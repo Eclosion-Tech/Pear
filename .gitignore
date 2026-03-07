@@ -1,0 +1,50 @@
+# ————————————————————————————————
+# Dependencies
+# ————————————————————————————————
+node_modules/
+.pnpm-store/
+
+# ————————————————————————————————
+# Next.js
+# ————————————————————————————————
+client/.next/
+client/out/
+
+# ————————————————————————————————
+# Rust / SpacetimeDB module
+# ————————————————————————————————
+server/spacetimedb/target/
+
+# ————————————————————————————————
+# Generated bindings (regenerated via `pnpm generate`)
+# ————————————————————————————————
+client/src/module_bindings/
+
+# ————————————————————————————————
+# Environment files
+# ————————————————————————————————
+.env
+.env.local
+.env*.local
+
+# ————————————————————————————————
+# OS / editor
+# ————————————————————————————————
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# ————————————————————————————————
+# Docker
+# ————————————————————————————————
+docker-compose.override.yml
+
+# ————————————————————————————————
+# Logs
+# ————————————————————————————————
+*.log
+npm-debug.log*
+pnpm-debug.log*

@@ -1,0 +1,13 @@
+{
+  "name": "pear",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter client dev",
+    "build": "pnpm --filter client build",
+    "generate": "pnpm --filter client generate"
+  },
+  "engines": {
+    "node": ">=18",
+    "pnpm": ">=10"
+  }
+}

@@ -1,0 +1,51 @@
+services:
+  # ── SpacetimeDB ────────────────────────────────────────────────────────────
+  # Pre-build the module before starting: cd server && spacetime build
+  spacetimedb:
+    image: clockworklabs/spacetime:v2.0.3
+    container_name: pear-spacetimedb
+    ports:
+      - "3000:3000"
+    volumes:
+      - spacetimedb-data:/stdb/data
+      # Persist the spacetime CLI identity across container restarts.
+      # Without this, every restart generates a new identity that isn't the
+      # database owner, causing a 403 on publish.
+      - spacetimedb-config:/root/.config/spacetime
+      # Entrypoint script (starts SpacetimeDB then publishes the module)
+      - ./server/docker/entrypoint.sh:/entrypoint.sh:ro
+      # Pre-built module WASM — run `cd server && spacetime build` first
+      - ./server/spacetimedb/target/wasm32-unknown-unknown/release/server.wasm:/module/server.wasm:ro
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    user: root
+    restart: unless-stopped
+    networks:
+      - pear
+
+  # ── Next.js client ─────────────────────────────────────────────────────────
+  client:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+      args:
+        # NEXT_PUBLIC_* vars are baked into the browser bundle — must use the URL
+        # the browser can reach (i.e. the exposed host port, not the Docker service name).
+        NEXT_PUBLIC_SPACETIMEDB_URI: ws://localhost:3000
+        NEXT_PUBLIC_SPACETIMEDB_DB_NAME: pear-dev
+    container_name: pear-client
+    ports:
+      - "3001:3001"
+    # NEXT_PUBLIC_* vars are baked at build time — no runtime env needed.
+    depends_on:
+      - spacetimedb
+    restart: unless-stopped
+    networks:
+      - pear
+
+networks:
+  pear:
+    driver: bridge
+
+volumes:
+  spacetimedb-data:
+  spacetimedb-config:

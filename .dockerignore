@@ -1,0 +1,7 @@
+# Keep the build context small — exclude large dirs not needed for the client build
+server
+client/node_modules
+client/.next
+client/.env*.local
+.git
+*.md
