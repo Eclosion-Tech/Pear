@@ -1,0 +1,29 @@
+@import "tailwindcss";
+
+/* Enable class-based dark mode for next-themes (.dark on <html>) */
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  color-scheme: light;
+}
+
+.dark {
+  color-scheme: dark;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+/* BlockNote — transparent background so it inherits our surface color */
+.bn-editor,
+.bn-container {
+  background: transparent !important;
+}
+
+/* BlockNote light-mode text overrides */
+:root .bn-editor {
+  color: inherit;
+}

@@ -1,0 +1,36 @@
+{
+  "name": "@pear/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3001",
+    "build": "next build",
+    "start": "next start",
+    "generate": "spacetime generate --lang typescript --out-dir src/module_bindings --module-path ../server/spacetimedb",
+    "generate:root": "spacetime generate --lang typescript --out-dir web/src/module_bindings --module-path server/spacetimedb"
+  },
+  "dependencies": {
+    "@blocknote/core": "^0.47.1",
+    "@blocknote/mantine": "^0.47.1",
+    "@blocknote/react": "^0.47.1",
+    "@mantine/core": "^8.3.16",
+    "@mantine/hooks": "^8.3.16",
+    "next": "16.1.6",
+    "next-themes": "^0.4.6",
+    "oidc-client-ts": "^3.4.1",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-oidc-context": "^3.3.0",
+    "spacetimedb": "^2.0.3",
+    "y-protocols": "^1.0.7",
+    "yjs": "^13.6.29"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}

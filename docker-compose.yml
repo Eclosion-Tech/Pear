@@ -22,17 +22,17 @@ services:
     networks:
       - pear
 
-  # ── Next.js client ─────────────────────────────────────────────────────────
-  client:
+  # ── Next.js web client ──────────────────────────────────────────────────────
+  web:
     build:
       context: .
-      dockerfile: client/Dockerfile
+      dockerfile: web/Dockerfile
       args:
         # NEXT_PUBLIC_* vars are baked into the browser bundle — must use the URL
         # the browser can reach (i.e. the exposed host port, not the Docker service name).
         NEXT_PUBLIC_SPACETIMEDB_URI: ws://localhost:3000
         NEXT_PUBLIC_SPACETIMEDB_DB_NAME: pear-dev
-    container_name: pear-client
+    container_name: pear-web
     ports:
       - "3001:3001"
     # NEXT_PUBLIC_* vars are baked at build time — no runtime env needed.
