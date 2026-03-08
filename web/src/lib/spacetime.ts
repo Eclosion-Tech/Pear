@@ -1,5 +1,20 @@
 "use client";
 
+// React's development-mode error formatter classifies bigint[] as a "primitive
+// array" and calls JSON.stringify() on it, which throws in Firefox/Chrome.
+// Adding toJSON makes all BigInt values serialise as their decimal string,
+// which is both lossless and safe for any logging / error-description code.
+if (typeof BigInt !== "undefined" && !("toJSON" in BigInt.prototype)) {
+  Object.defineProperty(BigInt.prototype, "toJSON", {
+    value(this: bigint) {
+      return this.toString();
+    },
+    writable: true,
+    configurable: true,
+    enumerable: false,
+  });
+}
+
 import { DbConnection } from "@/src/module_bindings";
 
 const SPACETIMEDB_URI = process.env.NEXT_PUBLIC_SPACETIMEDB_URI!;

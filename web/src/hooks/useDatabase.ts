@@ -35,6 +35,18 @@ export function useReorderProperty() {
   return useReducer(reducers.reorderProperty);
 }
 
+export function useRenameProperty() {
+  return useReducer(reducers.renameProperty);
+}
+
+export function useUpdatePropertyConfig() {
+  return useReducer(reducers.updatePropertyConfig);
+}
+
+export function useUpdatePropertyType() {
+  return useReducer(reducers.updatePropertyType);
+}
+
 // Row types inferred from table query builders
 export type DatabaseSchemaRow = ReturnType<typeof useDatabaseSchema>["schema"];
 export type PropertyDefinitionRow = ReturnType<typeof usePropertyDefinitions>[number];

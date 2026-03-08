@@ -623,6 +623,67 @@ pub fn delete_property(ctx: &ReducerContext, property_definition_id: u64) -> Res
     Ok(())
 }
 
+#[reducer]
+pub fn rename_property(
+    ctx: &ReducerContext,
+    property_definition_id: u64,
+    name: String,
+) -> Result<(), String> {
+    let prop = ctx
+        .db
+        .property_definition()
+        .id()
+        .find(&property_definition_id)
+        .ok_or("PropertyDefinition not found")?;
+    ctx.db
+        .property_definition()
+        .id()
+        .update(PropertyDefinition { name, ..prop });
+    Ok(())
+}
+
+#[reducer]
+pub fn update_property_config(
+    ctx: &ReducerContext,
+    property_definition_id: u64,
+    config: String,
+) -> Result<(), String> {
+    let prop = ctx
+        .db
+        .property_definition()
+        .id()
+        .find(&property_definition_id)
+        .ok_or("PropertyDefinition not found")?;
+    ctx.db
+        .property_definition()
+        .id()
+        .update(PropertyDefinition { config, ..prop });
+    Ok(())
+}
+
+#[reducer]
+pub fn update_property_type(
+    ctx: &ReducerContext,
+    property_definition_id: u64,
+    property_type: PropertyType,
+) -> Result<(), String> {
+    let prop = ctx
+        .db
+        .property_definition()
+        .id()
+        .find(&property_definition_id)
+        .ok_or("PropertyDefinition not found")?;
+    ctx.db
+        .property_definition()
+        .id()
+        .update(PropertyDefinition {
+            property_type,
+            config: "{}".to_string(),
+            ..prop
+        });
+    Ok(())
+}
+
 // ============================================================
 // Property Value Reducers
 // ============================================================
