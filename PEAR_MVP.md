@@ -1,5 +1,4 @@
 # Pear — Project Bible
-
 ## A Self-Hosted, Relational-First Notion Alternative
 
 **Domain:** pear.pro
@@ -25,20 +24,18 @@ Every serious Notion alternative (AFFiNE, AppFlowy, Anytype) treats databases an
 
 ## 3. Tech Stack
 
-
-| Layer                 | Choice                                        | Rationale                                                                                                           |
-| --------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Backend / Sync        | SpacetimeDB                                   | Handles real-time sync, subscriptions, and state via reducers. Eliminates the hardest engineering problem.          |
-| AI Orchestration      | Orcha                                         | Open protocol for coordinating multiple AI agents via SpacetimeDB. Agents read/write the same data layer as humans. |
-| Editor                | BlockNote                                     | Built on Tiptap. Embeddable, has slash commands out of the box, looks good, not tightly coupled to any framework.   |
-| Frontend              | React + Next.js                               | Standard, well-supported, good ecosystem.                                                                           |
-| Language (DB module)  | Rust                                          | SpacetimeDB modules are written in Rust.                                                                            |
-| Styling               | Tailwind CSS                                  | Utility-first, fast to iterate.                                                                                     |
-| Auth (default)        | SpacetimeAuth                                 | Managed OIDC provider by SpacetimeDB. Handles email/password out of the box. Zero config required.                  |
-| Auth (self-hosted)    | Any OIDC provider (Authentik, Keycloak, etc.) | Point Pear at your own provider via one env var. Pear stays auth-agnostic.                                          |
-| Embeddings (enhanced) | nomic-embed-text via Ollama                   | 274MB, higher quality. Optional upgrade — user points Pear at a local Ollama instance via one env var.              |
-| Embeddings (cloud)    | OpenAI text-embedding-3-small                 | Best quality. Optional — for users who don't care about full local and just want maximum accuracy.                  |
-
+| Layer | Choice | Rationale |
+|---|---|---|
+| Backend / Sync | SpacetimeDB | Handles real-time sync, subscriptions, and state via reducers. Eliminates the hardest engineering problem. |
+| AI Orchestration | Orcha | Open protocol for coordinating multiple AI agents via SpacetimeDB. Agents read/write the same data layer as humans. |
+| Editor | BlockNote | Built on Tiptap. Embeddable, has slash commands out of the box, looks good, not tightly coupled to any framework. |
+| Frontend | React + Next.js | Standard, well-supported, good ecosystem. |
+| Language (DB module) | Rust | SpacetimeDB modules are written in Rust. |
+| Styling | Tailwind CSS | Utility-first, fast to iterate. |
+| Auth (default) | SpacetimeAuth | Managed OIDC provider by SpacetimeDB. Handles email/password out of the box. Zero config required. |
+| Auth (self-hosted) | Any OIDC provider (Authentik, Keycloak, etc.) | Point Pear at your own provider via one env var. Pear stays auth-agnostic. |
+| Embeddings (enhanced) | nomic-embed-text via Ollama | 274MB, higher quality. Optional upgrade — user points Pear at a local Ollama instance via one env var. |
+| Embeddings (cloud) | OpenAI text-embedding-3-small | Best quality. Optional — for users who don't care about full local and just want maximum accuracy. |
 
 ---
 
@@ -47,7 +44,6 @@ Every serious Notion alternative (AFFiNE, AppFlowy, Anytype) treats databases an
 ### 4.1 Tables
 
 #### `Page`
-
 The universal atom. Every piece of content is a Page.
 
 ```rust
@@ -69,7 +65,6 @@ pub struct Page {
 ```
 
 #### `DatabaseSchema`
-
 Defines the column structure for a page of type `Database`.
 
 ```rust
@@ -84,7 +79,6 @@ pub struct DatabaseSchema {
 ```
 
 #### `PropertyDefinition`
-
 Each column in a database schema.
 
 ```rust
@@ -102,7 +96,6 @@ pub struct PropertyDefinition {
 ```
 
 #### `PagePropertyValue`
-
 The actual data stored for each property on each page (row).
 
 ```rust
@@ -118,7 +111,6 @@ pub struct PagePropertyValue {
 ```
 
 #### `PageContent`
-
 Content is stored in its own table, separate from `Page`, so that queries over pages (listing, filtering, searching titles and properties) never load content blobs into memory. Content is only fetched when a page is actually opened.
 
 ```rust
@@ -132,7 +124,6 @@ pub struct PageContent {
 ```
 
 #### `PageSnapshot`
-
 A point-in-time capture of a page's content and title. Taken automatically before/after agent edits, periodically during active editing, and on manual save. This is the backbone of version history and recovery.
 
 ```rust
@@ -151,7 +142,6 @@ pub struct PageSnapshot {
 ```
 
 #### `PagePropertyValueHistory`
-
 Append-only history of property value changes. Instead of updating in place, each change appends a new row with `is_current` flipped. Gives a full audit trail of every property mutation with zero extra work.
 
 ```rust
@@ -170,7 +160,6 @@ pub struct PagePropertyValueHistory {
 ```
 
 #### `DatabaseView`
-
 A saved view config on a database page. Stores display type, filters, sorts, column visibility and widths. Persisted in SpacetimeDB so views sync across devices. Supports both shared views (visible to all users of a workspace) and personal views (visible only to the creator).
 
 ```rust
@@ -191,8 +180,114 @@ pub struct DatabaseView {
 }
 ```
 
-#### `ActorType`
 
+
+#### `AutomationRule`
+A user-defined automation — a trigger condition paired with one or more actions. When the trigger fires, the Orcha automation worker picks it up from the queue and executes the action chain.
+
+```rust
+#[spacetimedb::table]
+pub struct AutomationRule {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub name: String,
+    pub enabled: bool,
+    pub trigger: AutomationTrigger,
+    pub created_by: Identity,
+    pub created_at: u64,
+}
+```
+
+#### `AutomationAction`
+Actions are chained — a single rule can have multiple actions executed in order.
+
+```rust
+#[spacetimedb::table]
+pub struct AutomationAction {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub automation_id: u64,
+    pub order: u32,                   // execution order within the rule
+    pub action_type: ActionType,      // HttpRequest | SendEmail | CreatePage | UpdateProperty | OrchaAgent
+    pub config: String,               // JSON, type-specific config per ActionType
+}
+```
+
+#### `AutomationEventQueue`
+Mutations enqueue events here. Fast, non-blocking — the reducer just writes a row and moves on. The Orcha automation worker subscribes to this table and processes events asynchronously.
+
+```rust
+#[spacetimedb::table]
+pub struct AutomationEventQueue {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub automation_id: u64,
+    pub trigger_payload: String,      // JSON snapshot of what triggered it
+    pub status: AutomationStatus,     // Pending | Running | Completed | Failed
+    pub created_at: u64,
+}
+```
+
+#### `AutomationRunLog`
+Per-action execution log. The automation worker writes results back here after each action executes. Visible to users in the UI — they can see what ran, when, and whether it succeeded.
+
+```rust
+#[spacetimedb::table]
+pub struct AutomationRunLog {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub queue_id: u64,
+    pub action_id: u64,
+    pub success: bool,
+    pub result: Option<String>,       // response body, error message, created page ID, etc.
+    pub attempts: u32,
+    pub executed_at: u64,
+}
+```
+
+#### `AutomationTrigger`
+```rust
+#[derive(SpacetimeType)]
+pub enum AutomationTrigger {
+    PageCreated { database_id: Option<u64> },              // optionally scoped to a specific database
+    PageUpdated { page_id: Option<u64> },                  // optionally scoped to a specific page
+    PageDeleted { database_id: Option<u64> },
+    PropertyChanged {
+        property_definition_id: u64,
+        to_value: Option<PropertyValue>,                   // None = any change, Some = specific value
+    },
+    UserJoined,
+}
+```
+
+#### `ActionType`
+```rust
+#[derive(SpacetimeType)]
+pub enum ActionType {
+    HttpRequest,       // fire an HTTP POST to an external URL (webhooks, Zapier, n8n, etc.)
+    SendEmail,         // notify a user or external address
+    CreatePage,        // create a new page/row in a database
+    UpdateProperty,    // set a property value on a page
+    OrchaJob,          // submit a Job + Task graph to Orcha, let AI agents handle execution
+}
+```
+
+#### `AutomationStatus`
+```rust
+#[derive(SpacetimeType)]
+pub enum AutomationStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+}
+```
+
+#### `ActorType`
 Tracks whether an action was taken by a human or an Orcha agent. Enables audit trails and lets the UI surface AI-generated content differently.
 
 ```rust
@@ -204,7 +299,6 @@ pub enum ActorType {
 ```
 
 #### `ViewType`
-
 ```rust
 #[derive(SpacetimeType)]
 pub enum ViewType {
@@ -217,7 +311,6 @@ pub enum ViewType {
 ```
 
 #### `SnapshotType`
-
 Why a snapshot was taken. Used to display history in the UI with useful context ("Before AI edit", "Auto-saved", etc.) and to power one-click AI revert.
 
 ```rust
@@ -231,7 +324,6 @@ pub enum SnapshotType {
 ```
 
 #### `PageType`
-
 ```rust
 #[derive(SpacetimeType)]
 pub enum PageType {
@@ -241,7 +333,6 @@ pub enum PageType {
 ```
 
 #### `PropertyType`
-
 ```rust
 #[derive(SpacetimeType)]
 pub enum PropertyType {
@@ -257,7 +348,6 @@ pub enum PropertyType {
 ```
 
 #### `PropertyValue` (tagged union)
-
 The key design decision. Instead of a wide nullable table or stringly-typed JSON, values are a typed enum. SpacetimeDB handles this natively.
 
 ```rust
@@ -328,6 +418,17 @@ update_view_config(view_id: u64, config: String)
 rename_view(view_id: u64, name: String)
 set_default_view(view_id: u64)
 delete_view(view_id: u64)
+
+// Automations
+create_automation(name: String, trigger: AutomationTrigger)
+add_automation_action(automation_id: u64, order: u32, action_type: ActionType, config: String)
+update_automation_action(action_id: u64, config: String)
+reorder_automation_action(action_id: u64, new_order: u32)
+delete_automation_action(action_id: u64)
+enable_automation(automation_id: u64)
+disable_automation(automation_id: u64)
+delete_automation(automation_id: u64)
+// Note: enqueue_automation_event is called internally by other reducers — not exposed to clients directly
 ```
 
 ---
@@ -343,12 +444,10 @@ A database always has at least one view. The default view (`is_default = true`) 
 The `config` field is a JSON string containing filters, sorts, column order and visibility, and column widths. It's deserialized on the client — never queried into server-side — so keeping it as JSON is fine indefinitely.
 
 ### v1 Views
-
 - **Grid / Table** — rows and columns, sortable, filterable
 - **List** — simplified single-column row view
 
 ### v2 Views (post-MVP)
-
 - **Kanban** — group rows by a Select property
 - **Calendar** — group rows by a Date property
 - **Gallery** — card grid, show a cover image property
@@ -360,25 +459,23 @@ The `config` field is a JSON string containing filters, sorts, column order and 
 The goal of the MVP is to validate the data model and get the core loop working: create a database, define columns, add rows, open a row as a full page.
 
 ### In scope
-
-- SpacetimeDB module with all tables and core reducers
-- `Page` + `PageContent` tables wired up — create_page creates both atomically
-- Create / nest pages
-- Create a database page with a schema
-- Add/remove/reorder property columns
-- Grid view — display child pages as rows with property values
-- Inline editing of property values in the grid
-- Open any row as a full page with BlockNote editor
-- Relation property type — link rows across two databases
-- Basic filtering in grid view
-- Soft deletes + trash with restore
-- `PageSnapshot` table + `PreAgentEdit` / `Periodic` snapshot types
-- Basic page history panel — list snapshots, one-click restore
-- `embedding` and `created_by` fields on Page (populated later, schema correct from day one)
-- Self-hostable via Docker
+- [ ] SpacetimeDB module with all tables and core reducers
+- [ ] `Page` + `PageContent` tables wired up — create_page creates both atomically
+- [ ] Create / nest pages
+- [ ] Create a database page with a schema
+- [ ] Add/remove/reorder property columns
+- [ ] Grid view — display child pages as rows with property values
+- [ ] Inline editing of property values in the grid
+- [ ] Open any row as a full page with BlockNote editor
+- [ ] Relation property type — link rows across two databases
+- [ ] Basic filtering in grid view
+- [ ] Soft deletes + trash with restore
+- [ ] `PageSnapshot` table + `PreAgentEdit` / `Periodic` snapshot types
+- [ ] Basic page history panel — list snapshots, one-click restore
+- [ ] `embedding` and `created_by` fields on Page (populated later, schema correct from day one)
+- [ ] Self-hostable via Docker
 
 ### Out of scope (v1)
-
 - Kanban / Calendar / Gallery views
 - Formula columns
 - Rollups
@@ -511,7 +608,117 @@ The tools bolting AI on after the fact are always at a disadvantage — their da
 
 ---
 
-## 10. Authentication
+## 10. Automations
+
+### 10.1 The Philosophy
+
+Automations are the general-purpose event-action layer built into Pear's core. They are not a cloud-only feature, not a webhook-specific system — they are a first-class primitive available to every self-hoster and cloud user alike. The mental model is simple: when X happens in your workspace, do Y.
+
+Webhooks are one action type. Invoking an AI agent is another. Creating a page, updating a property, sending an email — all the same model. This makes Pear competitive with Notion's automations while being fully self-hosted and extensible.
+
+### 10.2 Architecture
+
+The system has three parts:
+
+**1. Trigger detection (inside reducers)**
+Mutations check whether any enabled `AutomationRule` has a trigger matching the event. If yes, they insert a row into `AutomationEventQueue` — a single non-blocking table write. The reducer commits and returns immediately. No HTTP calls, no latency, no coupling.
+
+**2. Queue table**
+`AutomationEventQueue` is the decoupling layer. It holds pending automation events waiting to be processed. Fast to write, fast to read. The Orcha automation worker subscribes to this table via SpacetimeDB's real-time subscription mechanism — it does not poll.
+
+**3. Orcha automation worker**
+A proper Orcha worker with the `automation` capability that ships in the default docker compose. Per the Orcha protocol, it:
+- Registers with the coordination layer (SpacetimeDB) with `capabilities: ["automation"]`
+- Authenticates via OIDC client credentials — same identity path as all Orcha agents
+- Subscribes to `AutomationEventQueue` — reacts instantly on insert, no polling
+- Claims events atomically (prevents duplicate processing if multiple worker instances run)
+- Holds an in-memory cache of `AutomationRule` and `AutomationAction` configs, invalidated on table change
+- Executes action chains in order, publishing each result back to `AutomationRunLog`
+- On failure: retries with exponential backoff per Orcha fault tolerance model
+- Marks tasks done, updating queue row status
+
+```
+Reducer commits mutation
+  → inserts row to AutomationEventQueue (non-blocking)
+
+Orcha automation worker (capability: "automation")
+  → sees insert immediately via SpacetimeDB subscription
+  → claims event atomically
+  → looks up AutomationRule + AutomationAction chain (in-memory cache)
+  → executes actions in order:
+      HttpRequest    → fire HTTP POST with HMAC signature, log response
+      SendEmail      → send via configured SMTP
+      CreatePage     → call create_page reducer on Pear's SpacetimeDB module
+      UpdateProperty → call set_property_value reducer
+      OrchaJob       → write a Job + Task graph to Orcha coordination layer,
+                       letting AI agents claim and execute the work
+  → writes per-action result to AutomationRunLog
+  → marks queue event Completed or Failed
+```
+
+### 10.3 Action Types
+
+**HttpRequest** — fire an HTTP POST to any external URL. Config includes URL, headers, and HMAC secret for signature verification. This is the webhook use case — works with Zapier, n8n, Make, or any custom endpoint.
+
+**SendEmail** — send a notification email. Config includes recipient, subject template, and body template. Variables substituted from trigger payload (e.g. `{{page.title}}`). Requires SMTP configured via env var.
+
+**CreatePage** — create a new page or row in a specified database. Config includes target database ID and initial property values. Useful for "when a form is submitted, create a task."
+
+**UpdateProperty** — set a property value on a page. Config includes target property definition ID and new value. Useful for "when a page is created in this database, set Status to 'New'."
+
+**OrchaJob** — submit a `Job` to the Orcha coordination layer with a generated `Task` graph. The automation worker writes to Orcha's SpacetimeDB tables (`jobs`, `tasks`) and AI agents with matching capabilities claim and execute the work independently. This is the bridge between deterministic automations and AI — e.g. "when a page is created, have an agent summarize it and fill in the Summary property." Importantly, the automation worker does not execute the AI work itself — it delegates to Orcha's agent pool, which handles decomposition, parallel execution, and result synthesis per the Orcha protocol.
+
+### 10.4 Relationship to Orcha's Task Model
+
+The Orcha automation worker is a first-class Orcha agent. It uses the standard Orcha agent lifecycle:
+
+```
+1. Register with coordination layer — capabilities: ["automation"]
+2. Subscribe to AutomationEventQueue (Pear's tables) + Orcha task tables
+3. Claim automation events atomically
+4. Execute action chain
+5. For OrchaJob actions: write Job + Tasks to Orcha coordination layer,
+   let AI agents handle execution independently
+6. Publish results, mark done
+7. Repeat or idle
+```
+
+This means the automation worker can be scaled horizontally — run multiple instances and events are claimed atomically with no duplicate processing, exactly as Orcha's protocol defines for any worker.
+
+### 10.5 Zero Overhead When Unused
+
+If `AutomationRule` table is empty:
+- Reducers do one indexed lookup, find nothing, move on — negligible cost
+- Automation worker sits idle with open subscriptions and does nothing
+- No timers, no polling, no background work
+
+The worker only does real work when automations are configured and triggered.
+
+### 10.6 Docker Compose
+
+The automation worker ships as a separate container in the default compose:
+
+```yaml
+services:
+  spacetimedb: ...
+  pear-auth: ...
+  pear: ...
+  pear-automation-worker:
+    image: ghcr.io/pearpro/pear-automation-worker
+    environment:
+      - SPACETIMEDB_URL=ws://spacetimedb:3000
+      - OIDC_CLIENT_ID=${AUTOMATION_WORKER_CLIENT_ID}
+      - OIDC_CLIENT_SECRET=${AUTOMATION_WORKER_CLIENT_SECRET}
+      - SMTP_URL=${SMTP_URL}          # optional, only needed for SendEmail actions
+```
+
+### 10.7 Competitive Advantage
+
+Notion automations are cloud-only, limited to Notion-defined action types, and paywalled. AFFiNE and AppFlowy have nothing equivalent. Pear ships a general-purpose, self-hosted automation engine — with AI agent invocation via Orcha as a native action type — free and open source, running entirely on your own infrastructure.
+
+---
+
+## 11. Authentication
 
 ### 10.1 The Design Principle
 
@@ -538,11 +745,9 @@ SpacetimeAuth handles everything. Email/password works out of the box, no setup 
 
 **Tier 2 — Bring your own OIDC provider**
 Set one env var:
-
 ```
 PEAR_OIDC_ISSUER=https://authentik.yourdomain.com/application/o/pear/
 ```
-
 Any standards-compliant OIDC provider works — Authentik, Keycloak, Auth0, Okta, whatever you already run. Pear stays completely auth-agnostic. This is the killer feature for homelab users and small teams who already have an identity provider running — Pear just joins the SSO setup they have.
 
 ### 10.4 Orcha Agent Identity — Resolved
@@ -560,7 +765,7 @@ Social logins (Google, GitHub, etc.) are configured at the OIDC provider level, 
 
 ---
 
-## 11. Workspace Architecture
+## 12. Workspace Architecture
 
 ### 11.1 The Mental Model
 
@@ -585,7 +790,6 @@ pear://company.internal:3000?invite=abc123
 ```
 
 The invite flow:
-
 1. A workspace admin generates a one-time invite link from the workspace settings
 2. User clicks the link — Pear client opens an "Add Workspace" dialog pre-filled with the server URL
 3. User authenticates against that workspace's configured OIDC provider
@@ -643,7 +847,8 @@ The sidebar shows all connected workspaces. Switching between them is instant �
 10. **Docker** — containerize SpacetimeDB module + Next.js app for self-hosting. Wire up `PEAR_OIDC_ISSUER` env var for custom OIDC providers.
 11. **Multi-workspace client** — local workspace connection storage, workspace switcher in sidebar, invite link generation and join flow.
 12. **Embeddings** — background job that generates and stores embeddings on PageContent changes. Wire up semantic search.
-13. **Orcha integration** — connect Orcha orchestration layer. Wire up `PreAgentEdit` / `PostAgentEdit` snapshots. Configure agent client credentials. Implement schema generation agent as the first Orcha-powered feature.
+13. **Automations** — `AutomationRule`, `AutomationAction`, `AutomationEventQueue`, `AutomationRunLog` tables. Enqueue calls in relevant reducers. Build the Orcha automation worker. UI for creating and managing rules.
+14. **Orcha integration** — connect Orcha orchestration layer. Wire up `PreAgentEdit` / `PostAgentEdit` snapshots. Configure agent client credentials. Implement schema generation agent as the first Orcha-powered feature. Wire `OrchaAgent` action type into automation worker.
 
 ---
 
