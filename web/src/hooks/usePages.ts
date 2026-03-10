@@ -65,7 +65,7 @@ export function usePageSnapshots(pageId: bigint) {
   const [snapshots] = useTable(tables.page_snapshot);
   const forPage = snapshots
     .filter((s) => s.pageId === pageId)
-    .sort((a, b) => Number(b.snapshotAt - a.snapshotAt));
+    .sort((a, b) => Number(b.snapshotAt.microsSinceUnixEpoch - a.snapshotAt.microsSinceUnixEpoch));
   return forPage;
 }
 
@@ -92,8 +92,8 @@ export function useSetPropertyValue() {
   return useReducer(reducers.setPropertyValue);
 }
 
-export function useApplyYjsUpdate() {
-  return useReducer(reducers.applyYjsUpdate);
+export function useSaveYjsState() {
+  return useReducer(reducers.saveYjsState);
 }
 
 export function useCreateView() {

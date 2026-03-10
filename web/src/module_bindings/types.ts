@@ -114,12 +114,12 @@ export const PageType = __t.enum("PageType", {
 });
 export type PageType = __Infer<typeof PageType>;
 
-export const PageYjsUpdate = __t.object("PageYjsUpdate", {
-  id: __t.u64(),
+export const PageYjsState = __t.object("PageYjsState", {
   pageId: __t.u64(),
   data: __t.byteArray(),
+  updatedAt: __t.timestamp(),
 });
-export type PageYjsUpdate = __Infer<typeof PageYjsUpdate>;
+export type PageYjsState = __Infer<typeof PageYjsState>;
 
 export const PropertyDefinition = __t.object("PropertyDefinition", {
   id: __t.u64(),

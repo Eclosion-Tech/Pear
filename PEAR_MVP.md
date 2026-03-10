@@ -903,74 +903,112 @@ Until the migration story is nailed down:
 
 ---
 
-## 16. Offline Access & Local-First Architecture
+## 16. Content Storage Architecture (Simplified)
 
-### 16.1 The Problem
+### 16.1 The Problem (Pre-Simplification)
 
-The current architecture is **server-first**: the editor waits for SpacetimeDB's subscription snapshot before showing content. This causes:
-- A "connecting…" flash on every page load (even for returning users with cached data)
-- Total loss of editing capability when offline or when SpacetimeDB is unreachable
-- Every Yjs update requiring a server round-trip before the echo is processed
+The original architecture used `PageYjsUpdate` as an append-only log of every Yjs binary update, creating several problems:
+- Per-keystroke writes to SpacetimeDB → high row counts, frequent echoes
+- Echo suppression required non-trivial `Y.diffUpdate` logic in every subscriber
+- `appliedIdsRef` deduplication grew unbounded across reconnections → OOM crashes in deeply nested docs
+- Content "pop-in" delay: editor waited for all historical updates to replay before rendering
 
-### 16.2 The Goal
-
-Pear should work like a native app: **open instantly from local state, sync in the background**. When offline, edits are captured locally and synced when the connection is restored. Multi-device conflict resolution is handled by Yjs's CRDT semantics — no special merge logic required.
-
-### 16.3 Architecture: Two-Layer Yjs Persistence
+### 16.2 Implemented Architecture
 
 ```
 ┌─────────────────────────────────────────────┐
 │  BlockNote (ProseMirror + Yjs XML)          │
 └───────────────┬─────────────────────────────┘
                 │  Y.Doc (in-memory CRDT)
-       ┌────────┴────────┐
-       │                 │
-  IndexedDB         SpacetimeDB
-  (local, fast,     (remote, sync,
-   always works)     optional)
+       ┌────────┴──────────┐
+       │                   │
+  IndexedDB           SpacetimeDB
+  (y-indexeddb)       (PageYjsState)
+  Primary store       Periodic backup
+  Instant load        One blob per page
+  Always works        Background sync
 ```
 
-**Layer 1 — IndexedDB (`y-indexeddb`)**: Primary persistence. Every Yjs op is written to IndexedDB immediately (within the same microtask as the Y.Doc update). On page load, state is restored from IndexedDB in milliseconds — no server round-trip needed. This eliminates the "connecting" flash entirely.
+**IndexedDB (`y-indexeddb`)**: Every Yjs op is persisted immediately by `IndexeddbPersistence`. On page load, content restores from IndexedDB in milliseconds — zero server round-trips, no "connecting" flash, works fully offline.
 
-**Layer 2 — SpacetimeDB (`SpacetimeYjsProvider`)**: Sync and collaboration layer. Flushes pending Yjs updates to the server in the background (debounced). On reconnect, sends any updates that accumulated while offline. Receives updates from other devices/users.
+**SpacetimeDB (`PageYjsState` table)**: Stores a single merged Yjs state blob per page. Updated periodically (debounced ~30s, on blur, on unmount) via `save_yjs_state` reducer. This is the source of truth for cross-device sync and is used to bootstrap a fresh device/browser where IndexedDB is empty.
 
-### 16.4 Offline Queue
+**`PageContent` (JSON)**: Still maintained for human-readable snapshots and page history. Updated alongside `PageYjsState` on periodic saves.
 
-When offline, Yjs updates that fail to reach SpacetimeDB are held in a persistent IndexedDB queue (`pending_sync` store, separate from the doc state). On reconnect:
-1. Read the pending queue
-2. Send each update to SpacetimeDB via `applyYjsUpdate` reducer
-3. Clear the queue
-4. Apply any updates from SpacetimeDB that arrived during the offline window (Yjs CRDT merges cleanly)
+### 16.3 What Was Removed
 
-The state vector approach (`Y.encodeStateVector` / `Y.diffUpdate`) already used in `SpacetimeYjsProvider.applyUpdate` makes it straightforward to compute exactly what the server is missing.
+- `PageYjsUpdate` table — eliminated entirely; no more per-keystroke writes
+- `apply_yjs_update` reducer — no longer needed
+- `SpacetimeYjsProvider`'s per-update send logic — replaced by periodic full-state save
+- `appliedIdsRef` deduplication — eliminated; IndexedDB is the CRDT and there are no echoes
 
-### 16.5 Implementation Plan
+### 16.4 Save / Load Flow
 
-1. **Install `y-indexeddb`** (Yjs ecosystem, well-maintained)
-2. **Modify `PearEditor`**: attach `IndexeddbPersistence` to the Y.Doc keyed by `pageId`. The persistence syncs automatically; no changes needed to `SpacetimeYjsProvider`.
-3. **Offline detection**: listen to `navigator.onLine` / SpacetimeDB connection events. When offline, continue writing to IndexedDB. Buffer any `onSend` calls from `SpacetimeYjsProvider` into the pending queue.
-4. **Reconnect flush**: on SpacetimeDB `onConnect`, drain the pending queue and apply the Yjs state vector diff to send only what the server doesn't have.
-5. **Initial load order**: IndexedDB restores first (instant) → SpacetimeDB sync applies any updates from other devices (background, may be a no-op for single-user).
+**Load (page open):**
+1. `IndexeddbPersistence` restores Y.Doc from local IndexedDB → editor renders instantly
+2. If IndexedDB is empty (new device/browser), apply `PageYjsState.data` from SpacetimeDB to the Y.Doc
 
-### 16.6 Impact on Current Architecture
+**Save (periodic / on blur / on unmount):**
+1. `Y.encodeStateAsUpdate(doc)` → bytes
+2. Call `save_yjs_state(page_id, bytes)` → updates `PageYjsState` in SpacetimeDB
+3. Call `update_page_content(page_id, json)` with `editor.document` JSON → updates `PageContent` (for snapshots/history)
 
-- `SpacetimeYjsProvider` stays largely unchanged; it becomes the sync adapter rather than the primary source of truth
-- `PearEditor`'s `isActive` guard (currently gates whether to apply Yjs updates) can be relaxed — content loads from IndexedDB regardless of connection state
-- The `appliedIdsRef` Set used for deduplication integrates naturally: IndexedDB-restored content is already in the Y.Doc so `Y.diffUpdate` skips it on server sync
-- `PageContent` (the JSON snapshot in SpacetimeDB) becomes a backup/fallback rather than a recovery mechanism
+### 16.5 Offline Queue (Future)
 
-### 16.7 Why This Is the Right Path
+When offline, edits accumulate in IndexedDB. On reconnect:
+1. Compute `Y.encodeStateAsUpdate(doc)` (full current state)
+2. Call `save_yjs_state` — SpacetimeDB gets the merged result
+3. Apply `PageYjsState` from any other devices (Yjs CRDT merges cleanly)
 
-- **Solves "connecting" UX** without hacks
-- **Enables true offline editing** — core to Pear's self-hosted, own-your-data positioning
-- **Reduces SpacetimeDB pressure** — fewer round-trips, smaller subscription payloads
-- **Yjs is designed for this** — `y-indexeddb` is a first-class part of the Yjs ecosystem, used by production apps like Hocuspocus
+No explicit pending queue is needed because the periodic save always sends the *full current state*, which implicitly includes all offline changes.
 
-### 16.8 Blocking Considerations
+### 16.6 Trade-offs
 
-- **Multi-tab**: Two browser tabs open to the same page both write to the same IndexedDB doc. Yjs handles this correctly (same CRDT), but the SpacetimeDB sync needs to deduplicate (already handled by `appliedIdsRef` + `Y.diffUpdate`).
-- **Storage limits**: IndexedDB storage is per-origin and typically 1–10GB. For a self-hosted app this is fine; for a hosted version, quotas need monitoring.
-- **First install / new device**: IndexedDB is empty. Full state must come from SpacetimeDB. The existing initial-load path in `PearEditor` handles this.
+| Aspect | Old (PageYjsUpdate) | New (PageYjsState) |
+|---|---|---|
+| SpacetimeDB writes | Per keystroke | Every ~30s |
+| Echo suppression | Required (Y.diffUpdate) | Not needed |
+| Multi-user real-time | Supported | ❌ Not yet (see §17) |
+| OOM risk | High (unbounded replay) | None |
+| Pop-in on return | Yes | No (IndexedDB instant) |
+| Offline editing | Partial | Full |
+
+---
+
+## 17. Real-Time Multi-User Collaboration
+
+> **Status: Deferred post-MVP.** The current architecture (§16) is intentionally single-user-first to eliminate complexity. This section documents how we'll add collaborative editing when the time comes.
+
+### 17.1 What We're Deferring
+
+Live concurrent editing within the same page by multiple users simultaneously. The current setup syncs state periodically, so two people editing the same page at the same time will have their changes merged on the next save cycle (last-write-wins at the SpacetimeDB level), not in real-time.
+
+### 17.2 Why Yjs Still Sets Us Up Well
+
+Even though `PageYjsUpdate` was removed, the entire document is still stored as a **Yjs state** (a CRDT). This means:
+- Multiple users' changes can always be merged without conflicts (CRDT semantics)
+- No custom merge logic is needed — Yjs handles it
+- The Y.Doc is the single source of truth at the CRDT level
+
+### 17.3 Implementation Path (When Ready)
+
+1. **Re-introduce a real-time transport layer.** Options:
+   - SpacetimeDB: bring back a streaming update table (`PageYjsUpdate`) but scoped to *active sessions only* (TTL, not permanent history). Use the existing per-page subscription pattern.
+   - WebSocket relay (e.g. Hocuspocus server): purpose-built for Yjs real-time sync; slots in as a standard Yjs provider alongside `y-indexeddb`.
+   - PartyKit / Liveblocks: managed Yjs collaboration infrastructure.
+
+2. **Restore `SpacetimeYjsProvider` send logic** (or add a second provider) to broadcast incremental updates to active collaborators.
+
+3. **Awareness / cursors**: `y-protocols/awareness` is already wired into the provider stub. Cursor positions and user presence can be added without schema changes.
+
+4. **Conflict resolution**: Yjs handles structural conflicts. Application-level conflicts (e.g. two users deleting the same page) need reducer-level idempotency (already the case for existing reducers).
+
+### 17.4 UX Considerations
+
+- Presence indicators (avatars on the page title bar) showing active collaborators
+- Named cursors within the editor (Yjs awareness)
+- "Last edited by X" metadata on pages
+- Conflict notification when a periodic save detects a divergence (unlikely with CRDT but possible at the SpacetimeDB reducer level)
 
 ---
 *Last updated: March 2026*

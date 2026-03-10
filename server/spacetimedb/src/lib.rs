@@ -118,19 +118,19 @@ pub struct PageContent {
     pub updated_at: Timestamp,
 }
 
-/// Append-only log of Yjs CRDT updates for collaborative doc editing.
-/// Clients apply all updates in id order to reconstruct the live document.
-/// page_content is kept as a materialised read-only snapshot; this table
-/// is the authoritative source for collaborative editing.
-#[table(accessor = page_yjs_update, public)]
-pub struct PageYjsUpdate {
+/// Single merged Yjs state blob per page.
+/// Replaces the old PageYjsUpdate append-only log. Clients write the full
+/// Y.encodeStateAsUpdate(doc) here periodically (on blur, on unmount, every ~30s).
+/// On fresh load (IndexedDB empty), clients apply this blob to their Y.Doc.
+/// IndexedDB (y-indexeddb) is the primary local cache; this is the cross-device
+/// sync and backup layer.
+#[table(accessor = page_yjs_state, public)]
+pub struct PageYjsState {
     #[primary_key]
-    #[auto_inc]
-    pub id: u64,
-    #[index(btree)]
     pub page_id: u64,
-    /// Binary-encoded Yjs update (output of Y.encodeStateAsUpdate / doc.on('update')).
+    /// Full merged Yjs state (Y.encodeStateAsUpdate output).
     pub data: Vec<u8>,
+    pub updated_at: Timestamp,
 }
 
 /// Point-in-time snapshot of a page. Backbone of version history.
@@ -567,23 +567,39 @@ pub fn update_page_content(
     Ok(())
 }
 
-/// Append a Yjs CRDT update for a page.
-/// All connected clients receive this via their subscription and apply it to
-/// their local Y.Doc, converging to the same document state without conflicts.
+/// Persist the full merged Yjs state for a page.
+/// Called periodically by the client (on blur, on unmount, every ~30s).
+/// Upserts the single PageYjsState row for the page so row count stays O(1).
+/// Also touches the page's updated_at so the sidebar reflects recent activity.
 #[reducer]
-pub fn apply_yjs_update(ctx: &ReducerContext, page_id: u64, data: Vec<u8>) {
-    ctx.db.page_yjs_update().insert(PageYjsUpdate {
-        id: 0, // auto_inc
-        page_id,
-        data,
-    });
-    // Touch the page's updated_at so the sidebar reflects recent activity.
+pub fn save_yjs_state(
+    ctx: &ReducerContext,
+    page_id: u64,
+    data: Vec<u8>,
+) -> Result<(), String> {
+    ctx.db.page().id().find(&page_id).ok_or("Page not found")?;
+
+    if let Some(existing) = ctx.db.page_yjs_state().page_id().find(&page_id) {
+        ctx.db.page_yjs_state().page_id().update(PageYjsState {
+            data,
+            updated_at: ctx.timestamp,
+            ..existing
+        });
+    } else {
+        ctx.db.page_yjs_state().insert(PageYjsState {
+            page_id,
+            data,
+            updated_at: ctx.timestamp,
+        });
+    }
+
     if let Some(page) = ctx.db.page().id().find(&page_id) {
         ctx.db.page().id().update(Page {
             updated_at: ctx.timestamp,
             ..page
         });
     }
+    Ok(())
 }
 
 /// Soft delete — sets deleted_at, never hard deletes.
@@ -659,16 +675,8 @@ fn purge_page_inner(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
     // Delete linked data (PageContent is 1:1 with Page)
     ctx.db.page_content().page_id().delete(&page_id);
 
-    let yjs_ids: Vec<u64> = ctx
-        .db
-        .page_yjs_update()
-        .page_id()
-        .filter(&page_id)
-        .map(|u| u.id)
-        .collect();
-    for uid in yjs_ids {
-        ctx.db.page_yjs_update().id().delete(&uid);
-    }
+    // Delete the Yjs state blob (single row, primary key = page_id).
+    ctx.db.page_yjs_state().page_id().delete(&page_id);
 
     let snapshot_ids: Vec<u64> = ctx.db.page_snapshot().page_id().filter(&page_id).map(|s| s.id).collect();
     for sid in snapshot_ids {
@@ -1089,17 +1097,10 @@ pub fn restore_page_to_snapshot(
         });
     }
 
-    // Clear Yjs updates so the editor bootstraps from restored PageContent
-    // instead of replaying stale CRDT history.
-    let yjs_ids: Vec<u64> = ctx
-        .db
-        .page_yjs_update()
-        .page_id()
-        .filter(&page_id)
-        .map(|u| u.id)
-        .collect();
-    for uid in yjs_ids {
-        ctx.db.page_yjs_update().id().delete(&uid);
+    // Clear the Yjs state blob so the client re-bootstraps from the restored
+    // PageContent JSON on next open (the client will re-derive a Yjs state from it).
+    if ctx.db.page_yjs_state().page_id().find(&page_id).is_some() {
+        ctx.db.page_yjs_state().page_id().delete(&page_id);
     }
 
     Ok(())

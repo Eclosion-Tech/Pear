@@ -35,7 +35,6 @@ import {
 
 // Import all reducer arg schemas
 import AddPropertyReducer from "./add_property_reducer";
-import ApplyYjsUpdateReducer from "./apply_yjs_update_reducer";
 import ClearPropertyValueReducer from "./clear_property_value_reducer";
 import CreateDatabaseSchemaReducer from "./create_database_schema_reducer";
 import CreatePageReducer from "./create_page_reducer";
@@ -53,6 +52,7 @@ import RenameViewReducer from "./rename_view_reducer";
 import ReorderPropertyReducer from "./reorder_property_reducer";
 import RestorePageReducer from "./restore_page_reducer";
 import RestorePageToSnapshotReducer from "./restore_page_to_snapshot_reducer";
+import SaveYjsStateReducer from "./save_yjs_state_reducer";
 import SetDefaultViewReducer from "./set_default_view_reducer";
 import SetPropertyValueReducer from "./set_property_value_reducer";
 import SetUserProfileReducer from "./set_user_profile_reducer";
@@ -74,7 +74,7 @@ import PageContentRow from "./page_content_table";
 import PagePropertyValueRow from "./page_property_value_table";
 import PagePropertyValueHistoryRow from "./page_property_value_history_table";
 import PageSnapshotRow from "./page_snapshot_table";
-import PageYjsUpdateRow from "./page_yjs_update_table";
+import PageYjsStateRow from "./page_yjs_state_table";
 import PropertyDefinitionRow from "./property_definition_table";
 import UserRow from "./user_table";
 
@@ -183,20 +183,17 @@ const tablesSchema = __schema({
       { name: 'page_snapshot_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, PageSnapshotRow),
-  page_yjs_update: __table({
-    name: 'page_yjs_update',
+  page_yjs_state: __table({
+    name: 'page_yjs_state',
     indexes: [
-      { name: 'id', algorithm: 'btree', columns: [
-        'id',
-      ] },
       { name: 'page_id', algorithm: 'btree', columns: [
         'pageId',
       ] },
     ],
     constraints: [
-      { name: 'page_yjs_update_id_key', constraint: 'unique', columns: ['id'] },
+      { name: 'page_yjs_state_page_id_key', constraint: 'unique', columns: ['pageId'] },
     ],
-  }, PageYjsUpdateRow),
+  }, PageYjsStateRow),
   property_definition: __table({
     name: 'property_definition',
     indexes: [
@@ -227,7 +224,6 @@ const tablesSchema = __schema({
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
   __reducerSchema("add_property", AddPropertyReducer),
-  __reducerSchema("apply_yjs_update", ApplyYjsUpdateReducer),
   __reducerSchema("clear_property_value", ClearPropertyValueReducer),
   __reducerSchema("create_database_schema", CreateDatabaseSchemaReducer),
   __reducerSchema("create_page", CreatePageReducer),
@@ -245,6 +241,7 @@ const reducersSchema = __reducers(
   __reducerSchema("reorder_property", ReorderPropertyReducer),
   __reducerSchema("restore_page", RestorePageReducer),
   __reducerSchema("restore_page_to_snapshot", RestorePageToSnapshotReducer),
+  __reducerSchema("save_yjs_state", SaveYjsStateReducer),
   __reducerSchema("set_default_view", SetDefaultViewReducer),
   __reducerSchema("set_property_value", SetPropertyValueReducer),
   __reducerSchema("set_user_profile", SetUserProfileReducer),

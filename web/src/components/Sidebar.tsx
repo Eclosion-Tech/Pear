@@ -12,7 +12,7 @@ import {
   useConnection,
 } from "@/src/hooks/usePages";
 import { useCurrentUser } from "@/src/hooks/useUser";
-import { SignOutButton } from "@/src/components/SignOutButton";
+import { SettingsPopover } from "@/src/components/SettingsPopover";
 import { ContextMenu, type ContextMenuItem } from "@/src/components/ContextMenu";
 import type { PageRow } from "@/src/hooks/usePages";
 
@@ -490,7 +490,7 @@ export function Sidebar() {
           </div>
           <span className="flex-1 text-xs text-neutral-500 dark:text-neutral-400 truncate">{displayName}</span>
           <ThemeToggle />
-          <SignOutButton />
+          <SettingsPopover />
         </div>
       )}
 

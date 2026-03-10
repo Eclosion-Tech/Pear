@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useTable } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
-import { useUpdatePageTitle, useDeletePage } from "@/src/hooks/usePages";
+import { useUpdatePageTitle, useDeletePage, useChildPages } from "@/src/hooks/usePages";
 import type { PageRow } from "@/src/hooks/usePages";
 import { PearEditor } from "./PearEditor";
 import { PageMoreMenu } from "./PageMoreMenu";
@@ -21,6 +21,7 @@ export function DocPage({ page }: DocPageProps) {
   const [contents] = useTable(tables.page_content);
   const content = contents.find((c) => c.pageId === page.id);
 
+  const { children } = useChildPages(page.id);
   const [title, setTitle] = useState(page.title);
   const [historyOpen, setHistoryOpen] = useState(false);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -95,6 +96,7 @@ export function DocPage({ page }: DocPageProps) {
           key={`${page.id}-${content?.updatedAt ?? 0}`}
           pageId={page.id}
           initialContent={content?.content ?? ""}
+          childPages={children}
         />
       </div>
       </div>

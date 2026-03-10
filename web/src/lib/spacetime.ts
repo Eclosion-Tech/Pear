@@ -21,6 +21,53 @@ const SPACETIMEDB_URI = process.env.NEXT_PUBLIC_SPACETIMEDB_URI!;
 const SPACETIMEDB_DB_NAME = process.env.NEXT_PUBLIC_SPACETIMEDB_DB_NAME!;
 export const LOCAL_STORAGE_TOKEN_KEY = "pear_spacetimedb_token";
 
+/**
+ * A short stable string that uniquely identifies the server+database combination.
+ * Used to namespace IndexedDB keys so content cached from one server can never
+ * bleed into another server's pages — even if both servers share the same page IDs.
+ *
+ * We derive it from the URI + DB name rather than the module identity hash so
+ * it stays stable across normal publishes and only changes if you point the
+ * client at a different server or database.
+ *
+ * Example: "pear_idb_localhost:3000_pear-dev"
+ */
+export const idbNamespace = `pear_idb_${SPACETIMEDB_URI}_${SPACETIMEDB_DB_NAME}`;
+
+/** Promisify a single IDBOpenDBRequest from deleteDatabase(). */
+function deleteIdb(name: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.deleteDatabase(name);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+    req.onblocked = () => {
+      // Another tab has the DB open. Resolve anyway — the delete is queued
+      // and will complete once the other connection closes.
+      resolve();
+    };
+  });
+}
+
+/**
+ * Delete all Pear IndexedDB caches for the current origin.
+ * Clears both the current namespace and any legacy `pear-page-*` entries
+ * from older naming schemes.
+ * Call this from the settings panel after a server reset, then reload.
+ */
+export async function clearIdbCache(): Promise<void> {
+  if (typeof indexedDB === "undefined") return;
+
+  const dbs = await indexedDB.databases();
+  const pearDbs = dbs.filter(
+    (db) =>
+      db.name?.startsWith(idbNamespace) || // current namespace
+      db.name?.startsWith("pear-page-") || // legacy naming (pre-namespace)
+      db.name?.startsWith("pear_idb_")     // any previous namespace variant
+  );
+
+  await Promise.all(pearDbs.map((db) => deleteIdb(db.name!)));
+}
+
 /** Removes the persisted SpacetimeDB identity token so the next load gets a fresh anonymous identity. */
 export function clearSavedToken() {
   if (typeof window !== "undefined") {

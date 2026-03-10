@@ -7,7 +7,6 @@ import { type Infer as __Infer } from "spacetimedb";
 
 // Import all reducer arg schemas
 import AddPropertyReducer from "../add_property_reducer";
-import ApplyYjsUpdateReducer from "../apply_yjs_update_reducer";
 import ClearPropertyValueReducer from "../clear_property_value_reducer";
 import CreateDatabaseSchemaReducer from "../create_database_schema_reducer";
 import CreatePageReducer from "../create_page_reducer";
@@ -25,6 +24,7 @@ import RenameViewReducer from "../rename_view_reducer";
 import ReorderPropertyReducer from "../reorder_property_reducer";
 import RestorePageReducer from "../restore_page_reducer";
 import RestorePageToSnapshotReducer from "../restore_page_to_snapshot_reducer";
+import SaveYjsStateReducer from "../save_yjs_state_reducer";
 import SetDefaultViewReducer from "../set_default_view_reducer";
 import SetPropertyValueReducer from "../set_property_value_reducer";
 import SetUserProfileReducer from "../set_user_profile_reducer";
@@ -37,7 +37,6 @@ import UpdatePropertyTypeReducer from "../update_property_type_reducer";
 import UpdateViewConfigReducer from "../update_view_config_reducer";
 
 export type AddPropertyParams = __Infer<typeof AddPropertyReducer>;
-export type ApplyYjsUpdateParams = __Infer<typeof ApplyYjsUpdateReducer>;
 export type ClearPropertyValueParams = __Infer<typeof ClearPropertyValueReducer>;
 export type CreateDatabaseSchemaParams = __Infer<typeof CreateDatabaseSchemaReducer>;
 export type CreatePageParams = __Infer<typeof CreatePageReducer>;
@@ -55,6 +54,7 @@ export type RenameViewParams = __Infer<typeof RenameViewReducer>;
 export type ReorderPropertyParams = __Infer<typeof ReorderPropertyReducer>;
 export type RestorePageParams = __Infer<typeof RestorePageReducer>;
 export type RestorePageToSnapshotParams = __Infer<typeof RestorePageToSnapshotReducer>;
+export type SaveYjsStateParams = __Infer<typeof SaveYjsStateReducer>;
 export type SetDefaultViewParams = __Infer<typeof SetDefaultViewReducer>;
 export type SetPropertyValueParams = __Infer<typeof SetPropertyValueReducer>;
 export type SetUserProfileParams = __Infer<typeof SetUserProfileReducer>;

@@ -11,7 +11,7 @@ import {
 } from "spacetimedb";
 
 export default __t.row({
-  id: __t.u64().primaryKey(),
-  pageId: __t.u64().name("page_id"),
+  pageId: __t.u64().primaryKey().name("page_id"),
   data: __t.byteArray(),
+  updatedAt: __t.timestamp().name("updated_at"),
 });
