@@ -24,6 +24,10 @@ export function useRootPages() {
   return { roots, isReady };
 }
 
+export function useMovePage() {
+  return useReducer(reducers.movePage);
+}
+
 export function useCreatePage() {
   return useReducer(reducers.createPage);
 }
@@ -38,6 +42,42 @@ export function useUpdatePageContent() {
 
 export function useDeletePage() {
   return useReducer(reducers.deletePage);
+}
+
+export function useRestorePage() {
+  return useReducer(reducers.restorePage);
+}
+
+export function useTakeSnapshot() {
+  return useReducer(reducers.takeSnapshot);
+}
+
+export function useTakeSnapshotWithContent() {
+  return useReducer(reducers.takeSnapshotWithContent);
+}
+
+export function useRestorePageToSnapshot() {
+  return useReducer(reducers.restorePageToSnapshot);
+}
+
+/** Snapshots for a page, newest first. */
+export function usePageSnapshots(pageId: bigint) {
+  const [snapshots] = useTable(tables.page_snapshot);
+  const forPage = snapshots
+    .filter((s) => s.pageId === pageId)
+    .sort((a, b) => Number(b.snapshotAt - a.snapshotAt));
+  return forPage;
+}
+
+export function usePurgePage() {
+  return useReducer(reducers.purgePage);
+}
+
+/** Soft-deleted pages (in trash). */
+export function useDeletedPages() {
+  const [pages, isReady] = useTable(tables.page);
+  const deleted = pages.filter((p) => p.deletedAt != null);
+  return { pages: deleted, isReady };
 }
 
 export function useCreateDatabaseSchema() {

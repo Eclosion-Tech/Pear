@@ -45,6 +45,8 @@ import DeletePropertyReducer from "./delete_property_reducer";
 import DeleteViewReducer from "./delete_view_reducer";
 import LoginReducer from "./login_reducer";
 import LogoutReducer from "./logout_reducer";
+import MovePageReducer from "./move_page_reducer";
+import PurgePageReducer from "./purge_page_reducer";
 import RegisterReducer from "./register_reducer";
 import RenamePropertyReducer from "./rename_property_reducer";
 import RenameViewReducer from "./rename_view_reducer";
@@ -55,6 +57,7 @@ import SetDefaultViewReducer from "./set_default_view_reducer";
 import SetPropertyValueReducer from "./set_property_value_reducer";
 import SetUserProfileReducer from "./set_user_profile_reducer";
 import TakeSnapshotReducer from "./take_snapshot_reducer";
+import TakeSnapshotWithContentReducer from "./take_snapshot_with_content_reducer";
 import UpdatePageContentReducer from "./update_page_content_reducer";
 import UpdatePageTitleReducer from "./update_page_title_reducer";
 import UpdatePropertyConfigReducer from "./update_property_config_reducer";
@@ -234,6 +237,8 @@ const reducersSchema = __reducers(
   __reducerSchema("delete_view", DeleteViewReducer),
   __reducerSchema("login", LoginReducer),
   __reducerSchema("logout", LogoutReducer),
+  __reducerSchema("move_page", MovePageReducer),
+  __reducerSchema("purge_page", PurgePageReducer),
   __reducerSchema("register", RegisterReducer),
   __reducerSchema("rename_property", RenamePropertyReducer),
   __reducerSchema("rename_view", RenameViewReducer),
@@ -244,6 +249,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_property_value", SetPropertyValueReducer),
   __reducerSchema("set_user_profile", SetUserProfileReducer),
   __reducerSchema("take_snapshot", TakeSnapshotReducer),
+  __reducerSchema("take_snapshot_with_content", TakeSnapshotWithContentReducer),
   __reducerSchema("update_page_content", UpdatePageContentReducer),
   __reducerSchema("update_page_title", UpdatePageTitleReducer),
   __reducerSchema("update_property_config", UpdatePropertyConfigReducer),

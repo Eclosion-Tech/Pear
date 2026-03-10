@@ -1,13 +1,11 @@
 {
   "name": "@pear/web",
-  "version": "0.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3001",
     "build": "next build",
     "start": "next start",
-    "generate": "spacetime generate --lang typescript --out-dir src/module_bindings --module-path ../server/spacetimedb",
-    "generate:root": "spacetime generate --lang typescript --out-dir web/src/module_bindings --module-path server/spacetimedb"
+    "generate": "spacetime generate --lang typescript --out-dir src/module_bindings --module-path ../server/spacetimedb"
   },
   "dependencies": {
     "@blocknote/core": "^0.47.1",

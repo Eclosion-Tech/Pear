@@ -49,6 +49,7 @@ export const Page = __t.object("Page", {
     return PageType;
   },
   title: __t.string(),
+  sortOrder: __t.u32(),
   embedding: __t.option(__t.array(__t.f32())),
   get createdBy() {
     return ActorType;

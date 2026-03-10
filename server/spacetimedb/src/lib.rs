@@ -99,6 +99,8 @@ pub struct Page {
     pub parent_id: Option<u64>,
     pub page_type: PageType,
     pub title: String,
+    /// Position within siblings. Spaced by 1000 so insertions rarely need a renumber.
+    pub sort_order: u32,
     pub embedding: Option<Vec<f32>>,
     pub created_by: ActorType,
     pub created_at: Timestamp,
@@ -409,6 +411,19 @@ fn hash_password(email: &str, password: &str) -> String {
 // Page Reducers
 // ============================================================
 
+/// Returns the next sort_order for a new sibling under `parent_id`.
+/// Scans all active siblings and returns max_order + 1000.
+fn next_sort_order(ctx: &ReducerContext, parent_id: Option<u64>) -> u32 {
+    ctx.db
+        .page()
+        .iter()
+        .filter(|p| p.parent_id == parent_id && p.deleted_at.is_none())
+        .map(|p| p.sort_order)
+        .max()
+        .unwrap_or(0)
+        + 1000
+}
+
 /// Atomically creates a Page and its companion PageContent row.
 #[reducer]
 pub fn create_page(
@@ -420,9 +435,11 @@ pub fn create_page(
     if title.trim().is_empty() {
         return Err("Title cannot be empty".to_string());
     }
+    let sort_order = next_sort_order(ctx, parent_id);
     let page = ctx.db.page().insert(Page {
         id: 0,
         parent_id,
+        sort_order,
         page_type,
         title,
         embedding: None,
@@ -436,6 +453,71 @@ pub fn create_page(
         content: String::new(),
         updated_at: ctx.timestamp,
     });
+    Ok(())
+}
+
+/// Moves a page to a new parent and/or position.
+///
+/// `new_parent_id` — target parent (None = root).
+/// `after_page_id` — place after this sibling (None = place first).
+///
+/// Renumbers all siblings of the new parent so sort_order stays clean.
+#[reducer]
+pub fn move_page(
+    ctx: &ReducerContext,
+    page_id: u64,
+    new_parent_id: Option<u64>,
+    after_page_id: Option<u64>,
+) -> Result<(), String> {
+    let page = ctx
+        .db
+        .page()
+        .id()
+        .find(&page_id)
+        .ok_or("Page not found")?;
+
+    // Collect and sort active siblings of the new parent (excluding the moving page).
+    let mut siblings: Vec<Page> = ctx
+        .db
+        .page()
+        .iter()
+        .filter(|p| p.parent_id == new_parent_id && p.deleted_at.is_none() && p.id != page_id)
+        .collect();
+    siblings.sort_by_key(|p| p.sort_order);
+
+    // Find the insertion index.
+    let insert_after = match after_page_id {
+        None => 0, // place first
+        Some(after_id) => {
+            siblings
+                .iter()
+                .position(|p| p.id == after_id)
+                .map(|i| i + 1)
+                .unwrap_or(siblings.len())
+        }
+    };
+
+    // Splice the moving page into the sorted list (move, no Clone needed).
+    siblings.insert(insert_after, page);
+
+    // Renumber all siblings with clean multiples of 1000.
+    for (i, sibling) in siblings.into_iter().enumerate() {
+        let new_order = (i as u32 + 1) * 1000;
+        if sibling.id == page_id {
+            ctx.db.page().id().update(Page {
+                parent_id: new_parent_id,
+                sort_order: new_order,
+                updated_at: ctx.timestamp,
+                ..sibling
+            });
+        } else if sibling.sort_order != new_order {
+            ctx.db.page().id().update(Page {
+                sort_order: new_order,
+                ..sibling
+            });
+        }
+    }
+
     Ok(())
 }
 
@@ -534,6 +616,121 @@ pub fn restore_page(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
         updated_at: ctx.timestamp,
         ..page
     });
+    Ok(())
+}
+
+/// Permanently delete a soft-deleted page and its direct data. Fails if page is not in trash.
+/// Children are reparented to this page's parent (never purged) — we never cascade-delete
+/// non-deleted content.
+#[reducer]
+pub fn purge_page(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
+    let page = ctx
+        .db
+        .page()
+        .id()
+        .find(&page_id)
+        .ok_or("Page not found")?;
+    if page.deleted_at.is_none() {
+        return Err("Page is not in trash. Move to trash first.".to_string());
+    }
+
+    // Reparent children to our parent — never purge them (they may not be in trash)
+    let child_ids: Vec<u64> = ctx
+        .db
+        .page()
+        .iter()
+        .filter(|p| p.parent_id == Some(page_id))
+        .map(|p| p.id)
+        .collect();
+    for cid in child_ids {
+        if let Some(child) = ctx.db.page().id().find(&cid) {
+            ctx.db.page().id().update(Page {
+                parent_id: page.parent_id,
+                updated_at: ctx.timestamp,
+                ..child
+            });
+        }
+    }
+
+    purge_page_inner(ctx, page_id)
+}
+
+fn purge_page_inner(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
+    // Delete linked data (PageContent is 1:1 with Page)
+    ctx.db.page_content().page_id().delete(&page_id);
+
+    let yjs_ids: Vec<u64> = ctx
+        .db
+        .page_yjs_update()
+        .page_id()
+        .filter(&page_id)
+        .map(|u| u.id)
+        .collect();
+    for uid in yjs_ids {
+        ctx.db.page_yjs_update().id().delete(&uid);
+    }
+
+    let snapshot_ids: Vec<u64> = ctx.db.page_snapshot().page_id().filter(&page_id).map(|s| s.id).collect();
+    for sid in snapshot_ids {
+        ctx.db.page_snapshot().id().delete(&sid);
+    }
+
+    let pv_ids: Vec<u64> = ctx
+        .db
+        .page_property_value()
+        .page_id()
+        .filter(&page_id)
+        .map(|v| v.id)
+        .collect();
+    for vid in pv_ids {
+        ctx.db.page_property_value().id().delete(&vid);
+    }
+
+    let hist_ids: Vec<u64> = ctx
+        .db
+        .page_property_value_history()
+        .page_id()
+        .filter(&page_id)
+        .map(|h| h.id)
+        .collect();
+    for hid in hist_ids {
+        ctx.db.page_property_value_history().id().delete(&hid);
+    }
+
+    // If database page: delete views, property defs, schemas
+    let schema_ids: Vec<u64> = ctx
+        .db
+        .database_schema()
+        .page_id()
+        .filter(&page_id)
+        .map(|s| s.id)
+        .collect();
+    for schema_id in &schema_ids {
+        let prop_ids: Vec<u64> = ctx
+            .db
+            .property_definition()
+            .schema_id()
+            .filter(schema_id)
+            .map(|p| p.id)
+            .collect();
+        for pid in prop_ids {
+            ctx.db.property_definition().id().delete(&pid);
+        }
+        ctx.db.database_schema().id().delete(schema_id);
+    }
+
+    let view_ids: Vec<u64> = ctx
+        .db
+        .database_view()
+        .page_id()
+        .filter(&page_id)
+        .map(|v| v.id)
+        .collect();
+    for vid in view_ids {
+        ctx.db.database_view().id().delete(&vid);
+    }
+
+    ctx.db.page().id().delete(&page_id);
     Ok(())
 }
 
@@ -779,6 +976,9 @@ pub fn clear_property_value(
 // Snapshot Reducers
 // ============================================================
 
+/// Snapshot using whatever is currently in PageContent.
+/// Used for manual "Save version" and for agent pre/post snapshots
+/// where content is already materialised.
 #[reducer]
 pub fn take_snapshot(
     ctx: &ReducerContext,
@@ -798,6 +998,46 @@ pub fn take_snapshot(
         .find(&page_id)
         .map(|c| c.content)
         .unwrap_or_default();
+    ctx.db.page_snapshot().insert(PageSnapshot {
+        id: 0,
+        page_id,
+        title: page.title,
+        content,
+        snapshot_at: ctx.timestamp,
+        created_by: ActorType::Human,
+        snapshot_type,
+    });
+    Ok(())
+}
+
+/// Snapshot with content supplied by the client (e.g. from the live Yjs editor).
+/// Also syncs PageContent so it stays current — important because PageContent is
+/// the source of truth for restore and for take_snapshot above.
+/// Used for Periodic auto-saves: the editor serialises its live state and calls
+/// this every N minutes while the page is open.
+#[reducer]
+pub fn take_snapshot_with_content(
+    ctx: &ReducerContext,
+    page_id: u64,
+    snapshot_type: SnapshotType,
+    content: String,
+) -> Result<(), String> {
+    let page = ctx
+        .db
+        .page()
+        .id()
+        .find(&page_id)
+        .ok_or("Page not found")?;
+
+    // Keep PageContent in sync with actual editor state.
+    if let Some(existing) = ctx.db.page_content().page_id().find(&page_id) {
+        ctx.db.page_content().page_id().update(PageContent {
+            content: content.clone(),
+            updated_at: ctx.timestamp,
+            ..existing
+        });
+    }
+
     ctx.db.page_snapshot().insert(PageSnapshot {
         id: 0,
         page_id,
@@ -848,6 +1088,20 @@ pub fn restore_page_to_snapshot(
             ..existing_content
         });
     }
+
+    // Clear Yjs updates so the editor bootstraps from restored PageContent
+    // instead of replaying stale CRDT history.
+    let yjs_ids: Vec<u64> = ctx
+        .db
+        .page_yjs_update()
+        .page_id()
+        .filter(&page_id)
+        .map(|u| u.id)
+        .collect();
+    for uid in yjs_ids {
+        ctx.db.page_yjs_update().id().delete(&uid);
+    }
+
     Ok(())
 }
 

@@ -22,6 +22,7 @@ export default __t.row({
     return PageType.name("page_type");
   },
   title: __t.string(),
+  sortOrder: __t.u32().name("sort_order"),
   embedding: __t.option(__t.array(__t.f32())),
   get createdBy() {
     return ActorType.name("created_by");

@@ -849,7 +849,7 @@ The sidebar shows all connected workspaces. Switching between them is instant �
 12. **Embeddings** — background job that generates and stores embeddings on PageContent changes. Wire up semantic search.
 13. **Automations** — `AutomationRule`, `AutomationAction`, `AutomationEventQueue`, `AutomationRunLog` tables. Enqueue calls in relevant reducers. Build the Orcha automation worker. UI for creating and managing rules.
 14. **Orcha integration** — connect Orcha orchestration layer. Wire up `PreAgentEdit` / `PostAgentEdit` snapshots. Configure agent client credentials. Implement schema generation agent as the first Orcha-powered feature. Wire `OrchaAgent` action type into automation worker.
-
+15. **offline access** - allow for cached changes that get stored locally until network reconnect
 ---
 
 ## 14. Open Questions
@@ -863,4 +863,114 @@ The sidebar shows all connected workspaces. Switching between them is instant �
 
 ---
 
+## 15. Schema Migrations & Upgrade Path
+
+### 15.1 The Problem
+
+SpacetimeDB does not currently support automatic schema migrations. Publishing a module with breaking schema changes (removed columns, renamed columns, changed types, new non-nullable columns) requires `--clear-database`, which wipes all data. For self-hosted production instances this is a non-starter — users cannot lose their workspace every time they upgrade Pear.
+
+### 15.2 What "Breaking" vs "Safe" Means
+
+**Safe (publish without `--clear-database`):**
+- Adding a new reducer
+- Changing reducer logic
+- Adding a new table
+- Adding a new column with a default value that SpacetimeDB can backfill (TBD — depends on SpacetimeDB version)
+
+**Breaking (requires a migration strategy):**
+- Adding a non-nullable column without a default to an existing table (e.g. `sort_order: u32` on `Page`)
+- Removing or renaming a column
+- Changing a column's type
+- Removing a table
+
+### 15.3 The Migration Strategy (To Be Designed)
+
+The upgrade path needs to be defined before the first production release. Key questions to resolve:
+
+1. **Export/import tooling** — Does `spacetime dump` produce a format we can transform and re-import? What does that pipeline look like for a breaking change?
+2. **Versioned migration reducers** — Ship a `migrate_vN` reducer per breaking release. On upgrade: publish new schema with `--clear-database`, then run the migration reducer which re-inserts data from a pre-export. Requires a reliable export format.
+3. **Schema versioning table** — A `SchemaVersion { version: u32 }` table lets the module detect its current version and run pending migrations automatically on `init`. The module would carry all historical migration logic and apply only the ones needed.
+4. **SpacetimeDB roadmap** — SpacetimeDB is actively developing migration support. Track their progress — native migration tooling may eliminate this problem entirely before Pear hits prod.
+5. **Upgrade documentation** — Every release that includes a breaking schema change must ship a migration guide. Minimum: a shell script that exports, clears, republishes, and re-imports. Ideally: a `pear upgrade` CLI command that handles the full flow.
+
+### 15.4 Interim Rule (Pre-Migration Tooling)
+
+Until the migration story is nailed down:
+- **Schema changes must be additive only** for any release intended for production use.
+- New columns must have sensible defaults so existing rows remain valid.
+- Breaking changes are batched and released only when the migration tooling is ready.
+- Dev instances use `--clear-database` freely. Prod instances never do without a migration script.
+
+---
+
+## 16. Offline Access & Local-First Architecture
+
+### 16.1 The Problem
+
+The current architecture is **server-first**: the editor waits for SpacetimeDB's subscription snapshot before showing content. This causes:
+- A "connecting…" flash on every page load (even for returning users with cached data)
+- Total loss of editing capability when offline or when SpacetimeDB is unreachable
+- Every Yjs update requiring a server round-trip before the echo is processed
+
+### 16.2 The Goal
+
+Pear should work like a native app: **open instantly from local state, sync in the background**. When offline, edits are captured locally and synced when the connection is restored. Multi-device conflict resolution is handled by Yjs's CRDT semantics — no special merge logic required.
+
+### 16.3 Architecture: Two-Layer Yjs Persistence
+
+```
+┌─────────────────────────────────────────────┐
+│  BlockNote (ProseMirror + Yjs XML)          │
+└───────────────┬─────────────────────────────┘
+                │  Y.Doc (in-memory CRDT)
+       ┌────────┴────────┐
+       │                 │
+  IndexedDB         SpacetimeDB
+  (local, fast,     (remote, sync,
+   always works)     optional)
+```
+
+**Layer 1 — IndexedDB (`y-indexeddb`)**: Primary persistence. Every Yjs op is written to IndexedDB immediately (within the same microtask as the Y.Doc update). On page load, state is restored from IndexedDB in milliseconds — no server round-trip needed. This eliminates the "connecting" flash entirely.
+
+**Layer 2 — SpacetimeDB (`SpacetimeYjsProvider`)**: Sync and collaboration layer. Flushes pending Yjs updates to the server in the background (debounced). On reconnect, sends any updates that accumulated while offline. Receives updates from other devices/users.
+
+### 16.4 Offline Queue
+
+When offline, Yjs updates that fail to reach SpacetimeDB are held in a persistent IndexedDB queue (`pending_sync` store, separate from the doc state). On reconnect:
+1. Read the pending queue
+2. Send each update to SpacetimeDB via `applyYjsUpdate` reducer
+3. Clear the queue
+4. Apply any updates from SpacetimeDB that arrived during the offline window (Yjs CRDT merges cleanly)
+
+The state vector approach (`Y.encodeStateVector` / `Y.diffUpdate`) already used in `SpacetimeYjsProvider.applyUpdate` makes it straightforward to compute exactly what the server is missing.
+
+### 16.5 Implementation Plan
+
+1. **Install `y-indexeddb`** (Yjs ecosystem, well-maintained)
+2. **Modify `PearEditor`**: attach `IndexeddbPersistence` to the Y.Doc keyed by `pageId`. The persistence syncs automatically; no changes needed to `SpacetimeYjsProvider`.
+3. **Offline detection**: listen to `navigator.onLine` / SpacetimeDB connection events. When offline, continue writing to IndexedDB. Buffer any `onSend` calls from `SpacetimeYjsProvider` into the pending queue.
+4. **Reconnect flush**: on SpacetimeDB `onConnect`, drain the pending queue and apply the Yjs state vector diff to send only what the server doesn't have.
+5. **Initial load order**: IndexedDB restores first (instant) → SpacetimeDB sync applies any updates from other devices (background, may be a no-op for single-user).
+
+### 16.6 Impact on Current Architecture
+
+- `SpacetimeYjsProvider` stays largely unchanged; it becomes the sync adapter rather than the primary source of truth
+- `PearEditor`'s `isActive` guard (currently gates whether to apply Yjs updates) can be relaxed — content loads from IndexedDB regardless of connection state
+- The `appliedIdsRef` Set used for deduplication integrates naturally: IndexedDB-restored content is already in the Y.Doc so `Y.diffUpdate` skips it on server sync
+- `PageContent` (the JSON snapshot in SpacetimeDB) becomes a backup/fallback rather than a recovery mechanism
+
+### 16.7 Why This Is the Right Path
+
+- **Solves "connecting" UX** without hacks
+- **Enables true offline editing** — core to Pear's self-hosted, own-your-data positioning
+- **Reduces SpacetimeDB pressure** — fewer round-trips, smaller subscription payloads
+- **Yjs is designed for this** — `y-indexeddb` is a first-class part of the Yjs ecosystem, used by production apps like Hocuspocus
+
+### 16.8 Blocking Considerations
+
+- **Multi-tab**: Two browser tabs open to the same page both write to the same IndexedDB doc. Yjs handles this correctly (same CRDT), but the SpacetimeDB sync needs to deduplicate (already handled by `appliedIdsRef` + `Y.diffUpdate`).
+- **Storage limits**: IndexedDB storage is per-origin and typically 1–10GB. For a self-hosted app this is fine; for a hosted version, quotas need monitoring.
+- **First install / new device**: IndexedDB is empty. Full state must come from SpacetimeDB. The existing initial-load path in `PearEditor` handles this.
+
+---
 *Last updated: March 2026*

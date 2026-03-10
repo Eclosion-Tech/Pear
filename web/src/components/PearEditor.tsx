@@ -6,10 +6,11 @@ import { BlockNoteView } from "@blocknote/mantine";
 import "@blocknote/mantine/style.css";
 import { useTheme } from "next-themes";
 import * as Y from "yjs";
-import { useTable } from "spacetimedb/react";
-import { tables } from "@/src/module_bindings";
-import { useApplyYjsUpdate } from "@/src/hooks/usePages";
+import { useSpacetimeDB } from "spacetimedb/react";
+import { useApplyYjsUpdate, useTakeSnapshotWithContent } from "@/src/hooks/usePages";
 import { SpacetimeYjsProvider } from "@/src/lib/SpacetimeYjsProvider";
+
+const PERIODIC_SNAPSHOT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 interface PearEditorProps {
   pageId: bigint;
@@ -22,11 +23,25 @@ export function PearEditor({ pageId, initialContent }: PearEditorProps) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
+  // isActive tells us when the SpacetimeDB subscription snapshot has landed.
+  const { isActive } = useSpacetimeDB();
+  const spacetime = useSpacetimeDB();
+
   const applyYjsUpdate = useApplyYjsUpdate();
-  // Keep reducer reference stable inside callbacks/provider without
-  // recreating the provider on every render.
+  const takeSnapshotWithContent = useTakeSnapshotWithContent();
+
+  // Keep reducer references stable inside callbacks/provider.
   const applyRef = useRef(applyYjsUpdate);
   applyRef.current = applyYjsUpdate;
+  const snapshotRef = useRef(takeSnapshotWithContent);
+  snapshotRef.current = takeSnapshotWithContent;
+
+  const lastSnapshotContentRef = useRef<string | null>(null);
+  const migratedRef = useRef(false);
+  // Persists across isActive changes so we never re-apply the same Yjs update
+  // twice to the Y.Doc. Without this, every disconnect/reconnect would
+  // re-apply the full history → unbounded memory growth → OOM.
+  const appliedIdsRef = useRef(new Set<bigint>());
 
   // One Y.Doc + provider per pageId (parent uses key={pageId} so this
   // component fully remounts on page change).
@@ -37,73 +52,97 @@ export function PearEditor({ pageId, initialContent }: PearEditorProps) {
     )
   );
 
-  // Track which update IDs have already been applied to the local doc.
-  const appliedIdsRef = useRef(new Set<bigint>());
-  // Ensures legacy-content migration runs exactly once.
-  const migratedRef = useRef(false);
-
-  // Subscribe to Yjs updates from SpacetimeDB.
-  // subscribeToAllTables() in spacetime.ts means this table is already
-  // included; isReady signals the initial snapshot has landed.
-  const [allYjsUpdates, yjsReady] = useTable(tables.page_yjs_update);
-
-  // ── Create the collaborative BlockNote editor ────────────────────────────
-  // The editor is stable for the lifetime of this component (remounted via
-  // key={pageId} in the parent when the active page changes).
   const editor = useCreateBlockNote({
     collaboration: {
       provider: providerRef.current,
       fragment: docRef.current.getXmlFragment("document-store"),
       user: {
-        // TODO: replace with actual user name/colour from auth context
         name: "User",
         color: "#7b68ee",
       },
     },
   });
 
-  // ── Apply incoming updates + migrate legacy content ───────────────────────
+  // ── Subscribe to Yjs updates WITHOUT React state ──────────────────────────
+  //
+  // The old approach used useTable(page_yjs_update) which is React state.
+  // Every incoming update (including echoes of our own keystrokes) caused a
+  // React re-render → BlockNote reconciled the full editor tree → sluggish
+  // with deep nesting.
+  //
+  // New approach: use the SDK's onInsert callback directly. Updates are
+  // applied to the Y.Doc in the event handler with no React involvement,
+  // so keystrokes never trigger a component re-render.
   useEffect(() => {
-    const pageUpdates = allYjsUpdates
-      .filter((u) => u.pageId === pageId)
+    if (!isActive) return;
+    const conn = spacetime.getConnection();
+    if (!conn) return;
+
+    // Reuse the persistent set — never re-apply an update we've already
+    // sent to the Y.Doc, even if isActive toggles or the component re-renders.
+    const applied = appliedIdsRef.current;
+
+    // 1. Apply historical rows we haven't seen yet (skips already-applied ones
+    //    on reconnect so the Y.Doc doesn't balloon with duplicate processing).
+    const existing = Array.from(conn.db.page_yjs_update.iter())
+      .filter((u) => u.pageId === pageId && !applied.has(u.id))
       .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
-    // Apply any updates not yet seen (handles both initial load and live
-    // updates from other clients arriving after mount).
-    for (const u of pageUpdates) {
-      if (!appliedIdsRef.current.has(u.id)) {
-        appliedIdsRef.current.add(u.id);
-        providerRef.current.applyUpdate(u.data);
+    for (const u of existing) {
+      applied.add(u.id);
+      providerRef.current.applyUpdate(u.data);
+    }
+
+    // 2. Migrate from legacy PageContent JSON if no Yjs history exists at all.
+    if (!migratedRef.current) {
+      migratedRef.current = true;
+      if (applied.size === 0 && initialContent) {
+        const blocks = safeParseBlocks(initialContent);
+        if (blocks?.length) {
+          providerRef.current.paused = true;
+          editor.replaceBlocks(editor.document, blocks);
+          const snapshot = Y.encodeStateAsUpdate(docRef.current);
+          providerRef.current.paused = false;
+          applyRef.current({ pageId, data: snapshot });
+        }
       }
     }
 
-    // Once the subscription is ready, decide whether to migrate legacy content.
-    if (!yjsReady || migratedRef.current) return;
+    // 3. Subscribe to live inserts — no React state, no re-renders.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const onInsert = (_ctx: any, row: { id: bigint; pageId: bigint; data: Uint8Array }) => {
+      if (row.pageId !== pageId) return;
+      if (applied.has(row.id)) return;
+      applied.add(row.id);
+      providerRef.current.applyUpdate(row.data);
+    };
 
-    if (pageUpdates.length > 0) {
-      // Yjs history exists — nothing to migrate.
-      migratedRef.current = true;
-      return;
-    }
-
-    // No Yjs history yet: bootstrap from the legacy page_content JSON.
-    // Pause outgoing updates, apply all blocks in one go, then encode the
-    // full state as a single consolidated Yjs update to send to SpacetimeDB.
-    migratedRef.current = true;
-    if (!initialContent) return;
-
-    const blocks = safeParseBlocks(initialContent);
-    if (!blocks?.length) return;
-
-    providerRef.current.paused = true;
-    editor.replaceBlocks(editor.document, blocks);
-    const snapshot = Y.encodeStateAsUpdate(docRef.current);
-    providerRef.current.paused = false;
-    applyRef.current({ pageId, data: snapshot });
-  // editor and applyRef.current are stable refs — intentionally omitted from
-  // deps to prevent the effect from re-running on every render.
+    conn.db.page_yjs_update.onInsert(onInsert);
+    return () => {
+      conn.db.page_yjs_update.removeOnInsert(onInsert);
+    };
+  // editor is a stable ref created once. initialContent is read once for
+  // migration and intentionally not a dep (would re-run on every render).
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allYjsUpdates, yjsReady, pageId]);
+  }, [isActive, pageId]);
+
+  // ── Periodic snapshot every 5 minutes while the editor is open ───────────
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const blocks = editor.document;
+      if (!blocks?.length) return;
+      const content = JSON.stringify(blocks);
+      if (content === lastSnapshotContentRef.current) return;
+      lastSnapshotContentRef.current = content;
+      snapshotRef.current({
+        pageId,
+        snapshotType: { tag: "Periodic" },
+        content,
+      });
+    }, PERIODIC_SNAPSHOT_INTERVAL_MS);
+    return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageId]);
 
   // ── Cleanup on unmount ────────────────────────────────────────────────────
   useEffect(() => {

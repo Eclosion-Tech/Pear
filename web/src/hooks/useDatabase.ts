@@ -27,6 +27,10 @@ export function useDatabaseViews(pageId: bigint) {
   return { views: pageViews, isReady };
 }
 
+export function useClearPropertyValue() {
+  return useReducer(reducers.clearPropertyValue);
+}
+
 export function useDeleteProperty() {
   return useReducer(reducers.deleteProperty);
 }

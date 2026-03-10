@@ -1,22 +1,28 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { useTable } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
-import { useUpdatePageTitle } from "@/src/hooks/usePages";
+import { useUpdatePageTitle, useDeletePage } from "@/src/hooks/usePages";
 import type { PageRow } from "@/src/hooks/usePages";
 import { PearEditor } from "./PearEditor";
+import { PageMoreMenu } from "./PageMoreMenu";
+import { PageHistoryPanel } from "./PageHistoryPanel";
 
 interface DocPageProps {
   page: PageRow;
 }
 
 export function DocPage({ page }: DocPageProps) {
+  const router = useRouter();
   const updateTitle = useUpdatePageTitle();
+  const deletePage = useDeletePage();
   const [contents] = useTable(tables.page_content);
   const content = contents.find((c) => c.pageId === page.id);
 
   const [title, setTitle] = useState(page.title);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track whether the title input is focused so we can ignore server echoes
   // that would overwrite characters the user is still typing.
@@ -40,27 +46,66 @@ export function DocPage({ page }: DocPageProps) {
   }
 
   return (
-    <div className="flex flex-col h-full overflow-y-auto">
-      <div className="max-w-3xl mx-auto w-full px-8 pt-16 pb-24">
-        <input
-          className="text-4xl font-bold text-neutral-900 dark:text-white bg-transparent outline-none w-full mb-6 placeholder:text-neutral-300 dark:placeholder:text-neutral-700"
-          value={title}
-          onChange={(e) => handleTitleChange(e.target.value)}
-          onFocus={() => { titleFocusedRef.current = true; }}
-          onBlur={() => {
-            titleFocusedRef.current = false;
-            // On blur, snap to the latest server value so we stay in sync
-            // (handles the case where focus leaves before the echo arrives).
-            setTitle(page.title);
-          }}
-          placeholder="Untitled"
-        />
+    <div className="flex h-full overflow-hidden">
+      <div
+        className={`flex flex-col overflow-y-auto transition-all ${historyOpen ? "flex-1 min-w-0" : "flex-1"}`}
+      >
+      <div className="max-w-3xl mx-auto w-full px-8 pt-16 pb-24 flex-1">
+        <div className="flex items-center gap-3 mb-6">
+          <input
+            className="flex-1 text-4xl font-bold text-neutral-900 dark:text-white bg-transparent outline-none placeholder:text-neutral-300 dark:placeholder:text-neutral-700"
+            value={title}
+            onChange={(e) => handleTitleChange(e.target.value)}
+            onFocus={() => { titleFocusedRef.current = true; }}
+            onBlur={() => {
+              titleFocusedRef.current = false;
+              setTitle(page.title);
+            }}
+            placeholder="Untitled"
+          />
+          <button
+            onClick={() => setHistoryOpen((o) => !o)}
+            title="Page history"
+            aria-label="Page history"
+            className={`shrink-0 p-1.5 rounded transition-colors ${
+              historyOpen
+                ? "text-neutral-900 dark:text-white bg-neutral-200 dark:bg-neutral-700"
+                : "text-neutral-400 dark:text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+            }`}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12 6 12 12 16 14"/>
+            </svg>
+          </button>
+          <PageMoreMenu
+            items={[
+              {
+                label: "Move to trash",
+                onClick: () => {
+                  deletePage({ pageId: page.id });
+                  router.push("/workspace");
+                },
+                destructive: true,
+              },
+            ]}
+          />
+        </div>
         <PearEditor
-          key={String(page.id)}
+          key={`${page.id}-${content?.updatedAt ?? 0}`}
           pageId={page.id}
           initialContent={content?.content ?? ""}
         />
       </div>
+      </div>
+      {historyOpen && (
+        <div className="w-72 shrink-0 border-l border-neutral-200 dark:border-neutral-800">
+          <PageHistoryPanel
+            pageId={page.id}
+            onClose={() => setHistoryOpen(false)}
+          />
+        </div>
+      )}
     </div>
   );
 }

@@ -16,9 +16,13 @@ client/out/
 server/spacetimedb/target/
 
 # ————————————————————————————————
-# Generated bindings (regenerated via `pnpm generate`)
+# Generated bindings
+# web/src/module_bindings/ is intentionally committed — regenerate with
+# `pnpm generate` from the web/ directory after schema changes.
+# The paths below are accidental output locations to ignore.
 # ————————————————————————————————
 client/src/module_bindings/
+server/web/
 
 # ————————————————————————————————
 # Environment files
