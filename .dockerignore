@@ -1,7 +1,9 @@
-# Keep the build context small — exclude large dirs not needed for the client build
-server
+# Keep the build context small and prevent host node_modules from colliding
+# with the ones installed inside the Docker build stages.
+node_modules
 web/node_modules
 web/.next
 web/.env*.local
+server/spacetimedb/target
 .git
 *.md

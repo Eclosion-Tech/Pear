@@ -20,8 +20,9 @@ function actorLabel(createdBy: { tag: string; value?: string }): string {
   return "Unknown";
 }
 
-function formatTime(ts: bigint | number): string {
-  const ms = Number(ts) / 1000;
+function formatTime(ts: bigint | number | { microsSinceUnixEpoch: bigint }): string {
+  const raw = typeof ts === "object" ? ts.microsSinceUnixEpoch : ts;
+  const ms = Number(raw) / 1000;
   const d = new Date(ms);
   const now = new Date();
   const diff = now.getTime() - d.getTime();

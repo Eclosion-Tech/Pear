@@ -17,6 +17,8 @@ services:
       # Pre-built module WASM — run `cd server && spacetime build` first
       - ./server/spacetimedb/target/wasm32-unknown-unknown/release/server.wasm:/module/server.wasm:ro
     entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    environment:
+      STDB_DB_NAME: ${SPACETIMEDB_DB_NAME:-pear-dev}
     user: root
     restart: unless-stopped
     networks:
@@ -28,19 +30,22 @@ services:
       context: .
       dockerfile: web/Dockerfile
       args:
-        # NEXT_PUBLIC_* vars are baked into the browser bundle — must use the URL
-        # the browser can reach (i.e. the exposed host port, not the Docker service name).
-        NEXT_PUBLIC_SPACETIMEDB_URI: ws://localhost:3000
-        NEXT_PUBLIC_SPACETIMEDB_DB_NAME: pear-dev
+        # NEXT_PUBLIC_* vars are baked into the browser bundle at build time.
+        # The browser must reach these URLs directly, so use the public-facing
+        # addresses (Cloudflare Tunnel hostname or exposed host port).
+        NEXT_PUBLIC_SPACETIMEDB_URI: ${SPACETIMEDB_PUBLIC_URI:-ws://localhost:3000}
+        NEXT_PUBLIC_SPACETIMEDB_DB_NAME: ${SPACETIMEDB_DB_NAME:-pear-dev}
+        NEXT_PUBLIC_SPACETIMEAUTH_CLIENT_ID: ${SPACETIMEAUTH_CLIENT_ID:-}
+        NEXT_PUBLIC_SPACETIMEAUTH_AUTHORITY: ${SPACETIMEAUTH_AUTHORITY:-}
     container_name: pear-web
     ports:
       - "3001:3001"
-    # NEXT_PUBLIC_* vars are baked at build time — no runtime env needed.
     depends_on:
       - spacetimedb
     restart: unless-stopped
     networks:
       - pear
+
 
 networks:
   pear:

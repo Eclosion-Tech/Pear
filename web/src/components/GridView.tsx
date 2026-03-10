@@ -332,7 +332,7 @@ export function GridView({ page }: GridViewProps) {
   const filteredRows = useMemo(() => {
     if (activeFilters.length === 0) return rows;
     return rows.filter((row) =>
-      activeFilters.every((f) => matchesFilter(row, f, allPropertyValues as PropValRow[], properties)),
+      activeFilters.every((f) => matchesFilter(row, f, allPropertyValues as unknown as PropValRow[], properties)),
     );
   }, [rows, activeFilters, allPropertyValues, properties]);
 
@@ -378,7 +378,7 @@ export function GridView({ page }: GridViewProps) {
     if (activeSort.length === 0) return filteredRows;
     return [...filteredRows].sort((a, b) => {
       for (const rule of activeSort) {
-        const cmp = compareForSort(a, b, rule, allPropertyValues as PropValRow[]);
+        const cmp = compareForSort(a, b, rule, allPropertyValues as unknown as PropValRow[]);
         if (cmp !== 0) return cmp;
       }
       return 0;
