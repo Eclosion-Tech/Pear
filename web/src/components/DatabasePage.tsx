@@ -2,11 +2,15 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { useUpdatePageTitle, useDeletePage } from "@/src/hooks/usePages";
+import { useUpdatePageTitle, useUpdatePageIcon, useDeletePage } from "@/src/hooks/usePages";
 import type { PageRow } from "@/src/hooks/usePages";
 import { GridView } from "./GridView";
 import { PageMoreMenu } from "./PageMoreMenu";
 import { PageHistoryPanel } from "./PageHistoryPanel";
+import { Breadcrumb } from "./Breadcrumb";
+import { EmojiPicker } from "./EmojiPicker";
+import { usePageAncestors } from "@/src/hooks/usePages";
+import { clearIdbCache, clearIdbCacheForPage } from "@/src/lib/spacetime";
 
 interface DatabasePageProps {
   page: PageRow;
@@ -15,7 +19,11 @@ interface DatabasePageProps {
 export function DatabasePage({ page }: DatabasePageProps) {
   const router = useRouter();
   const updateTitle = useUpdatePageTitle();
+  const updatePageIcon = useUpdatePageIcon();
   const deletePage = useDeletePage();
+  const ancestors = usePageAncestors(page.id);
+  const iconButtonRef = useRef<HTMLButtonElement>(null);
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [title, setTitle] = useState(page.title);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -33,9 +41,27 @@ export function DatabasePage({ page }: DatabasePageProps) {
   }
 
   return (
-    <div className="relative flex flex-col h-full overflow-hidden">
+    <div className="relative flex flex-col h-full">
       <div className="px-8 pt-8 pb-4 flex-shrink-0">
-        <div className="flex items-center gap-3">
+        <Breadcrumb ancestors={ancestors} currentTitle={title} />
+        <div className="flex items-center gap-3 mt-1">
+          <button
+            ref={iconButtonRef}
+            type="button"
+            onClick={() => setEmojiPickerOpen((o) => !o)}
+            className="shrink-0 w-10 h-10 flex items-center justify-center rounded-lg text-2xl hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+            title="Change icon"
+          >
+            {page.icon ?? "📊"}
+          </button>
+          {emojiPickerOpen && (
+            <EmojiPicker
+              anchorRef={iconButtonRef}
+              currentIcon={page.icon != null ? page.icon : undefined}
+              onSelect={(emoji) => { updatePageIcon({ pageId: page.id, icon: emoji ?? "" }); setEmojiPickerOpen(false); }}
+              onClose={() => setEmojiPickerOpen(false)}
+            />
+          )}
           <input
             className="flex-1 text-3xl font-bold text-neutral-900 dark:text-white bg-transparent outline-none placeholder:text-neutral-300 dark:placeholder:text-neutral-700"
             value={title}
@@ -60,6 +86,20 @@ export function DatabasePage({ page }: DatabasePageProps) {
           <PageMoreMenu
             items={[
               {
+                label: "Clear cache for this page",
+                onClick: async () => {
+                  await clearIdbCacheForPage(page.id);
+                  window.location.reload();
+                },
+              },
+              {
+                label: "Clear cache for workspace",
+                onClick: async () => {
+                  await clearIdbCache();
+                  window.location.reload();
+                },
+              },
+              {
                 label: "Move to trash",
                 onClick: () => {
                   deletePage({ pageId: page.id });
@@ -72,7 +112,7 @@ export function DatabasePage({ page }: DatabasePageProps) {
         </div>
         <p className="text-xs text-neutral-400 dark:text-neutral-600 mt-1">Database</p>
       </div>
-      <div className="flex-1 overflow-hidden px-4">
+      <div className="flex-1 min-h-0 overflow-auto px-4 pb-8">
         <GridView page={page} />
       </div>
 

@@ -7,7 +7,8 @@ FROM base AS deps
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY web/package.json ./web/
-RUN pnpm install --frozen-lockfile --filter web...
+RUN pnpm install --frozen-lockfile --filter web... \
+ && mkdir -p /app/node_modules /app/web/node_modules
 
 # ── Build ───────────────────────────────────────────────────────────────────
 FROM base AS builder

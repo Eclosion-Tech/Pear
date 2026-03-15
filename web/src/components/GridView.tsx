@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useTable } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
 import {
@@ -15,16 +15,31 @@ import {
 import type { PageRow } from "@/src/hooks/usePages";
 import {
   useDatabaseSchema,
+  useDatabaseViews,
   usePropertyDefinitions,
   usePagePropertyValues,
   useClearPropertyValue,
   useDeleteProperty,
+  useReorderProperty,
   useRenameProperty,
   useUpdatePropertyType,
   useUpdatePropertyConfig,
+  useUpdateViewConfig,
 } from "@/src/hooks/useDatabase";
 import type { PropertyDefinitionRow } from "@/src/hooks/useDatabase";
 import { PropertyCell } from "./PropertyCell";
+import {
+  buildSiblingValues,
+  parseSelectConfig,
+  serializeSelectConfig,
+  parseOptionFormula,
+  getOptionColorClass,
+  COLOR_KEYS,
+  OPTION_CHIP_CLASSES,
+  SWATCH_BG_CLASSES,
+  type SelectOptionCondition,
+  type OptionColorKey,
+} from "@/src/lib/formulaEval";
 import { RowDetailModal } from "./RowDetailModal";
 import {
   PropertyTypePicker,
@@ -264,6 +279,23 @@ function matchesFilter(
   }
 }
 
+// ─── View config (column widths) ──────────────────────────────────────────────
+
+const NAME_COL_KEY = "__name";
+const DEFAULT_NAME_WIDTH = 224;  // w-56
+const DEFAULT_COL_WIDTH  = 160;
+const MIN_COL_WIDTH      = 60;
+
+interface ViewConfig {
+  columnWidths?: Record<string, number>;
+}
+function parseViewConfig(raw: string): ViewConfig {
+  try { return JSON.parse(raw) as ViewConfig; } catch { return {}; }
+}
+function serializeViewConfig(cfg: ViewConfig): string {
+  return JSON.stringify(cfg);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface GridViewProps {
@@ -274,11 +306,201 @@ export function GridView({ page }: GridViewProps) {
   const { schema, isReady: schemaReady } = useDatabaseSchema(page.id);
   const properties = usePropertyDefinitions(schema?.id ?? BigInt(0));
   const { children: rows } = useChildPages(page.id);
+  const { views } = useDatabaseViews(page.id);
+  const view = views[0] ?? null;
 
   const createPage = useCreatePage();
   const addProperty = useAddProperty();
   const createSchema = useCreateDatabaseSchema();
   const createView = useCreateView();
+  const updateViewConfig = useUpdateViewConfig();
+
+  // ── Column widths ───────────────────────────────────────────────────────────
+  const [colWidths, setColWidths] = useState<Record<string, number>>({});
+  const colWidthsRef = useRef(colWidths);
+  colWidthsRef.current = colWidths;
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const updateViewConfigRef = useRef(updateViewConfig);
+  updateViewConfigRef.current = updateViewConfig;
+
+  // Hydrate widths from persisted view config whenever the view first arrives
+  useEffect(() => {
+    if (!view?.config) return;
+    const parsed = parseViewConfig(view.config);
+    if (parsed.columnWidths) setColWidths(parsed.columnWidths);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view?.id]);
+
+  // Stable drag state lives in a ref so mouse handlers don't go stale
+  const dragRef = useRef<{ key: string; startX: number; startWidth: number } | null>(null);
+  const [isResizing, setIsResizing] = useState(false);
+
+  function startColResize(key: string, clientX: number, currentWidth: number) {
+    dragRef.current = { key, startX: clientX, startWidth: currentWidth };
+    setIsResizing(true);
+  }
+
+  function saveColWidths(widths: Record<string, number>) {
+    const v = viewRef.current;
+    if (!v) return;
+    const existing = parseViewConfig(v.config);
+    updateViewConfigRef.current({
+      viewId: v.id,
+      config: serializeViewConfig({ ...existing, columnWidths: widths }),
+    });
+  }
+
+  useEffect(() => {
+    function onMouseMove(e: MouseEvent) {
+      if (!dragRef.current) return;
+      const { key, startX, startWidth } = dragRef.current;
+      const next = Math.max(MIN_COL_WIDTH, startWidth + e.clientX - startX);
+      setColWidths((prev) => ({ ...prev, [key]: next }));
+    }
+    function onMouseUp() {
+      if (!dragRef.current) return;
+      dragRef.current = null;
+      setIsResizing(false);
+      saveColWidths(colWidthsRef.current);
+    }
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+    return () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Table ref for auto-fit measurement
+  const tableRef = useRef<HTMLTableElement>(null);
+
+  function autoFitColumn(key: string) {
+    if (!tableRef.current) return;
+    const dp = localPropOrderRef.current
+      ? localPropOrderRef.current
+          .map((id) => propertiesRef.current.find((p) => p.id === id))
+          .filter(Boolean)
+      : propertiesRef.current;
+    const allKeys = [NAME_COL_KEY, ...dp.map((p) => String(p!.id))];
+    const colIdx = allKeys.indexOf(key);
+    if (colIdx < 0) return;
+    const cells = tableRef.current.querySelectorAll<HTMLElement>(
+      `tr > :nth-child(${colIdx + 1})`
+    );
+    let maxW = MIN_COL_WIDTH;
+    cells.forEach((cell) => { maxW = Math.max(maxW, cell.scrollWidth); });
+    const next = { ...colWidthsRef.current, [key]: maxW };
+    setColWidths(next);
+    saveColWidths(next);
+  }
+
+  // ── Column reorder ──────────────────────────────────────────────────────────
+  const reorderProperty = useReorderProperty();
+  const propertiesRef = useRef(properties);
+  propertiesRef.current = properties;
+
+  const [localPropOrder, setLocalPropOrder] = useState<bigint[] | null>(null);
+  const localPropOrderRef = useRef(localPropOrder);
+  localPropOrderRef.current = localPropOrder;
+
+  const displayProperties = useMemo(() => {
+    if (!localPropOrder) return properties;
+    return localPropOrder
+      .map((id) => properties.find((p) => p.id === id))
+      .filter((p): p is NonNullable<PropertyDefinitionRow> => p != null);
+  }, [localPropOrder, properties]);
+
+  const [draggingColKey, setDraggingColKey] = useState<string | null>(null);
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+  const [ghostPos, setGhostPos] = useState<{ x: number; y: number } | null>(null);
+
+  const colDragRef = useRef<{
+    key: string;
+    fromIdx: number;
+    startX: number;
+    startY: number;
+    started: boolean;
+  } | null>(null);
+
+  function computeDragOverIdx(clientX: number): number {
+    if (!tableRef.current) return 0;
+    const dp = localPropOrderRef.current
+      ? localPropOrderRef.current
+          .map((id) => propertiesRef.current.find((p) => p.id === id))
+          .filter(Boolean)
+      : propertiesRef.current;
+    const rect = tableRef.current.getBoundingClientRect();
+    let x = rect.left + (colWidthsRef.current[NAME_COL_KEY] ?? DEFAULT_NAME_WIDTH);
+    for (let i = 0; i < dp.length; i++) {
+      const pw = colWidthsRef.current[String(dp[i]!.id)] ?? DEFAULT_COL_WIDTH;
+      if (clientX < x + pw / 2) return i;
+      x += pw;
+    }
+    return dp.length;
+  }
+
+  function startColDrag(key: string, fromIdx: number, clientX: number, clientY: number) {
+    colDragRef.current = { key, fromIdx, startX: clientX, startY: clientY, started: false };
+  }
+
+  // Delegating-ref pattern: always calls the freshest closure
+  const colDragHandlersRef = useRef({ onMouseMove: (_e: MouseEvent) => {}, onMouseUp: (_e: MouseEvent) => {} });
+  colDragHandlersRef.current = {
+    onMouseMove(e: MouseEvent) {
+      if (!colDragRef.current) return;
+      const { startX, startY, key } = colDragRef.current;
+      if (!colDragRef.current.started) {
+        if (Math.abs(e.clientX - startX) < 5 && Math.abs(e.clientY - startY) < 5) return;
+        colDragRef.current.started = true;
+        setDraggingColKey(key);
+        setLocalPropOrder(propertiesRef.current.map((p) => p.id));
+      }
+      setGhostPos({ x: e.clientX, y: e.clientY });
+
+      // Live reorder: move the column into its new slot as the cursor crosses midpoints
+      const fromIdx = colDragRef.current.fromIdx;
+      const overIdx = computeDragOverIdx(e.clientX);
+      if (overIdx !== fromIdx && overIdx !== fromIdx + 1) {
+        const currentOrder = localPropOrderRef.current ?? propertiesRef.current.map((p) => p.id);
+        const ids = [...currentOrder];
+        const [moved] = ids.splice(fromIdx, 1);
+        const insertAt = overIdx > fromIdx ? overIdx - 1 : overIdx;
+        ids.splice(insertAt, 0, moved);
+        setLocalPropOrder(ids);
+        colDragRef.current.fromIdx = insertAt; // track new position synchronously
+      }
+    },
+    onMouseUp(_e: MouseEvent) {
+      if (!colDragRef.current) return;
+      const { started } = colDragRef.current;
+      colDragRef.current = null;
+      if (!started) { setLocalPropOrder(null); setDraggingColKey(null); setDragOverIdx(null); setGhostPos(null); return; }
+      // Persist whatever order the live drag ended on
+      const finalOrder = localPropOrderRef.current;
+      if (finalOrder) {
+        finalOrder.forEach((id, i) => {
+          reorderProperty({ propertyDefinitionId: id, newOrder: i * 1000 });
+        });
+      }
+      setLocalPropOrder(null);
+      setDraggingColKey(null);
+      setDragOverIdx(null);
+      setGhostPos(null);
+    },
+  };
+
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => colDragHandlersRef.current.onMouseMove(e);
+    const onMouseUp   = (e: MouseEvent) => colDragHandlersRef.current.onMouseUp(e);
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup",   onMouseUp);
+    return () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup",   onMouseUp);
+    };
+  }, []);
 
   const [selectedRow, setSelectedRow] = useState<PageRow | null>(null);
 
@@ -402,12 +624,126 @@ export function GridView({ page }: GridViewProps) {
   }
   // ────────────────────────────────────────────────────────────────────────────
 
-  // ── Cell selection ──────────────────────────────────────────────────────────
+  // ── View mode (grid / list) ──────────────────────────────────────────────────
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+
+  // ── Row multi-select ────────────────────────────────────────────────────────
+  const [selectedRowIds, setSelectedRowIds] = useState<Set<bigint>>(new Set());
+  const [lastSelectedRowIdx, setLastSelectedRowIdx] = useState<number | null>(null);
+
+  function toggleRowSelect(rowId: bigint, rowIdx: number, shiftKey: boolean) {
+    if (shiftKey && lastSelectedRowIdx !== null) {
+      // Range: replace selection with the full span
+      const from = Math.min(lastSelectedRowIdx, rowIdx);
+      const to   = Math.max(lastSelectedRowIdx, rowIdx);
+      setSelectedRowIds(() => {
+        const next = new Set<bigint>();
+        for (let i = from; i <= to; i++) next.add(sortedRows[i].id);
+        return next;
+      });
+    } else {
+      setSelectedRowIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(rowId)) next.delete(rowId); else next.add(rowId);
+        return next;
+      });
+      setLastSelectedRowIdx(rowIdx);
+    }
+  }
+
+  function clearRowSelection() {
+    setSelectedRowIds(new Set());
+    setLastSelectedRowIdx(null);
+  }
+
+  function bulkDeleteRows() {
+    for (const id of selectedRowIds) deletePage({ pageId: id });
+    clearRowSelection();
+  }
+
+  // ── Cell selection & keyboard navigation ────────────────────────────────────
   // Key format: `${rowId}|${propDefinitionId}` (both as decimal strings)
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
+  // When non-null, the matching PropertyCell starts in edit mode.
+  const [editingCell, setEditingCell] = useState<string | null>(null);
   const setPropertyValue = useSetPropertyValue();
   const deletePage = useDeletePage();
   const clearPropertyValue = useClearPropertyValue();
+
+  // ── Fill handle ─────────────────────────────────────────────────────────────
+  const [fillSource, setFillSource] = useState<{ rowId: bigint; propId: bigint } | null>(null);
+  const [fillTarget, setFillTarget] = useState<bigint | null>(null);
+  const isDraggingFillRef = useRef(false);
+
+  const fillRangeCells = useMemo(() => {
+    const cells = new Set<string>();
+    if (!fillSource || !fillTarget) return cells;
+    const sourceIdx = sortedRows.findIndex((r) => r.id === fillSource.rowId);
+    const targetIdx = sortedRows.findIndex((r) => r.id === fillTarget);
+    if (sourceIdx === -1 || targetIdx === -1) return cells;
+    const [start, end] = sourceIdx <= targetIdx ? [sourceIdx, targetIdx] : [targetIdx, sourceIdx];
+    for (let i = start; i <= end; i++) {
+      cells.add(`${sortedRows[i].id}|${fillSource.propId}`);
+    }
+    return cells;
+  }, [fillSource, fillTarget, sortedRows]);
+
+  function handleFillDragStart(rowId: bigint, propId: bigint) {
+    isDraggingFillRef.current = true;
+    setFillSource({ rowId, propId });
+    setFillTarget(rowId);
+  }
+
+  function handleFillDragEnter(rowId: bigint, propId: bigint) {
+    if (!isDraggingFillRef.current || !fillSource) return;
+    if (propId !== fillSource.propId) return;
+    setFillTarget(rowId);
+  }
+
+  useEffect(() => {
+    function onMouseUp() {
+      if (!isDraggingFillRef.current) return;
+      isDraggingFillRef.current = false;
+
+      if (fillSource && fillTarget && fillSource.rowId !== fillTarget) {
+        const sourceValue = (allPropertyValues as unknown as Array<{ pageId: bigint; propertyDefinitionId: bigint; value: unknown }>)
+          .find((v) => v.pageId === fillSource.rowId && v.propertyDefinitionId === fillSource.propId)
+          ?.value;
+
+        if (sourceValue) {
+          const sourceIdx = sortedRows.findIndex((r) => r.id === fillSource.rowId);
+          const targetIdx = sortedRows.findIndex((r) => r.id === fillTarget);
+          if (sourceIdx !== -1 && targetIdx !== -1) {
+            const [fillStart, fillEnd] = sourceIdx < targetIdx
+              ? [sourceIdx + 1, targetIdx]
+              : [targetIdx, sourceIdx - 1];
+            for (let i = fillStart; i <= fillEnd; i++) {
+              setPropertyValue({
+                pageId: sortedRows[i].id,
+                propertyDefinitionId: fillSource.propId,
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                value: sourceValue as any,
+              });
+            }
+            // Expand selection to cover the full filled range
+            const newSelected = new Set<string>();
+            const [selStart, selEnd] = sourceIdx <= targetIdx ? [sourceIdx, targetIdx] : [targetIdx, sourceIdx];
+            for (let i = selStart; i <= selEnd; i++) {
+              newSelected.add(`${sortedRows[i].id}|${fillSource.propId}`);
+            }
+            setSelectedCells(newSelected);
+          }
+        }
+      }
+
+      setFillSource(null);
+      setFillTarget(null);
+    }
+
+    document.addEventListener("mouseup", onMouseUp);
+    return () => document.removeEventListener("mouseup", onMouseUp);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fillSource, fillTarget, sortedRows, allPropertyValues]);
 
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -450,18 +786,96 @@ export function GridView({ page }: GridViewProps) {
     setSelectedCells(new Set());
   }
 
+  // ── Navigation helpers ──────────────────────────────────────────────────────
+
+  function navigateFrom(
+    fromKey: string,
+    dir: "up" | "down" | "left" | "right"
+  ): string | null {
+    const [rowIdStr, propIdStr] = fromKey.split("|");
+    const rowId = BigInt(rowIdStr);
+    const propId = BigInt(propIdStr);
+    const rowIdx = sortedRows.findIndex((r) => r.id === rowId);
+    const propIdx = properties.findIndex((p) => p.id === propId);
+    if (rowIdx === -1 || propIdx === -1) return null;
+
+    let newRowIdx = rowIdx;
+    let newPropIdx = propIdx;
+    if (dir === "up") newRowIdx = Math.max(0, rowIdx - 1);
+    else if (dir === "down") newRowIdx = Math.min(sortedRows.length - 1, rowIdx + 1);
+    else if (dir === "left") newPropIdx = Math.max(0, propIdx - 1);
+    else if (dir === "right") newPropIdx = Math.min(properties.length - 1, propIdx + 1);
+
+    // No movement at boundary — don't wrap
+    if (newRowIdx === rowIdx && newPropIdx === propIdx) return null;
+    return cellKey(sortedRows[newRowIdx].id, properties[newPropIdx].id);
+  }
+
+  // Called by PropertyCell sub-components after Enter / Tab / Escape
+  function handleCellNavigate(dir: "down" | "right" | "left" | "escape") {
+    const current = [...selectedCells][0];
+    setEditingCell(null);
+    if (dir === "escape" || !current) return;
+    const navDir = dir === "down" ? "down" : dir === "right" ? "right" : "left";
+    const next = navigateFrom(current, navDir);
+    if (next) setSelectedCells(new Set([next]));
+  }
+
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       // Don't intercept while the user is typing inside an input / textarea / editor
       const target = e.target as HTMLElement;
-      if (
+      const isEditing =
         target.tagName === "INPUT" ||
         target.tagName === "TEXTAREA" ||
-        target.isContentEditable
-      ) return;
+        target.isContentEditable;
 
       if (e.key === "Escape") {
+        if (editingCell) {
+          setEditingCell(null);
+        } else if (selectedCells.size > 0) {
+          setSelectedCells(new Set());
+        } else {
+          clearRowSelection();
+        }
+        return;
+      }
+
+      // Ctrl/Cmd+A → select all rows
+      if ((e.metaKey || e.ctrlKey) && e.key === "a") {
+        e.preventDefault();
+        setSelectedRowIds(new Set(sortedRows.map((r) => r.id)));
+        setLastSelectedRowIdx(sortedRows.length - 1);
         setSelectedCells(new Set());
+        return;
+      }
+
+      // While a cell is actively editing, let the input handle keys
+      if (isEditing) return;
+
+      const single = selectedCells.size === 1 ? [...selectedCells][0] : null;
+
+      // Arrow key navigation (only when not editing)
+      if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key) && single) {
+        e.preventDefault();
+        const dir = e.key.slice(5).toLowerCase() as "up" | "down" | "left" | "right";
+        const next = navigateFrom(single, dir);
+        if (next) setSelectedCells(new Set([next]));
+        return;
+      }
+
+      // Tab navigation
+      if (e.key === "Tab" && single) {
+        e.preventDefault();
+        const next = navigateFrom(single, e.shiftKey ? "left" : "right");
+        if (next) setSelectedCells(new Set([next]));
+        return;
+      }
+
+      // Enter → start editing the selected cell
+      if (e.key === "Enter" && single) {
+        e.preventDefault();
+        setEditingCell(single);
         return;
       }
 
@@ -472,7 +886,8 @@ export function GridView({ page }: GridViewProps) {
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [selectedCells]); // eslint-disable-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCells, selectedRowIds, editingCell, sortedRows, properties]);
   // ────────────────────────────────────────────────────────────────────────────
 
   async function ensureSchemaAndView() {
@@ -543,11 +958,13 @@ export function GridView({ page }: GridViewProps) {
 
   return (
     <div
-      className="flex-1 flex flex-col overflow-hidden"
+      className="flex flex-col"
       onContextMenu={(e) => e.stopPropagation()}
     >
+      {/* Sticky toolbar: stays pinned while table content scrolls */}
+      <div className="sticky top-0 z-10 bg-white dark:bg-neutral-950">
       {/* Grid toolbar */}
-      <div className="flex items-center gap-3 px-3 py-1.5 border-b border-neutral-200 dark:border-neutral-800 shrink-0">
+      <div className="flex items-center gap-3 px-3 py-1.5 border-b border-neutral-200 dark:border-neutral-800">
         <button
           onClick={() => setFilterBarOpen((prev) => !prev)}
           className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded transition-colors ${
@@ -584,7 +1001,53 @@ export function GridView({ page }: GridViewProps) {
             </span>
           )}
         </button>
+
+        {/* View mode toggle — right-aligned */}
+        <div className="ml-auto flex items-center gap-0.5 bg-neutral-100 dark:bg-neutral-800 rounded p-0.5">
+          <button
+            onClick={() => setViewMode("grid")}
+            title="Grid view"
+            className={`p-1 rounded transition-colors ${viewMode === "grid" ? "bg-white dark:bg-neutral-700 shadow-sm text-neutral-700 dark:text-neutral-200" : "text-neutral-400 dark:text-neutral-500 hover:text-neutral-600 dark:hover:text-neutral-300"}`}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <rect x="1" y="1" width="5" height="5" rx="0.5" stroke="currentColor" strokeWidth="1.3"/>
+              <rect x="8" y="1" width="5" height="5" rx="0.5" stroke="currentColor" strokeWidth="1.3"/>
+              <rect x="1" y="8" width="5" height="5" rx="0.5" stroke="currentColor" strokeWidth="1.3"/>
+              <rect x="8" y="8" width="5" height="5" rx="0.5" stroke="currentColor" strokeWidth="1.3"/>
+            </svg>
+          </button>
+          <button
+            onClick={() => setViewMode("list")}
+            title="List view"
+            className={`p-1 rounded transition-colors ${viewMode === "list" ? "bg-white dark:bg-neutral-700 shadow-sm text-neutral-700 dark:text-neutral-200" : "text-neutral-400 dark:text-neutral-500 hover:text-neutral-600 dark:hover:text-neutral-300"}`}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M1 3h12M1 7h12M1 11h12" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+            </svg>
+          </button>
+        </div>
       </div>
+
+      {/* Bulk selection bar */}
+      {selectedRowIds.size > 0 && (
+        <div className="flex items-center gap-3 px-3 py-1.5 border-b border-blue-200 dark:border-blue-900/60 bg-blue-50 dark:bg-blue-950/40">
+          <span className="text-xs font-medium text-blue-700 dark:text-blue-300">
+            {selectedRowIds.size} row{selectedRowIds.size !== 1 ? "s" : ""} selected
+          </span>
+          <button
+            onClick={bulkDeleteRows}
+            className="text-xs px-2 py-0.5 rounded text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors"
+          >
+            Delete
+          </button>
+          <button
+            onClick={clearRowSelection}
+            className="text-xs px-2 py-0.5 rounded text-neutral-500 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-700 transition-colors ml-auto"
+          >
+            Clear selection
+          </button>
+        </div>
+      )}
 
       {/* Filter bar (collapsible) */}
       {filterBarOpen && (
@@ -610,7 +1073,7 @@ export function GridView({ page }: GridViewProps) {
 
       {/* Sort bar (collapsible) */}
       {sortBarOpen && (
-        <div className="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-900/30 flex flex-col gap-1.5 shrink-0">
+        <div className="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-900/30 flex flex-col gap-1.5">
           {activeSort.map((rule, i) => (
             <SortRuleRow
               key={rule.id}
@@ -629,23 +1092,73 @@ export function GridView({ page }: GridViewProps) {
           </button>
         </div>
       )}
+      </div>{/* end sticky toolbar */}
 
-      <div className="flex-1 overflow-auto">
-        <table className="w-full border-collapse text-sm">
+      {viewMode === "list" && (
+        <ListView
+          rows={sortedRows}
+          properties={displayProperties}
+          selectedRowIds={selectedRowIds}
+          anyRowsSelected={selectedRowIds.size > 0}
+          onRowSelect={toggleRowSelect}
+          onOpenRow={(r) => { clearRowSelection(); setSelectedRow(r); }}
+        />
+      )}
+      <div className={`overflow-x-auto${viewMode === "list" ? " hidden" : ""}${isResizing || draggingColKey ? " select-none" : ""}${isResizing ? " cursor-col-resize" : ""}${draggingColKey ? " cursor-grabbing" : ""}`}>
+        <table
+          ref={tableRef}
+          className={`border-collapse text-sm${fillSource ? " cursor-crosshair select-none" : ""}`}
+          style={{
+            tableLayout: "fixed",
+            width:
+              (colWidths[NAME_COL_KEY] ?? DEFAULT_NAME_WIDTH) +
+              displayProperties.reduce(
+                (sum, p) => sum + (colWidths[String(p.id)] ?? DEFAULT_COL_WIDTH),
+                0
+              ) +
+              40,
+          }}
+        >
+          <colgroup>
+            <col style={{ width: colWidths[NAME_COL_KEY] ?? DEFAULT_NAME_WIDTH }} />
+            {displayProperties.map((prop) => (
+              <col key={String(prop.id)} style={{ width: colWidths[String(prop.id)] ?? DEFAULT_COL_WIDTH }} />
+            ))}
+            <col style={{ width: 40 }} />
+          </colgroup>
           <thead>
             <tr className="border-b border-neutral-200 dark:border-neutral-800">
-              <th className="text-left px-3 py-2 text-xs font-medium text-neutral-500 uppercase tracking-wider w-56 border-r border-neutral-200 dark:border-neutral-800">
+              <th
+                className="text-left px-3 py-2 text-xs font-medium text-neutral-500 uppercase tracking-wider border-r border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 sticky left-0 z-[2] relative group/col overflow-hidden [box-shadow:1px_0_0_0_#e5e7eb] dark:[box-shadow:1px_0_0_0_#262626]"
+              >
                 Name
+                <div
+                  className="absolute top-0 right-0 h-full w-1 cursor-col-resize opacity-0 group-hover/col:opacity-100 bg-blue-400/60 hover:bg-blue-500 transition-opacity z-10"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    startColResize(NAME_COL_KEY, e.clientX, colWidths[NAME_COL_KEY] ?? DEFAULT_NAME_WIDTH);
+                  }}
+                  onDoubleClick={(e) => { e.stopPropagation(); autoFitColumn(NAME_COL_KEY); }}
+                />
               </th>
-              {properties.map((prop) => (
+              {displayProperties.map((prop, propIdx) => (
                 <ColumnHeader
                   key={String(prop.id)}
                   prop={prop}
                   schemaId={schema?.id ?? BigInt(0)}
+                  allProperties={displayProperties}
                   databasePages={databasePages}
+                  colWidth={colWidths[String(prop.id)] ?? DEFAULT_COL_WIDTH}
+                  onResizeStart={(clientX) => startColResize(String(prop.id), clientX, colWidths[String(prop.id)] ?? DEFAULT_COL_WIDTH)}
+                  onAutoFit={() => autoFitColumn(String(prop.id))}
+                  onDragStart={(clientX, clientY) => startColDrag(String(prop.id), propIdx, clientX, clientY)}
+                  isDragging={draggingColKey === String(prop.id)}
                 />
               ))}
-              <th className="px-3 py-2 w-10">
+              <th
+                className="px-3 py-2 bg-white dark:bg-neutral-950"
+              >
                 <button
                   ref={addAnchorRef}
                   onClick={startAddProperty}
@@ -661,7 +1174,7 @@ export function GridView({ page }: GridViewProps) {
             {sortedRows.length === 0 && (
               <tr>
                 <td
-                  colSpan={properties.length + 2}
+                  colSpan={displayProperties.length + 2}
                   className="px-3 py-6 text-center text-neutral-400 dark:text-neutral-600 text-sm italic"
                 >
                   {rows.length === 0
@@ -670,15 +1183,27 @@ export function GridView({ page }: GridViewProps) {
                 </td>
               </tr>
             )}
-            {sortedRows.map((row) => (
+            {sortedRows.map((row, rowIdx) => (
               <GridRow
                 key={String(row.id)}
                 row={row}
-                properties={properties}
+                rowIdx={rowIdx}
+                properties={displayProperties}
                 selectedCells={selectedCells}
-                onCellClick={handleCellClick}
+                editingCell={editingCell}
+                isRowSelected={selectedRowIds.has(row.id)}
+                anyRowsSelected={selectedRowIds.size > 0}
+                onRowSelect={(shiftKey) => { setSelectedCells(new Set()); toggleRowSelect(row.id, rowIdx, shiftKey); }}
+                onCellClick={(rowId, propId, e) => { clearRowSelection(); handleCellClick(rowId, propId, e); }}
+                onCellNavigate={handleCellNavigate}
+                fillRangeCells={fillRangeCells}
+                isDraggingFill={fillSource !== null}
+                onFillDragStart={handleFillDragStart}
+                onFillDragEnter={handleFillDragEnter}
                 onOpenRow={(r) => {
                   setSelectedCells(new Set());
+                  setEditingCell(null);
+                  clearRowSelection();
                   setSelectedRow(r);
                 }}
                 onRowContextMenu={(e) => {
@@ -742,6 +1267,17 @@ export function GridView({ page }: GridViewProps) {
           parentPage={page}
           onClose={() => setSelectedRow(null)}
         />
+      )}
+
+      {/* Column drag ghost */}
+      {ghostPos && draggingColKey && (
+        <div
+          className="fixed pointer-events-none z-[9999] flex items-center gap-1 px-2.5 py-1.5 bg-white dark:bg-neutral-800 shadow-xl rounded text-xs font-medium text-neutral-500 dark:text-neutral-400 border border-neutral-200 dark:border-neutral-700 whitespace-nowrap"
+          style={{ left: ghostPos.x + 14, top: ghostPos.y - 16 }}
+        >
+          <PropertyTypeIcon type={displayProperties.find((p) => String(p.id) === draggingColKey)?.propertyType.tag ?? "Text"} />
+          {displayProperties.find((p) => String(p.id) === draggingColKey)?.name ?? "Column"}
+        </div>
       )}
 
       {/* Add-column wizard — portal-based so it escapes overflow-auto */}
@@ -863,14 +1399,26 @@ export function GridView({ page }: GridViewProps) {
 function ColumnHeader({
   prop,
   schemaId: _schemaId,
+  allProperties,
   databasePages,
+  colWidth: _colWidth,
+  onResizeStart,
+  onAutoFit,
+  onDragStart,
+  isDragging,
 }: {
   prop: NonNullable<PropertyDefinitionRow>;
   schemaId: bigint;
+  allProperties: PropertyDefinitionRow[];
   databasePages: { id: bigint; title: string; deletedAt: unknown }[];
+  colWidth: number;
+  onResizeStart: (clientX: number) => void;
+  onAutoFit: () => void;
+  onDragStart: (clientX: number, clientY: number) => void;
+  isDragging: boolean;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [mode, setMode] = useState<"idle" | "rename" | "change-type" | "relation-target">("idle");
+  const [mode, setMode] = useState<"idle" | "rename" | "change-type" | "relation-target" | "edit-options">("idle");
   const [renameValue, setRenameValue] = useState(prop.name);
   const [relTargetId, setRelTargetId] = useState<bigint | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -927,7 +1475,13 @@ function ColumnHeader({
   }
 
   return (
-    <th className="text-left px-3 py-2 text-xs font-medium text-neutral-500 uppercase tracking-wider min-w-32 border-r border-neutral-200 dark:border-neutral-800">
+    <th
+      className={`text-left px-3 py-2 text-xs font-medium text-neutral-500 uppercase tracking-wider border-r border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 relative group/col overflow-hidden transition-opacity${isDragging ? " opacity-30" : ""}`}
+      onMouseDown={(e) => {
+        if (mode !== "idle") return;
+        onDragStart(e.clientX, e.clientY);
+      }}
+    >
       {mode === "rename" ? (
         <input
           autoFocus
@@ -943,35 +1497,46 @@ function ColumnHeader({
       ) : (
         <button
           ref={buttonRef}
-          className="flex items-center gap-1 w-full text-left hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors"
+          className="flex items-center gap-1 w-full text-left hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors cursor-grab active:cursor-grabbing"
           onClick={() => setMenuOpen(true)}
         >
           <PropertyTypeIcon type={prop.propertyType.tag} />
           {prop.name}
         </button>
       )}
+      <div
+        className="absolute top-0 right-0 h-full w-1 cursor-col-resize opacity-0 group-hover/col:opacity-100 bg-blue-400/60 hover:bg-blue-500 transition-opacity z-10"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          e.stopPropagation(); // don't trigger column drag
+          onResizeStart(e.clientX);
+        }}
+        onDoubleClick={(e) => { e.stopPropagation(); onAutoFit(); }}
+      />
 
       {menuOpen && mode === "idle" && (
         <FloatingPopup
           anchorRef={buttonRef}
           onClose={closeMenu}
-          className="w-40 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-xl overflow-hidden"
+          className="w-44 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-xl overflow-hidden"
         >
           <button
             className="w-full text-left px-3 py-1.5 text-sm text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700"
-            onClick={() => {
-              setMenuOpen(false);
-              setMode("rename");
-            }}
+            onClick={() => { setMenuOpen(false); setMode("rename"); }}
           >
             Rename
           </button>
+          {(prop.propertyType.tag === "Select" || prop.propertyType.tag === "MultiSelect") && (
+            <button
+              className="w-full text-left px-3 py-1.5 text-sm text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+              onClick={() => { setMenuOpen(false); setMode("edit-options"); }}
+            >
+              Edit options
+            </button>
+          )}
           <button
             className="w-full text-left px-3 py-1.5 text-sm text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700"
-            onClick={() => {
-              setMenuOpen(false);
-              setMode("change-type");
-            }}
+            onClick={() => { setMenuOpen(false); setMode("change-type"); }}
           >
             Change type
           </button>
@@ -992,6 +1557,16 @@ function ColumnHeader({
           className="w-44 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-xl overflow-hidden"
         >
           <PropertyTypePicker onSelect={handleChangeType} />
+        </FloatingPopup>
+      )}
+
+      {mode === "edit-options" && (
+        <FloatingPopup
+          anchorRef={buttonRef}
+          onClose={closeMenu}
+          className="w-72 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-xl overflow-hidden"
+        >
+          <OptionsEditor prop={prop} allProperties={allProperties} onClose={closeMenu} />
         </FloatingPopup>
       )}
 
@@ -1046,43 +1621,562 @@ function ColumnHeader({
   );
 }
 
+// ————————————————— Options editor (for Select / MultiSelect columns) —————————
+
+// Same palette order as PropertyCell so colors match between editor and cells.
+
+function OptionsEditor({
+  prop,
+  allProperties,
+  onClose: _onClose,
+}: {
+  prop: NonNullable<PropertyDefinitionRow>;
+  allProperties: PropertyDefinitionRow[];
+  onClose: () => void;
+}) {
+  const updatePropertyConfig = useUpdatePropertyConfig();
+  const setPropertyValue = useSetPropertyValue();
+  const [allValues] = useTable(tables.page_property_value);
+
+  const initialCfg = parseSelectConfig(prop.config);
+  const [options, setOptions] = useState<string[]>(initialCfg.options);
+  const [conditions, setConditions] = useState<Record<string, SelectOptionCondition>>(
+    initialCfg.conditions ?? {}
+  );
+  const [colors, setColors] = useState<Record<string, OptionColorKey>>(
+    initialCfg.colors ?? {}
+  );
+  const [editingIdx, setEditingIdx] = useState<number | null>(null);
+  const [editingLabel, setEditingLabel] = useState("");
+  // Which option's condition is open for editing
+  const [condEditingFor, setCondEditingFor] = useState<string | null>(null);
+  const [condPropName, setCondPropName] = useState("");
+  const [condValue, setCondValue] = useState("");
+  // Which option's color picker is open
+  const [colorPickerFor, setColorPickerFor] = useState<string | null>(null);
+  const [newInput, setNewInput] = useState("");
+  const newInputRef = useRef<HTMLInputElement>(null);
+
+  // Sibling properties that can be used as condition fields (not this property itself).
+  const siblingProps = allProperties.filter((p) => p.id !== prop.id);
+
+  function optColor(opt: string) {
+    const cfg = { options, conditions, colors };
+    return getOptionColorClass(opt, cfg);
+  }
+
+  function saveConfig(
+    newOpts: string[],
+    newConds: Record<string, SelectOptionCondition>,
+    newColors: Record<string, OptionColorKey>
+  ) {
+    updatePropertyConfig({
+      propertyDefinitionId: prop.id,
+      config: serializeSelectConfig({
+        options: newOpts,
+        conditions: Object.keys(newConds).length ? newConds : undefined,
+        colors: Object.keys(newColors).length ? newColors : undefined,
+      }),
+    });
+  }
+
+  function startRename(idx: number) {
+    setCondEditingFor(null);
+    setColorPickerFor(null);
+    setEditingIdx(idx);
+    setEditingLabel(options[idx]);
+  }
+
+  function commitRename(idx: number) {
+    const oldLabel = options[idx];
+    const newLabel = editingLabel.trim();
+    setEditingIdx(null);
+    if (!newLabel || newLabel === oldLabel) return;
+
+    const newOpts = options.map((o, i) => (i === idx ? newLabel : o));
+    const newConds: Record<string, SelectOptionCondition> = {};
+    for (const [k, v] of Object.entries(conditions)) {
+      newConds[k === oldLabel ? newLabel : k] = v;
+    }
+    const newColors: Record<string, OptionColorKey> = {};
+    for (const [k, v] of Object.entries(colors)) {
+      newColors[k === oldLabel ? newLabel : k] = v;
+    }
+    setOptions(newOpts);
+    setConditions(newConds);
+    setColors(newColors);
+    saveConfig(newOpts, newConds, newColors);
+
+    const propId = prop.id;
+    const propTag = prop.propertyType.tag;
+    for (const pv of allValues) {
+      if (pv.propertyDefinitionId !== propId) continue;
+      if (propTag === "Select" && pv.value.tag === "Select" && pv.value.value === oldLabel) {
+        setPropertyValue({ pageId: pv.pageId, propertyDefinitionId: propId, value: { tag: "Select", value: newLabel } });
+      } else if (propTag === "MultiSelect" && pv.value.tag === "MultiSelect") {
+        const vals = pv.value.value as string[];
+        if (vals.includes(oldLabel)) {
+          setPropertyValue({ pageId: pv.pageId, propertyDefinitionId: propId, value: { tag: "MultiSelect", value: vals.map((v) => (v === oldLabel ? newLabel : v)) } });
+        }
+      }
+    }
+  }
+
+  function deleteOption(label: string) {
+    const newOpts = options.filter((o) => o !== label);
+    const newConds = { ...conditions };
+    delete newConds[label];
+    const newColors = { ...colors };
+    delete newColors[label];
+    if (condEditingFor === label) setCondEditingFor(null);
+    if (colorPickerFor === label) setColorPickerFor(null);
+    setOptions(newOpts);
+    setConditions(newConds);
+    setColors(newColors);
+    saveConfig(newOpts, newConds, newColors);
+  }
+
+  function openConditionEditor(label: string) {
+    setEditingIdx(null);
+    setColorPickerFor(null);
+    const existing = conditions[label];
+    setCondPropName(existing?.propName ?? "");
+    setCondValue(existing?.value ?? "");
+    setCondEditingFor(label);
+  }
+
+  function commitCondition(label: string) {
+    if (!condPropName || !condValue) {
+      setCondEditingFor(null);
+      return;
+    }
+    const newConds = { ...conditions, [label]: { propName: condPropName, value: condValue } };
+    setConditions(newConds);
+    setCondEditingFor(null);
+    saveConfig(options, newConds, colors);
+  }
+
+  function removeCondition(label: string) {
+    const newConds = { ...conditions };
+    delete newConds[label];
+    setConditions(newConds);
+    setCondEditingFor(null);
+    saveConfig(options, newConds, colors);
+  }
+
+  function setOptionColor(label: string, colorKey: OptionColorKey) {
+    const newColors = { ...colors, [label]: colorKey };
+    setColors(newColors);
+    setColorPickerFor(null);
+    saveConfig(options, conditions, newColors);
+  }
+
+  // Get the available values for a condition field (for Select/MultiSelect props).
+  function getCondFieldOptions(propName: string): string[] {
+    const p = siblingProps.find((sp) => sp.name === propName);
+    if (!p) return [];
+    if (p.propertyType.tag === "Select" || p.propertyType.tag === "MultiSelect") {
+      return parseSelectConfig(p.config).options;
+    }
+    return [];
+  }
+
+  const condFieldOptions = getCondFieldOptions(condPropName);
+
+  function addOption() {
+    const trimmed = newInput.trim();
+    if (!trimmed) return;
+    const label = trimmed;
+    if (options.some((o) => o.toLowerCase() === label.toLowerCase())) return;
+    const newOpts = [...options, label];
+    setOptions(newOpts);
+    setNewInput("");
+    saveConfig(newOpts, conditions, colors);
+    newInputRef.current?.focus();
+  }
+
+  const selectCls = "bg-neutral-100 dark:bg-neutral-700 text-neutral-800 dark:text-neutral-200 text-xs px-1.5 py-0.5 rounded border-0 outline-none cursor-pointer";
+
+  return (
+    <div>
+      <div className="px-3 py-2 text-xs font-semibold text-neutral-500 dark:text-neutral-400 uppercase tracking-wider border-b border-neutral-100 dark:border-neutral-700">
+        Options
+      </div>
+
+      <div className="max-h-72 overflow-y-auto">
+        {options.length === 0 && (
+          <div className="px-3 py-3 text-sm text-neutral-400 dark:text-neutral-600 italic">
+            No options yet
+          </div>
+        )}
+
+        {options.map((opt, idx) => {
+          const cond = conditions[opt];
+          const isRenamingThis = editingIdx === idx;
+          const isEditingCondThis = condEditingFor === opt;
+          const isEditingColorThis = colorPickerFor === opt;
+          const currentColorKey = (colors[opt] ?? COLOR_KEYS[(options.indexOf(opt)) % COLOR_KEYS.length]) as OptionColorKey;
+
+          return (
+            <div key={opt} className="border-b border-neutral-50 dark:border-neutral-700/50 last:border-0">
+              {/* Main row */}
+              <div className="flex items-center gap-1.5 px-3 py-1.5 group">
+                {/* Color swatch button */}
+                {!isRenamingThis && (
+                  <button
+                    onClick={() => {
+                      setEditingIdx(null);
+                      setCondEditingFor(null);
+                      setColorPickerFor(isEditingColorThis ? null : opt);
+                    }}
+                    className={`w-3 h-3 rounded-full flex-shrink-0 ring-1 ring-offset-1 ring-transparent hover:ring-neutral-400 dark:hover:ring-neutral-500 transition-all ${SWATCH_BG_CLASSES[currentColorKey]}`}
+                    title="Change color"
+                  />
+                )}
+
+                {isRenamingThis ? (
+                  <input
+                    autoFocus
+                    className="flex-1 min-w-0 text-xs bg-neutral-100 dark:bg-neutral-700 text-neutral-900 dark:text-white px-1.5 py-0.5 rounded outline-none border border-blue-500/60"
+                    value={editingLabel}
+                    onChange={(e) => setEditingLabel(e.target.value)}
+                    onBlur={() => commitRename(idx)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") commitRename(idx);
+                      if (e.key === "Escape") setEditingIdx(null);
+                    }}
+                  />
+                ) : (
+                  <button
+                    className={`text-xs px-2 py-0.5 rounded-full font-medium truncate max-w-[100px] ${optColor(opt)}`}
+                    onClick={() => startRename(idx)}
+                    title="Click to rename"
+                  >
+                    {opt}
+                  </button>
+                )}
+
+                {/* Condition chip / add-condition button */}
+                {!isRenamingThis && (
+                  cond ? (
+                    <button
+                      onClick={() => isEditingCondThis ? setCondEditingFor(null) : openConditionEditor(opt)}
+                      className={`flex items-center gap-0.5 shrink-0 text-[10px] px-1.5 py-0.5 rounded font-medium transition-colors ${
+                        isEditingCondThis
+                          ? "bg-violet-200 dark:bg-violet-800/60 text-violet-700 dark:text-violet-200"
+                          : "bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-300 hover:bg-violet-200 dark:hover:bg-violet-800/60"
+                      }`}
+                      title="Edit condition"
+                    >
+                      {cond.propName} = {cond.value}
+                      <span className="ml-0.5 opacity-60">✎</span>
+                    </button>
+                  ) : (
+                    siblingProps.length > 0 && (
+                      <button
+                        onClick={() => openConditionEditor(opt)}
+                        className="opacity-0 group-hover:opacity-100 shrink-0 text-[10px] text-neutral-400 dark:text-neutral-500 hover:text-violet-500 dark:hover:text-violet-400 transition-all"
+                        title="Add condition"
+                      >
+                        + when…
+                      </button>
+                    )
+                  )
+                )}
+
+                <button
+                  onClick={() => deleteOption(opt)}
+                  className="ml-auto opacity-0 group-hover:opacity-100 text-neutral-400 hover:text-red-500 dark:hover:text-red-400 text-xs transition-all shrink-0 leading-none"
+                  title="Delete option"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Inline condition editor */}
+              {isEditingCondThis && (
+                <div className="px-3 pb-2.5 flex flex-col gap-2">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[10px] text-neutral-400 dark:text-neutral-500 font-medium">Show when</span>
+                    <select
+                      value={condPropName}
+                      onChange={(e) => { setCondPropName(e.target.value); setCondValue(""); }}
+                      className={selectCls}
+                    >
+                      <option value="">Field…</option>
+                      {siblingProps.map((sp) => (
+                        <option key={String(sp.id)} value={sp.name}>{sp.name}</option>
+                      ))}
+                    </select>
+                    <span className="text-[10px] text-neutral-400 dark:text-neutral-500">=</span>
+                    {condFieldOptions.length > 0 ? (
+                      <select
+                        value={condValue}
+                        onChange={(e) => setCondValue(e.target.value)}
+                        className={selectCls}
+                      >
+                        <option value="">Value…</option>
+                        {condFieldOptions.map((o) => (
+                          <option key={o} value={o}>{o}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        className="bg-neutral-100 dark:bg-neutral-700 text-neutral-800 dark:text-neutral-200 text-xs px-1.5 py-0.5 rounded outline-none border border-transparent focus:border-blue-500/60 w-20"
+                        placeholder="value…"
+                        value={condValue}
+                        onChange={(e) => setCondValue(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") commitCondition(opt); if (e.key === "Escape") setCondEditingFor(null); }}
+                      />
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => commitCondition(opt)}
+                      disabled={!condPropName || !condValue}
+                      className="text-[10px] px-2 py-0.5 rounded bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-40 transition-colors"
+                    >
+                      Save
+                    </button>
+                    {cond && (
+                      <button
+                        onClick={() => removeCondition(opt)}
+                        className="text-[10px] px-2 py-0.5 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                      >
+                        Remove condition
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setCondEditingFor(null)}
+                      className="text-[10px] text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors ml-auto"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Inline color picker */}
+              {isEditingColorThis && (
+                <div className="px-3 pb-2.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[10px] text-neutral-400 dark:text-neutral-500 font-medium mr-0.5">Color</span>
+                    {COLOR_KEYS.map((key) => (
+                      <button
+                        key={key}
+                        onClick={() => setOptionColor(opt, key)}
+                        title={key}
+                        className={`w-5 h-5 rounded-full transition-all ${SWATCH_BG_CLASSES[key]} ${
+                          currentColorKey === key
+                            ? "ring-2 ring-offset-1 ring-neutral-500 dark:ring-neutral-400 scale-110"
+                            : "hover:scale-110 ring-1 ring-transparent hover:ring-neutral-400 dark:hover:ring-neutral-500"
+                        }`}
+                      />
+                    ))}
+                    <span className="text-[10px] text-neutral-400 dark:text-neutral-500 ml-1">
+                      — preview:
+                    </span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${OPTION_CHIP_CLASSES[currentColorKey]}`}>
+                      {opt}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="px-3 py-2 border-t border-neutral-100 dark:border-neutral-700">
+        <input
+          ref={newInputRef}
+          className="w-full text-xs bg-neutral-100 dark:bg-neutral-700 text-neutral-900 dark:text-white px-2 py-1.5 rounded outline-none placeholder:text-neutral-400 dark:placeholder:text-neutral-500 border border-transparent focus:border-blue-500/60 transition-colors"
+          placeholder="New option…"
+          value={newInput}
+          onChange={(e) => setNewInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") addOption(); }}
+        />
+      </div>
+    </div>
+  );
+}
+
 // ————————————————— Grid row —————————————————
+
+// ─── List view ────────────────────────────────────────────────────────────────
+
+function ListView({
+  rows,
+  properties,
+  selectedRowIds,
+  anyRowsSelected,
+  onRowSelect,
+  onOpenRow,
+}: {
+  rows: PageRow[];
+  properties: ReturnType<typeof usePropertyDefinitions>;
+  selectedRowIds: Set<bigint>;
+  anyRowsSelected: boolean;
+  onRowSelect: (rowId: bigint, rowIdx: number, shiftKey: boolean) => void;
+  onOpenRow: (r: PageRow) => void;
+}) {
+  if (rows.length === 0) {
+    return (
+      <div className="px-4 py-10 text-center text-sm text-neutral-400 dark:text-neutral-600 italic">
+        No rows yet
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col">
+      {rows.map((row, rowIdx) => {
+        const isSelected = selectedRowIds.has(row.id);
+        return (
+          <div
+            key={String(row.id)}
+            className={`group flex items-center gap-2 px-3 h-9 border-b border-neutral-200/60 dark:border-neutral-800/60 hover:bg-neutral-50 dark:hover:bg-neutral-900/40 transition-colors cursor-pointer${isSelected ? " bg-blue-50/60 dark:bg-blue-950/30" : ""}`}
+            onClick={() => onOpenRow(row)}
+          >
+            <input
+              type="checkbox"
+              checked={isSelected}
+              onChange={() => {/* handled by onClick */}}
+              onClick={(e) => { e.stopPropagation(); onRowSelect(row.id, rowIdx, e.shiftKey); }}
+              className={`h-3.5 w-3.5 flex-shrink-0 rounded border-neutral-300 dark:border-neutral-600 text-blue-600 cursor-pointer transition-opacity ${anyRowsSelected || isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
+            />
+            <span className="flex-1 text-sm text-neutral-800 dark:text-neutral-200 truncate">
+              {row.title || "Untitled"}
+            </span>
+            {/* Inline chips for first few select/multi-select properties */}
+            <div className="flex items-center gap-1.5 flex-shrink-0">
+              {properties.slice(0, 4).map((prop) => (
+                <ListCellValue key={String(prop.id)} row={row} prop={prop} />
+              ))}
+            </div>
+            <button
+              onClick={(e) => { e.stopPropagation(); onOpenRow(row); }}
+              className="opacity-0 group-hover:opacity-100 text-xs text-neutral-400 dark:text-neutral-500 hover:text-neutral-900 dark:hover:text-white transition-all flex-shrink-0"
+              title="Open"
+            >
+              ↗
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ListCellValue({ row, prop }: { row: PageRow; prop: NonNullable<ReturnType<typeof usePropertyDefinitions>[number]> }) {
+  const values = usePagePropertyValues(row.id);
+  const val = values.find((v) => v.propertyDefinitionId === prop.id);
+  if (!val) return null;
+  const tag = prop.propertyType.tag;
+  if (tag === "Select" || tag === "MultiSelect") {
+    const chips = tag === "Select"
+      ? (typeof val.value === "string" ? [val.value] : [])
+      : (Array.isArray(val.value) ? val.value as string[] : []);
+    if (chips.length === 0) return null;
+    const cfg = parseSelectConfig(prop.config);
+    return (
+      <div className="flex items-center gap-1">
+        {chips.slice(0, 2).map((chip) => (
+          <span key={chip} className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${getOptionColorClass(chip, cfg)}`}>
+            {chip}
+          </span>
+        ))}
+        {chips.length > 2 && <span className="text-[10px] text-neutral-400">+{chips.length - 2}</span>}
+      </div>
+    );
+  }
+  if (tag === "Checkbox") {
+    const pv = val.value as { tag?: string; value?: boolean } | undefined;
+    const checked = pv && "tag" in pv && pv.tag === "Checkbox" && pv.value === true;
+    return checked ? (
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="text-blue-500 flex-shrink-0">
+        <rect x="0.5" y="0.5" width="11" height="11" rx="2.5" fill="currentColor" fillOpacity="0.15" stroke="currentColor"/>
+        <path d="M3 6l2.5 2.5L9 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>
+    ) : null;
+  }
+  if (tag === "Text" || tag === "Number" || tag === "Url") {
+    const text = typeof val.value === "string" || typeof val.value === "number" ? String(val.value) : null;
+    if (!text) return null;
+    return <span className="text-xs text-neutral-400 dark:text-neutral-500 truncate max-w-[80px]">{text}</span>;
+  }
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 function GridRow({
   row,
+  rowIdx: _rowIdx,
   properties,
   selectedCells,
+  editingCell,
+  isRowSelected,
+  anyRowsSelected,
+  onRowSelect,
   onCellClick,
+  onCellNavigate,
   onOpenRow,
   onRowContextMenu,
   onCellContextMenu,
+  fillRangeCells,
+  isDraggingFill,
+  onFillDragStart,
+  onFillDragEnter,
 }: {
   row: PageRow;
+  rowIdx: number;
   properties: ReturnType<typeof usePropertyDefinitions>;
   selectedCells: Set<string>;
+  editingCell: string | null;
+  isRowSelected: boolean;
+  anyRowsSelected: boolean;
+  onRowSelect: (shiftKey: boolean) => void;
   onCellClick: (rowId: bigint, propId: bigint, e: React.MouseEvent) => void;
+  onCellNavigate: (dir: "down" | "right" | "left" | "escape") => void;
   onOpenRow: (p: PageRow) => void;
   onRowContextMenu?: (e: React.MouseEvent) => void;
   onCellContextMenu?: (e: React.MouseEvent, propId: bigint) => void;
+  fillRangeCells: Set<string>;
+  isDraggingFill: boolean;
+  onFillDragStart: (rowId: bigint, propId: bigint) => void;
+  onFillDragEnter: (rowId: bigint, propId: bigint) => void;
 }) {
   const values = usePagePropertyValues(row.id);
 
+  // Build { propName → currentStringValue } for conditional option evaluation.
+  const siblingValues = useMemo(
+    () => buildSiblingValues(values, properties),
+    [values, properties]
+  );
+
   return (
-    <tr className="border-b border-neutral-200/60 dark:border-neutral-800/60 hover:bg-neutral-50 dark:hover:bg-neutral-900/40 group">
+    <tr className={`border-b border-neutral-200/60 dark:border-neutral-800/60 hover:bg-neutral-50 dark:hover:bg-neutral-900/40 group${isRowSelected ? " bg-blue-50/60 dark:bg-blue-950/30" : ""}`}>
       <td
-        className="px-3 py-0 h-9 border-r border-neutral-200 dark:border-neutral-800"
+        className={`px-3 py-0 h-9 border-r border-neutral-200 dark:border-neutral-800 sticky left-0 z-[1] transition-colors [box-shadow:1px_0_0_0_#e5e7eb] dark:[box-shadow:1px_0_0_0_#262626] ${isRowSelected ? "bg-blue-50/80 dark:bg-blue-950/40 group-hover:bg-blue-100/60 dark:group-hover:bg-blue-950/60" : "bg-white dark:bg-neutral-950 group-hover:bg-neutral-50 dark:group-hover:bg-neutral-900/40"}`}
         onContextMenu={onRowContextMenu}
       >
         <div className="flex items-center gap-1.5">
+          <input
+            type="checkbox"
+            checked={isRowSelected}
+            onChange={() => {/* handled by onClick */}}
+            onClick={(e) => { e.stopPropagation(); onRowSelect(e.shiftKey); }}
+            className={`h-3.5 w-3.5 flex-shrink-0 rounded border-neutral-300 dark:border-neutral-600 text-blue-600 cursor-pointer transition-opacity ${anyRowsSelected || isRowSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
+          />
           <button
             onClick={() => onOpenRow(row)}
-            className="text-sm text-neutral-800 dark:text-neutral-200 hover:text-neutral-900 dark:hover:text-white hover:underline truncate max-w-52"
+            className="text-sm text-neutral-800 dark:text-neutral-200 hover:text-neutral-900 dark:hover:text-white hover:underline truncate"
           >
             {row.title || "Untitled"}
           </button>
           <button
             onClick={() => onOpenRow(row)}
-            className="opacity-0 group-hover:opacity-100 text-xs text-neutral-400 dark:text-neutral-500 hover:text-neutral-900 dark:hover:text-white transition-all"
+            className="opacity-0 group-hover:opacity-100 text-xs text-neutral-400 dark:text-neutral-500 hover:text-neutral-900 dark:hover:text-white transition-all flex-shrink-0"
             title="Open"
           >
             ↗
@@ -1091,23 +2185,46 @@ function GridRow({
       </td>
       {properties.map((prop) => {
         const val = values.find((v) => v.propertyDefinitionId === prop.id);
-        const isSelected = selectedCells.has(`${row.id}|${prop.id}`);
+        const cellKey = `${row.id}|${prop.id}`;
+        const isSelected = selectedCells.has(cellKey);
+        const isFillRange = fillRangeCells.has(cellKey);
+        // Show the fill handle only on the single selected cell, when not already dragging
+        const showFillHandle = isSelected && selectedCells.size === 1 && !isDraggingFill;
+
         return (
           <td
             key={String(prop.id)}
             className={`px-0 py-0 h-9 border-r border-neutral-200 dark:border-neutral-800 relative select-none ${
               isSelected
                 ? "shadow-[inset_0_0_0_2px_#3b82f6] bg-blue-50/40 dark:bg-blue-900/20"
+                : isFillRange
+                ? "bg-blue-50/60 dark:bg-blue-900/25 shadow-[inset_0_0_0_1px_#93c5fd]"
                 : ""
             }`}
             onClick={(e) => onCellClick(row.id, prop.id, e)}
             onContextMenu={(e) => onCellContextMenu?.(e, prop.id)}
+            onMouseEnter={() => {
+              if (isDraggingFill) onFillDragEnter(row.id, prop.id);
+            }}
           >
             <PropertyCell
               pageId={row.id}
               definition={prop}
               value={val?.value}
+              siblingValues={siblingValues}
+              forceEdit={editingCell === cellKey}
+              onRequestNavigate={onCellNavigate}
             />
+            {showFillHandle && (
+              <div
+                className="absolute bottom-0 right-0 w-2 h-2 bg-blue-500 z-10 cursor-crosshair translate-x-1/2 translate-y-1/2"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onFillDragStart(row.id, prop.id);
+                }}
+              />
+            )}
           </td>
         );
       })}

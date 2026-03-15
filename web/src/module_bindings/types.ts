@@ -17,6 +17,17 @@ export const ActorType = __t.enum("ActorType", {
 });
 export type ActorType = __Infer<typeof ActorType>;
 
+export const Attachment = __t.object("Attachment", {
+  id: __t.u64(),
+  pageId: __t.u64(),
+  filename: __t.string(),
+  contentType: __t.string(),
+  storageKey: __t.string(),
+  sizeBytes: __t.u64(),
+  createdAt: __t.timestamp(),
+});
+export type Attachment = __Infer<typeof Attachment>;
+
 export const DatabaseSchema = __t.object("DatabaseSchema", {
   id: __t.u64(),
   pageId: __t.u64(),
@@ -57,6 +68,7 @@ export const Page = __t.object("Page", {
   createdAt: __t.timestamp(),
   updatedAt: __t.timestamp(),
   deletedAt: __t.option(__t.timestamp()),
+  icon: __t.option(__t.string()),
 });
 export type Page = __Infer<typeof Page>;
 

@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { useTable } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
 import { PearEditor } from "./PearEditor";
-import { PropertyCell } from "./PropertyCell";
 import { useUpdatePageTitle, useDeletePage } from "@/src/hooks/usePages";
 import type { PageRow } from "@/src/hooks/usePages";
 import { PageMoreMenu } from "./PageMoreMenu";
@@ -13,8 +12,8 @@ import { PageHistoryPanel } from "./PageHistoryPanel";
 import {
   useDatabaseSchema,
   usePropertyDefinitions,
-  usePagePropertyValues,
 } from "@/src/hooks/useDatabase";
+import { PagePropertiesPanel } from "./PagePropertiesPanel";
 
 interface RowDetailModalProps {
   page: PageRow;
@@ -141,7 +140,7 @@ export function RowDetailModal({ page, parentPage, onClose }: RowDetailModalProp
             {/* Properties panel */}
             {properties.length > 0 && (
               <div className="px-6 pt-3 pb-2 border-b border-neutral-100 dark:border-neutral-800">
-                <PropertiesPanel pageId={page.id} properties={properties} />
+                <PagePropertiesPanel pageId={page.id} properties={properties} />
               </div>
             )}
 
@@ -169,55 +168,3 @@ export function RowDetailModal({ page, parentPage, onClose }: RowDetailModalProp
   );
 }
 
-// ————————————————— Properties panel —————————————————
-
-function PropertiesPanel({
-  pageId,
-  properties,
-}: {
-  pageId: bigint;
-  properties: ReturnType<typeof usePropertyDefinitions>;
-}) {
-  const values = usePagePropertyValues(pageId);
-
-  return (
-    <div className="space-y-1">
-      {properties.map((prop) => {
-        const val = values.find((v) => v.propertyDefinitionId === prop.id);
-        return (
-          <div key={String(prop.id)} className="flex items-start gap-3 min-h-8">
-            <div className="w-32 flex-shrink-0 text-xs text-neutral-500 dark:text-neutral-400 pt-1.5 flex items-center gap-1.5 truncate">
-              <PropIcon type={prop.propertyType.tag} />
-              <span className="truncate">{prop.name}</span>
-            </div>
-            <div className="flex-1 min-w-0 rounded hover:bg-neutral-50 dark:hover:bg-neutral-800/40 transition-colors">
-              <PropertyCell
-                pageId={pageId}
-                definition={prop}
-                value={val?.value}
-              />
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function PropIcon({ type }: { type: string }) {
-  const icons: Record<string, string> = {
-    Text: "T",
-    Number: "#",
-    Date: "📅",
-    Select: "◉",
-    MultiSelect: "☰",
-    Relation: "↗",
-    Checkbox: "✓",
-    Url: "🔗",
-  };
-  return (
-    <span className="font-mono text-neutral-400 dark:text-neutral-600 text-xs">
-      {icons[type] ?? "?"}
-    </span>
-  );
-}

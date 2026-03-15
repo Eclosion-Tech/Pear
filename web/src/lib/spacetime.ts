@@ -68,6 +68,16 @@ export async function clearIdbCache(): Promise<void> {
   await Promise.all(pearDbs.map((db) => deleteIdb(db.name!)));
 }
 
+/**
+ * Delete IndexedDB cache for a single page (Yjs doc for that page).
+ * Use when a page is out of sync or after schema changes; then reload.
+ */
+export async function clearIdbCacheForPage(pageId: bigint): Promise<void> {
+  if (typeof indexedDB === "undefined") return;
+  const name = `${idbNamespace}-page-${pageId}`;
+  await deleteIdb(name);
+}
+
 /** Removes the persisted SpacetimeDB identity token so the next load gets a fresh anonymous identity. */
 export function clearSavedToken() {
   if (typeof window !== "undefined") {

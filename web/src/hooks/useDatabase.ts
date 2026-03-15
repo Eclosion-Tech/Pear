@@ -51,6 +51,10 @@ export function useUpdatePropertyType() {
   return useReducer(reducers.updatePropertyType);
 }
 
+export function useUpdateViewConfig() {
+  return useReducer(reducers.updateViewConfig);
+}
+
 // Row types inferred from table query builders
 export type DatabaseSchemaRow = ReturnType<typeof useDatabaseSchema>["schema"];
 export type PropertyDefinitionRow = ReturnType<typeof usePropertyDefinitions>[number];

@@ -10,16 +10,47 @@ import {
 import { useUpdatePropertyConfig } from "@/src/hooks/useDatabase";
 import type { PropertyDefinitionRow, PagePropertyValueRow } from "@/src/hooks/useDatabase";
 import { FloatingPopup } from "./FloatingPopup";
+import {
+  parseSelectConfig,
+  serializeSelectConfig,
+  parseOptionFormula,
+  evaluateOption,
+  isOptionValid,
+  getOptionColorClass,
+} from "@/src/lib/formulaEval";
 
 type PropertyValue = NonNullable<PagePropertyValueRow>["value"];
+
+/** Direction passed to onRequestNavigate when the user commits / escapes. */
+export type NavigateDir = "down" | "right" | "left" | "escape";
 
 interface PropertyCellProps {
   pageId: bigint;
   definition: NonNullable<PropertyDefinitionRow>;
   value: PropertyValue | undefined;
+  /**
+   * Current string values of all sibling properties on this row,
+   * keyed by property name. Used to evaluate conditional select options.
+   * e.g. `{ Type: "Video", Status: "Filming" }`
+   */
+  siblingValues?: Record<string, string>;
+  /** When true the cell starts in edit mode immediately (keyboard Enter). */
+  forceEdit?: boolean;
+  /**
+   * Called by editable cells when the user commits (Enter / Tab) or cancels
+   * (Escape) so the parent can move focus to the next cell.
+   */
+  onRequestNavigate?: (dir: NavigateDir) => void;
 }
 
-export function PropertyCell({ pageId, definition, value }: PropertyCellProps) {
+export function PropertyCell({
+  pageId,
+  definition,
+  value,
+  siblingValues = {},
+  forceEdit,
+  onRequestNavigate,
+}: PropertyCellProps) {
   const setPropertyValue = useSetPropertyValue();
   const updatePropertyConfig = useUpdatePropertyConfig();
 
@@ -44,6 +75,8 @@ export function PropertyCell({ pageId, definition, value }: PropertyCellProps) {
         <TextCell
           value={value?.tag === "Text" ? value.value : ""}
           onSave={(v) => save({ tag: "Text", value: v })}
+          forceEdit={forceEdit}
+          onRequestNavigate={onRequestNavigate}
         />
       );
 
@@ -52,8 +85,11 @@ export function PropertyCell({ pageId, definition, value }: PropertyCellProps) {
         <SelectCell
           value={value?.tag === "Select" ? value.value : ""}
           config={definition.config}
+          siblingValues={siblingValues}
           onSave={(v) => save({ tag: "Select", value: v })}
           onSaveConfig={saveConfig}
+          forceEdit={forceEdit}
+          onRequestNavigate={onRequestNavigate}
         />
       );
 
@@ -62,8 +98,11 @@ export function PropertyCell({ pageId, definition, value }: PropertyCellProps) {
         <MultiSelectCell
           value={value?.tag === "MultiSelect" ? (value.value as string[]) : []}
           config={definition.config}
+          siblingValues={siblingValues}
           onSave={(v) => save({ tag: "MultiSelect", value: v })}
           onSaveConfig={saveConfig}
+          forceEdit={forceEdit}
+          onRequestNavigate={onRequestNavigate}
         />
       );
 
@@ -72,6 +111,8 @@ export function PropertyCell({ pageId, definition, value }: PropertyCellProps) {
         <NumberCell
           value={value?.tag === "Number" ? value.value : null}
           onSave={(v) => save({ tag: "Number", value: v })}
+          forceEdit={forceEdit}
+          onRequestNavigate={onRequestNavigate}
         />
       );
 
@@ -80,6 +121,7 @@ export function PropertyCell({ pageId, definition, value }: PropertyCellProps) {
         <CheckboxCell
           value={value?.tag === "Checkbox" ? value.value : false}
           onSave={(v) => save({ tag: "Checkbox", value: v })}
+          onRequestNavigate={onRequestNavigate}
         />
       );
 
@@ -89,6 +131,8 @@ export function PropertyCell({ pageId, definition, value }: PropertyCellProps) {
           value={value?.tag === "Url" ? value.value : ""}
           onSave={(v) => save({ tag: "Url", value: v })}
           placeholder="https://…"
+          forceEdit={forceEdit}
+          onRequestNavigate={onRequestNavigate}
         />
       );
 
@@ -124,14 +168,23 @@ function TextCell({
   value,
   onSave,
   placeholder = "",
+  forceEdit,
+  onRequestNavigate,
 }: {
   value: string;
   onSave: (v: string) => void;
   placeholder?: string;
+  forceEdit?: boolean;
+  onRequestNavigate?: (dir: NavigateDir) => void;
 }) {
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(forceEdit ?? false);
   const [draft, setDraft] = useState(value);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Enter edit mode when forceEdit flips to true
+  useEffect(() => {
+    if (forceEdit) setEditing(true);
+  }, [forceEdit]);
 
   useEffect(() => {
     if (editing) inputRef.current?.focus();
@@ -170,8 +223,17 @@ function TextCell({
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {
-        if (e.key === "Enter") commit();
-        if (e.key === "Escape") setEditing(false);
+        if (e.key === "Escape") {
+          setEditing(false);
+          onRequestNavigate?.("escape");
+        } else if (e.key === "Enter") {
+          commit();
+          onRequestNavigate?.("down");
+        } else if (e.key === "Tab") {
+          e.preventDefault();
+          commit();
+          onRequestNavigate?.(e.shiftKey ? "left" : "right");
+        }
       }}
       placeholder={placeholder}
     />
@@ -183,13 +245,21 @@ function TextCell({
 function NumberCell({
   value,
   onSave,
+  forceEdit,
+  onRequestNavigate,
 }: {
   value: number | null;
   onSave: (v: number) => void;
+  forceEdit?: boolean;
+  onRequestNavigate?: (dir: NavigateDir) => void;
 }) {
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(forceEdit ?? false);
   const [draft, setDraft] = useState(value != null ? String(value) : "");
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (forceEdit) setEditing(true);
+  }, [forceEdit]);
 
   useEffect(() => {
     if (editing) inputRef.current?.focus();
@@ -230,8 +300,17 @@ function NumberCell({
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {
-        if (e.key === "Enter") commit();
-        if (e.key === "Escape") setEditing(false);
+        if (e.key === "Escape") {
+          setEditing(false);
+          onRequestNavigate?.("escape");
+        } else if (e.key === "Enter") {
+          commit();
+          onRequestNavigate?.("down");
+        } else if (e.key === "Tab") {
+          e.preventDefault();
+          commit();
+          onRequestNavigate?.(e.shiftKey ? "left" : "right");
+        }
       }}
     />
   );
@@ -239,60 +318,50 @@ function NumberCell({
 
 // ————————————————— Select cell —————————————————
 
-interface SelectConfig {
-  options?: string[];
-}
-
-function parseOptions(config: string): string[] {
-  try {
-    const parsed: SelectConfig = JSON.parse(config);
-    return parsed.options ?? [];
-  } catch {
-    return [];
-  }
-}
-
-// Stable color palette cycled for user-created options.
-const OPTION_COLORS = [
-  "bg-neutral-200 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-200",
-  "bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-200",
-  "bg-green-100 dark:bg-green-900/60 text-green-700 dark:text-green-200",
-  "bg-yellow-100 dark:bg-yellow-900/60 text-yellow-700 dark:text-yellow-200",
-  "bg-orange-100 dark:bg-orange-900/60 text-orange-700 dark:text-orange-200",
-  "bg-red-100 dark:bg-red-900/60 text-red-700 dark:text-red-200",
-  "bg-purple-100 dark:bg-purple-900/60 text-purple-700 dark:text-purple-200",
-  "bg-pink-100 dark:bg-pink-900/60 text-pink-700 dark:text-pink-200",
-];
-
-function optionColor(opt: string, allOptions: string[]) {
-  const idx = allOptions.indexOf(opt);
-  return OPTION_COLORS[(idx < 0 ? 0 : idx) % OPTION_COLORS.length];
-}
 
 function SelectCell({
   value,
   config,
+  siblingValues,
   onSave,
   onSaveConfig,
+  forceEdit,
+  onRequestNavigate,
 }: {
   value: string;
   config: string;
+  siblingValues: Record<string, string>;
   onSave: (v: string) => void;
   onSaveConfig: (config: string) => void;
+  forceEdit?: boolean;
+  onRequestNavigate?: (dir: NavigateDir) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [search, setSearch] = useState("");
   const cellRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const options = parseOptions(config);
 
-  const filtered = options.filter((o) =>
+  const cfg = parseSelectConfig(config);
+  const { options } = cfg;
+
+  // Only show options whose conditions pass for this row.
+  const visibleOptions = options.filter(
+    (o) => evaluateOption(o, cfg, siblingValues) !== null
+  );
+
+  // Did the current value's condition stop passing (e.g. Type changed)?
+  const currentValueValid = isOptionValid(value, cfg, siblingValues);
+
+  const filtered = visibleOptions.filter((o) =>
     o.toLowerCase().includes(search.toLowerCase())
   );
   const trimmed = search.trim();
+  // For "can create" check, look at the resolved label (formula or plain)
+  const resolvedCreate = parseOptionFormula(trimmed);
+  const createLabel = resolvedCreate ? resolvedCreate.label : trimmed;
   const canCreate =
     trimmed !== "" &&
-    !options.some((o) => o.toLowerCase() === trimmed.toLowerCase());
+    !options.some((o) => o.toLowerCase() === createLabel.toLowerCase());
 
   function close() {
     setEditing(false);
@@ -306,10 +375,18 @@ function SelectCell({
 
   function createAndSelect() {
     if (!trimmed) return;
-    if (!options.includes(trimmed)) {
-      onSaveConfig(JSON.stringify({ options: [...options, trimmed] }));
+    const formula = parseOptionFormula(trimmed);
+    const label = formula ? formula.label : trimmed;
+
+    if (!options.some((o) => o.toLowerCase() === label.toLowerCase())) {
+      const newConditions = formula
+        ? { ...cfg.conditions, [label]: formula.condition }
+        : cfg.conditions;
+      onSaveConfig(
+        serializeSelectConfig({ options: [...options, label], conditions: newConditions })
+      );
     }
-    onSave(trimmed);
+    onSave(label);
     close();
   }
 
@@ -320,8 +397,6 @@ function SelectCell({
   return (
     <div ref={cellRef} className="h-full">
       {editing ? (
-        // Cell becomes the input — size={1}+min-w-0 prevents the input's intrinsic
-        // minimum width from stretching the column; w-full fills the cell instead.
         <input
           ref={inputRef}
           size={1}
@@ -344,9 +419,19 @@ function SelectCell({
           onDoubleClick={() => setEditing(true)}
         >
           {value ? (
-            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${optionColor(value, options)}`}>
-              {value}
-            </span>
+            currentValueValid ? (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${getOptionColorClass(value, cfg)}`}>
+                {value}
+              </span>
+            ) : (
+              <span
+                className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800"
+                title="This option isn't valid for the current field values"
+              >
+                <span>⚠</span>
+                {value}
+              </span>
+            )
           ) : (
             <span className="text-neutral-400 dark:text-neutral-600 text-sm italic">—</span>
           )}
@@ -357,7 +442,7 @@ function SelectCell({
         <FloatingPopup
           anchorRef={cellRef}
           onClose={close}
-          className="w-52 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-xl overflow-hidden"
+          className="w-56 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-xl overflow-hidden"
         >
           <div className="max-h-56 overflow-y-auto">
             {/* Clear when a value is set and nothing typed */}
@@ -376,7 +461,7 @@ function SelectCell({
                 className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors"
                 onClick={() => selectOpt(opt)}
               >
-                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${optionColor(opt, options)}`}>
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${getOptionColorClass(opt, cfg)}`}>
                   {opt}
                 </span>
                 {opt === value && (
@@ -391,10 +476,23 @@ function SelectCell({
                 onClick={createAndSelect}
               >
                 <span className="text-neutral-400 dark:text-neutral-500 text-xs">+</span>
-                Create{" "}
-                <span className="font-medium text-neutral-800 dark:text-neutral-100">
-                  &ldquo;{trimmed}&rdquo;
-                </span>
+                {resolvedCreate ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="font-medium text-neutral-800 dark:text-neutral-100">
+                      &ldquo;{createLabel}&rdquo;
+                    </span>
+                    <span className="text-[10px] px-1 py-0.5 rounded bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-300 font-mono">
+                      if {resolvedCreate.condition.propName}={resolvedCreate.condition.value}
+                    </span>
+                  </span>
+                ) : (
+                  <span>
+                    Create{" "}
+                    <span className="font-medium text-neutral-800 dark:text-neutral-100">
+                      &ldquo;{trimmed}&rdquo;
+                    </span>
+                  </span>
+                )}
               </button>
             )}
 
@@ -403,6 +501,13 @@ function SelectCell({
                 No options
               </div>
             )}
+          </div>
+
+          {/* Formula hint */}
+          <div className="px-3 py-1.5 border-t border-neutral-100 dark:border-neutral-700">
+            <p className="text-[10px] text-neutral-400 dark:text-neutral-500 font-mono leading-snug">
+              this[Field]=&quot;Value&quot;?&quot;Label&quot;
+            </p>
           </div>
         </FloatingPopup>
       )}
@@ -415,27 +520,42 @@ function SelectCell({
 function MultiSelectCell({
   value,
   config,
+  siblingValues,
   onSave,
   onSaveConfig,
+  forceEdit,
+  onRequestNavigate,
 }: {
   value: string[];
   config: string;
+  siblingValues: Record<string, string>;
   onSave: (v: string[]) => void;
   onSaveConfig: (config: string) => void;
+  forceEdit?: boolean;
+  onRequestNavigate?: (dir: NavigateDir) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [search, setSearch] = useState("");
   const cellRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const options = parseOptions(config);
 
-  const filtered = options.filter((o) =>
+  const cfg = parseSelectConfig(config);
+  const { options } = cfg;
+
+  // Only show options whose conditions pass for this row.
+  const visibleOptions = options.filter(
+    (o) => evaluateOption(o, cfg, siblingValues) !== null
+  );
+
+  const filtered = visibleOptions.filter((o) =>
     o.toLowerCase().includes(search.toLowerCase())
   );
   const trimmed = search.trim();
+  const resolvedCreate = parseOptionFormula(trimmed);
+  const createLabel = resolvedCreate ? resolvedCreate.label : trimmed;
   const canCreate =
     trimmed !== "" &&
-    !options.some((o) => o.toLowerCase() === trimmed.toLowerCase());
+    !options.some((o) => o.toLowerCase() === createLabel.toLowerCase());
 
   function close() {
     setEditing(false);
@@ -448,17 +568,24 @@ function MultiSelectCell({
       : [...value, opt];
     onSave(next);
     setSearch("");
-    // Stay open so the user can keep picking
     inputRef.current?.focus();
   }
 
   function createAndToggle() {
     if (!trimmed) return;
-    if (!options.includes(trimmed)) {
-      onSaveConfig(JSON.stringify({ options: [...options, trimmed] }));
+    const formula = parseOptionFormula(trimmed);
+    const label = formula ? formula.label : trimmed;
+
+    if (!options.some((o) => o.toLowerCase() === label.toLowerCase())) {
+      const newConditions = formula
+        ? { ...cfg.conditions, [label]: formula.condition }
+        : cfg.conditions;
+      onSaveConfig(
+        serializeSelectConfig({ options: [...options, label], conditions: newConditions })
+      );
     }
-    if (!value.includes(trimmed)) {
-      onSave([...value, trimmed]);
+    if (!value.includes(label)) {
+      onSave([...value, label]);
     }
     setSearch("");
     inputRef.current?.focus();
@@ -468,8 +595,10 @@ function MultiSelectCell({
     if (editing) inputRef.current?.focus();
   }, [editing]);
 
+  // Invalid selected tags: their conditions no longer pass.
+  const invalidValues = value.filter((v) => !isOptionValid(v, cfg, siblingValues));
+
   return (
-    // h-9 + overflow-hidden: cell is always exactly one row tall, pills never push it taller
     <div
       ref={cellRef}
       className={`h-9 overflow-hidden px-2 flex items-center gap-1 ${
@@ -479,17 +608,26 @@ function MultiSelectCell({
       }`}
       onDoubleClick={() => { if (!editing) setEditing(true); }}
     >
-      {/* Selected pills — flex-shrink-0 so they don't get squashed by the input */}
-      {value.map((v) => (
-        <span
-          key={v}
-          className={`flex-shrink-0 text-xs px-2 py-0.5 rounded-full font-medium ${optionColor(v, options)}`}
-        >
-          {v}
-        </span>
-      ))}
+      {value.map((v) => {
+        const invalid = invalidValues.includes(v);
+        return invalid ? (
+          <span
+            key={v}
+            title="This option isn't valid for the current field values"
+            className="flex-shrink-0 flex items-center gap-0.5 text-xs px-2 py-0.5 rounded-full font-medium bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800"
+          >
+            <span>⚠</span>{v}
+          </span>
+        ) : (
+          <span
+            key={v}
+            className={`flex-shrink-0 text-xs px-2 py-0.5 rounded-full font-medium ${getOptionColorClass(v, cfg)}`}
+          >
+            {v}
+          </span>
+        );
+      })}
 
-      {/* Inline input — only visible while editing */}
       {editing ? (
         <input
           ref={inputRef}
@@ -505,7 +643,6 @@ function MultiSelectCell({
               else if (canCreate) createAndToggle();
             }
             if (e.key === "Escape") close();
-            // Backspace with empty input removes the last tag
             if (e.key === "Backspace" && !search && value.length > 0) {
               onSave(value.slice(0, -1));
             }
@@ -521,7 +658,7 @@ function MultiSelectCell({
         <FloatingPopup
           anchorRef={cellRef}
           onClose={close}
-          className="w-52 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-xl overflow-hidden"
+          className="w-56 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-xl overflow-hidden"
         >
           <div className="max-h-56 overflow-y-auto">
             {filtered.map((opt) => (
@@ -539,7 +676,7 @@ function MultiSelectCell({
                 >
                   {value.includes(opt) ? "✓" : ""}
                 </span>
-                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${optionColor(opt, options)}`}>
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${getOptionColorClass(opt, cfg)}`}>
                   {opt}
                 </span>
               </button>
@@ -551,10 +688,23 @@ function MultiSelectCell({
                 onClick={createAndToggle}
               >
                 <span className="text-neutral-400 dark:text-neutral-500 text-xs">+</span>
-                Create{" "}
-                <span className="font-medium text-neutral-800 dark:text-neutral-100">
-                  &ldquo;{trimmed}&rdquo;
-                </span>
+                {resolvedCreate ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="font-medium text-neutral-800 dark:text-neutral-100">
+                      &ldquo;{createLabel}&rdquo;
+                    </span>
+                    <span className="text-[10px] px-1 py-0.5 rounded bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-300 font-mono">
+                      if {resolvedCreate.condition.propName}={resolvedCreate.condition.value}
+                    </span>
+                  </span>
+                ) : (
+                  <span>
+                    Create{" "}
+                    <span className="font-medium text-neutral-800 dark:text-neutral-100">
+                      &ldquo;{trimmed}&rdquo;
+                    </span>
+                  </span>
+                )}
               </button>
             )}
 
@@ -563,6 +713,12 @@ function MultiSelectCell({
                 No options
               </div>
             )}
+          </div>
+
+          <div className="px-3 py-1.5 border-t border-neutral-100 dark:border-neutral-700">
+            <p className="text-[10px] text-neutral-400 dark:text-neutral-500 font-mono leading-snug">
+              this[Field]=&quot;Value&quot;?&quot;Label&quot;
+            </p>
           </div>
         </FloatingPopup>
       )}
@@ -575,9 +731,11 @@ function MultiSelectCell({
 function CheckboxCell({
   value,
   onSave,
+  onRequestNavigate,
 }: {
   value: boolean;
   onSave: (v: boolean) => void;
+  onRequestNavigate?: (dir: NavigateDir) => void;
 }) {
   return (
     <div className="h-full px-2 py-1 flex items-center hover:bg-neutral-100 dark:hover:bg-neutral-800/50">
@@ -585,6 +743,11 @@ function CheckboxCell({
         type="checkbox"
         checked={value}
         onChange={(e) => onSave(e.target.checked)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") { e.preventDefault(); onSave(!value); onRequestNavigate?.("down"); }
+          else if (e.key === "Tab") { e.preventDefault(); onRequestNavigate?.(e.shiftKey ? "left" : "right"); }
+          else if (e.key === "Escape") onRequestNavigate?.("escape");
+        }}
         className="accent-blue-500 cursor-pointer"
       />
     </div>

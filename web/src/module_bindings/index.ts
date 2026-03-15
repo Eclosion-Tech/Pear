@@ -36,9 +36,11 @@ import {
 // Import all reducer arg schemas
 import AddPropertyReducer from "./add_property_reducer";
 import ClearPropertyValueReducer from "./clear_property_value_reducer";
+import CreateAttachmentReducer from "./create_attachment_reducer";
 import CreateDatabaseSchemaReducer from "./create_database_schema_reducer";
 import CreatePageReducer from "./create_page_reducer";
 import CreateViewReducer from "./create_view_reducer";
+import DeleteAttachmentReducer from "./delete_attachment_reducer";
 import DeletePageReducer from "./delete_page_reducer";
 import DeletePropertyReducer from "./delete_property_reducer";
 import DeleteViewReducer from "./delete_view_reducer";
@@ -59,6 +61,7 @@ import SetUserProfileReducer from "./set_user_profile_reducer";
 import TakeSnapshotReducer from "./take_snapshot_reducer";
 import TakeSnapshotWithContentReducer from "./take_snapshot_with_content_reducer";
 import UpdatePageContentReducer from "./update_page_content_reducer";
+import UpdatePageIconReducer from "./update_page_icon_reducer";
 import UpdatePageTitleReducer from "./update_page_title_reducer";
 import UpdatePropertyConfigReducer from "./update_property_config_reducer";
 import UpdatePropertyTypeReducer from "./update_property_type_reducer";
@@ -67,6 +70,7 @@ import UpdateViewConfigReducer from "./update_view_config_reducer";
 // Import all procedure arg schemas
 
 // Import all table schema definitions
+import AttachmentRow from "./attachment_table";
 import DatabaseSchemaRow from "./database_schema_table";
 import DatabaseViewRow from "./database_view_table";
 import PageRow from "./page_table";
@@ -82,6 +86,20 @@ import UserRow from "./user_table";
 
 /** The schema information for all tables in this module. This is defined the same was as the tables would have been defined in the server. */
 const tablesSchema = __schema({
+  attachment: __table({
+    name: 'attachment',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'page_id', algorithm: 'btree', columns: [
+        'pageId',
+      ] },
+    ],
+    constraints: [
+      { name: 'attachment_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, AttachmentRow),
   database_schema: __table({
     name: 'database_schema',
     indexes: [
@@ -225,9 +243,11 @@ const tablesSchema = __schema({
 const reducersSchema = __reducers(
   __reducerSchema("add_property", AddPropertyReducer),
   __reducerSchema("clear_property_value", ClearPropertyValueReducer),
+  __reducerSchema("create_attachment", CreateAttachmentReducer),
   __reducerSchema("create_database_schema", CreateDatabaseSchemaReducer),
   __reducerSchema("create_page", CreatePageReducer),
   __reducerSchema("create_view", CreateViewReducer),
+  __reducerSchema("delete_attachment", DeleteAttachmentReducer),
   __reducerSchema("delete_page", DeletePageReducer),
   __reducerSchema("delete_property", DeletePropertyReducer),
   __reducerSchema("delete_view", DeleteViewReducer),
@@ -248,6 +268,7 @@ const reducersSchema = __reducers(
   __reducerSchema("take_snapshot", TakeSnapshotReducer),
   __reducerSchema("take_snapshot_with_content", TakeSnapshotWithContentReducer),
   __reducerSchema("update_page_content", UpdatePageContentReducer),
+  __reducerSchema("update_page_icon", UpdatePageIconReducer),
   __reducerSchema("update_page_title", UpdatePageTitleReducer),
   __reducerSchema("update_property_config", UpdatePropertyConfigReducer),
   __reducerSchema("update_property_type", UpdatePropertyTypeReducer),

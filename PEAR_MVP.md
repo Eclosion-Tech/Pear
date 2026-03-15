@@ -1011,4 +1011,43 @@ Even though `PageYjsUpdate` was removed, the entire document is still stored as 
 - Conflict notification when a periodic save detects a divergence (unlikely with CRDT but possible at the SpacetimeDB reducer level)
 
 ---
+
+## 18. Custom Block Types
+
+BlockNote's block system is extensible. Beyond the standard text/heading/list/code blocks, Pear ships purpose-built block types that integrate directly with the data layer.
+
+### 18.1 PageLink Block
+
+Already implemented. A custom block that embeds a reference to another Pear page inline in a document — renders as a linked page chip with the page title. Created via `/page` slash command. When the referenced page title changes in SpacetimeDB, the chip updates in real time.
+
+### 18.2 Audio Recording Block
+
+A native in-document audio recorder for capturing and transcribing voice — designed primarily for meeting recordings, voice notes, and interview captures.
+
+**Block behavior:**
+- Inserting an `Audio` block (via `/audio` slash command) starts a recording session immediately
+- MediaRecorder API captures microphone input; waveform visualization renders during recording
+- On stop, the audio blob is stored (base64 or external blob storage reference) in the block's content JSON
+- The block renders a persistent audio player on any future view of the document
+
+**Transcription strategy (tiered, matching the embeddings philosophy):**
+
+| Tier | Method | When Used |
+|---|---|---|
+| **On-device (Apple)** | `webkitSpeechRecognition` / Web Speech API | Default on Safari/macOS/iOS — uses Apple's on-device model, zero cost, fully private |
+| **Local Whisper** | [Whisper.cpp](https://github.com/ggerganov/whisper.cpp) via Ollama or standalone binary | Set `PEAR_TRANSCRIPTION_BACKEND=whisper` — self-hosted, GPU-optional, excellent quality |
+| **Cloud** | OpenAI Whisper API | Set `PEAR_TRANSCRIPTION_BACKEND=openai` — for users who don't need local and want fastest turnaround |
+
+**Output:**
+- Real-time partial transcripts appear inline while recording (where Web Speech API supports it)
+- Final transcript appended as plain text blocks below the audio player after recording stops
+- Transcript is fully editable — it's just regular Pear blocks, nothing special
+- Speaker diarization (future): "Speaker A:", "Speaker B:" labels inserted when using Whisper models that support it
+- Because the transcript lives in `PageContent` as normal blocks, it's immediately indexed for semantic search and available to Orcha agents — "summarize this meeting" just works
+
+**Meeting recording mode:**
+Users can also drag-and-drop an existing audio file (`.m4a`, `.mp3`, `.wav`) onto an Audio block to trigger transcription of a pre-recorded file rather than a live session. Same transcription pipeline, same output format.
+
+---
+
 *Last updated: March 2026*

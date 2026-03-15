@@ -4,11 +4,17 @@ import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useTable } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
-import { useUpdatePageTitle, useDeletePage, useChildPages } from "@/src/hooks/usePages";
+import { useUpdatePageTitle, useUpdatePageIcon, useDeletePage, useChildPages } from "@/src/hooks/usePages";
 import type { PageRow } from "@/src/hooks/usePages";
+import { EmojiPicker } from "./EmojiPicker";
 import { PearEditor } from "./PearEditor";
 import { PageMoreMenu } from "./PageMoreMenu";
 import { PageHistoryPanel } from "./PageHistoryPanel";
+import { PagePropertiesPanel } from "./PagePropertiesPanel";
+import { Breadcrumb } from "./Breadcrumb";
+import { useDatabaseSchema, usePropertyDefinitions } from "@/src/hooks/useDatabase";
+import { clearIdbCache, clearIdbCacheForPage } from "@/src/lib/spacetime";
+import { usePageAncestors } from "@/src/hooks/usePages";
 
 interface DocPageProps {
   page: PageRow;
@@ -17,11 +23,24 @@ interface DocPageProps {
 export function DocPage({ page }: DocPageProps) {
   const router = useRouter();
   const updateTitle = useUpdatePageTitle();
+  const updatePageIcon = useUpdatePageIcon();
   const deletePage = useDeletePage();
+  const iconButtonRef = useRef<HTMLButtonElement>(null);
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [contents] = useTable(tables.page_content);
   const content = contents.find((c) => c.pageId === page.id);
 
+  const [allPages] = useTable(tables.page);
+  const parentPage = page.parentId != null
+    ? allPages.find((p) => p.id === page.parentId)
+    : undefined;
+  const parentIsDatabase = parentPage?.pageType?.tag === "Database";
+
+  const { schema } = useDatabaseSchema(parentPage?.id ?? BigInt(0));
+  const properties = usePropertyDefinitions(schema?.id ?? BigInt(0));
+
   const { children } = useChildPages(page.id);
+  const ancestors = usePageAncestors(page.id);
   const [title, setTitle] = useState(page.title);
   const [historyOpen, setHistoryOpen] = useState(false);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -52,7 +71,25 @@ export function DocPage({ page }: DocPageProps) {
         className={`flex flex-col overflow-y-auto transition-all ${historyOpen ? "flex-1 min-w-0" : "flex-1"}`}
       >
       <div className="max-w-3xl mx-auto w-full px-8 pt-16 pb-24 flex-1">
+        <Breadcrumb ancestors={ancestors} currentTitle={title} />
         <div className="flex items-center gap-3 mb-6">
+          <button
+            ref={iconButtonRef}
+            type="button"
+            onClick={() => setEmojiPickerOpen((o) => !o)}
+            className="shrink-0 w-10 h-10 flex items-center justify-center rounded-lg text-2xl hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+            title="Change icon"
+          >
+            {page.icon ?? "📄"}
+          </button>
+          {emojiPickerOpen && (
+            <EmojiPicker
+              anchorRef={iconButtonRef}
+              currentIcon={page.icon != null ? page.icon : undefined}
+              onSelect={(emoji) => { updatePageIcon({ pageId: page.id, icon: emoji ?? "" }); setEmojiPickerOpen(false); }}
+              onClose={() => setEmojiPickerOpen(false)}
+            />
+          )}
           <input
             className="flex-1 text-4xl font-bold text-neutral-900 dark:text-white bg-transparent outline-none placeholder:text-neutral-300 dark:placeholder:text-neutral-700"
             value={title}
@@ -82,6 +119,20 @@ export function DocPage({ page }: DocPageProps) {
           <PageMoreMenu
             items={[
               {
+                label: "Clear cache for this page",
+                onClick: async () => {
+                  await clearIdbCacheForPage(page.id);
+                  window.location.reload();
+                },
+              },
+              {
+                label: "Clear cache for workspace",
+                onClick: async () => {
+                  await clearIdbCache();
+                  window.location.reload();
+                },
+              },
+              {
                 label: "Move to trash",
                 onClick: () => {
                   deletePage({ pageId: page.id });
@@ -92,6 +143,11 @@ export function DocPage({ page }: DocPageProps) {
             ]}
           />
         </div>
+        {parentIsDatabase && properties.length > 0 && (
+          <div className="mb-6 pb-4 border-b border-neutral-100 dark:border-neutral-800">
+            <PagePropertiesPanel pageId={page.id} properties={properties} />
+          </div>
+        )}
         <PearEditor
           key={`${page.id}-${content?.updatedAt ?? 0}`}
           pageId={page.id}

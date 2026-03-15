@@ -107,6 +107,9 @@ pub struct Page {
     pub updated_at: Timestamp,
     /// None = active, Some = soft deleted. Hard purge after 30 days.
     pub deleted_at: Option<Timestamp>,
+    /// Optional emoji/icon (single character or short string) for sidebar and header. Must be last for schema migration.
+    #[default(Option::<String>::None)]
+    pub icon: Option<String>,
 }
 
 /// Separated from Page so listing/filtering never loads content blobs.
@@ -220,6 +223,22 @@ pub struct DatabaseView {
     pub created_by: ActorType,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+}
+
+/// File upload metadata. Blob lives in S3/MinIO at storage_key; this row is the source of truth for "what's attached to this page".
+#[table(accessor = attachment, public)]
+pub struct Attachment {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub page_id: u64,
+    pub filename: String,
+    pub content_type: String,
+    /// Key in the S3 bucket (e.g. "pages/123/abc-123.png").
+    pub storage_key: String,
+    pub size_bytes: u64,
+    pub created_at: Timestamp,
 }
 
 // ============================================================
@@ -442,6 +461,7 @@ pub fn create_page(
         sort_order,
         page_type,
         title,
+        icon: None,
         embedding: None,
         created_by: ActorType::Human,
         created_at: ctx.timestamp,
@@ -540,6 +560,28 @@ pub fn update_page_title(ctx: &ReducerContext, page_id: u64, title: String) -> R
     Ok(())
 }
 
+/// Set or clear the page icon (emoji). Pass empty string to clear.
+#[reducer]
+pub fn update_page_icon(ctx: &ReducerContext, page_id: u64, icon: String) -> Result<(), String> {
+    let page = ctx
+        .db
+        .page()
+        .id()
+        .find(&page_id)
+        .ok_or("Page not found")?;
+    let new_icon = if icon.trim().is_empty() {
+        None
+    } else {
+        Some(icon.trim().to_string())
+    };
+    ctx.db.page().id().update(Page {
+        icon: new_icon,
+        updated_at: ctx.timestamp,
+        ..page
+    });
+    Ok(())
+}
+
 /// Updates PageContent (not Page) — content is separate from metadata.
 #[reducer]
 pub fn update_page_content(
@@ -632,6 +674,45 @@ pub fn restore_page(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
         updated_at: ctx.timestamp,
         ..page
     });
+    Ok(())
+}
+
+/// Register a new attachment after the client uploads the blob to S3/MinIO.
+/// Call this once the upload succeeds so the attachment is linked to the page.
+#[reducer]
+pub fn create_attachment(
+    ctx: &ReducerContext,
+    page_id: u64,
+    filename: String,
+    content_type: String,
+    storage_key: String,
+    size_bytes: u64,
+) -> Result<(), String> {
+    ctx.db.page().id().find(&page_id).ok_or("Page not found")?;
+    if filename.is_empty() || storage_key.is_empty() {
+        return Err("filename and storage_key are required".to_string());
+    }
+    ctx.db.attachment().insert(Attachment {
+        id: 0,
+        page_id,
+        filename,
+        content_type,
+        storage_key,
+        size_bytes,
+        created_at: ctx.timestamp,
+    });
+    Ok(())
+}
+
+/// Remove an attachment record. Call after deleting the blob from S3 (or leave orphaned blobs for later cleanup).
+#[reducer]
+pub fn delete_attachment(ctx: &ReducerContext, attachment_id: u64) -> Result<(), String> {
+    ctx.db
+        .attachment()
+        .id()
+        .find(&attachment_id)
+        .ok_or("Attachment not found")?;
+    ctx.db.attachment().id().delete(&attachment_id);
     Ok(())
 }
 

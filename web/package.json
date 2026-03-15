@@ -5,9 +5,11 @@
     "dev": "next dev -p 3001",
     "build": "next build",
     "start": "next start",
-    "generate": "spacetime generate --lang typescript --out-dir src/module_bindings --module-path ../server/spacetimedb"
+    "generate": "cd ../server && spacetime generate"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1009.0",
+    "@aws-sdk/s3-request-presigner": "^3.1009.0",
     "@blocknote/core": "^0.47.1",
     "@blocknote/mantine": "^0.47.1",
     "@blocknote/react": "^0.47.1",

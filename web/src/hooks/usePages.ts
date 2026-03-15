@@ -24,6 +24,22 @@ export function useRootPages() {
   return { roots, isReady };
 }
 
+/** Ancestors of a page from root to immediate parent (for breadcrumbs). */
+export function usePageAncestors(pageId: bigint) {
+  const { pages } = usePages();
+  const page = pages.find((p) => p.id === pageId);
+  if (!page) return [];
+  const ancestors: Array<{ id: bigint; title: string }> = [];
+  let parentId = page.parentId;
+  while (parentId != null) {
+    const parent = pages.find((p) => p.id === parentId);
+    if (!parent) break;
+    ancestors.unshift({ id: parent.id, title: parent.title || "Untitled" });
+    parentId = parent.parentId;
+  }
+  return ancestors;
+}
+
 export function useMovePage() {
   return useReducer(reducers.movePage);
 }
@@ -34,6 +50,10 @@ export function useCreatePage() {
 
 export function useUpdatePageTitle() {
   return useReducer(reducers.updatePageTitle);
+}
+
+export function useUpdatePageIcon() {
+  return useReducer(reducers.updatePageIcon);
 }
 
 export function useUpdatePageContent() {
@@ -102,6 +122,20 @@ export function useCreateView() {
 
 export function useConnection() {
   return useSpacetimeDB();
+}
+
+/** Attachments for a page (files in S3/MinIO, metadata in SpacetimeDB). */
+export function usePageAttachments(pageId: bigint) {
+  const [attachments] = useTable(tables.attachment);
+  return attachments.filter((a) => a.pageId === pageId);
+}
+
+export function useCreateAttachment() {
+  return useReducer(reducers.createAttachment);
+}
+
+export function useDeleteAttachment() {
+  return useReducer(reducers.deleteAttachment);
 }
 
 // Row type inferred from table query builder

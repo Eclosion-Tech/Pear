@@ -47,6 +47,11 @@ Thumbs.db
 docker-compose.override.yml
 
 # ————————————————————————————————
+# Deploy script (machine-specific, never commit)
+# ————————————————————————————————
+deploy.sh
+
+# ————————————————————————————————
 # Logs
 # ————————————————————————————————
 *.log

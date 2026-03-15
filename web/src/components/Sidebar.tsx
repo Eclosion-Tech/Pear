@@ -10,10 +10,13 @@ import {
   useMovePage,
   useDeletedPages,
   useConnection,
+  useUpdatePageIcon,
 } from "@/src/hooks/usePages";
 import { useCurrentUser } from "@/src/hooks/useUser";
 import { SettingsPopover } from "@/src/components/SettingsPopover";
 import { ContextMenu, type ContextMenuItem } from "@/src/components/ContextMenu";
+import { QuickSwitcher } from "@/src/components/QuickSwitcher";
+import { EmojiPicker } from "@/src/components/EmojiPicker";
 import type { PageRow } from "@/src/hooks/usePages";
 
 // ─── Drag state shared across the whole sidebar ───────────────────────────────
@@ -57,6 +60,10 @@ interface SidebarItemProps {
   onDrop: (target: DropTarget) => void;
   onContextMenu: (e: React.MouseEvent, page: PageRow) => void;
   router: ReturnType<typeof useRouter>;
+  emojiPickerPageId: bigint | null;
+  onOpenEmojiPicker: (pageId: bigint) => void;
+  onCloseEmojiPicker: () => void;
+  updatePageIcon: (args: { pageId: bigint; icon: string }) => void;
 }
 
 function SidebarItem({
@@ -73,11 +80,19 @@ function SidebarItem({
   onDrop,
   onContextMenu,
   router,
+  emojiPickerPageId,
+  onOpenEmojiPicker,
+  onCloseEmojiPicker,
+  updatePageIcon,
 }: SidebarItemProps) {
+  const iconButtonRef = useRef<HTMLButtonElement>(null);
   const id = String(page.id);
   const isActive = id === activeId;
   const isExpanded = expandedIds.has(id);
   const isDragging = draggingId === page.id;
+  const defaultIcon = page.pageType.tag === "Database" ? "📊" : "📄";
+  const icon = page.icon ?? defaultIcon;
+  const showEmojiPicker = emojiPickerPageId === page.id;
 
   const children = allPages
     .filter((p) => p.parentId === page.id)
@@ -184,9 +199,23 @@ function SidebarItem({
           className="flex-1 flex items-center gap-1.5 min-w-0"
           onClick={() => router.push(`/workspace/${page.id}`)}
         >
-          <span className="shrink-0 text-xs">
-            {page.pageType.tag === "Database" ? "⊞" : "📄"}
-          </span>
+          <button
+            ref={iconButtonRef}
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onOpenEmojiPicker(page.id); }}
+            className="shrink-0 w-6 h-6 flex items-center justify-center rounded text-base hover:bg-neutral-200 dark:hover:bg-neutral-700 transition-colors"
+            title="Change icon"
+          >
+            {icon}
+          </button>
+          {showEmojiPicker && (
+            <EmojiPicker
+              anchorRef={iconButtonRef}
+              currentIcon={page.icon != null ? page.icon : undefined}
+              onSelect={(emoji) => updatePageIcon({ pageId: page.id, icon: emoji ?? "" })}
+              onClose={onCloseEmojiPicker}
+            />
+          )}
           <span className="truncate">{page.title}</span>
         </div>
       </div>
@@ -215,6 +244,10 @@ function SidebarItem({
               onDrop={onDrop}
               onContextMenu={onContextMenu}
               router={router}
+              emojiPickerPageId={emojiPickerPageId}
+              onOpenEmojiPicker={onOpenEmojiPicker}
+              onCloseEmojiPicker={onCloseEmojiPicker}
+              updatePageIcon={(args) => updatePageIcon({ pageId: args.pageId, icon: args.icon ?? "" })}
             />
           ))}
         </div>
@@ -242,14 +275,31 @@ export function Sidebar() {
     .filter((p) => p.parentId == null)
     .sort((a, b) => a.sortOrder - b.sortOrder);
 
+  const updatePageIcon = useUpdatePageIcon();
   const [isCreating, setIsCreating] = useState(false);
   const [pendingNav, setPendingNav] = useState<Set<bigint> | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [emojiPickerPageId, setEmojiPickerPageId] = useState<bigint | null>(null);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
     items: ContextMenuItem[];
   } | null>(null);
+
+  // Quick switcher
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+
+  // Global ⌘K / Ctrl+K listener
+  useEffect(() => {
+    function handler(e: KeyboardEvent) {
+      if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setSwitcherOpen((o) => !o);
+      }
+    }
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
   // DnD state
   const [draggingId, setDraggingId] = useState<bigint | null>(null);
@@ -412,6 +462,17 @@ export function Sidebar() {
         {!isActive && (
           <span className="ml-auto text-xs text-yellow-600 dark:text-yellow-500">connecting…</span>
         )}
+        {isActive && (
+          <button
+            onClick={() => setSwitcherOpen(true)}
+            title="Quick switcher (⌘K)"
+            className="ml-auto text-neutral-400 dark:text-neutral-600 hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+          </button>
+        )}
       </div>
 
       {/* Page tree */}
@@ -440,12 +501,16 @@ export function Sidebar() {
                 onDrop={setDropTarget}
                 onContextMenu={handleContextMenu}
                 router={router}
+                emojiPickerPageId={emojiPickerPageId}
+                onOpenEmojiPicker={setEmojiPickerPageId}
+                onCloseEmojiPicker={() => setEmojiPickerPageId(null)}
+                updatePageIcon={(args) => updatePageIcon({ pageId: args.pageId, icon: args.icon ?? "" })}
               />
             ))}
           </div>
         )}
 
-        {/* Trash link */}
+        {/* Trash + Settings */}
         <button
           onClick={() => router.push("/workspace/trash")}
           className={`w-full text-left px-2 py-1.5 rounded text-sm transition-colors mt-2 ${
@@ -461,6 +526,17 @@ export function Sidebar() {
               ({deletedPages.length})
             </span>
           )}
+        </button>
+        <button
+          onClick={() => router.push("/workspace/settings")}
+          className={`w-full text-left px-2 py-1.5 rounded text-sm transition-colors ${
+            activeId === "settings"
+              ? "bg-neutral-200 dark:bg-neutral-800 text-neutral-900 dark:text-white"
+              : "text-neutral-500 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-900 hover:text-neutral-900 dark:hover:text-white"
+          }`}
+        >
+          <span className="mr-1.5 text-xs">⚙</span>
+          Settings
         </button>
       </nav>
 
@@ -502,6 +578,8 @@ export function Sidebar() {
           onClose={() => setContextMenu(null)}
         />
       )}
+
+      <QuickSwitcher open={switcherOpen} onClose={() => setSwitcherOpen(false)} />
     </aside>
   );
 }
