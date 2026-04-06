@@ -8,7 +8,8 @@ export type PropertyTypeTag =
   | "MultiSelect"
   | "Relation"
   | "Checkbox"
-  | "Url";
+  | "Url"
+  | "Person";
 
 const PROPERTY_TYPES: { tag: PropertyTypeTag; icon: string; label: string }[] =
   [
@@ -20,6 +21,7 @@ const PROPERTY_TYPES: { tag: PropertyTypeTag; icon: string; label: string }[] =
     { tag: "Relation", icon: "↗", label: "Relation" },
     { tag: "Checkbox", icon: "✓", label: "Checkbox" },
     { tag: "Url", icon: "🔗", label: "URL" },
+    { tag: "Person", icon: "👤", label: "Person" },
   ];
 
 interface PropertyTypePickerProps {

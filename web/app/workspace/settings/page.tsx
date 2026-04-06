@@ -1,21 +1,15 @@
 "use client";
 
-import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
-import { clearIdbCache } from "@/src/lib/spacetime";
+import { AiUsersSettings } from "@/src/components/AiUsersSettings";
+import { ApiEndpointsSettings } from "@/src/components/ApiEndpointsSettings";
+import { ExtensionsSettings } from "@/src/components/ExtensionsSettings";
+import { WorkspaceConnectionsPanel } from "@/src/components/WorkspaceConnectionsPanel";
 
 export default function SettingsPage() {
   const router = useRouter();
   const { resolvedTheme, setTheme } = useTheme();
-  const [clearing, setClearing] = useState(false);
-
-  async function handleClearCache() {
-    setClearing(true);
-    await clearIdbCache();
-    window.location.reload();
-  }
-
   return (
     <div className="h-full overflow-auto">
       <div className="max-w-xl mx-auto px-8 py-12">
@@ -53,21 +47,15 @@ export default function SettingsPage() {
           </div>
         </section>
 
+        <WorkspaceConnectionsPanel />
+
+        <AiUsersSettings />
+
         <section className="mb-10">
-          <h2 className="text-sm font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-4">Data</h2>
-          <div className="py-3 border-b border-neutral-200 dark:border-neutral-800">
-            <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-3">
-              Clear all locally cached editor state (IndexedDB). Content will re-sync from the server on next load. Use if you see sync issues or after schema changes.
-            </p>
-            <button
-              onClick={handleClearCache}
-              disabled={clearing}
-              className="px-3 py-1.5 rounded text-sm font-medium text-neutral-700 dark:text-neutral-300 bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 disabled:opacity-50 transition-colors"
-            >
-              {clearing ? "Clearing…" : "Clear cached data"}
-            </button>
-          </div>
+          <ExtensionsSettings />
         </section>
+
+        <ApiEndpointsSettings />
 
         <section>
           <h2 className="text-sm font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-4">About</h2>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useTable } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
 import {
@@ -9,6 +9,7 @@ import {
 } from "@/src/hooks/usePages";
 import { useUpdatePropertyConfig } from "@/src/hooks/useDatabase";
 import type { PropertyDefinitionRow, PagePropertyValueRow } from "@/src/hooks/useDatabase";
+import { useUsers, type UserRow } from "@/src/hooks/useUser";
 import { FloatingPopup } from "./FloatingPopup";
 import {
   parseSelectConfig,
@@ -150,6 +151,14 @@ export function PropertyCell({
           value={value?.tag === "Relation" ? (value.value as bigint[]) : []}
           config={definition.config}
           onSave={(v) => save({ tag: "Relation", value: v })}
+        />
+      );
+
+    case "Person":
+      return (
+        <PersonCell
+          value={value?.tag === "Person" ? (value.value as string[]) : []}
+          onSave={(v) => save({ tag: "Person", value: v })}
         />
       );
 
@@ -965,6 +974,185 @@ function RelationCell({
   );
 }
 
+// ————————————————— Person cell —————————————————
+
+const AVATAR_COLORS = [
+  "bg-blue-500",
+  "bg-emerald-500",
+  "bg-violet-500",
+  "bg-amber-500",
+  "bg-rose-500",
+  "bg-cyan-500",
+  "bg-pink-500",
+  "bg-teal-500",
+];
+
+function hashColor(str: string): string {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) hash = (hash * 31 + str.charCodeAt(i)) | 0;
+  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+}
+
+function userInitials(user: UserRow): string {
+  if (user.name) {
+    const parts = user.name.trim().split(/\s+/);
+    return parts.length >= 2
+      ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+      : parts[0].slice(0, 2).toUpperCase();
+  }
+  if (user.email) return user.email[0].toUpperCase();
+  return "?";
+}
+
+function PersonCell({
+  value,
+  onSave,
+}: {
+  value: string[];
+  onSave: (v: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const anchorRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const { users } = useUsers();
+
+  const usersByIdentity = useMemo(() => {
+    const map = new Map<string, UserRow>();
+    for (const u of users) map.set(u.identity.toHexString(), u);
+    return map;
+  }, [users]);
+
+  const selectedUsers = value
+    .map((hex) => ({ hex, user: usersByIdentity.get(hex) }))
+    .filter((e): e is { hex: string; user: UserRow } => !!e.user);
+
+  const filtered = users.filter(
+    (u) =>
+      (u.name.toLowerCase().includes(search.toLowerCase()) ||
+        u.email.toLowerCase().includes(search.toLowerCase())) &&
+      !value.includes(u.identity.toHexString())
+  );
+
+  useEffect(() => {
+    if (open) inputRef.current?.focus();
+  }, [open]);
+
+  function toggle(hex: string) {
+    const next = value.includes(hex)
+      ? value.filter((v) => v !== hex)
+      : [...value, hex];
+    onSave(next);
+  }
+
+  function handleClose() {
+    setOpen(false);
+    setSearch("");
+  }
+
+  return (
+    <div className="h-full">
+      <div
+        ref={anchorRef}
+        className="h-full px-2 py-1 cursor-default flex items-center flex-wrap gap-1 min-h-9 hover:bg-neutral-100 dark:hover:bg-neutral-800/50"
+        onDoubleClick={() => setOpen((o) => !o)}
+      >
+        {selectedUsers.length > 0 ? (
+          selectedUsers.map(({ hex, user }) => (
+            <span
+              key={hex}
+              className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full font-medium bg-neutral-100 dark:bg-neutral-700 text-neutral-800 dark:text-neutral-200 border border-neutral-200 dark:border-neutral-600"
+            >
+              <span
+                className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] text-white font-semibold ${hashColor(hex)}`}
+              >
+                {userInitials(user)}
+              </span>
+              {user.name || user.email}
+            </span>
+          ))
+        ) : (
+          <span className="text-neutral-400 dark:text-neutral-600 text-sm italic">
+            —
+          </span>
+        )}
+      </div>
+
+      {open && (
+        <FloatingPopup
+          anchorRef={anchorRef}
+          onClose={handleClose}
+          className="w-60 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-xl overflow-hidden"
+        >
+          <div className="px-2 py-1.5 border-b border-neutral-100 dark:border-neutral-700">
+            <input
+              ref={inputRef}
+              className="w-full bg-neutral-100 dark:bg-neutral-700 text-sm text-neutral-900 dark:text-white px-2 py-0.5 rounded outline-none"
+              placeholder="Search people…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <div className="max-h-48 overflow-y-auto">
+            {/* Already-selected users (shown at top for easy removal) */}
+            {selectedUsers.map(({ hex, user }) => (
+              <button
+                key={hex}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors"
+                onClick={() => toggle(hex)}
+              >
+                <span className="w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center text-xs bg-blue-500 border-blue-500 text-white">
+                  ✓
+                </span>
+                <span
+                  className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] text-white font-semibold flex-shrink-0 ${hashColor(hex)}`}
+                >
+                  {userInitials(user)}
+                </span>
+                <span className="truncate">
+                  {user.name || user.email}
+                </span>
+              </button>
+            ))}
+
+            {selectedUsers.length > 0 && filtered.length > 0 && (
+              <div className="border-t border-neutral-100 dark:border-neutral-700" />
+            )}
+
+            {/* Unselected users */}
+            {filtered.map((user) => {
+              const hex = user.identity.toHexString();
+              return (
+                <button
+                  key={hex}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors"
+                  onClick={() => toggle(hex)}
+                >
+                  <span className="w-3.5 h-3.5 rounded border flex-shrink-0 border-neutral-400 dark:border-neutral-500" />
+                  <span
+                    className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] text-white font-semibold flex-shrink-0 ${hashColor(hex)}`}
+                  >
+                    {userInitials(user)}
+                  </span>
+                  <span className="truncate">
+                    {user.name || user.email}
+                  </span>
+                </button>
+              );
+            })}
+
+            {selectedUsers.length === 0 && filtered.length === 0 && (
+              <div className="px-3 py-2 text-sm text-neutral-400 dark:text-neutral-600 italic">
+                No users found
+              </div>
+            )}
+          </div>
+        </FloatingPopup>
+      )}
+    </div>
+  );
+}
+
 function renderValueFallback(value: PropertyValue): string {
   switch (value.tag) {
     case "Text":
@@ -979,6 +1167,8 @@ function renderValueFallback(value: PropertyValue): string {
       return (value.value as string[]).join(", ");
     case "Relation":
       return `${(value.value as bigint[]).length} linked`;
+    case "Person":
+      return `${(value.value as string[]).length} assigned`;
     case "Date":
       return new Date(Number(value.value as bigint)).toLocaleDateString();
     default:

@@ -1,0 +1,28 @@
+{
+  "name": "@pear/worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pear LLM worker — Orcha agent that claims tasks from SpacetimeDB and executes them via Anthropic Claude",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --env-file=../.env src/index.ts",
+    "start": "node --import tsx/esm src/index.ts",
+    "generate": "spacetime generate --lang typescript --out-dir src/module_bindings --module-path ../server/spacetimedb"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "openai": "^6.33.0",
+    "spacetimedb": "^2.0.3",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.0",
+    "typescript": "^5.0.0"
+  }
+}

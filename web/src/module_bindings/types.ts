@@ -17,6 +17,77 @@ export const ActorType = __t.enum("ActorType", {
 });
 export type ActorType = __Infer<typeof ActorType>;
 
+export const AiUserConfig = __t.object("AiUserConfig", {
+  id: __t.u64(),
+  createdBy: __t.identity(),
+  get provider() {
+    return InferenceProvider;
+  },
+  model: __t.string(),
+  endpoint: __t.option(__t.string()),
+  apiKey: __t.option(__t.string()),
+  systemPrompt: __t.option(__t.string()),
+  maxTokens: __t.u32(),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+});
+export type AiUserConfig = __Infer<typeof AiUserConfig>;
+
+export const AiUserProfile = __t.object("AiUserProfile", {
+  aiUserId: __t.u64(),
+  displayName: __t.string(),
+  avatarUrl: __t.option(__t.string()),
+  providerName: __t.string(),
+  modelName: __t.string(),
+  createdBy: __t.identity(),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+});
+export type AiUserProfile = __Infer<typeof AiUserProfile>;
+
+export const ApiEndpoint = __t.object("ApiEndpoint", {
+  id: __t.u64(),
+  databasePageId: __t.u64(),
+  slug: __t.string(),
+  displayName: __t.string(),
+  description: __t.string(),
+  get allowedMethods() {
+    return __t.array(HttpMethod);
+  },
+  requireAuth: __t.bool(),
+  createdBy: __t.identity(),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+});
+export type ApiEndpoint = __Infer<typeof ApiEndpoint>;
+
+export const ApiEndpointKey = __t.object("ApiEndpointKey", {
+  id: __t.u64(),
+  endpointId: __t.u64(),
+  keyHash: __t.string(),
+  label: __t.string(),
+  get allowedMethods() {
+    return __t.array(HttpMethod);
+  },
+  createdBy: __t.identity(),
+  createdAt: __t.timestamp(),
+  lastUsedAt: __t.option(__t.timestamp()),
+  expiresAt: __t.option(__t.timestamp()),
+});
+export type ApiEndpointKey = __Infer<typeof ApiEndpointKey>;
+
+export const ApiFieldMapping = __t.object("ApiFieldMapping", {
+  id: __t.u64(),
+  endpointId: __t.u64(),
+  propertyDefinitionId: __t.u64(),
+  fieldName: __t.string(),
+  requiredOnCreate: __t.bool(),
+  defaultValue: __t.option(__t.string()),
+  readOnly: __t.bool(),
+  fieldOrder: __t.u32(),
+});
+export type ApiFieldMapping = __Infer<typeof ApiFieldMapping>;
+
 export const Attachment = __t.object("Attachment", {
   id: __t.u64(),
   pageId: __t.u64(),
@@ -28,10 +99,60 @@ export const Attachment = __t.object("Attachment", {
 });
 export type Attachment = __Infer<typeof Attachment>;
 
+// The tagged union or sum type for the algebraic type `AuthScheme`.
+export const AuthScheme = __t.enum("AuthScheme", {
+  None: __t.unit(),
+  ApiKey: __t.unit(),
+  OAuth: __t.unit(),
+});
+export type AuthScheme = __Infer<typeof AuthScheme>;
+
+export const Conversation = __t.object("Conversation", {
+  id: __t.u64(),
+  pageId: __t.u64(),
+  aiUserId: __t.u64(),
+  initiatedBy: __t.identity(),
+  get status() {
+    return ConversationStatus;
+  },
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+});
+export type Conversation = __Infer<typeof Conversation>;
+
+export const ConversationMessage = __t.object("ConversationMessage", {
+  id: __t.u64(),
+  conversationId: __t.u64(),
+  get sender() {
+    return MessageSender;
+  },
+  content: __t.string(),
+  jobId: __t.option(__t.u64()),
+  createdAt: __t.timestamp(),
+  get status() {
+    return MessageStatus;
+  },
+  thinking: __t.option(__t.string()),
+  toolCallsJson: __t.option(__t.string()),
+  inputTokens: __t.u32(),
+  outputTokens: __t.u32(),
+  cacheCreationInputTokens: __t.u32(),
+  cacheReadInputTokens: __t.u32(),
+});
+export type ConversationMessage = __Infer<typeof ConversationMessage>;
+
+// The tagged union or sum type for the algebraic type `ConversationStatus`.
+export const ConversationStatus = __t.enum("ConversationStatus", {
+  Active: __t.unit(),
+  Closed: __t.unit(),
+});
+export type ConversationStatus = __Infer<typeof ConversationStatus>;
+
 export const DatabaseSchema = __t.object("DatabaseSchema", {
   id: __t.u64(),
   pageId: __t.u64(),
   name: __t.string(),
+  config: __t.option(__t.string()),
 });
 export type DatabaseSchema = __Infer<typeof DatabaseSchema>;
 
@@ -52,6 +173,158 @@ export const DatabaseView = __t.object("DatabaseView", {
   updatedAt: __t.timestamp(),
 });
 export type DatabaseView = __Infer<typeof DatabaseView>;
+
+export const ExtensionManifest = __t.object("ExtensionManifest", {
+  id: __t.u64(),
+  name: __t.string(),
+  description: __t.string(),
+  get extensionType() {
+    return ExtensionType;
+  },
+  version: __t.string(),
+  authorIdentity: __t.option(__t.identity()),
+  manifestJson: __t.string(),
+  sourceUrl: __t.option(__t.string()),
+  createdAt: __t.timestamp(),
+});
+export type ExtensionManifest = __Infer<typeof ExtensionManifest>;
+
+export const ExtensionMcpServer = __t.object("ExtensionMcpServer", {
+  id: __t.u64(),
+  name: __t.string(),
+  endpoint: __t.string(),
+  get authScheme() {
+    return AuthScheme;
+  },
+  apiKey: __t.option(__t.string()),
+  capabilities: __t.array(__t.string()),
+  installedBy: __t.identity(),
+  enabled: __t.bool(),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+});
+export type ExtensionMcpServer = __Infer<typeof ExtensionMcpServer>;
+
+export const ExtensionPermission = __t.object("ExtensionPermission", {
+  id: __t.u64(),
+  installedExtensionId: __t.u64(),
+  get scope() {
+    return PermissionScope;
+  },
+  get action() {
+    return PermissionAction;
+  },
+  allowedDomains: __t.option(__t.string()),
+  grantedBy: __t.identity(),
+  grantedAt: __t.timestamp(),
+});
+export type ExtensionPermission = __Infer<typeof ExtensionPermission>;
+
+// The tagged union or sum type for the algebraic type `ExtensionType`.
+export const ExtensionType = __t.enum("ExtensionType", {
+  ConfigBundle: __t.unit(),
+  McpServer: __t.unit(),
+  Hybrid: __t.unit(),
+  Builtin: __t.unit(),
+});
+export type ExtensionType = __Infer<typeof ExtensionType>;
+
+// The tagged union or sum type for the algebraic type `HttpMethod`.
+export const HttpMethod = __t.enum("HttpMethod", {
+  Get: __t.unit(),
+  Post: __t.unit(),
+  Patch: __t.unit(),
+  Delete: __t.unit(),
+});
+export type HttpMethod = __Infer<typeof HttpMethod>;
+
+// The tagged union or sum type for the algebraic type `InferenceProvider`.
+export const InferenceProvider = __t.enum("InferenceProvider", {
+  Anthropic: __t.unit(),
+  OpenAi: __t.unit(),
+  Ollama: __t.unit(),
+  OpenAiCompatible: __t.unit(),
+});
+export type InferenceProvider = __Infer<typeof InferenceProvider>;
+
+// The tagged union or sum type for the algebraic type `InstallStatus`.
+export const InstallStatus = __t.enum("InstallStatus", {
+  Active: __t.unit(),
+  PendingConfirmation: __t.unit(),
+});
+export type InstallStatus = __Infer<typeof InstallStatus>;
+
+export const InstalledExtension = __t.object("InstalledExtension", {
+  id: __t.u64(),
+  manifestId: __t.u64(),
+  installedBy: __t.identity(),
+  get installStatus() {
+    return InstallStatus;
+  },
+  aiUserId: __t.option(__t.u64()),
+  mcpServerId: __t.option(__t.u64()),
+  enabled: __t.bool(),
+  installedAt: __t.timestamp(),
+  confirmedAt: __t.option(__t.timestamp()),
+});
+export type InstalledExtension = __Infer<typeof InstalledExtension>;
+
+// The tagged union or sum type for the algebraic type `MessageSender`.
+export const MessageSender = __t.enum("MessageSender", {
+  Human: __t.identity(),
+  AiUser: __t.u64(),
+  System: __t.string(),
+});
+export type MessageSender = __Infer<typeof MessageSender>;
+
+// The tagged union or sum type for the algebraic type `MessageStatus`.
+export const MessageStatus = __t.enum("MessageStatus", {
+  Complete: __t.unit(),
+  Thinking: __t.unit(),
+  ToolUse: __t.unit(),
+  Streaming: __t.unit(),
+  Error: __t.unit(),
+});
+export type MessageStatus = __Infer<typeof MessageStatus>;
+
+export const OrchaAgent = __t.object("OrchaAgent", {
+  id: __t.string(),
+  capabilities: __t.array(__t.string()),
+  status: __t.string(),
+});
+export type OrchaAgent = __Infer<typeof OrchaAgent>;
+
+export const OrchaJob = __t.object("OrchaJob", {
+  id: __t.u64(),
+  userId: __t.string(),
+  prompt: __t.string(),
+  pageId: __t.option(__t.u64()),
+  status: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type OrchaJob = __Infer<typeof OrchaJob>;
+
+export const OrchaSharedContext = __t.object("OrchaSharedContext", {
+  id: __t.u64(),
+  jobId: __t.u64(),
+  key: __t.string(),
+  value: __t.string(),
+  createdBy: __t.string(),
+});
+export type OrchaSharedContext = __Infer<typeof OrchaSharedContext>;
+
+export const OrchaTask = __t.object("OrchaTask", {
+  id: __t.u64(),
+  jobId: __t.u64(),
+  description: __t.string(),
+  taskType: __t.string(),
+  status: __t.string(),
+  dependsOn: __t.array(__t.u64()),
+  requiredCapabilities: __t.array(__t.string()),
+  assignedTo: __t.option(__t.string()),
+  result: __t.option(__t.string()),
+});
+export type OrchaTask = __Infer<typeof OrchaTask>;
 
 export const Page = __t.object("Page", {
   id: __t.u64(),
@@ -133,6 +406,28 @@ export const PageYjsState = __t.object("PageYjsState", {
 });
 export type PageYjsState = __Infer<typeof PageYjsState>;
 
+// The tagged union or sum type for the algebraic type `PermissionAction`.
+export const PermissionAction = __t.enum("PermissionAction", {
+  Read: __t.unit(),
+  Write: __t.unit(),
+  Edit: __t.unit(),
+  Delete: __t.unit(),
+  Snapshot: __t.unit(),
+  PropertyRead: __t.unit(),
+  PropertyWrite: __t.unit(),
+  SpawnJob: __t.unit(),
+  HttpOutbound: __t.unit(),
+});
+export type PermissionAction = __Infer<typeof PermissionAction>;
+
+// The tagged union or sum type for the algebraic type `PermissionScope`.
+export const PermissionScope = __t.enum("PermissionScope", {
+  Page: __t.u64(),
+  Subtree: __t.u64(),
+  Workspace: __t.unit(),
+});
+export type PermissionScope = __Infer<typeof PermissionScope>;
+
 export const PropertyDefinition = __t.object("PropertyDefinition", {
   id: __t.u64(),
   schemaId: __t.u64(),
@@ -155,6 +450,7 @@ export const PropertyType = __t.enum("PropertyType", {
   Relation: __t.unit(),
   Checkbox: __t.unit(),
   Url: __t.unit(),
+  Person: __t.unit(),
 });
 export type PropertyType = __Infer<typeof PropertyType>;
 
@@ -168,6 +464,7 @@ export const PropertyValue = __t.enum("PropertyValue", {
   Relation: __t.array(__t.u64()),
   Checkbox: __t.bool(),
   Url: __t.string(),
+  Person: __t.array(__t.string()),
 });
 export type PropertyValue = __Infer<typeof PropertyValue>;
 
@@ -179,6 +476,22 @@ export const SnapshotType = __t.enum("SnapshotType", {
   PostAgentEdit: __t.unit(),
 });
 export type SnapshotType = __Infer<typeof SnapshotType>;
+
+export const ToolCallAuditLog = __t.object("ToolCallAuditLog", {
+  id: __t.u64(),
+  conversationId: __t.u64(),
+  jobId: __t.option(__t.u64()),
+  taskId: __t.option(__t.u64()),
+  agentId: __t.string(),
+  installedExtensionId: __t.option(__t.u64()),
+  toolName: __t.string(),
+  inputHash: __t.string(),
+  outputHash: __t.string(),
+  outcome: __t.string(),
+  outcomeDetail: __t.option(__t.string()),
+  calledAt: __t.timestamp(),
+});
+export type ToolCallAuditLog = __Infer<typeof ToolCallAuditLog>;
 
 export const User = __t.object("User", {
   identity: __t.identity(),

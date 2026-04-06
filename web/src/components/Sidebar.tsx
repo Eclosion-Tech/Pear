@@ -18,6 +18,7 @@ import { ContextMenu, type ContextMenuItem } from "@/src/components/ContextMenu"
 import { QuickSwitcher } from "@/src/components/QuickSwitcher";
 import { EmojiPicker } from "@/src/components/EmojiPicker";
 import type { PageRow } from "@/src/hooks/usePages";
+import { useWorkspace } from "@/src/providers/WorkspaceProvider";
 
 // ─── Drag state shared across the whole sidebar ───────────────────────────────
 
@@ -270,6 +271,7 @@ export function Sidebar() {
   const movePage = useMovePage();
   const { isActive } = useConnection();
   const { user, displayName, initials } = useCurrentUser();
+  const { workspaces, activeId: activeWorkspaceId, setActiveId } = useWorkspace();
 
   const roots = pages
     .filter((p) => p.parentId == null)
@@ -403,6 +405,12 @@ export function Sidebar() {
     draggingIdRef.current = id;
   }
 
+  function switchWorkspace(id: string) {
+    if (id === activeWorkspaceId) return;
+    setActiveId(id);
+    window.location.reload();
+  }
+
   function handleDragEnd() {
     const dragId = draggingIdRef.current;
     const target = dropTarget;
@@ -455,24 +463,41 @@ export function Sidebar() {
   return (
     <aside className="w-56 flex-shrink-0 border-r border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 flex flex-col h-screen">
       {/* Header */}
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-neutral-200 dark:border-neutral-800">
-        <span className="text-lg font-semibold text-neutral-900 dark:text-white tracking-tight">
-          🍐 Pear
-        </span>
-        {!isActive && (
-          <span className="ml-auto text-xs text-yellow-600 dark:text-yellow-500">connecting…</span>
-        )}
-        {isActive && (
-          <button
-            onClick={() => setSwitcherOpen(true)}
-            title="Quick switcher (⌘K)"
-            className="ml-auto text-neutral-400 dark:text-neutral-600 hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-            </svg>
-          </button>
-        )}
+      <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800">
+        <div className="flex items-center gap-2">
+          <span className="text-lg font-semibold text-neutral-900 dark:text-white tracking-tight">
+            🍐 Pear
+          </span>
+          {!isActive && (
+            <span className="ml-auto text-xs text-yellow-600 dark:text-yellow-500">connecting…</span>
+          )}
+          {isActive && (
+            <button
+              onClick={() => setSwitcherOpen(true)}
+              title="Quick switcher (⌘K)"
+              className="ml-auto text-neutral-400 dark:text-neutral-600 hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+            </button>
+          )}
+        </div>
+        <label className="sr-only" htmlFor="pear-workspace-select">
+          Workspace
+        </label>
+        <select
+          id="pear-workspace-select"
+          value={activeWorkspaceId ?? ""}
+          onChange={(e) => switchWorkspace(e.target.value)}
+          className="mt-2 w-full text-xs bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded px-2 py-1.5 text-neutral-800 dark:text-neutral-200"
+        >
+          {workspaces.map((w) => (
+            <option key={w.id} value={w.id}>
+              {w.name}
+            </option>
+          ))}
+        </select>
       </div>
 
       {/* Page tree */}

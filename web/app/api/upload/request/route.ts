@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import { PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { getS3Client, getS3Bucket, isS3Configured } from "@/src/lib/s3";
+import {
+  getS3PresigningClient,
+  getS3Bucket,
+  isS3Configured,
+  derivePublicS3EndpointFromRequest,
+} from "@/src/lib/s3";
 
 /** Sanitize filename to a safe extension (e.g. ".png") or default. */
 function getExtension(filename: string): string {
@@ -41,7 +46,6 @@ export async function POST(request: Request) {
 
   const ext = getExtension(filename) || ".bin";
   const storageKey = `pages/${pageId}/${crypto.randomUUID()}${ext}`;
-  const client = getS3Client();
   const bucket = getS3Bucket();
 
   const command = new PutObjectCommand({
@@ -50,9 +54,12 @@ export async function POST(request: Request) {
     ContentType: contentType,
   });
 
+  const publicEndpoint = derivePublicS3EndpointFromRequest(request);
+
   let uploadUrl: string;
   try {
-    uploadUrl = await getSignedUrl(client, command, { expiresIn: 900 }); // 15 min
+    const presigningClient = getS3PresigningClient(publicEndpoint);
+    uploadUrl = await getSignedUrl(presigningClient, command, { expiresIn: 900 }); // 15 min
   } catch (err) {
     console.error("[upload/request] presign error:", err);
     return NextResponse.json(

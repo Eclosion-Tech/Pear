@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { useTable } from "spacetimedb/react";
+import { useTable, useSpacetimeDB } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
 import {
   useChildPages,
@@ -25,6 +25,7 @@ import {
   useUpdatePropertyType,
   useUpdatePropertyConfig,
   useUpdateViewConfig,
+  useUpdateDatabaseSchemaConfig,
 } from "@/src/hooks/useDatabase";
 import type { PropertyDefinitionRow } from "@/src/hooks/useDatabase";
 import { PropertyCell } from "./PropertyCell";
@@ -40,6 +41,12 @@ import {
   type SelectOptionCondition,
   type OptionColorKey,
 } from "@/src/lib/formulaEval";
+import {
+  getDefaultExpr,
+  mergeDefaultIntoConfig,
+  getFormulaHints,
+  resolveDefault,
+} from "@/src/lib/propertyDefaults";
 import { RowDetailModal } from "./RowDetailModal";
 import {
   PropertyTypePicker,
@@ -308,12 +315,20 @@ export function GridView({ page }: GridViewProps) {
   const { children: rows } = useChildPages(page.id);
   const { views } = useDatabaseViews(page.id);
   const view = views[0] ?? null;
+  const { identity } = useSpacetimeDB();
 
   const createPage = useCreatePage();
   const addProperty = useAddProperty();
   const createSchema = useCreateDatabaseSchema();
   const createView = useCreateView();
   const updateViewConfig = useUpdateViewConfig();
+  const updateSchemaConfig = useUpdateDatabaseSchemaConfig();
+
+  // Name column default
+  const [nameDefaultOpen, setNameDefaultOpen] = useState(false);
+  const [nameDefaultDraft, setNameDefaultDraft] = useState("");
+  const nameColRef = useRef<HTMLTableCellElement>(null);
+  const currentNameDefault = schema?.config ? getDefaultExpr(schema.config) : null;
 
   // ── Column widths ───────────────────────────────────────────────────────────
   const [colWidths, setColWidths] = useState<Record<string, number>>({});
@@ -537,6 +552,7 @@ export function GridView({ page }: GridViewProps) {
   const [addStep, setAddStep] = useState<"idle" | "pick-type" | "name" | "relation-target">("idle");
   const [pendingType, setPendingType] = useState<PropertyTypeTag>("Text");
   const [newPropName, setNewPropName] = useState("");
+  const [newPropDefault, setNewPropDefault] = useState("");
   const [relationTargetId, setRelationTargetId] = useState<bigint | null>(null);
   const addAnchorRef = useRef<HTMLButtonElement>(null);
 
@@ -902,13 +918,98 @@ export function GridView({ page }: GridViewProps) {
     }
   }
 
+  // Refs so the default-application callback can see the latest values
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  const allPropValsRef = useRef(allPropertyValues);
+  allPropValsRef.current = allPropertyValues;
+
   async function handleAddRow() {
     await ensureSchemaAndView();
+
+    const existingRowIds = new Set(rowsRef.current.map((r) => String(r.id)));
+
+    // Resolve name column default from schema config
+    let title = "Untitled";
+    if (schema?.config) {
+      const nameDefault = getDefaultExpr(schema.config);
+      if (nameDefault) {
+        const userHex = identity?.toHexString() ?? "";
+        const existingTitles = rowsRef.current.map((r) => r.title ?? "");
+        const resolved = resolveDefault(nameDefault, "Text", {
+          userIdentityHex: userHex,
+          siblingValues: {},
+          existingColumnValues: existingTitles,
+          selectOptions: [],
+        });
+        if (resolved && resolved.tag === "Text") {
+          title = resolved.value;
+        }
+      }
+    }
+
     await createPage({
       parentId: page.id,
       pageType: { tag: "Doc" },
-      title: "Untitled",
+      title,
     });
+
+    const currentProps = propertiesRef.current;
+    const propsWithDefaults = currentProps
+      .filter((p): p is NonNullable<typeof p> => !!p && !!getDefaultExpr(p.config))
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+    if (propsWithDefaults.length === 0) return;
+
+    // Poll for the new row to appear in the subscription via ref.
+    const newRow = await new Promise<PageRow | null>((resolve) => {
+      let attempts = 0;
+      const interval = setInterval(() => {
+        const found = rowsRef.current.find((r) => !existingRowIds.has(String(r.id)));
+        if (found) { clearInterval(interval); resolve(found); }
+        if (++attempts > 30) { clearInterval(interval); resolve(null); }
+      }, 100);
+    });
+    if (!newRow) return;
+
+    const userHex = identity?.toHexString() ?? "";
+    const siblingValues: Record<string, string> = {};
+
+    for (const prop of propsWithDefaults) {
+      const expr = getDefaultExpr(prop.config);
+      if (!expr) continue;
+
+      const cfg = parseSelectConfig(prop.config);
+      const existingColumnValues: string[] = (allPropValsRef.current as unknown as PropValRow[])
+        .filter((pv) => pv.propertyDefinitionId === prop.id)
+        .map((pv) => {
+          const v = pv.value;
+          return v.tag === "Text" || v.tag === "Select" || v.tag === "Url"
+            ? (v.value as string) : String(v.value);
+        });
+
+      const resolved = resolveDefault(expr, prop.propertyType.tag, {
+        userIdentityHex: userHex,
+        siblingValues,
+        existingColumnValues,
+        selectOptions: cfg.options,
+      });
+
+      if (resolved) {
+        setPropertyValue({
+          pageId: newRow.id,
+          propertyDefinitionId: prop.id,
+          value: resolved,
+        });
+        if (resolved.tag === "Text" || resolved.tag === "Select" || resolved.tag === "Url") {
+          siblingValues[prop.name] = resolved.value as string;
+        } else if (resolved.tag === "Number") {
+          siblingValues[prop.name] = String(resolved.value);
+        } else if (resolved.tag === "Checkbox") {
+          siblingValues[prop.name] = String(resolved.value);
+        }
+      }
+    }
   }
 
   function startAddProperty() {
@@ -918,6 +1019,7 @@ export function GridView({ page }: GridViewProps) {
   function onTypePicked(tag: PropertyTypeTag) {
     setPendingType(tag);
     setNewPropName("");
+    setNewPropDefault("");
     setRelationTargetId(null);
     setAddStep("name");
   }
@@ -929,31 +1031,35 @@ export function GridView({ page }: GridViewProps) {
       return;
     }
 
-    // Schema must exist before adding a property. If it doesn't yet, bail —
-    // the seeding useEffect will create it and the user can retry.
     if (!schema) {
       setAddStep("idle");
       return;
     }
 
-    let config = "{}";
+    const configObj: Record<string, unknown> = {};
     if (pendingType === "Relation" && relationTargetId) {
-      config = JSON.stringify({ targetPageId: String(relationTargetId) });
+      configObj.targetPageId = String(relationTargetId);
+    }
+    const defaultVal = newPropDefault.trim();
+    if (defaultVal) {
+      configObj.defaultValue = defaultVal;
     }
 
     await addProperty({
       schemaId: schema.id,
       name,
       propertyType: { tag: pendingType },
-      config,
+      config: JSON.stringify(configObj),
     });
     setAddStep("idle");
     setNewPropName("");
+    setNewPropDefault("");
   }
 
   function cancelAdd() {
     setAddStep("idle");
     setNewPropName("");
+    setNewPropDefault("");
   }
 
   return (
@@ -1107,7 +1213,7 @@ export function GridView({ page }: GridViewProps) {
       <div className={`overflow-x-auto${viewMode === "list" ? " hidden" : ""}${isResizing || draggingColKey ? " select-none" : ""}${isResizing ? " cursor-col-resize" : ""}${draggingColKey ? " cursor-grabbing" : ""}`}>
         <table
           ref={tableRef}
-          className={`border-collapse text-sm${fillSource ? " cursor-crosshair select-none" : ""}`}
+          className={`border-collapse text-sm${fillSource ? " cursor-nwse-resize select-none" : ""}`}
           style={{
             tableLayout: "fixed",
             width:
@@ -1129,9 +1235,21 @@ export function GridView({ page }: GridViewProps) {
           <thead>
             <tr className="border-b border-neutral-200 dark:border-neutral-800">
               <th
+                ref={nameColRef}
                 className="text-left px-3 py-2 text-xs font-medium text-neutral-500 uppercase tracking-wider border-r border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 sticky left-0 z-[2] relative group/col overflow-hidden [box-shadow:1px_0_0_0_#e5e7eb] dark:[box-shadow:1px_0_0_0_#262626]"
               >
-                Name
+                <button
+                  className="flex items-center gap-1 w-full text-left hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors"
+                  onClick={() => { setNameDefaultDraft(currentNameDefault ?? ""); setNameDefaultOpen(true); }}
+                >
+                  <span className="text-[10px] font-mono text-neutral-400 dark:text-neutral-500">T</span>
+                  Name
+                  {currentNameDefault && (
+                    <span className="ml-auto text-[9px] text-neutral-400 dark:text-neutral-500 font-mono truncate max-w-[60px]">
+                      {currentNameDefault}
+                    </span>
+                  )}
+                </button>
                 <div
                   className="absolute top-0 right-0 h-full w-1 cursor-col-resize opacity-0 group-hover/col:opacity-100 bg-blue-400/60 hover:bg-blue-500 transition-opacity z-10"
                   onMouseDown={(e) => {
@@ -1141,6 +1259,76 @@ export function GridView({ page }: GridViewProps) {
                   }}
                   onDoubleClick={(e) => { e.stopPropagation(); autoFitColumn(NAME_COL_KEY); }}
                 />
+                {nameDefaultOpen && schema && (
+                  <FloatingPopup
+                    anchorRef={nameColRef}
+                    onClose={() => setNameDefaultOpen(false)}
+                    className="w-64 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-xl p-3"
+                  >
+                    <div className="text-xs text-neutral-500 dark:text-neutral-400 mb-1.5 font-medium">
+                      Name column default
+                    </div>
+                    <input
+                      autoFocus
+                      className="w-full bg-neutral-100 dark:bg-neutral-700 text-sm text-neutral-900 dark:text-white px-2 py-1 rounded outline-none border border-blue-500/60 font-mono"
+                      placeholder="Value or formula…"
+                      value={nameDefaultDraft}
+                      onChange={(e) => setNameDefaultDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          const val = nameDefaultDraft.trim() || null;
+                          updateSchemaConfig({
+                            schemaId: schema.id,
+                            config: mergeDefaultIntoConfig(schema.config ?? "{}", val),
+                          });
+                          setNameDefaultOpen(false);
+                        }
+                        if (e.key === "Escape") setNameDefaultOpen(false);
+                      }}
+                    />
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {["now()", 'counter("TASK-")', "uuid()"].map((h) => (
+                        <button
+                          key={h}
+                          className="text-[10px] px-1.5 py-0.5 rounded bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-300 font-mono hover:bg-violet-200 dark:hover:bg-violet-800/60 transition-colors"
+                          onClick={() => setNameDefaultDraft(h)}
+                        >
+                          {h}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex gap-2 mt-2 border-t border-neutral-100 dark:border-neutral-700 pt-2">
+                      {currentNameDefault && (
+                        <button
+                          className="text-xs py-1 px-2 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30"
+                          onClick={() => {
+                            updateSchemaConfig({
+                              schemaId: schema.id,
+                              config: mergeDefaultIntoConfig(schema.config ?? "{}", null),
+                            });
+                            setNameDefaultOpen(false);
+                          }}
+                        >
+                          Clear
+                        </button>
+                      )}
+                      <div className="flex-1" />
+                      <button
+                        className="text-xs py-1 px-3 rounded bg-blue-500 text-white hover:bg-blue-600"
+                        onClick={() => {
+                          const val = nameDefaultDraft.trim() || null;
+                          updateSchemaConfig({
+                            schemaId: schema.id,
+                            config: mergeDefaultIntoConfig(schema.config ?? "{}", val),
+                          });
+                          setNameDefaultOpen(false);
+                        }}
+                      >
+                        Save
+                      </button>
+                    </div>
+                  </FloatingPopup>
+                )}
               </th>
               {displayProperties.map((prop, propIdx) => (
                 <ColumnHeader
@@ -1312,6 +1500,38 @@ export function GridView({ page }: GridViewProps) {
               }
             }}
           />
+          <div className="mt-2">
+            <div className="text-xs text-neutral-500 dark:text-neutral-400 mb-1 font-medium">
+              Default value <span className="text-neutral-400 dark:text-neutral-600 font-normal">(optional)</span>
+            </div>
+            <input
+              className="w-full bg-neutral-100 dark:bg-neutral-700 text-sm text-neutral-900 dark:text-white px-2 py-1 rounded outline-none border border-neutral-300 dark:border-neutral-600 font-mono text-xs"
+              placeholder="Value or formula…"
+              value={newPropDefault}
+              onChange={(e) => setNewPropDefault(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  pendingType === "Relation" ? setAddStep("relation-target") : commitAddProperty();
+                }
+              }}
+            />
+            {(() => {
+              const hints = getFormulaHints(pendingType);
+              return hints.length > 0 ? (
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {hints.map((h) => (
+                    <button
+                      key={h}
+                      className="text-[10px] px-1.5 py-0.5 rounded bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-300 font-mono hover:bg-violet-200 dark:hover:bg-violet-800/60 transition-colors"
+                      onClick={() => setNewPropDefault(h)}
+                    >
+                      {h}
+                    </button>
+                  ))}
+                </div>
+              ) : null;
+            })()}
+          </div>
           <div className="flex gap-2 mt-2">
             <button
               className="flex-1 text-xs py-1 rounded bg-neutral-100 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-600"
@@ -1418,9 +1638,10 @@ function ColumnHeader({
   isDragging: boolean;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [mode, setMode] = useState<"idle" | "rename" | "change-type" | "relation-target" | "edit-options">("idle");
+  const [mode, setMode] = useState<"idle" | "rename" | "change-type" | "relation-target" | "edit-options" | "set-default">("idle");
   const [renameValue, setRenameValue] = useState(prop.name);
   const [relTargetId, setRelTargetId] = useState<bigint | null>(null);
+  const [defaultDraft, setDefaultDraft] = useState("");
   const buttonRef = useRef<HTMLButtonElement>(null);
 
   const deleteProperty = useDeleteProperty();
@@ -1428,11 +1649,14 @@ function ColumnHeader({
   const updatePropertyType = useUpdatePropertyType();
   const updatePropertyConfig = useUpdatePropertyConfig();
 
+  const currentDefault = getDefaultExpr(prop.config);
+
   function closeMenu() {
     setMenuOpen(false);
     setMode("idle");
     setRenameValue(prop.name);
     setRelTargetId(null);
+    setDefaultDraft("");
   }
 
   async function commitRename() {
@@ -1536,6 +1760,19 @@ function ColumnHeader({
           )}
           <button
             className="w-full text-left px-3 py-1.5 text-sm text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+            onClick={() => { setMenuOpen(false); setDefaultDraft(currentDefault ?? ""); setMode("set-default"); }}
+          >
+            <div className="flex items-center justify-between">
+              <span>Set default</span>
+              {currentDefault && (
+                <span className="text-[10px] text-neutral-400 dark:text-neutral-500 font-mono truncate max-w-[80px] ml-2">
+                  {currentDefault}
+                </span>
+              )}
+            </div>
+          </button>
+          <button
+            className="w-full text-left px-3 py-1.5 text-sm text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700"
             onClick={() => { setMenuOpen(false); setMode("change-type"); }}
           >
             Change type
@@ -1611,6 +1848,85 @@ function ColumnHeader({
               className="flex-1 text-xs py-1 rounded bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-40"
               disabled={!relTargetId}
               onClick={commitRelationTarget}
+            >
+              Save
+            </button>
+          </div>
+        </FloatingPopup>
+      )}
+
+      {mode === "set-default" && (
+        <FloatingPopup
+          anchorRef={buttonRef}
+          onClose={closeMenu}
+          className="w-64 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-xl p-3"
+        >
+          <div className="text-xs text-neutral-500 dark:text-neutral-400 mb-1.5 font-medium">
+            Default value
+          </div>
+          <input
+            autoFocus
+            className="w-full bg-neutral-100 dark:bg-neutral-700 text-sm text-neutral-900 dark:text-white px-2 py-1 rounded outline-none border border-blue-500/60 font-mono"
+            placeholder="Value or formula…"
+            value={defaultDraft}
+            onChange={(e) => setDefaultDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                const val = defaultDraft.trim() || null;
+                updatePropertyConfig({
+                  propertyDefinitionId: prop.id,
+                  config: mergeDefaultIntoConfig(prop.config, val),
+                });
+                closeMenu();
+              }
+              if (e.key === "Escape") closeMenu();
+            }}
+          />
+          {(() => {
+            const hints = getFormulaHints(prop.propertyType.tag);
+            return hints.length > 0 ? (
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                {hints.map((h) => (
+                  <button
+                    key={h}
+                    className="text-[10px] px-1.5 py-0.5 rounded bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-300 font-mono hover:bg-violet-200 dark:hover:bg-violet-800/60 transition-colors"
+                    onClick={() => setDefaultDraft(h)}
+                  >
+                    {h}
+                  </button>
+                ))}
+              </div>
+            ) : null;
+          })()}
+          <div className="text-[10px] text-neutral-400 dark:text-neutral-500 mt-1.5 leading-snug">
+            Also supports: this[Field]=&quot;Value&quot;?&quot;Result&quot;
+          </div>
+          <div className="flex gap-2 mt-2 border-t border-neutral-100 dark:border-neutral-700 pt-2">
+            {currentDefault && (
+              <button
+                className="text-xs py-1 px-2 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30"
+                onClick={() => {
+                  updatePropertyConfig({
+                    propertyDefinitionId: prop.id,
+                    config: mergeDefaultIntoConfig(prop.config, null),
+                  });
+                  closeMenu();
+                }}
+              >
+                Clear
+              </button>
+            )}
+            <div className="flex-1" />
+            <button
+              className="text-xs py-1 px-3 rounded bg-blue-500 text-white hover:bg-blue-600"
+              onClick={() => {
+                const val = defaultDraft.trim() || null;
+                updatePropertyConfig({
+                  propertyDefinitionId: prop.id,
+                  config: mergeDefaultIntoConfig(prop.config, val),
+                });
+                closeMenu();
+              }}
             >
               Save
             </button>
@@ -2217,7 +2533,8 @@ function GridRow({
             />
             {showFillHandle && (
               <div
-                className="absolute bottom-0 right-0 w-2 h-2 bg-blue-500 z-10 cursor-crosshair translate-x-1/2 translate-y-1/2"
+                title="Drag to fill cells"
+                className="absolute bottom-0 right-0 w-3 h-3 z-10 cursor-nwse-resize translate-x-1/2 translate-y-1/2 rounded-sm border border-white dark:border-neutral-900 bg-blue-500 shadow-sm hover:bg-blue-600 hover:scale-110 transition-transform"
                 onMouseDown={(e) => {
                   e.preventDefault();
                   e.stopPropagation();

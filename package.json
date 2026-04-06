@@ -2,10 +2,19 @@
   "name": "pear",
   "version": "0.2.1",
   "private": true,
+  "pnpm": {
+    "overrides": {
+      "sharp": "^0.34.5"
+    }
+  },
   "scripts": {
     "dev": "pnpm --filter web dev",
     "build": "pnpm --filter web build",
-    "generate": "pnpm --filter web generate"
+    "generate": "pnpm --filter web generate",
+    "worker": "pnpm --filter @pear/worker dev",
+    "worker:generate": "pnpm --filter @pear/worker generate",
+    "desktop": "pnpm --filter @pear/desktop tauri:dev",
+    "desktop:build": "pnpm --filter @pear/desktop tauri:build"
   },
   "engines": {
     "node": ">=18",

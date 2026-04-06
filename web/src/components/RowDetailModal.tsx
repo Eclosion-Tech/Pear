@@ -147,7 +147,7 @@ export function RowDetailModal({ page, parentPage, onClose }: RowDetailModalProp
             {/* Editor */}
             <div className="px-6 py-4">
               <PearEditor
-                key={`${page.id}-${content?.updatedAt ?? 0}`}
+                key={`${page.id}-${content?.updatedAt?.microsSinceUnixEpoch ?? 0}`}
                 pageId={page.id}
                 initialContent={content?.content ?? ""}
               />

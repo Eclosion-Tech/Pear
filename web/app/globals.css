@@ -27,3 +27,41 @@ body {
 :root .bn-editor {
   color: inherit;
 }
+
+/*
+ * Interaction cursors — BlockNote Mantine loads after globals; use matching
+ * specificity + !important so hovers win over Mantine defaults.
+ */
+
+/* Six-dot block drag handle (side menu) */
+.bn-mantine .bn-side-menu [draggable="true"] {
+  cursor: grab !important;
+}
+.bn-mantine .bn-side-menu [draggable="true"]:active {
+  cursor: grabbing !important;
+}
+
+/* Image / file preview resize bars (left & right) */
+.bn-resize-handle {
+  cursor: ew-resize !important;
+}
+.bn-resize-handle:active {
+  cursor: ew-resize !important;
+}
+
+/* Table: row/column grips & drag handles */
+.bn-mantine .bn-table-handle:not(.bn-table-handle-not-draggable),
+.bn-mantine .bn-table-cell-handle {
+  cursor: grab !important;
+}
+.bn-mantine .bn-table-handle:active:not(.bn-table-handle-not-draggable),
+.bn-mantine .bn-table-cell-handle:active,
+.bn-mantine .bn-table-handle-dragging {
+  cursor: grabbing !important;
+}
+.bn-mantine .bn-extend-button-add-remove-columns {
+  cursor: col-resize !important;
+}
+.bn-mantine .bn-extend-button-add-remove-rows {
+  cursor: row-resize !important;
+}

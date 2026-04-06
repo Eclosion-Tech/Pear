@@ -1,0 +1,31 @@
+{
+  "name": "pear-workspace-tools",
+  "description": "Built-in Pear workspace tools. Read and write pages, databases, and properties. Copy this file to define your own extension.",
+  "version": "1.0.0",
+  "extension_type": "Builtin",
+  "builtin": {
+    "tools": [
+      "get_context",
+      "web_search",
+      "fetch_url",
+      "create_page",
+      "update_page_content",
+      "update_page_title",
+      "search_pages",
+      "list_child_pages",
+      "get_page",
+      "get_schema_id",
+      "list_properties",
+      "add_property",
+      "create_row",
+      "set_property_value"
+    ],
+    "requested_permissions": [
+      { "scope": "workspace", "action": "Read" },
+      { "scope": "workspace", "action": "Write" },
+      { "scope": "workspace", "action": "PropertyRead" },
+      { "scope": "workspace", "action": "PropertyWrite" },
+      { "scope": "workspace", "action": "HttpOutbound", "allowed_domains": ["*"] }
+    ]
+  }
+}

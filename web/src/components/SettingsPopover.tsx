@@ -6,6 +6,7 @@ import { useReducer } from "spacetimedb/react";
 import { useAuth } from "react-oidc-context";
 import { reducers } from "@/src/module_bindings";
 import { clearSavedToken, clearIdbCache } from "@/src/lib/spacetime";
+import { useWorkspace } from "@/src/providers/WorkspaceProvider";
 
 const OIDC_CONFIGURED = !!process.env.NEXT_PUBLIC_SPACETIMEAUTH_CLIENT_ID;
 
@@ -15,6 +16,7 @@ const OIDC_CONFIGURED = !!process.env.NEXT_PUBLIC_SPACETIMEAUTH_CLIENT_ID;
  */
 export function SettingsPopover() {
   const router = useRouter();
+  const { idbNamespace } = useWorkspace();
   const btnRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -25,7 +27,7 @@ export function SettingsPopover() {
 
   async function handleClearCache() {
     setClearing(true);
-    await clearIdbCache();
+    await clearIdbCache(idbNamespace);
     // Reload so the in-memory Y.Docs and active IndexeddbPersistence
     // connections are replaced with a clean slate.
     window.location.reload();
@@ -86,7 +88,7 @@ export function SettingsPopover() {
             <div className="border-t border-neutral-100 dark:border-neutral-800 my-1" />
 
             {/* Sign out */}
-            {OIDC_CONFIGURED ? <OidcSignOut /> : <NativeSignOut />}
+            {OIDC_CONFIGURED ? <OidcSignOut /> : <NativeSignOutWithWorkspace />}
           </div>
         </>
       )}
@@ -109,12 +111,13 @@ function OidcSignOut() {
   );
 }
 
-function NativeSignOut() {
+function NativeSignOutWithWorkspace() {
   const logout = useReducer(reducers.logout);
+  const { activeId } = useWorkspace();
 
   function handleLogout() {
     logout();
-    clearSavedToken();
+    if (activeId) clearSavedToken(activeId);
     window.location.reload();
   }
 

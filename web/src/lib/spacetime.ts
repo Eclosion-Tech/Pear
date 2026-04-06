@@ -16,23 +16,35 @@ if (typeof BigInt !== "undefined" && !("toJSON" in BigInt.prototype)) {
 }
 
 import { DbConnection } from "@/src/module_bindings";
+import {
+  resolveWorkspaceDbName,
+  resolveWorkspaceWsUri,
+  tokenStorageKey,
+  validateResolvedSpacetimeUri,
+  type WorkspaceConnection,
+} from "@/src/lib/workspaceConnections";
 
-const SPACETIMEDB_URI = process.env.NEXT_PUBLIC_SPACETIMEDB_URI!;
-const SPACETIMEDB_DB_NAME = process.env.NEXT_PUBLIC_SPACETIMEDB_DB_NAME!;
-export const LOCAL_STORAGE_TOKEN_KEY = "pear_spacetimedb_token";
+const LEGACY_TOKEN_KEY = "pear_spacetimedb_token";
+
+export { tokenStorageKey };
+/** @deprecated Use tokenStorageKey(connectionId) */
+export const LOCAL_STORAGE_TOKEN_KEY = LEGACY_TOKEN_KEY;
 
 /**
  * A short stable string that uniquely identifies the server+database combination.
- * Used to namespace IndexedDB keys so content cached from one server can never
- * bleed into another server's pages — even if both servers share the same page IDs.
- *
- * We derive it from the URI + DB name rather than the module identity hash so
- * it stays stable across normal publishes and only changes if you point the
- * client at a different server or database.
- *
- * Example: "pear_idb_localhost:3000_pear-dev"
+ * Pass the workspace's stored wsUri/dbName (may be empty; same resolution as connect).
  */
-export const idbNamespace = `pear_idb_${SPACETIMEDB_URI}_${SPACETIMEDB_DB_NAME}`;
+export function getIdbNamespace(storedWsUri: string, storedDbName: string): string {
+  const uri = resolveWorkspaceWsUri(storedWsUri);
+  const db = resolveWorkspaceDbName(storedDbName);
+  return `pear_idb_${uri}_${db}`;
+}
+
+/** @deprecated Use getIdbNamespace(wsUri, dbName) from the active workspace. */
+export const idbNamespace = getIdbNamespace(
+  process.env.NEXT_PUBLIC_SPACETIMEDB_URI?.trim() ?? "",
+  process.env.NEXT_PUBLIC_SPACETIMEDB_DB_NAME?.trim() || "pear-dev"
+);
 
 /** Promisify a single IDBOpenDBRequest from deleteDatabase(). */
 function deleteIdb(name: string): Promise<void> {
@@ -41,8 +53,6 @@ function deleteIdb(name: string): Promise<void> {
     req.onsuccess = () => resolve();
     req.onerror = () => reject(req.error);
     req.onblocked = () => {
-      // Another tab has the DB open. Resolve anyway — the delete is queued
-      // and will complete once the other connection closes.
       resolve();
     };
   });
@@ -54,15 +64,16 @@ function deleteIdb(name: string): Promise<void> {
  * from older naming schemes.
  * Call this from the settings panel after a server reset, then reload.
  */
-export async function clearIdbCache(): Promise<void> {
+export async function clearIdbCache(namespace?: string): Promise<void> {
   if (typeof indexedDB === "undefined") return;
 
   const dbs = await indexedDB.databases();
+  const ns = namespace ?? idbNamespace;
   const pearDbs = dbs.filter(
     (db) =>
-      db.name?.startsWith(idbNamespace) || // current namespace
-      db.name?.startsWith("pear-page-") || // legacy naming (pre-namespace)
-      db.name?.startsWith("pear_idb_")     // any previous namespace variant
+      db.name?.startsWith(ns) ||
+      db.name?.startsWith("pear-page-") ||
+      db.name?.startsWith("pear_idb_")
   );
 
   await Promise.all(pearDbs.map((db) => deleteIdb(db.name!)));
@@ -72,60 +83,76 @@ export async function clearIdbCache(): Promise<void> {
  * Delete IndexedDB cache for a single page (Yjs doc for that page).
  * Use when a page is out of sync or after schema changes; then reload.
  */
-export async function clearIdbCacheForPage(pageId: bigint): Promise<void> {
+export async function clearIdbCacheForPage(
+  pageId: bigint,
+  namespace: string
+): Promise<void> {
   if (typeof indexedDB === "undefined") return;
-  const name = `${idbNamespace}-page-${pageId}`;
+  const name = `${namespace}-page-${pageId}`;
   await deleteIdb(name);
 }
 
-/** Removes the persisted SpacetimeDB identity token so the next load gets a fresh anonymous identity. */
-export function clearSavedToken() {
-  if (typeof window !== "undefined") {
-    localStorage.removeItem(LOCAL_STORAGE_TOKEN_KEY);
+/** Removes the persisted SpacetimeDB identity token for a workspace. */
+export function clearSavedToken(connectionId?: string) {
+  if (typeof window === "undefined") return;
+  if (connectionId) {
+    localStorage.removeItem(tokenStorageKey(connectionId));
+  } else {
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
   }
 }
 
 /**
- * Builds a DbConnectionBuilder configured for the Pear workspace.
+ * Builds a DbConnectionBuilder configured for a Pear workspace.
  * Pass an OIDC id_token to authenticate via OIDC; omit for native/anonymous auth
- * (falls back to the locally-persisted SpacetimeDB identity token).
+ * (falls back to the locally-persisted SpacetimeDB identity token for that workspace).
+ * Returns `null` if the address is invalid or the client cannot construct a connection (never throws).
  */
-export function buildConnectionBuilder(oidcToken?: string) {
+export function buildConnectionBuilder(
+  oidcToken: string | undefined,
+  workspace: WorkspaceConnection
+): ReturnType<typeof DbConnection.builder> | null {
+  const spacetimeUri = resolveWorkspaceWsUri(workspace.wsUri);
+  const v = validateResolvedSpacetimeUri(spacetimeUri);
+  if (!v.ok) {
+    return null;
+  }
+  const databaseName = resolveWorkspaceDbName(workspace.dbName);
+  const tokenKey = tokenStorageKey(workspace.id);
   const savedToken =
-    typeof window !== "undefined"
-      ? (localStorage.getItem(LOCAL_STORAGE_TOKEN_KEY) ?? undefined)
-      : undefined;
+    typeof window !== "undefined" ? (localStorage.getItem(tokenKey) ?? undefined) : undefined;
 
   const token = oidcToken ?? savedToken;
 
-  return DbConnection.builder()
-    .withUri(SPACETIMEDB_URI)
-    .withDatabaseName(SPACETIMEDB_DB_NAME)
-    .withToken(token)
-    .onConnect((conn, identity, newToken) => {
-      console.log("[SpacetimeDB] Connected, identity:", identity.toHexString());
-      if (typeof window !== "undefined") {
-        localStorage.setItem(LOCAL_STORAGE_TOKEN_KEY, newToken);
-      }
-      conn.subscriptionBuilder().subscribeToAllTables();
-      console.log("[SpacetimeDB] subscribeToAllTables called");
-    })
-    .onConnectError((_ctx, error) => {
-      console.error("[SpacetimeDB] Connection error:", error);
-      // If the saved token is rejected (e.g. connecting to a different SpacetimeDB
-      // instance than the one that issued it), clear the stale token and reload so
-      // the SDK creates a fresh anonymous identity instead of retrying the bad token.
-      const msg = error instanceof Error ? error.message : String(error);
-      if (
-        typeof window !== "undefined" &&
-        (msg.includes("Failed to verify token") || msg.includes("Unauthorized"))
-      ) {
-        console.warn("[SpacetimeDB] Stale token rejected — clearing and reloading");
-        clearSavedToken();
-        window.location.reload();
-      }
-    })
-    .onDisconnect((_ctx, error) => {
-      console.warn("[SpacetimeDB] Disconnected", error ?? "");
-    });
+  try {
+    return DbConnection.builder()
+      .withUri(spacetimeUri)
+      .withDatabaseName(databaseName)
+      .withToken(token)
+      .onConnect((conn, identity, newToken) => {
+        console.log("[SpacetimeDB] Connected, identity:", identity.toHexString());
+        if (typeof window !== "undefined") {
+          localStorage.setItem(tokenKey, newToken);
+        }
+        conn.subscriptionBuilder().subscribeToAllTables();
+      })
+      .onConnectError((_ctx, error) => {
+        console.error("[SpacetimeDB] Connection error:", error);
+        const msg = error instanceof Error ? error.message : String(error);
+        if (
+          typeof window !== "undefined" &&
+          (msg.includes("Failed to verify token") || msg.includes("Unauthorized"))
+        ) {
+          console.warn("[SpacetimeDB] Stale token rejected — clearing and reloading");
+          clearSavedToken(workspace.id);
+          window.location.reload();
+        }
+      })
+      .onDisconnect((_ctx, error) => {
+        console.warn("[SpacetimeDB] Disconnected", error ?? "");
+      });
+  } catch (e) {
+    console.warn("[SpacetimeDB] Invalid connection settings:", e);
+    return null;
+  }
 }

@@ -1,0 +1,1105 @@
+/**
+ * Claude tool definitions mapped to Pear's SpacetimeDB reducers.
+ *
+ * The tool-use loop in llm.ts lets Claude decide which reducers to call,
+ * executes them against the live SpacetimeDB connection, and returns the
+ * results so Claude can reference newly-created IDs in subsequent calls.
+ */
+
+import type Anthropic from "@anthropic-ai/sdk";
+// ConnLike avoids importing the full generated DbConnection class (whose
+// db/reducers properties are only resolved in the generated bindings context).
+export interface ConnLike {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  reducers: any;
+}
+
+type SharedContextRow = { jobId: bigint; key: string; value: string };
+
+// ── Tool definitions (sent to Claude) ─────────────────────────────────────────
+
+/**
+ * Returns the tool list, including context tools pre-seeded with the current
+ * job's shared context so Claude can see what sibling tasks already created.
+ */
+export function getPearTools(conn: ConnLike, jobId: bigint): Anthropic.Messages.Tool[] {
+  // Snapshot current shared context for this job so Claude knows what exists.
+  const ctx: Record<string, string> = {};
+  for (const row of conn.db.orcha_shared_context.iter() as Iterable<SharedContextRow>) {
+    if (row.jobId === jobId) ctx[row.key] = row.value;
+  }
+  const ctxSummary = Object.keys(ctx).length
+    ? `Available shared context keys for this job: ${JSON.stringify(ctx)}`
+    : "No shared context yet for this job.";
+
+  return [
+    ...PEAR_TOOLS,
+    ...WEB_TOOLS,
+    {
+      name: "get_context",
+      description:
+        `Look up a value from this job's shared context. ${ctxSummary}. ` +
+        "Use this to find page_ids created by sibling tasks (e.g. 'task_tracker_page_id').",
+      input_schema: {
+        type: "object" as const,
+        properties: { key: { type: "string" } },
+        required: ["key"],
+      },
+    },
+  ];
+}
+
+/**
+ * Tools available to the AI during conversations.
+ * Includes web tools and all workspace mutation tools so the AI can
+ * create pages, databases, add properties, etc. directly in chat.
+ */
+export function getConversationTools(): Anthropic.Messages.Tool[] {
+  return [...PEAR_TOOLS, ...WEB_TOOLS];
+}
+
+// ── Web tools (search & fetch) ────────────────────────────────────────────────
+
+const WEB_TOOLS: Anthropic.Messages.Tool[] = [
+  {
+    name: "web_search",
+    description:
+      "Search the web for information. Returns top results with titles, URLs, and snippets. " +
+      "Use when you need current information, facts, or want to find relevant pages before fetching them.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query: { type: "string", description: "Search query" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "fetch_url",
+    description:
+      "Fetch a web page and return its text content. Use to read articles, documentation, " +
+      "product pages, or any publicly accessible URL. Returns extracted text, not raw HTML.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        url: { type: "string", description: "The URL to fetch" },
+      },
+      required: ["url"],
+    },
+  },
+];
+
+/**
+ * Fetch a URL and extract readable text from the HTML.
+ * Strips tags, scripts, styles, and normalizes whitespace.
+ */
+async function fetchUrlContent(url: string): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "PearBot/1.0 (workspace assistant)",
+        "Accept": "text/html,application/xhtml+xml,text/plain,application/json",
+      },
+      redirect: "follow",
+    });
+
+    if (!res.ok) {
+      return `Error: HTTP ${res.status} ${res.statusText}`;
+    }
+
+    const contentType = res.headers.get("content-type") ?? "";
+    const body = await res.text();
+
+    if (contentType.includes("application/json")) {
+      return body.slice(0, 20_000);
+    }
+
+    if (!contentType.includes("html")) {
+      return body.slice(0, 20_000);
+    }
+
+    return htmlToText(body).slice(0, 20_000);
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      return "Error: Request timed out after 15 seconds";
+    }
+    return `Error: ${err instanceof Error ? err.message : String(err)}`;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** Strip HTML to readable text. */
+function htmlToText(html: string): string {
+  let text = html;
+  text = text.replace(/<script[\s\S]*?<\/script>/gi, "");
+  text = text.replace(/<style[\s\S]*?<\/style>/gi, "");
+  text = text.replace(/<nav[\s\S]*?<\/nav>/gi, "");
+  text = text.replace(/<footer[\s\S]*?<\/footer>/gi, "");
+  text = text.replace(/<header[\s\S]*?<\/header>/gi, "");
+  text = text.replace(/<!--[\s\S]*?-->/g, "");
+  text = text.replace(/<br\s*\/?>/gi, "\n");
+  text = text.replace(/<\/?(p|div|li|h[1-6]|tr|blockquote|section|article)[^>]*>/gi, "\n");
+  text = text.replace(/<[^>]+>/g, "");
+  text = text.replace(/&nbsp;/gi, " ");
+  text = text.replace(/&amp;/gi, "&");
+  text = text.replace(/&lt;/gi, "<");
+  text = text.replace(/&gt;/gi, ">");
+  text = text.replace(/&quot;/gi, '"');
+  text = text.replace(/&#39;/gi, "'");
+  text = text.replace(/\n{3,}/g, "\n\n");
+  text = text.replace(/[ \t]+/g, " ");
+  return text.trim();
+}
+
+/**
+ * Search the web using DuckDuckGo's HTML lite endpoint.
+ * Returns parsed search results with titles, URLs, and snippets.
+ */
+async function webSearch(query: string): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+
+  try {
+    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "PearBot/1.0 (workspace assistant)",
+      },
+    });
+
+    if (!res.ok) {
+      return JSON.stringify({ ok: false, error: `Search returned HTTP ${res.status}` });
+    }
+
+    const html = await res.text();
+    const results: { title: string; url: string; snippet: string }[] = [];
+
+    const resultBlocks = html.split(/class="result__body"/);
+    for (let i = 1; i < resultBlocks.length && results.length < 8; i++) {
+      const block = resultBlocks[i];
+
+      const titleMatch = block.match(/class="result__a"[^>]*>([^<]+)</);
+      const hrefMatch = block.match(/class="result__a"\s+href="([^"]+)"/);
+      const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/);
+
+      if (titleMatch && hrefMatch) {
+        let href = hrefMatch[1];
+        if (href.startsWith("//duckduckgo.com/l/")) {
+          const uddg = href.match(/uddg=([^&]+)/);
+          if (uddg) href = decodeURIComponent(uddg[1]);
+        }
+        results.push({
+          title: titleMatch[1].trim(),
+          url: href,
+          snippet: snippetMatch
+            ? snippetMatch[1].replace(/<[^>]+>/g, "").trim()
+            : "",
+        });
+      }
+    }
+
+    if (results.length === 0) {
+      return JSON.stringify({ ok: true, results: [], note: "No results found. Try a different query." });
+    }
+
+    return JSON.stringify({ ok: true, results });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      return JSON.stringify({ ok: false, error: "Search timed out" });
+    }
+    return JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// ── Pear workspace tools ──────────────────────────────────────────────────────
+
+const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
+  {
+    name: "create_page",
+    description:
+      "Create a new Pear page as a child of an existing page. " +
+      "Use page_type 'Database' for structured data with columns, 'Doc' for rich text.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        parent_id: {
+          type: "number",
+          description: "Parent page ID. Use 0 to create at the workspace root, or the current page's ID to nest under it.",
+        },
+        page_type: { type: "string", enum: ["Doc", "Database"] },
+        title: { type: "string" },
+      },
+      required: ["parent_id", "page_type", "title"],
+    },
+  },
+  {
+    name: "add_property",
+    description:
+      "Add a property (column) to a Database page. " +
+      "First call create_page with page_type='Database', then use the returned schema_id to add properties. " +
+      "For Select/MultiSelect include config: '{\"options\":[\"A\",\"B\"]}'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        schema_id: {
+          type: "number",
+          description: "Database schema ID returned by create_page or get_schema_id.",
+        },
+        name: { type: "string" },
+        property_type: {
+          type: "string",
+          enum: ["Text", "Number", "Date", "Select", "MultiSelect", "Relation", "Checkbox", "Url", "Person"],
+        },
+        config: {
+          type: "string",
+          description:
+            "JSON string. For Select/MultiSelect: '{\"options\":[\"Option1\",\"Option2\"]}'. Otherwise '{}'.",
+        },
+      },
+      required: ["schema_id", "name", "property_type"],
+    },
+  },
+  {
+    name: "get_schema_id",
+    description: "Get the database schema ID for an existing Database page.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        page_id: { type: "number" },
+      },
+      required: ["page_id"],
+    },
+  },
+  {
+    name: "list_properties",
+    description:
+      "List all property definitions (columns) for a database schema. " +
+      "Returns each property's id, name, and type. Use the id as property_definition_id when calling set_property_value.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        schema_id: { type: "number" },
+      },
+      required: ["schema_id"],
+    },
+  },
+  {
+    name: "create_row",
+    description:
+      "Create a new row in a Database page. In Pear each row is a child page. " +
+      "Returns the new row's page_id which you then use with set_property_value to fill in column values.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        database_page_id: { type: "number", description: "The Database page that owns this row." },
+        title: { type: "string", description: "Row title (shown in the NAME column)." },
+      },
+      required: ["database_page_id", "title"],
+    },
+  },
+  {
+    name: "set_property_value",
+    description:
+      "Set a column value on a database row (child page). " +
+      "Use list_properties first to get the property_definition_id for each column. " +
+      "value_type must match the column type: Text→string, Number→number, Date→unix_ms number, " +
+      "Select→string (one option), MultiSelect→array of strings, Relation→array of page_id numbers, " +
+      "Person→array of identity hex strings (user identities), Checkbox→boolean, Url→string.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        page_id: { type: "number", description: "The row's page_id (from create_row)." },
+        property_definition_id: { type: "number" },
+        value_type: {
+          type: "string",
+          enum: ["Text", "Number", "Date", "Select", "MultiSelect", "Relation", "Checkbox", "Url", "Person"],
+        },
+        value: {
+          description: "The value — string for Text/Select/Url, number for Number/Date, boolean for Checkbox, string[] for MultiSelect, number[] of page_ids for Relation, string[] of identity hex strings for Person.",
+        },
+      },
+      required: ["page_id", "property_definition_id", "value_type", "value"],
+    },
+  },
+  {
+    name: "update_page_content",
+    description:
+      "Write or replace the text content of a Doc page. " +
+      "Pass markdown — headings (#/##/###), bullet lists (- item), numbered lists (1. item), " +
+      "and plain paragraphs are all supported. The worker converts markdown to BlockNote format automatically.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        page_id: { type: "number" },
+        markdown: {
+          type: "string",
+          description: "Markdown text to write into the page.",
+        },
+      },
+      required: ["page_id", "markdown"],
+    },
+  },
+  {
+    name: "update_page_title",
+    description: "Rename an existing page.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        page_id: { type: "number" },
+        title: { type: "string" },
+      },
+      required: ["page_id", "title"],
+    },
+  },
+  {
+    name: "search_pages",
+    description:
+      "Search the workspace for pages by title (case-insensitive substring match). " +
+      "Returns matching pages with their id, title, page_type, and parent_id. " +
+      "Use this to find existing pages before creating new ones or to look up page IDs.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query: { type: "string", description: "Search term to match against page titles." },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "list_child_pages",
+    description:
+      "List all child pages of a given parent page. " +
+      "Returns each child's id, title, page_type, and sort_order. " +
+      "Use parent_id=0 to list root-level pages.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        parent_id: {
+          type: "number",
+          description: "Parent page ID. Use 0 to list root-level pages.",
+        },
+      },
+      required: ["parent_id"],
+    },
+  },
+  {
+    name: "get_page",
+    description:
+      "Get details about a specific page by ID, including its title, type, parent, and content.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        page_id: { type: "number" },
+      },
+      required: ["page_id"],
+    },
+  },
+];
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+type AnyRow = Record<string, unknown>;
+
+/**
+ * Poll `fn` up to `timeoutMs` in 100ms increments, returning the first
+ * non-undefined value. Used to detect new rows after reducer calls, since
+ * SpacetimeDB reducers don't return values directly.
+ */
+async function waitFor<T>(fn: () => T | undefined, timeoutMs = 2000): Promise<T | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = fn();
+    if (result !== undefined) return result;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return undefined;
+}
+
+// ── Default value resolver (worker-side) ──────────────────────────────────────
+
+interface WorkerDefaultContext {
+  userIdentityHex: string;
+  siblingValues: Record<string, string>;
+  existingColumnValues: string[];
+  selectOptions: string[];
+}
+
+function resolveWorkerDefault(
+  expr: string,
+  propertyType: string,
+  ctx: WorkerDefaultContext,
+): { tag: string; value: unknown } | null {
+  const e = expr.trim();
+  if (!e) return null;
+
+  if (e === "now()") {
+    if (propertyType === "Date") return { tag: "Date", value: BigInt(Date.now()) };
+    if (propertyType === "Text") return { tag: "Text", value: new Date().toLocaleDateString() };
+  }
+
+  if (e === "me()" && propertyType === "Person")
+    return { tag: "Person", value: [ctx.userIdentityHex] };
+
+  if (e === "uuid()" && propertyType === "Text")
+    return { tag: "Text", value: crypto.randomUUID() };
+
+  const counterMatch = e.match(/^counter\(["'](.+?)["']\)$/);
+  if (counterMatch && propertyType === "Text") {
+    const prefix = counterMatch[1];
+    const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(`^${escaped}(\\d+)$`);
+    let maxN = 0;
+    for (const v of ctx.existingColumnValues) {
+      const m = v.match(pattern);
+      if (m) { const n = parseInt(m[1], 10); if (n > maxN) maxN = n; }
+    }
+    return { tag: "Text", value: `${prefix}${maxN + 1}` };
+  }
+
+  if (e === "rand(select)") {
+    const opts = ctx.selectOptions;
+    if (opts.length === 0) return null;
+    const pick = opts[Math.floor(Math.random() * opts.length)];
+    if (propertyType === "Select") return { tag: "Select", value: pick };
+    if (propertyType === "MultiSelect") return { tag: "MultiSelect", value: [pick] };
+    return { tag: "Text", value: pick };
+  }
+
+  const randArrayMatch = e.match(/^rand\(\[(.+)\]\)$/);
+  if (randArrayMatch) {
+    try {
+      const items: string[] = JSON.parse(`[${randArrayMatch[1]}]`);
+      if (items.length === 0) return null;
+      const pick = items[Math.floor(Math.random() * items.length)];
+      if (propertyType === "Select") return { tag: "Select", value: pick };
+      return { tag: "Text", value: pick };
+    } catch { return null; }
+  }
+
+  const randRangeMatch = e.match(/^rand\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)$/);
+  if (randRangeMatch && propertyType === "Number") {
+    const min = parseInt(randRangeMatch[1], 10);
+    const max = parseInt(randRangeMatch[2], 10);
+    if (min > max) return null;
+    return { tag: "Number", value: Math.floor(Math.random() * (max - min + 1)) + min };
+  }
+
+  // Ternary: this[Field]="Value"?"Result"
+  const ternaryMatch = e.match(/^this\[([^\]]+)\]="([^"]*)"\?"(.+)"$/);
+  if (ternaryMatch) {
+    const [, field, condVal, result] = ternaryMatch;
+    if ((ctx.siblingValues[field] ?? "") === condVal) {
+      return coerceWorkerDefault(result, propertyType);
+    }
+    return null;
+  }
+
+  // Static literal fallback
+  return coerceWorkerDefault(e, propertyType);
+}
+
+function coerceWorkerDefault(raw: string, propertyType: string): { tag: string; value: unknown } | null {
+  switch (propertyType) {
+    case "Text": return { tag: "Text", value: raw };
+    case "Url": return { tag: "Url", value: raw };
+    case "Select": return { tag: "Select", value: raw };
+    case "MultiSelect": return { tag: "MultiSelect", value: raw.split(",").map((s) => s.trim()).filter(Boolean) };
+    case "Number": { const n = parseFloat(raw); return isNaN(n) ? null : { tag: "Number", value: n }; }
+    case "Checkbox": return { tag: "Checkbox", value: raw === "true" };
+    case "Date": { const ms = Date.parse(raw); return isNaN(ms) ? null : { tag: "Date", value: BigInt(ms) }; }
+    default: return null;
+  }
+}
+
+function getDefaultFromConfig(config: string): string | null {
+  try {
+    const parsed = JSON.parse(config);
+    return typeof parsed?.defaultValue === "string" && parsed.defaultValue.trim()
+      ? parsed.defaultValue.trim() : null;
+  } catch { return null; }
+}
+
+function getSelectOptionsFromConfig(config: string): string[] {
+  try {
+    const parsed = JSON.parse(config);
+    return Array.isArray(parsed?.options) ? parsed.options : [];
+  } catch { return []; }
+}
+
+/**
+ * Apply column defaults for a newly-created row in a database.
+ * Called after create_row to auto-populate columns that have defaultValue set.
+ */
+async function applyDefaults(
+  conn: ConnLike,
+  dbPageId: bigint,
+  newPageId: bigint,
+  workerIdentityHex: string,
+): Promise<string[]> {
+  type PropDef = { id: bigint; schemaId: bigint; name: string; propertyType: { tag: string }; config: string; order: number };
+  type SchemaRow = { id: bigint; pageId: bigint };
+  type PVRow = { pageId: bigint; propertyDefinitionId: bigint; value: { tag: string; value: unknown } };
+
+  const schema = [...(conn.db.database_schema.iter() as Iterable<SchemaRow>)]
+    .find((s) => String(s.pageId) === String(dbPageId));
+  if (!schema) return [];
+
+  const props = [...(conn.db.property_definition.iter() as Iterable<PropDef>)]
+    .filter((p) => String(p.schemaId) === String(schema.id))
+    .sort((a, b) => a.order - b.order);
+
+  const applied: string[] = [];
+  const siblingValues: Record<string, string> = {};
+
+  for (const prop of props) {
+    const expr = getDefaultFromConfig(prop.config);
+    if (!expr) continue;
+
+    const existingColumnValues = [...(conn.db.page_property_value.iter() as Iterable<PVRow>)]
+      .filter((pv) => pv.propertyDefinitionId === prop.id)
+      .map((pv) => {
+        const v = pv.value;
+        return v.tag === "Text" || v.tag === "Select" || v.tag === "Url"
+          ? (v.value as string) : String(v.value);
+      });
+
+    const resolved = resolveWorkerDefault(expr, prop.propertyType.tag, {
+      userIdentityHex: workerIdentityHex,
+      siblingValues,
+      existingColumnValues,
+      selectOptions: getSelectOptionsFromConfig(prop.config),
+    });
+
+    if (resolved) {
+      try {
+        await conn.reducers.setPropertyValue({
+          pageId: newPageId,
+          propertyDefinitionId: prop.id,
+          value: resolved,
+        });
+        applied.push(prop.name);
+
+        if (resolved.tag === "Text" || resolved.tag === "Select" || resolved.tag === "Url") {
+          siblingValues[prop.name] = resolved.value as string;
+        } else if (resolved.tag === "Number") {
+          siblingValues[prop.name] = String(resolved.value);
+        } else if (resolved.tag === "Checkbox") {
+          siblingValues[prop.name] = String(resolved.value);
+        }
+      } catch (err) {
+        console.warn(`[tools] applyDefaults: failed for ${prop.name}: ${err}`);
+      }
+    }
+  }
+
+  return applied;
+}
+
+// ── Tool executor ──────────────────────────────────────────────────────────────
+
+/**
+ * Execute a single tool call from Claude and return a string result that
+ * will be sent back as a tool_result content block.
+ */
+// ── Markdown → BlockNote converter ────────────────────────────────────────────
+
+let _blockIdCounter = 1;
+function blockId(): string {
+  return `ai-${(_blockIdCounter++).toString(36)}`;
+}
+
+function makeInline(text: string) {
+  return [{ type: "text", text, styles: {} }];
+}
+
+function defaultProps(extra: Record<string, unknown> = {}) {
+  return { textColor: "default", backgroundColor: "default", textAlignment: "left", ...extra };
+}
+
+/**
+ * Convert a markdown string to a BlockNote JSON array.
+ * Supports: headings (#/##/###), bullet lists (- / * / +), numbered lists,
+ * horizontal rules (---), and plain paragraphs.
+ */
+export function markdownToBlockNote(markdown: string | undefined | null): string {
+  if (!markdown) return JSON.stringify([]);
+  const lines = markdown.split("\n");
+  const blocks: unknown[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trimEnd();
+
+    // Heading
+    const headingMatch = trimmed.match(/^(#{1,3})\s+(.*)/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      blocks.push({
+        id: blockId(), type: "heading",
+        props: defaultProps({ level }),
+        content: makeInline(headingMatch[2]),
+        children: [],
+      });
+      continue;
+    }
+
+    // Bullet list item
+    const bulletMatch = trimmed.match(/^[-*+]\s+(.*)/);
+    if (bulletMatch) {
+      blocks.push({
+        id: blockId(), type: "bulletListItem",
+        props: defaultProps(),
+        content: makeInline(bulletMatch[1]),
+        children: [],
+      });
+      continue;
+    }
+
+    // Numbered list item
+    const numberedMatch = trimmed.match(/^\d+\.\s+(.*)/);
+    if (numberedMatch) {
+      blocks.push({
+        id: blockId(), type: "numberedListItem",
+        props: defaultProps(),
+        content: makeInline(numberedMatch[1]),
+        children: [],
+      });
+      continue;
+    }
+
+    // Horizontal rule → empty paragraph (BlockNote has no HR type)
+    if (/^---+$/.test(trimmed)) {
+      blocks.push({ id: blockId(), type: "paragraph", props: defaultProps(), content: [], children: [] });
+      continue;
+    }
+
+    // Empty line → empty paragraph (skip consecutive empties)
+    if (trimmed === "") {
+      if (blocks.length > 0 && (blocks[blocks.length - 1] as { type: string }).type !== "paragraph") {
+        // only add spacer paragraph between non-paragraph blocks
+      }
+      // Skip double-blank
+      continue;
+    }
+
+    // Plain paragraph
+    blocks.push({
+      id: blockId(), type: "paragraph",
+      props: defaultProps(),
+      content: makeInline(trimmed),
+      children: [],
+    });
+  }
+
+  return JSON.stringify(blocks);
+}
+
+/** Convert a page title to a shared-context key, e.g. "Task Tracker" → "task_tracker_page_id". */
+function titleToContextKey(title: string): string {
+  return title.toLowerCase().replace(/\s+/g, "_") + "_page_id";
+}
+
+export async function executeTool(
+  conn: ConnLike,
+  toolName: string,
+  input: Record<string, unknown>,
+  jobId: bigint
+): Promise<string> {
+  console.log(`[tools] Executing ${toolName} — input: ${JSON.stringify(input)}`);
+  try {
+    switch (toolName) {
+      case "create_page": {
+        // parent_id=0 means root (no parent). Map to undefined so the SDK
+        // sends Option::None rather than Option::Some(0) which is an invalid page id.
+        const rawParentId = input.parent_id as number;
+        const parentId = rawParentId > 0 ? BigInt(rawParentId) : undefined;
+        const pageType = input.page_type as string;
+        const title = input.title as string;
+
+        // Snapshot existing page + schema IDs before the call.
+        const existingPageIds = new Set(
+          [...(conn.db.page.iter() as Iterable<AnyRow>)].map((p) => p.id as bigint)
+        );
+        const existingSchemaIds = new Set(
+          [...(conn.db.database_schema.iter() as Iterable<AnyRow>)].map((s) => s.id as bigint)
+        );
+
+        console.log(`[tools] create_page: calling reducer — parentId=${parentId ?? "root"}, pageType=${pageType}, title="${title}"`);
+        await conn.reducers.createPage({
+          parentId,
+          pageType: { tag: pageType },
+          title,
+        });
+        console.log(`[tools] create_page: reducer called, waiting for page row…`);
+
+        // Wait for the new page row to appear in the subscription.
+        const newPage = await waitFor(() =>
+          [...(conn.db.page.iter() as Iterable<AnyRow>)].find(
+            (p) => !existingPageIds.has(p.id as bigint) && p.title === title
+          )
+        );
+
+        if (!newPage) {
+          const allTitles = [...(conn.db.page.iter() as Iterable<AnyRow>)].map((p) => `${p.id}:${p.title}`).join(", ");
+          console.warn(`[tools] create_page: waitFor timed out. Existing pages: ${allTitles}`);
+          return JSON.stringify({ ok: false, error: `Page "${title}" created but could not read back row — subscription may be slow.` });
+        }
+        console.log(`[tools] create_page: found new page id=${newPage.id}`);
+
+        const result: Record<string, unknown> = {
+          ok: true,
+          page_id: Number(newPage.id as bigint),
+          title: newPage.title,
+          page_type: pageType,
+        };
+
+        // Auto-store page_id in shared context so sibling tasks can reference it.
+        const ctxKey = titleToContextKey(title);
+        try {
+          await conn.reducers.setSharedContext({
+            jobId,
+            key: ctxKey,
+            value: String(newPage.id as bigint),
+            createdBy: "pear-worker",
+          });
+        } catch { /* non-fatal */ }
+
+        // For Database pages: explicitly create the schema so the worker can
+        // immediately add properties without waiting for the browser to open
+        // the page (which is when the browser would lazily create the schema).
+        if (pageType === "Database") {
+          console.log(`[tools] create_page: calling createDatabaseSchema for page ${newPage.id}`);
+          await conn.reducers.createDatabaseSchema({
+            pageId: newPage.id as bigint,
+            name: title,
+          });
+          console.log(`[tools] create_page: createDatabaseSchema called, waiting for schema row…`);
+
+          const newSchema = await waitFor(() =>
+            [...(conn.db.database_schema.iter() as Iterable<AnyRow>)].find(
+              (s) =>
+                !existingSchemaIds.has(s.id as bigint) &&
+                String(s.pageId) === String(newPage.id)
+            )
+          );
+
+          if (newSchema) {
+            result.schema_id = Number(newSchema.id as bigint);
+            result.next_step = `Schema ready. Now call add_property with schema_id=${result.schema_id} for EVERY column listed in the task before returning your summary.`;
+            console.log(`[tools] create_page: schema id=${newSchema.id}`);
+          } else {
+            const allSchemas = [...(conn.db.database_schema.iter() as Iterable<AnyRow>)].map((s) => `${s.id}:${s.pageId}`).join(", ");
+            console.warn(`[tools] create_page: schema waitFor timed out. Schemas: ${allSchemas}`);
+            result.schema_warning = "Schema creation may still be in progress — call get_schema_id before add_property.";
+          }
+        }
+
+        return JSON.stringify(result);
+      }
+
+      case "add_property": {
+        const schemaId = BigInt(input.schema_id as number);
+        const name = input.name as string;
+        const propertyType = input.property_type as string;
+        const config = (input.config as string | undefined) ?? "{}";
+
+        const existingIds = new Set(
+          [...(conn.db.property_definition.iter() as Iterable<AnyRow>)].map((p) => p.id as bigint)
+        );
+
+        console.log(`[tools] add_property: schemaId=${schemaId} name="${name}" type=${propertyType} config=${config}`);
+        await conn.reducers.addProperty({
+          schemaId,
+          name,
+          propertyType: { tag: propertyType },
+          config,
+        });
+        console.log(`[tools] add_property: reducer called`);
+
+        const newProp = await waitFor(() =>
+          [...(conn.db.property_definition.iter() as Iterable<AnyRow>)].find(
+            (p) => !existingIds.has(p.id as bigint) && p.name === name
+          )
+        );
+
+        return JSON.stringify({
+          ok: true,
+          property_id: newProp ? Number(newProp.id as bigint) : undefined,
+          name,
+          property_type: propertyType,
+        });
+      }
+
+      case "get_schema_id": {
+        const pageId = BigInt(input.page_id as number);
+        const schema = [...(conn.db.database_schema.iter() as Iterable<AnyRow>)].find(
+          (s) => s.pageId === pageId
+        );
+        if (!schema) return JSON.stringify({ ok: false, error: "No schema found for this page" });
+        return JSON.stringify({ ok: true, schema_id: Number(schema.id as bigint) });
+      }
+
+      case "update_page_content": {
+        const pageId = BigInt(input.page_id as number);
+        // Accept either a `markdown` string (new) or a raw `content` JSON string (legacy).
+        const raw = (input.markdown ?? input.content) as string | undefined;
+        if (!raw) {
+          return JSON.stringify({ ok: false, error: "markdown field was empty or missing — likely hit max_tokens. Try a shorter response." });
+        }
+        let content: string;
+        if (input.markdown) {
+          content = markdownToBlockNote(raw);
+          console.log(`[tools] update_page_content: converted ${raw.length} chars markdown → ${content.length} chars BlockNote JSON`);
+        } else {
+          try { JSON.parse(raw); content = raw; } catch {
+            content = markdownToBlockNote(raw);
+          }
+        }
+        await conn.reducers.updatePageContent({ pageId, content });
+        return JSON.stringify({ ok: true, page_id: Number(pageId) });
+      }
+
+      case "update_page_title": {
+        const pageId = BigInt(input.page_id as number);
+        const title = input.title as string;
+        await conn.reducers.updatePageTitle({ pageId, title });
+        return JSON.stringify({ ok: true, page_id: Number(pageId), title });
+      }
+
+      case "list_properties": {
+        const schemaId = BigInt(input.schema_id as number);
+        type PropRow = { id: bigint; schemaId: bigint; name: string; propertyType: { tag: string }; order: number };
+        const props = [...(conn.db.property_definition.iter() as Iterable<PropRow>)]
+          .filter((p) => String(p.schemaId) === String(schemaId))
+          .sort((a, b) => a.order - b.order)
+          .map((p) => ({ property_definition_id: Number(p.id), name: p.name, type: p.propertyType.tag }));
+        console.log(`[tools] list_properties: schema ${schemaId} → ${props.length} props`);
+        return JSON.stringify({ ok: true, properties: props });
+      }
+
+      case "create_row": {
+        const dbPageId = BigInt(input.database_page_id as number);
+        let title = (input.title as string) || "Untitled";
+
+        // Resolve name default from schema config when no explicit title given
+        if (!input.title || input.title === "Untitled") {
+          type SchemaRow = { id: bigint; pageId: bigint; config?: string | null };
+          const schema = [...(conn.db.database_schema.iter() as Iterable<SchemaRow>)]
+            .find((s) => String(s.pageId) === String(dbPageId));
+          if (schema?.config) {
+            const nameExpr = getDefaultFromConfig(schema.config);
+            if (nameExpr) {
+              type PageRow = { id: bigint; parentId: bigint | undefined; title: string; deletedAt: unknown };
+              const existingTitles = [...(conn.db.page.iter() as Iterable<PageRow>)]
+                .filter((p) => !p.deletedAt && String(p.parentId) === String(dbPageId))
+                .map((p) => p.title);
+              const resolved = resolveWorkerDefault(nameExpr, "Text", {
+                userIdentityHex: "",
+                siblingValues: {},
+                existingColumnValues: existingTitles,
+                selectOptions: [],
+              });
+              if (resolved && resolved.tag === "Text") {
+                title = resolved.value as string;
+              }
+            }
+          }
+        }
+
+        const existingIds = new Set(
+          [...(conn.db.page.iter() as Iterable<AnyRow>)].map((p) => p.id as bigint)
+        );
+        console.log(`[tools] create_row: parent=${dbPageId} title="${title}"`);
+        await conn.reducers.createPage({
+          parentId: dbPageId,
+          pageType: { tag: "Doc" },
+          title,
+        });
+        const newRow = await waitFor(() =>
+          [...(conn.db.page.iter() as Iterable<AnyRow>)].find(
+            (p) => !existingIds.has(p.id as bigint) && String(p.parentId) === String(dbPageId)
+          )
+        );
+        if (!newRow) return JSON.stringify({ ok: false, error: "Row created but could not read back ID" });
+        const newPageId = newRow.id as bigint;
+        console.log(`[tools] create_row: row page_id=${newPageId}`);
+
+        // Apply column defaults
+        const workerIdentity = conn.db.user?.iter
+          ? "" // Worker may not have its own identity hex readily available
+          : "";
+        const defaultsApplied = await applyDefaults(conn, dbPageId, newPageId, workerIdentity);
+        if (defaultsApplied.length > 0) {
+          console.log(`[tools] create_row: applied defaults for: ${defaultsApplied.join(", ")}`);
+        }
+
+        return JSON.stringify({ ok: true, page_id: Number(newPageId), title, defaults_applied: defaultsApplied });
+      }
+
+      case "set_property_value": {
+        const pageId = BigInt(input.page_id as number);
+        const propDefId = BigInt(input.property_definition_id as number);
+        const valueType = input.value_type as string;
+        const rawValue = input.value;
+
+        // Build the tagged PropertyValue union.
+        let value: unknown;
+        switch (valueType) {
+          case "Text":   value = { tag: "Text",        value: String(rawValue) }; break;
+          case "Url":    value = { tag: "Url",         value: String(rawValue) }; break;
+          case "Select": value = { tag: "Select",      value: String(rawValue) }; break;
+          case "Number": value = { tag: "Number",      value: Number(rawValue) }; break;
+          case "Date":   value = { tag: "Date",        value: BigInt(Math.round(Number(rawValue))) }; break;
+          case "Checkbox": value = { tag: "Checkbox",  value: Boolean(rawValue) }; break;
+          case "MultiSelect":
+            value = { tag: "MultiSelect", value: Array.isArray(rawValue) ? rawValue.map(String) : [String(rawValue)] };
+            break;
+          case "Relation":
+            value = { tag: "Relation", value: Array.isArray(rawValue) ? rawValue.map((v: unknown) => BigInt(Math.round(Number(v)))) : [BigInt(Math.round(Number(rawValue)))] };
+            break;
+          case "Person":
+            value = { tag: "Person", value: Array.isArray(rawValue) ? rawValue.map(String) : [String(rawValue)] };
+            break;
+          default:
+            return JSON.stringify({ ok: false, error: `Unknown value_type: ${valueType}` });
+        }
+
+        console.log(`[tools] set_property_value: page=${pageId} prop=${propDefId} type=${valueType} value=${JSON.stringify(rawValue)}`);
+        await conn.reducers.setPropertyValue({
+          pageId,
+          propertyDefinitionId: propDefId,
+          value,
+        });
+        return JSON.stringify({ ok: true, page_id: Number(pageId), property_definition_id: Number(propDefId) });
+      }
+
+      case "search_pages": {
+        const query = (input.query as string).toLowerCase();
+        type PageRow = { id: bigint; parentId: bigint | undefined; title: string; pageType: { tag: string }; deletedAt: unknown };
+        const matches = [...(conn.db.page.iter() as Iterable<PageRow>)]
+          .filter((p) => !p.deletedAt && p.title.toLowerCase().includes(query))
+          .slice(0, 20)
+          .map((p) => ({
+            page_id: Number(p.id),
+            title: p.title,
+            page_type: p.pageType.tag,
+            parent_id: p.parentId ? Number(p.parentId) : null,
+          }));
+        return JSON.stringify({ ok: true, results: matches });
+      }
+
+      case "list_child_pages": {
+        const rawParentId = input.parent_id as number;
+        const parentId = rawParentId > 0 ? BigInt(rawParentId) : undefined;
+        type PageRow = { id: bigint; parentId: bigint | undefined; title: string; pageType: { tag: string }; sortOrder: number; deletedAt: unknown };
+        const children = [...(conn.db.page.iter() as Iterable<PageRow>)]
+          .filter((p) => {
+            if (p.deletedAt) return false;
+            if (parentId === undefined) return p.parentId === undefined || p.parentId === null;
+            return String(p.parentId) === String(parentId);
+          })
+          .sort((a, b) => a.sortOrder - b.sortOrder)
+          .map((p) => ({
+            page_id: Number(p.id),
+            title: p.title,
+            page_type: p.pageType.tag,
+            sort_order: p.sortOrder,
+          }));
+        return JSON.stringify({ ok: true, parent_id: rawParentId, children });
+      }
+
+      case "get_page": {
+        const pageId = BigInt(input.page_id as number);
+        type PageRow = { id: bigint; parentId: bigint | undefined; title: string; pageType: { tag: string }; deletedAt: unknown; createdAt: unknown };
+        const page = [...(conn.db.page.iter() as Iterable<PageRow>)].find((p) => p.id === pageId);
+        if (!page) return JSON.stringify({ ok: false, error: "Page not found" });
+
+        type ContentRow = { pageId: bigint; content: string };
+        const contentRow = [...(conn.db.page_content.iter() as Iterable<ContentRow>)].find((c) => c.pageId === pageId);
+
+        return JSON.stringify({
+          ok: true,
+          page_id: Number(page.id),
+          title: page.title,
+          page_type: page.pageType.tag,
+          parent_id: page.parentId ? Number(page.parentId) : null,
+          content: contentRow?.content?.slice(0, 5000) || "",
+        });
+      }
+
+      case "get_context": {
+        const key = input.key as string;
+        const row = [...(conn.db.orcha_shared_context.iter() as Iterable<SharedContextRow>)].find(
+          (r) => r.jobId === jobId && r.key === key
+        );
+        if (!row) return JSON.stringify({ ok: false, error: `No context value for key "${key}"` });
+        return JSON.stringify({ ok: true, key, value: row.value });
+      }
+
+      case "web_search": {
+        const query = input.query as string;
+        console.log(`[tools] web_search: "${query}"`);
+        return await webSearch(query);
+      }
+
+      case "fetch_url": {
+        const url = input.url as string;
+        console.log(`[tools] fetch_url: "${url}"`);
+        const content = await fetchUrlContent(url);
+        return JSON.stringify({ ok: true, url, content });
+      }
+
+      default:
+        return JSON.stringify({ ok: false, error: `Unknown tool: ${toolName}` });
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : "";
+    console.error(`[tools] ${toolName} FAILED: ${message}`);
+    if (stack) console.error(`[tools] ${toolName} stack: ${stack}`);
+    return JSON.stringify({ ok: false, error: message });
+  }
+}
+
+/**
+ * StaticToolExecutor — thin class wrapper around the existing executeTool switch.
+ *
+ * Exposes the same interface expected by CompositeToolExecutor so the two tiers
+ * (static native tools + MCP extension tools) can be composed without changing
+ * the underlying tool implementations.
+ */
+export class StaticToolExecutor {
+  private readonly conn: ConnLike;
+  private readonly jobId: bigint;
+
+  constructor(conn: ConnLike, jobId: bigint = BigInt(0)) {
+    this.conn = conn;
+    this.jobId = jobId;
+  }
+
+  /** Returns the names of all tools registered in this executor. */
+  toolNames(): Set<string> {
+    const defs = [...PEAR_TOOLS, ...WEB_TOOLS];
+    return new Set(defs.map((t) => t.name));
+  }
+
+  /** Returns true if this executor handles the named tool. */
+  hasTool(name: string): boolean {
+    return this.toolNames().has(name);
+  }
+
+  /** Execute a static tool by name. */
+  async execute(toolName: string, input: Record<string, unknown>): Promise<string> {
+    return executeTool(this.conn, toolName, input, this.jobId);
+  }
+}

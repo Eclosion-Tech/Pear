@@ -12,17 +12,24 @@ import type { NextConfig } from "next";
 //
 // Cloud providers (Auth0, Okta, Google, etc.) already support CORS — no proxy needed.
 const oidcProxyOrigin = process.env.OIDC_PROXY_ORIGIN;
+const spacetimeProxyOrigin = process.env.SPACETIMEDB_PROXY_ORIGIN;
 
 const nextConfig: NextConfig = {
   output: "standalone",
 
-  ...(oidcProxyOrigin
-    ? {
-        async rewrites() {
-          return [{ source: "/dex/:path*", destination: `${oidcProxyOrigin}/dex/:path*` }];
-        },
-      }
-    : {}),
+  async rewrites() {
+    const rules = [];
+    if (oidcProxyOrigin) {
+      rules.push({ source: "/dex/:path*", destination: `${oidcProxyOrigin}/dex/:path*` });
+    }
+    if (spacetimeProxyOrigin) {
+      // SpacetimeDB SDK issues requests to /v1/... from the host root.
+      // Proxy those paths to the internal SpacetimeDB origin so clients only
+      // need the Pear web URL.
+      rules.push({ source: "/v1/:path*", destination: `${spacetimeProxyOrigin}/v1/:path*` });
+    }
+    return rules;
+  },
 };
 
 export default nextConfig;

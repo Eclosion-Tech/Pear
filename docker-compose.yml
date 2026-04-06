@@ -78,10 +78,15 @@ services:
         # NEXT_PUBLIC_* vars are baked into the browser bundle at build time.
         # The browser must reach these URLs directly, so use the public-facing
         # addresses (Cloudflare Tunnel hostname or exposed host port).
-        NEXT_PUBLIC_SPACETIMEDB_URI: ${SPACETIMEDB_PUBLIC_URI:-ws://localhost:3000}
+        NEXT_PUBLIC_SPACETIMEDB_URI: ${SPACETIMEDB_PUBLIC_URI-ws://localhost:3000}
         NEXT_PUBLIC_SPACETIMEDB_DB_NAME: ${SPACETIMEDB_DB_NAME:-pear-dev}
         NEXT_PUBLIC_SPACETIMEAUTH_CLIENT_ID: ${SPACETIMEAUTH_CLIENT_ID:-}
         NEXT_PUBLIC_SPACETIMEAUTH_AUTHORITY: ${SPACETIMEAUTH_AUTHORITY:-}
+        # Optional same-origin proxy to SpacetimeDB via Next.js rewrites.
+        # Set SPACETIMEDB_PROXY_ORIGIN=http://spacetimedb:3000 and leave
+        # SPACETIMEDB_PUBLIC_URI empty to let the browser use ws(s)://<web-host>.
+        # The web app proxies /v1/* to the internal SpacetimeDB service.
+        SPACETIMEDB_PROXY_ORIGIN: ${SPACETIMEDB_PROXY_ORIGIN:-}
     container_name: pear-web
     ports:
       - "3001:3001"
@@ -92,10 +97,35 @@ services:
       # S3-compatible blob storage (default: MinIO in this stack)
       # Override to use external storage (e.g. R2, S3): set S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY.
       S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      # Optional. Browser upload URL (presigned URLs). If unset, derived from request host + :9000 (zero config when app and MinIO are on the same host). Set only when MinIO is on another host/port.
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
       S3_BUCKET: ${S3_BUCKET:-pear-attachments}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
       S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
       S3_REGION: ${S3_REGION:-us-east-1}
+    restart: unless-stopped
+    networks:
+      - pear
+
+  # ── Pear LLM Worker ────────────────────────────────────────────────────────
+  # Orcha agent: connects to SpacetimeDB, claims "orchestrate" and "llm" tasks,
+  # calls Anthropic Claude, and submits results back to the coordination layer.
+  # Set ANTHROPIC_API_KEY in your .env to enable.
+  # Scale with: docker compose up --scale worker=3
+  worker:
+    image: ${WORKER_IMAGE:-pear-worker:latest}
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    container_name: pear-worker
+    depends_on:
+      - spacetimedb
+    environment:
+      SPACETIMEDB_URI: ws://spacetimedb:3000
+      SPACETIMEDB_DB_NAME: ${SPACETIMEDB_DB_NAME:-pear-dev}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-4-5-20251001}
+      ORCHA_AGENT_ID: ${ORCHA_AGENT_ID:-pear-llm-worker}
     restart: unless-stopped
     networks:
       - pear

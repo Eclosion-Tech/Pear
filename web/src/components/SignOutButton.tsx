@@ -4,6 +4,7 @@ import { useReducer } from "spacetimedb/react";
 import { useAuth } from "react-oidc-context";
 import { reducers } from "@/src/module_bindings";
 import { clearSavedToken } from "@/src/lib/spacetime";
+import { useWorkspace } from "@/src/providers/WorkspaceProvider";
 
 const OIDC_CONFIGURED = !!process.env.NEXT_PUBLIC_SPACETIMEAUTH_CLIENT_ID;
 
@@ -24,10 +25,11 @@ function OidcSignOutButton() {
 /** Used in native mode — must be rendered inside SpacetimeDBProvider. */
 function NativeSignOutButton() {
   const logout = useReducer(reducers.logout);
+  const { activeId } = useWorkspace();
 
   const handleLogout = () => {
     logout(); // best-effort: mark server-side as logged out
-    clearSavedToken(); // remove identity token so next load gets a fresh anonymous identity
+    if (activeId) clearSavedToken(activeId); // remove identity token for this workspace
     window.location.reload(); // reload to clean login screen
   };
 

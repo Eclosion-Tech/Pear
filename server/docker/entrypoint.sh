@@ -20,14 +20,37 @@ done
 echo "[pear] SpacetimeDB ready."
 
 # Publish the pre-built module WASM
+# Some deploy paths accidentally create /module/server.wasm as a directory
+# containing server.wasm. Normalize to the nested file in that case.
+if [ -d "$MODULE_WASM" ] && [ -f "$MODULE_WASM/server.wasm" ]; then
+  echo "[pear] Detected directory at $MODULE_WASM; using $MODULE_WASM/server.wasm"
+  MODULE_WASM="$MODULE_WASM/server.wasm"
+fi
+
 if [ -f "$MODULE_WASM" ]; then
   echo "[pear] Publishing module from $MODULE_WASM as '$DB_NAME'..."
-  spacetime publish \
+  if spacetime publish \
     --bin-path "$MODULE_WASM" \
     "$DB_NAME" \
     --server http://localhost:3000 \
-    --yes
-  echo "[pear] Module published."
+    --yes; then
+    echo "[pear] Module published."
+  else
+    echo "[pear] WARNING: Initial publish failed. Clearing stale spacetime CLI state and retrying..."
+    rm -rf /root/.config/spacetime
+    mkdir -p /root/.config/spacetime
+
+    if spacetime publish \
+      --bin-path "$MODULE_WASM" \
+      "$DB_NAME" \
+      --server http://localhost:3000 \
+      --yes; then
+      echo "[pear] Module published on retry."
+    else
+      echo "[pear] ERROR: Module publish failed after retry."
+      echo "[pear] SpacetimeDB will keep running, but clients may fail until publish succeeds."
+    fi
+  fi
 else
   echo "[pear] WARNING: $MODULE_WASM not found."
   echo "[pear] Run 'cd server && spacetime build' on the host first, then restart this container."

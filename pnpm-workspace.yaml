@@ -1,2 +1,4 @@
 packages:
   - web
+  - desktop
+  - worker

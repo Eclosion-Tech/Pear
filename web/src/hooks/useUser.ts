@@ -3,6 +3,25 @@
 import { useTable, useSpacetimeDB } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
 
+/** All authenticated users in the workspace, deduplicated by email.
+ *  The same person can have multiple Identity rows (different sessions/devices).
+ *  We keep the most recently seen row per email. */
+export function useUsers() {
+  const [users, isReady] = useTable(tables.user);
+  const authenticated = users.filter((u) => u.isAuthenticated);
+  const byEmail = new Map<string, (typeof authenticated)[number]>();
+  for (const u of authenticated) {
+    const key = u.email || u.identity.toHexString();
+    const existing = byEmail.get(key);
+    if (!existing || u.lastSeenAt.microsSinceUnixEpoch > existing.lastSeenAt.microsSinceUnixEpoch) {
+      byEmail.set(key, u);
+    }
+  }
+  return { users: [...byEmail.values()], isReady };
+}
+
+export type UserRow = ReturnType<typeof useUsers>["users"][number];
+
 /** Returns the current user's row from the User table, plus derived display helpers. */
 export function useCurrentUser() {
   const { identity } = useSpacetimeDB();
