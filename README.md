@@ -2,7 +2,7 @@
 
 **A self-hosted, relational-first Notion alternative built on SpacetimeDB.**
 
-Pages and database rows are the same entity — a page viewed in a grid is a row, a row opened fully is a page. Real-time collaboration is built in at the data layer, not bolted on.
+Pages and database rows are the same entity — a page viewed in a grid is a row, a row opened fully is a page. Real-time data syncs over SpacetimeDB subscriptions; the editor is Yjs-backed and local-first, with merged state persisted to the server.
 
 ---
 
@@ -21,46 +21,66 @@ Pages and database rows are the same entity — a page viewed in a grid is a row
 |---|---|
 | Backend / sync | [SpacetimeDB](https://spacetimedb.com) (Rust module) |
 | Frontend | Next.js 15 · React 19 · Tailwind CSS v4 |
-| Editor | [BlockNote](https://blocknotejs.org) + Yjs (CRDT collaborative editing) |
+| Editor | [BlockNote](https://blocknotejs.org) + Yjs (local-first; full state snapshot to SpacetimeDB) |
+| Worker | Node (optional) — AI conversations, Orcha task execution, tool runtime |
 | Auth | Native SpacetimeDB email/password (default) · Any OIDC provider (optional) |
+| Attachments | S3-compatible storage (MinIO in Docker Compose by default) |
 | Containerisation | Docker Compose |
 
 ---
 
 ## Features
 
-- **Documents** — Rich-text pages with collaborative editing powered by Yjs CRDTs. No typing jitter between collaborators.
-- **Databases** — Spreadsheet-style grid view. New databases are seeded with default columns and rows.
-- **Property types** — Text, Number, Date, Select, Multi-select, Checkbox, URL, Relation.
-- **Relation columns** — Link rows across any two databases. Pick linked rows from a search dropdown.
-- **Cell selection** — Click to select, Cmd/Ctrl+click for multi-select, Delete/Backspace to clear, Escape to deselect.
-- **Inline editing** — Double-click any cell to edit in place. Select/Multi-select show a live-filtered option list with "Create X" for new options.
-- **Row detail modal** — Open any database row as a full page with a property panel and rich-text editor.
-- **Light / dark mode** — System-aware with a manual toggle.
-- **Soft delete** — Pages are soft-deleted and can be restored.
-- **Snapshots** — Point-in-time content snapshots with restore.
-- **Real-time** — All state is streamed over a SpacetimeDB WebSocket subscription. No polling.
+### Workspace & navigation
+
+- **Sidebar** — Drag to reorder pages, collapse/expand subtrees, soft delete & restore from trash.
+- **Quick switcher** — `⌘K` / `Ctrl+K` fuzzy search by title, plus **semantic search** over page embeddings when the query is long enough.
+- **Breadcrumbs** — Hierarchy in the header (workspace → parent → current).
+- **Page icons** — Emoji per page in the sidebar and headers.
+
+### Documents
+
+- **Rich text** — BlockNote with slash commands, inline **page links** (live title sync).
+- **Blocks** — Images and audio (uploads to blob storage), tables, code blocks with language picker and copy shortcut.
+- **Audio** — Record or upload; inline playback; transcript via Web Speech API where the browser supports it.
+- **History** — Snapshot timeline, preview, one-click restore; optional snapshot with live editor content.
+- **Local-first** — IndexedDB holds working state; SpacetimeDB stores merged Yjs blobs and metadata on a debounced schedule.
+
+### Databases
+
+- **Grid & list views** — Column resize persisted per view; **frozen first column**; filters and multi-column sorts.
+- **Property types** — Text, Number, Date, Select (conditional options, per-option colors), Multi-select, Checkbox, URL, Relation, Person, and agent-oriented fields where enabled.
+- **Editing** — Inline cells, fill handle, keyboard navigation (arrows, Tab, Enter), multi-row selection with bulk delete.
+- **Rows** — Open any row as a full page (routable URL) with properties panel.
+
+### Files
+
+- **Attachments** — Presigned upload/download via the web app; metadata in SpacetimeDB (`Attachment` table).
+
+### AI & extensions (optional)
+
+- **AI users** — Configurable model providers; **conversations** attached to pages (human ↔ AI), persisted in SpacetimeDB.
+- **Orcha** — Job/task coordination tables and reducers embedded in the same module (or point workers at an external Orcha DB). Page-scoped jobs from the in-app panel.
+- **Extensions** — Install MCP servers and config bundles; permissioned tool execution with audit logging. Built-in workspace tools extension seeded for new databases.
+
+For a finer-grained shipped vs planned list, see [`ROADMAP.md`](./ROADMAP.md).
 
 ---
 
 ## Project structure
 
 ```
-Pear.pro/
-├── server/                  # SpacetimeDB backend
+Pear/
+├── server/
 │   ├── spacetimedb/
-│   │   └── src/lib.rs       # All tables, reducers, and types
+│   │   └── src/lib.rs       # Tables, reducers, types (source of truth for API surface)
 │   ├── docker/
-│   │   └── entrypoint.sh    # Container startup: starts SpacetimeDB, publishes module
-│   └── spacetime.json       # CLI config (module path, TS bindings output dir)
-├── web/                     # Next.js frontend
-│   ├── app/                 # Next.js App Router pages & layouts
-│   ├── src/
-│   │   ├── components/      # UI components (GridView, DocPage, PropertyCell, …)
-│   │   ├── hooks/           # SpacetimeDB data hooks (usePages, useDatabase, …)
-│   │   ├── lib/             # SpacetimeDB connection, Yjs provider
-│   │   └── module_bindings/ # Auto-generated TypeScript bindings (do not edit)
-│   └── Dockerfile
+│   │   └── entrypoint.sh    # Starts SpacetimeDB, publishes WASM module
+│   └── spacetime.json       # Module path, TS bindings output dir
+├── web/                     # Next.js app (UI, API routes, embeddings, uploads)
+├── worker/                  # Optional Node worker (AI / Orcha / tools)
+├── desktop/                 # Desktop shell (workspace)
+├── extensions/              # Example / built-in extension manifests
 ├── docker-compose.yml
 └── pnpm-workspace.yaml
 ```
@@ -81,16 +101,28 @@ That's it for the Docker path. Rust, the SpacetimeDB CLI, and pnpm are only need
 docker compose up -d
 ```
 
-Docker builds everything — the Next.js client and the SpacetimeDB WASM module — and the entrypoint script publishes the module automatically once SpacetimeDB is ready.
+Docker builds the Next.js client and the SpacetimeDB WASM module; the entrypoint publishes the module once SpacetimeDB is ready.
 
 | Service | URL |
 |---|---|
 | SpacetimeDB | `http://localhost:3000` |
 | Web client | `http://localhost:3001` |
 
+Compose also brings up **MinIO** (or your configured S3-compatible backend) for attachment uploads — see `docker-compose.yml` and `.env.example` for variables.
+
 ### 2. Create an account
 
 Open `http://localhost:3001` and register with any email and password. Authentication is handled natively by the SpacetimeDB module — no external auth service required.
+
+### 3. Optional: AI worker
+
+If you use AI users, conversations, or Orcha task execution, run the worker from the repo root:
+
+```bash
+pnpm worker
+```
+
+Copy and adjust variables from [`.env.example`](./.env.example) (and `web/.env.local` as needed).
 
 ---
 
@@ -108,7 +140,7 @@ Open `http://localhost:3001` and register with any email and password. Authentic
 # Start a local SpacetimeDB instance
 spacetime start
 
-# Build the module and publish it
+# Build the module and publish
 cd server/spacetimedb
 cargo build --release --target wasm32-unknown-unknown
 cd ..
@@ -161,29 +193,14 @@ NEXT_PUBLIC_OIDC_CLIENT_ID=pear
 
 ---
 
-## Backend reducers
+## Backend API surface
 
-The SpacetimeDB module exposes the following reducers:
+The SpacetimeDB module is large and evolving. Rather than duplicating every reducer here:
 
-| Reducer | Description |
-|---|---|
-| `register` / `login` / `logout` | Native auth |
-| `set_user_profile` | Update display name / avatar |
-| `create_page` | Create a doc or database page |
-| `update_page_title` | Rename a page |
-| `update_page_content` | Set legacy JSON content |
-| `apply_yjs_update` | Apply a Yjs CRDT binary update |
-| `delete_page` / `restore_page` | Soft delete and restore |
-| `create_database_schema` | Initialise a database's column schema |
-| `add_property` / `delete_property` | Add or remove a column |
-| `rename_property` | Rename a column |
-| `reorder_property` | Change column order |
-| `update_property_type` | Change a column's type |
-| `update_property_config` | Update a column's config (options, relation target, etc.) |
-| `set_property_value` / `clear_property_value` | Write or clear a cell value |
-| `create_view` / `rename_view` / `delete_view` | Manage database views |
-| `update_view_config` / `set_default_view` | Configure views |
-| `take_snapshot` / `restore_page_to_snapshot` | Content versioning |
+- **Source of truth:** `server/spacetimedb/src/lib.rs` — all `#[reducer]` functions and `#[table]` definitions.
+- **High-level groups:** authentication (`register`, `login`, …), pages & Yjs (`save_yjs_state`, `update_page_content`, …), snapshots, attachments, embeddings (`set_page_embedding`), database schema & property values & views, **AI users & conversations** (`create_ai_user`, `send_message`, `record_compaction`, …), **Orcha** (`create_job`, `claim_task`, `submit_result`, …), **extensions** (`publish_extension`, `install_extension`, permission/audit reducers, …), and **HTTP API integrations** (endpoint CRUD reducers for inbound webhooks).
+
+Client call sites use the generated bindings under `web/src/module_bindings/`.
 
 ---
 
