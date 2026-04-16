@@ -6,9 +6,32 @@ import { useReducer } from "spacetimedb/react";
 import { useAuth } from "react-oidc-context";
 import { reducers } from "@/src/module_bindings";
 import { clearSavedToken, clearIdbCache } from "@/src/lib/spacetime";
-import { useWorkspace } from "@/src/providers/WorkspaceProvider";
+import {
+  useWorkspace,
+} from "@/src/providers/WorkspaceProvider";
+import { purgePearBrowserState } from "@/src/lib/workspaceConnections";
 
 const OIDC_CONFIGURED = !!process.env.NEXT_PUBLIC_SPACETIMEAUTH_CLIENT_ID;
+
+/**
+ * When Pear is embedded inside a host app that owns authentication
+ * (own session cookie, own IdP integration), the host can set this env
+ * var to a URL that Pear should navigate to on sign-out. The host's
+ * endpoint is responsible for clearing its session and redirecting to
+ * the IdP / marketing site / wherever.
+ *
+ * Pear still purges its own browser state (localStorage + IndexedDB)
+ * before handing off, so the next user on this browser profile doesn't
+ * inherit the previous session's workspace list or editor snapshots.
+ *
+ * When unset, Pear falls back to its built-in flows (OIDC via
+ * `react-oidc-context` if `NEXT_PUBLIC_SPACETIMEAUTH_CLIENT_ID` is
+ * configured, otherwise the native SpacetimeDB `logout` reducer).
+ *
+ * Example — host sets: NEXT_PUBLIC_PEAR_HOST_LOGOUT_URL="/auth/logout"
+ */
+const HOST_LOGOUT_URL =
+  process.env.NEXT_PUBLIC_PEAR_HOST_LOGOUT_URL?.trim() || "";
 
 /**
  * Gear icon button that opens a small settings popover anchored to itself.
@@ -88,11 +111,52 @@ export function SettingsPopover() {
             <div className="border-t border-neutral-100 dark:border-neutral-800 my-1" />
 
             {/* Sign out */}
-            {OIDC_CONFIGURED ? <OidcSignOut /> : <NativeSignOutWithWorkspace />}
+            {HOST_LOGOUT_URL ? (
+              <HostSignOut url={HOST_LOGOUT_URL} />
+            ) : OIDC_CONFIGURED ? (
+              <OidcSignOut />
+            ) : (
+              <NativeSignOutWithWorkspace />
+            )}
           </div>
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * Host-delegated sign-out: purge all Pear-owned browser state
+ * (localStorage + Yjs IndexedDB snapshots) so the next sign-in on this
+ * browser profile doesn't inherit the previous account's workspace list
+ * or editor state, then do a FULL-page navigation to the host app's
+ * logout URL.
+ *
+ * Full nav (not `router.push`) matters because the host's logout
+ * endpoint typically responds with a 302 to an IdP's end-session URL;
+ * a Next.js RSC fetch would chase that redirect and CORS-fail on the
+ * cross-origin hop. `window.location.href =` forces a document
+ * navigation instead, which the browser follows natively.
+ */
+function HostSignOut({ url }: { url: string }) {
+  async function handleClick() {
+    // Fire-and-forget: the critical synchronous work (localStorage
+    // wipe) is done before the async IndexedDB deletion resolves.
+    void purgePearBrowserState().finally(() => {
+      window.location.href = url;
+    });
+  }
+
+  return (
+    <button
+      onClick={handleClick}
+      className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left text-red-600 dark:text-red-400 hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+      </svg>
+      Sign out
+    </button>
   );
 }
 
