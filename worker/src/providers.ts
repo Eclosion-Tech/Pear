@@ -431,8 +431,12 @@ export function getProviderForAiUser(
     }
   }
 
-  const fallback = getDefaultProvider();
-  return { provider: fallback.provider, model: fallback.model, maxTokens: fallback.maxTokens };
+  try {
+    const fallback = getDefaultProvider();
+    return { provider: fallback.provider, model: fallback.model, maxTokens: fallback.maxTokens };
+  } catch {
+    throw new Error(`No API key configured for AI user ${aiUserId} and no fallback ANTHROPIC_API_KEY in env`);
+  }
 }
 
 /** Convenience: get the default provider (backwards-compatible with env-var config). */

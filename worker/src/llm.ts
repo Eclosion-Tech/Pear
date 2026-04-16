@@ -7,7 +7,11 @@ import {
 } from "./providers.js";
 import { getPearTools, executeTool, type ConnLike } from "./tools.js";
 
-const { provider: defaultProvider, model: MODEL, plannerModel: PLANNER_MODEL, maxTokens: MAX_TOKENS } = getDefaultProvider();
+let _defaults: { provider: InferenceProvider; model: string; plannerModel: string; maxTokens: number } | null = null;
+function defaults() {
+  if (!_defaults) _defaults = getDefaultProvider();
+  return _defaults;
+}
 
 // ── Pear context injected into every LLM call ─────────────────────────────────
 
@@ -152,9 +156,9 @@ export async function callLlm(
   extraContext = "",
   overrides?: { provider: InferenceProvider; model: string; maxTokens?: number },
 ): Promise<string> {
-  const inf = overrides?.provider ?? defaultProvider;
-  const model = overrides?.model ?? MODEL;
-  const maxTokens = overrides?.maxTokens ?? MAX_TOKENS;
+  const inf = overrides?.provider ?? defaults().provider;
+  const model = overrides?.model ?? defaults().model;
+  const maxTokens = overrides?.maxTokens ?? defaults().maxTokens;
 
   const userMessage = extraContext
     ? `${taskDescription}\n\n---\n${extraContext}`
@@ -244,8 +248,8 @@ export async function planTasks(
   pageContext = "",
   overrides?: { provider: InferenceProvider; model: string },
 ): Promise<TaskSpec[]> {
-  const inf = overrides?.provider ?? defaultProvider;
-  const model = overrides?.model ?? PLANNER_MODEL;
+  const inf = overrides?.provider ?? defaults().provider;
+  const model = overrides?.model ?? defaults().plannerModel;
 
   const userMessage = pageContext
     ? `${prompt}\n\n---\n${pageContext}`
