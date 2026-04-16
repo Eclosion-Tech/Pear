@@ -1,12 +1,10 @@
 "use client";
 
 import { createReactBlockSpec } from "@blocknote/react";
-import { useWorkspace } from "@/src/providers/WorkspaceProvider";
-import { workspaceBlobSrc } from "@/src/lib/blobUpload";
+import { usePearWorkspaceSlug, workspaceBlobSrc } from "@/src/lib/blobUpload";
 
 function ImageBlockView({ storageKey, caption }: { storageKey: string; caption: string }) {
-  const { activeWorkspace } = useWorkspace();
-  const slug = activeWorkspace?.dbName ?? "";
+  const slug = usePearWorkspaceSlug();
 
   if (!storageKey) {
     return (

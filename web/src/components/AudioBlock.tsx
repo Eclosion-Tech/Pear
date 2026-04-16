@@ -3,8 +3,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createReactBlockSpec } from "@blocknote/react";
 import { useAudioAttachment } from "@/src/components/AudioAttachmentContext";
-import { useWorkspace } from "@/src/providers/WorkspaceProvider";
-import { uploadWorkspaceBlob, workspaceBlobSrc } from "@/src/lib/blobUpload";
+import {
+  uploadWorkspaceBlob,
+  usePearWorkspaceSlug,
+  workspaceBlobSrc,
+} from "@/src/lib/blobUpload";
 
 type AudioProps = {
   storageKey: string;
@@ -81,8 +84,7 @@ interface AudioBlockViewProps {
 
 function AudioBlockView({ block, editor }: AudioBlockViewProps) {
   const ctx = useAudioAttachment();
-  const { activeWorkspace } = useWorkspace();
-  const workspaceSlug = activeWorkspace?.dbName ?? "";
+  const workspaceSlug = usePearWorkspaceSlug();
   const props = block.props as unknown as AudioProps;
   const [isRecording, setIsRecording] = useState(false);
   const [seconds, setSeconds] = useState(0);

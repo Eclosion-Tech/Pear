@@ -38,7 +38,7 @@ import {
 } from "@/src/hooks/useMeetingCallDetection";
 import { useCreateAttachment } from "@/src/hooks/usePages";
 import { useWorkspace } from "@/src/providers/WorkspaceProvider";
-import { uploadWorkspaceBlob } from "@/src/lib/blobUpload";
+import { uploadWorkspaceBlob, usePearWorkspaceSlug } from "@/src/lib/blobUpload";
 
 /** How often (ms) we push a full Yjs state blob to SpacetimeDB. */
 const SAVE_INTERVAL_MS = 30_000;
@@ -84,8 +84,8 @@ export function PearEditor({ pageId, initialContent, childPages, onMentionAiUser
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
-  const { idbNamespace, activeWorkspace } = useWorkspace();
-  const workspaceSlug = activeWorkspace?.dbName ?? "";
+  const { idbNamespace } = useWorkspace();
+  const workspaceSlug = usePearWorkspaceSlug();
   const { isActive, identity } = useSpacetimeDB();
   const spacetime = useSpacetimeDB();
 

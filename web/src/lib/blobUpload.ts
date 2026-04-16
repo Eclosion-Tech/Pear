@@ -1,5 +1,8 @@
 "use client";
 
+import { useParams } from "next/navigation";
+import { useWorkspace } from "@/src/providers/WorkspaceProvider";
+
 /**
  * Workspace-scoped blob upload/download helpers.
  *
@@ -118,4 +121,23 @@ export function workspaceBlobSrc(slug: string, storageKey: string): string {
   return `/api/workspaces/${encodeURIComponent(slug)}/blobs/${encodeURIComponent(
     storageKey
   )}/raw`;
+}
+
+/**
+ * Resolve the current workspace slug for blob URLs.
+ *
+ * Priority:
+ *   1. URL param `slug` (Next.js route like `/workspace/[slug]/…`). This is
+ *      the authoritative source in Pear Cloud — the URL always reflects
+ *      which workspace the user is viewing.
+ *   2. `activeWorkspace.dbName` from the WorkspaceProvider (localStorage-
+ *      backed). This is the fallback for standalone Pear where there is
+ *      no slug-based URL.
+ */
+export function usePearWorkspaceSlug(): string {
+  const params = useParams() as { slug?: string | string[] } | null;
+  const rawSlug = params?.slug;
+  const urlSlug = Array.isArray(rawSlug) ? rawSlug[0] : rawSlug;
+  const { activeWorkspace } = useWorkspace();
+  return (urlSlug ?? activeWorkspace?.dbName ?? "").trim();
 }
