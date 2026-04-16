@@ -18,7 +18,7 @@ import {
   type ToolDef,
   type StreamEvent,
   type ChatStreamRequest,
-  getDefaultProvider,
+  getProviderForAiUser,
 } from "./providers.js";
 import { buildPageContext } from "./llm.js";
 import { getConversationTools, executeTool } from "./tools.js";
@@ -360,7 +360,7 @@ async function handleConversationMessage(
       llmMessages.unshift({ role: "user", content: `[Page context]\n${pageContext}` });
     }
 
-    const { provider: defaultProvider, model, maxTokens } = getDefaultProvider();
+    const { provider: aiProvider, model, maxTokens } = getProviderForAiUser(conn, conv.aiUserId);
 
     const tools: ToolDef[] = getConversationTools() as ToolDef[];
     const allToolCalls: ToolCallInfo[] = [];
@@ -369,7 +369,7 @@ async function handleConversationMessage(
     let iterations = 0;
 
     // Step 2: Streaming tool-use loop
-    if (defaultProvider.chatStream) {
+    if (aiProvider.chatStream) {
       while (iterations++ < MAX_TOOL_ITERATIONS) {
         let lastFlush = Date.now();
 
@@ -385,7 +385,7 @@ async function handleConversationMessage(
 
         let doneResponse: StreamEvent & { type: "done" } | null = null;
 
-        for await (const event of defaultProvider.chatStream(streamReq)) {
+        for await (const event of aiProvider.chatStream(streamReq)) {
           if (event.type === "thinking_delta") {
             thinkingText += event.text;
             if (Date.now() - lastFlush > FLUSH_INTERVAL_MS) {
@@ -450,7 +450,7 @@ async function handleConversationMessage(
     } else {
       // Fallback: non-streaming path for providers that don't support chatStream
       while (iterations++ < MAX_TOOL_ITERATIONS) {
-        const response = await defaultProvider.chat({
+        const response = await aiProvider.chat({
           model,
           maxTokens,
           system: systemPrompt,

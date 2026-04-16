@@ -4,9 +4,13 @@
  * Normalized message types sit close to Anthropic's format (content blocks,
  * tool_use / tool_result). Each provider converts to/from its native API.
  *
- * API keys come from env vars for now. When AiUserConfig credentials are
- * readable by the worker (via SpacetimeDB procedures or a secure relay),
- * the factory will accept per-user keys instead.
+ * Two ways to create a provider:
+ *   1. `createProvider(name, endpoint?)` — reads API keys from env vars (self-hosted default)
+ *   2. `createProviderFromConfig(config)` — reads from an AiUserConfig row (per-user keys)
+ *
+ * Use `getProviderForAiUser(conn, aiUserId)` to resolve per-user config with
+ * env-var fallback. Requires the worker to connect with admin/owner credentials
+ * so the private `ai_user_config` table is accessible.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -302,10 +306,23 @@ class OpenAIProvider implements InferenceProvider {
 export type ProviderType = "Anthropic" | "OpenAI" | "Ollama" | "OpenAI Compatible";
 
 /**
- * Create an inference provider from a provider name.
- *
- * API keys are read from env vars. Per-AI-user key storage will replace
- * this once the worker can read AiUserConfig via procedures.
+ * Shape of an AiUserConfig row from SpacetimeDB's private table.
+ * The worker can read this when connected with owner/admin credentials.
+ */
+export interface AiUserConfigRow {
+  id: bigint;
+  createdBy: { toHexString(): string };
+  provider: { tag: ProviderType };
+  model: string;
+  endpoint: string | undefined;
+  apiKey: string | undefined;
+  systemPrompt: string | undefined;
+  maxTokens: number;
+}
+
+/**
+ * Create an inference provider from env-var API keys.
+ * Used as a fallback when no per-user config is available (self-hosted default).
  */
 export function createProvider(
   providerName: ProviderType,
@@ -334,6 +351,88 @@ export function createProvider(
     default:
       throw new Error(`Unknown provider: ${providerName}`);
   }
+}
+
+/**
+ * Create an inference provider from an AiUserConfig row (per-user API keys).
+ * Throws if the config has no api_key and the provider requires one.
+ */
+export function createProviderFromConfig(config: AiUserConfigRow): InferenceProvider {
+  const providerName = config.provider.tag;
+  const apiKey = config.apiKey;
+  const endpoint = config.endpoint;
+
+  switch (providerName) {
+    case "Anthropic": {
+      if (!apiKey) throw new Error(`AI user ${config.id}: Anthropic API key not set`);
+      return new AnthropicProvider(apiKey);
+    }
+    case "OpenAI": {
+      if (!apiKey) throw new Error(`AI user ${config.id}: OpenAI API key not set`);
+      return new OpenAIProvider(apiKey);
+    }
+    case "Ollama": {
+      const base = endpoint || "http://localhost:11434/v1";
+      return new OpenAIProvider("ollama", base);
+    }
+    case "OpenAI Compatible": {
+      if (!endpoint) throw new Error(`AI user ${config.id}: endpoint required for OpenAI Compatible`);
+      return new OpenAIProvider(apiKey || "no-key", endpoint);
+    }
+    default:
+      throw new Error(`Unknown provider: ${providerName}`);
+  }
+}
+
+/** Cached provider instances keyed by AI user ID. */
+const providerCache = new Map<bigint, { provider: InferenceProvider; model: string; maxTokens: number }>();
+
+/** Invalidate cached provider for an AI user (call on ai_user_config update/delete). */
+export function invalidateProviderCache(aiUserId: bigint): void {
+  providerCache.delete(aiUserId);
+}
+
+/** Clear the entire provider cache (call on disconnect). */
+export function clearProviderCache(): void {
+  providerCache.clear();
+}
+
+/**
+ * Resolve a provider for a specific AI user. Reads from the private
+ * `ai_user_config` table (requires admin/owner connection), falls back
+ * to env-var config if the table is inaccessible or the user has no key.
+ */
+export function getProviderForAiUser(
+  conn: { db: Record<string, unknown> },
+  aiUserId: bigint,
+): { provider: InferenceProvider; model: string; maxTokens: number } {
+  const cached = providerCache.get(aiUserId);
+  if (cached) return cached;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const configTable = (conn.db as any).ai_user_config;
+  if (configTable) {
+    const config = configTable.id?.find(aiUserId) as AiUserConfigRow | undefined;
+    if (config?.apiKey) {
+      try {
+        const entry = {
+          provider: createProviderFromConfig(config),
+          model: config.model,
+          maxTokens: config.maxTokens || 8192,
+        };
+        providerCache.set(aiUserId, entry);
+        return entry;
+      } catch (err) {
+        console.warn(
+          `[providers] Failed to create provider from AiUserConfig ${aiUserId}, falling back to env:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+  }
+
+  const fallback = getDefaultProvider();
+  return { provider: fallback.provider, model: fallback.model, maxTokens: fallback.maxTokens };
 }
 
 /** Convenience: get the default provider (backwards-compatible with env-var config). */

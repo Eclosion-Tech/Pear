@@ -702,6 +702,9 @@ fn next_orcha_task_id(ctx: &ReducerContext) -> u64 {
 fn next_orcha_shared_context_id(ctx: &ReducerContext) -> u64 {
     ctx.db.orcha_shared_context().iter().map(|r| r.id).max().unwrap_or(0) + 1
 }
+fn next_orcha_usage_event_id(ctx: &ReducerContext) -> u64 {
+    ctx.db.orcha_usage_event().iter().map(|r| r.id).max().unwrap_or(0) + 1
+}
 
 // ============================================================
 // AI User Reducers
@@ -2161,6 +2164,29 @@ pub struct OrchaSharedContext {
     pub created_by: String,
 }
 
+/// Per-task usage telemetry. Workers write a row after each task or conversation
+/// response completes. Tracks three dimensions:
+///   - task count (implicit: one row = one execution)
+///   - LLM tokens (zero for non-LLM automations)
+///   - wall-clock time
+#[table(accessor = orcha_usage_event, public)]
+pub struct OrchaUsageEvent {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    /// The Orcha task this event relates to, or 0 for conversation responses.
+    pub task_id: u64,
+    /// "orchestrate" | "llm" | "conversation" | custom task types
+    pub task_type: String,
+    pub agent_id: String,
+    /// The AI user whose provider/key was used (if applicable).
+    pub ai_user_id: Option<u64>,
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    pub wall_clock_ms: u64,
+    pub created_at: Timestamp,
+}
+
 /// Check whether all tasks for a job have reached a terminal state and update job status.
 /// Called after every task state transition to "done" or "failed".
 fn check_orcha_job_completion(ctx: &ReducerContext, job_id: u64) {
@@ -2479,6 +2505,32 @@ pub fn set_shared_context(
             });
         }
     }
+    Ok(())
+}
+
+/// Record a usage event for a completed task or conversation response.
+#[reducer]
+pub fn record_usage_event(
+    ctx: &ReducerContext,
+    task_id: u64,
+    task_type: String,
+    agent_id: String,
+    ai_user_id: Option<u64>,
+    tokens_in: u64,
+    tokens_out: u64,
+    wall_clock_ms: u64,
+) -> Result<(), String> {
+    ctx.db.orcha_usage_event().insert(OrchaUsageEvent {
+        id: next_orcha_usage_event_id(ctx),
+        task_id,
+        task_type,
+        agent_id,
+        ai_user_id,
+        tokens_in,
+        tokens_out,
+        wall_clock_ms,
+        created_at: ctx.timestamp,
+    });
     Ok(())
 }
 
