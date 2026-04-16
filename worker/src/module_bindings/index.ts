@@ -130,7 +130,7 @@ const tablesSchema = __schema({
   ai_user_profile: __table({
     name: 'ai_user_profile',
     indexes: [
-      { name: 'ai_user_id', algorithm: 'btree', columns: [
+      { name: 'ai_user_id', accessor: 'aiUserId', algorithm: 'btree', columns: [
         'aiUserId',
       ] },
     ],
@@ -141,10 +141,10 @@ const tablesSchema = __schema({
   attachment: __table({
     name: 'attachment',
     indexes: [
-      { name: 'id', algorithm: 'btree', columns: [
+      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'page_id', algorithm: 'btree', columns: [
+      { name: 'page_id', accessor: 'pageId', algorithm: 'btree', columns: [
         'pageId',
       ] },
     ],
@@ -155,10 +155,10 @@ const tablesSchema = __schema({
   conversation: __table({
     name: 'conversation',
     indexes: [
-      { name: 'id', algorithm: 'btree', columns: [
+      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'page_id', algorithm: 'btree', columns: [
+      { name: 'page_id', accessor: 'pageId', algorithm: 'btree', columns: [
         'pageId',
       ] },
     ],
@@ -169,10 +169,10 @@ const tablesSchema = __schema({
   conversation_message: __table({
     name: 'conversation_message',
     indexes: [
-      { name: 'conversation_id', algorithm: 'btree', columns: [
+      { name: 'conversation_id', accessor: 'conversationId', algorithm: 'btree', columns: [
         'conversationId',
       ] },
-      { name: 'id', algorithm: 'btree', columns: [
+      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
     ],
@@ -183,10 +183,10 @@ const tablesSchema = __schema({
   database_schema: __table({
     name: 'database_schema',
     indexes: [
-      { name: 'id', algorithm: 'btree', columns: [
+      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'page_id', algorithm: 'btree', columns: [
+      { name: 'page_id', accessor: 'pageId', algorithm: 'btree', columns: [
         'pageId',
       ] },
     ],
@@ -197,10 +197,10 @@ const tablesSchema = __schema({
   database_view: __table({
     name: 'database_view',
     indexes: [
-      { name: 'id', algorithm: 'btree', columns: [
+      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'page_id', algorithm: 'btree', columns: [
+      { name: 'page_id', accessor: 'pageId', algorithm: 'btree', columns: [
         'pageId',
       ] },
     ],
@@ -211,7 +211,7 @@ const tablesSchema = __schema({
   extension_manifest: __table({
     name: 'extension_manifest',
     indexes: [
-      { name: 'id', algorithm: 'btree', columns: [
+      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
     ],
@@ -222,10 +222,10 @@ const tablesSchema = __schema({
   installed_extension: __table({
     name: 'installed_extension',
     indexes: [
-      { name: 'id', algorithm: 'btree', columns: [
+      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'manifest_id', algorithm: 'btree', columns: [
+      { name: 'manifest_id', accessor: 'manifestId', algorithm: 'btree', columns: [
         'manifestId',
       ] },
     ],
@@ -236,7 +236,7 @@ const tablesSchema = __schema({
   orcha_agent: __table({
     name: 'orcha_agent',
     indexes: [
-      { name: 'id', algorithm: 'btree', columns: [
+      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
     ],
@@ -247,10 +247,10 @@ const tablesSchema = __schema({
   orcha_job: __table({
     name: 'orcha_job',
     indexes: [
-      { name: 'id', algorithm: 'btree', columns: [
+      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'page_id', algorithm: 'btree', columns: [
+      { name: 'page_id', accessor: 'pageId', algorithm: 'btree', columns: [
         'pageId',
       ] },
     ],
@@ -261,10 +261,10 @@ const tablesSchema = __schema({
   orcha_shared_context: __table({
     name: 'orcha_shared_context',
     indexes: [
-      { name: 'id', algorithm: 'btree', columns: [
+      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'job_id', algorithm: 'btree', columns: [
+      { name: 'job_id', accessor: 'jobId', algorithm: 'btree', columns: [
         'jobId',
       ] },
     ],
@@ -275,10 +275,10 @@ const tablesSchema = __schema({
   orcha_task: __table({
     name: 'orcha_task',
     indexes: [
-      { name: 'id', algorithm: 'btree', columns: [
+      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'job_id', algorithm: 'btree', columns: [
+      { name: 'job_id', accessor: 'jobId', algorithm: 'btree', columns: [
         'jobId',
       ] },
     ],
@@ -289,10 +289,10 @@ const tablesSchema = __schema({
   page: __table({
     name: 'page',
     indexes: [
-      { name: 'id', algorithm: 'btree', columns: [
+      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'parent_id', algorithm: 'btree', columns: [
+      { name: 'parent_id', accessor: 'parentId', algorithm: 'btree', columns: [
         'parentId',
       ] },
     ],
@@ -303,7 +303,7 @@ const tablesSchema = __schema({
   page_content: __table({
     name: 'page_content',
     indexes: [
-      { name: 'page_id', algorithm: 'btree', columns: [
+      { name: 'page_id', accessor: 'pageId', algorithm: 'btree', columns: [
         'pageId',
       ] },
     ],
@@ -314,13 +314,13 @@ const tablesSchema = __schema({
   page_property_value: __table({
     name: 'page_property_value',
     indexes: [
-      { name: 'id', algorithm: 'btree', columns: [
+      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'page_id', algorithm: 'btree', columns: [
+      { name: 'page_id', accessor: 'pageId', algorithm: 'btree', columns: [
         'pageId',
       ] },
-      { name: 'property_definition_id', algorithm: 'btree', columns: [
+      { name: 'property_definition_id', accessor: 'propertyDefinitionId', algorithm: 'btree', columns: [
         'propertyDefinitionId',
       ] },
     ],
@@ -331,13 +331,13 @@ const tablesSchema = __schema({
   page_property_value_history: __table({
     name: 'page_property_value_history',
     indexes: [
-      { name: 'id', algorithm: 'btree', columns: [
+      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'page_id', algorithm: 'btree', columns: [
+      { name: 'page_id', accessor: 'pageId', algorithm: 'btree', columns: [
         'pageId',
       ] },
-      { name: 'property_definition_id', algorithm: 'btree', columns: [
+      { name: 'property_definition_id', accessor: 'propertyDefinitionId', algorithm: 'btree', columns: [
         'propertyDefinitionId',
       ] },
     ],
@@ -348,10 +348,10 @@ const tablesSchema = __schema({
   page_snapshot: __table({
     name: 'page_snapshot',
     indexes: [
-      { name: 'id', algorithm: 'btree', columns: [
+      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'page_id', algorithm: 'btree', columns: [
+      { name: 'page_id', accessor: 'pageId', algorithm: 'btree', columns: [
         'pageId',
       ] },
     ],
@@ -362,7 +362,7 @@ const tablesSchema = __schema({
   page_yjs_state: __table({
     name: 'page_yjs_state',
     indexes: [
-      { name: 'page_id', algorithm: 'btree', columns: [
+      { name: 'page_id', accessor: 'pageId', algorithm: 'btree', columns: [
         'pageId',
       ] },
     ],
@@ -373,10 +373,10 @@ const tablesSchema = __schema({
   property_definition: __table({
     name: 'property_definition',
     indexes: [
-      { name: 'id', algorithm: 'btree', columns: [
+      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'schema_id', algorithm: 'btree', columns: [
+      { name: 'schema_id', accessor: 'schemaId', algorithm: 'btree', columns: [
         'schemaId',
       ] },
     ],
@@ -387,7 +387,7 @@ const tablesSchema = __schema({
   user: __table({
     name: 'user',
     indexes: [
-      { name: 'identity', algorithm: 'btree', columns: [
+      { name: 'identity', accessor: 'identity', algorithm: 'btree', columns: [
         'identity',
       ] },
     ],
