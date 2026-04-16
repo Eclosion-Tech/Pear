@@ -38,6 +38,7 @@ import {
 } from "@/src/hooks/useMeetingCallDetection";
 import { useCreateAttachment } from "@/src/hooks/usePages";
 import { useWorkspace } from "@/src/providers/WorkspaceProvider";
+import { uploadWorkspaceBlob } from "@/src/lib/blobUpload";
 
 /** How often (ms) we push a full Yjs state blob to SpacetimeDB. */
 const SAVE_INTERVAL_MS = 30_000;
@@ -83,7 +84,8 @@ export function PearEditor({ pageId, initialContent, childPages, onMentionAiUser
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
-  const { idbNamespace } = useWorkspace();
+  const { idbNamespace, activeWorkspace } = useWorkspace();
+  const workspaceSlug = activeWorkspace?.dbName ?? "";
   const { isActive, identity } = useSpacetimeDB();
   const spacetime = useSpacetimeDB();
 
@@ -535,34 +537,18 @@ export function PearEditor({ pageId, initialContent, childPages, onMentionAiUser
       const blocksToInsert: Array<{ type: "image"; props: { storageKey: string; caption: string } }> = [];
 
       for (const file of images) {
-        const res = await fetch("/api/upload/request", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            pageId: String(pageId),
-            filename: file.name || "image",
-            contentType: file.type || "image/png",
-          }),
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          console.error("[PearEditor] upload request failed", err);
-          continue;
-        }
-        const { uploadUrl, storageKey } = await res.json();
-        const putRes = await fetch(uploadUrl, {
-          method: "PUT",
+        const contentType = file.type || "image/png";
+        const up = await uploadWorkspaceBlob({
+          slug: workspaceSlug,
           body: file,
-          headers: { "Content-Type": file.type || "image/png" },
+          contentType,
         });
-        if (!putRes.ok) {
-          console.error("[PearEditor] upload PUT failed");
-          continue;
-        }
+        if (!up) continue;
+        const storageKey = up.objectId;
         createAttachment({
           pageId,
           filename: file.name || "image",
-          contentType: file.type || "image/png",
+          contentType,
           storageKey,
           sizeBytes: BigInt(file.size),
         });
@@ -595,30 +581,13 @@ export function PearEditor({ pageId, initialContent, childPages, onMentionAiUser
 
       for (const file of list) {
         const contentType = file.type || "application/octet-stream";
-        const res = await fetch("/api/upload/request", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            pageId: String(pageId),
-            filename: file.name || "audio",
-            contentType,
-          }),
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          console.error("[PearEditor] audio upload request failed", err);
-          continue;
-        }
-        const { uploadUrl, storageKey } = await res.json();
-        const putRes = await fetch(uploadUrl, {
-          method: "PUT",
+        const up = await uploadWorkspaceBlob({
+          slug: workspaceSlug,
           body: file,
-          headers: { "Content-Type": contentType },
+          contentType,
         });
-        if (!putRes.ok) {
-          console.error("[PearEditor] audio upload PUT failed");
-          continue;
-        }
+        if (!up) continue;
+        const storageKey = up.objectId;
         createAttachment({
           pageId,
           filename: file.name || "audio",

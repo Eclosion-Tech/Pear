@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createReactBlockSpec } from "@blocknote/react";
 import { useAudioAttachment } from "@/src/components/AudioAttachmentContext";
+import { useWorkspace } from "@/src/providers/WorkspaceProvider";
+import { uploadWorkspaceBlob, workspaceBlobSrc } from "@/src/lib/blobUpload";
 
 type AudioProps = {
   storageKey: string;
@@ -30,46 +32,23 @@ function getSpeechRecognitionCtor(): (new () => SpeechRecognition) | null {
 }
 
 async function uploadAudioBlob(
+  slug: string,
   pageId: bigint,
   blob: Blob,
   filename: string,
   contentType: string,
   createAttachment: NonNullable<ReturnType<typeof useAudioAttachment>>["createAttachment"]
 ): Promise<string | null> {
-  const res = await fetch("/api/upload/request", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      pageId: String(pageId),
-      filename,
-      contentType,
-    }),
-  });
-  if (!res.ok) {
-    console.error("[AudioBlock] upload request failed");
-    return null;
-  }
-  const { uploadUrl, storageKey } = (await res.json()) as {
-    uploadUrl: string;
-    storageKey: string;
-  };
-  const putRes = await fetch(uploadUrl, {
-    method: "PUT",
-    body: blob,
-    headers: { "Content-Type": contentType },
-  });
-  if (!putRes.ok) {
-    console.error("[AudioBlock] upload PUT failed");
-    return null;
-  }
+  const up = await uploadWorkspaceBlob({ slug, body: blob, contentType });
+  if (!up) return null;
   createAttachment({
     pageId,
     filename,
     contentType,
-    storageKey,
+    storageKey: up.objectId,
     sizeBytes: BigInt(blob.size),
   });
-  return storageKey;
+  return up.objectId;
 }
 
 function formatClock(sec: number): string {
@@ -102,6 +81,8 @@ interface AudioBlockViewProps {
 
 function AudioBlockView({ block, editor }: AudioBlockViewProps) {
   const ctx = useAudioAttachment();
+  const { activeWorkspace } = useWorkspace();
+  const workspaceSlug = activeWorkspace?.dbName ?? "";
   const props = block.props as unknown as AudioProps;
   const [isRecording, setIsRecording] = useState(false);
   const [seconds, setSeconds] = useState(0);
@@ -147,6 +128,7 @@ function AudioBlockView({ block, editor }: AudioBlockViewProps) {
         const ext =
           mimeType.includes("ogg") || mimeType.includes("opus") ? ".ogg" : ".webm";
         const storageKey = await uploadAudioBlob(
+          workspaceSlug,
           ctx.pageId,
           blob,
           `recording-${Date.now()}${ext}`,
@@ -327,6 +309,7 @@ function AudioBlockView({ block, editor }: AudioBlockViewProps) {
     setError(null);
     try {
       const storageKey = await uploadAudioBlob(
+        workspaceSlug,
         ctx.pageId,
         file,
         file.name || "audio",
@@ -353,9 +336,7 @@ function AudioBlockView({ block, editor }: AudioBlockViewProps) {
 
   const displayTranscript = (props.transcript || liveTranscript).trim();
   const hasAudio = Boolean(props.storageKey);
-  const src = hasAudio
-    ? `/api/upload/proxy?key=${encodeURIComponent(props.storageKey)}`
-    : "";
+  const src = hasAudio ? workspaceBlobSrc(workspaceSlug, props.storageKey) : "";
   const showTranscriptSection = hasAudio || isRecording || Boolean(displayTranscript);
 
   if (!ctx) {
