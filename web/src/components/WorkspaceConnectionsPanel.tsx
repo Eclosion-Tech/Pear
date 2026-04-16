@@ -91,8 +91,8 @@ export function WorkspaceConnectionsPanel() {
     try {
       const text = await f.text();
       parsePearSnapshotV1Json(text);
-      importSnapshot({ snapshotJson: text });
-      setMsg("Import requested. If the server accepts it, data will appear after sync.");
+      await importSnapshot({ snapshotJson: text });
+      setMsg("Import successful. Data will appear momentarily.");
     } catch (e) {
       setMsg(e instanceof Error ? e.message : `${e}`);
     } finally {
