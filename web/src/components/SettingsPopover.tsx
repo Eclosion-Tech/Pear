@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useReducer } from "spacetimedb/react";
 import { useAuth } from "react-oidc-context";
@@ -10,6 +10,9 @@ import {
   useWorkspace,
 } from "@/src/providers/WorkspaceProvider";
 import { purgePearBrowserState } from "@/src/lib/workspaceConnections";
+import { createLogger } from "@/src/lib/log";
+
+const log = createLogger("settings");
 
 const OIDC_CONFIGURED = !!process.env.NEXT_PUBLIC_SPACETIMEAUTH_CLIENT_ID;
 
@@ -33,6 +36,9 @@ const OIDC_CONFIGURED = !!process.env.NEXT_PUBLIC_SPACETIMEAUTH_CLIENT_ID;
 const HOST_LOGOUT_URL =
   process.env.NEXT_PUBLIC_PEAR_HOST_LOGOUT_URL?.trim() || "";
 
+/** Module-level latch so the selected sign-out mode is logged once per page load. */
+let signOutModeLogged = false;
+
 /**
  * Gear icon button that opens a small settings popover anchored to itself.
  * Lives in the Sidebar user widget.
@@ -43,6 +49,20 @@ export function SettingsPopover() {
   const btnRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [clearing, setClearing] = useState(false);
+
+  // Log the selected sign-out path once per page load so embedders can
+  // verify their host-logout env var was baked in without sniffing the
+  // network tab. Silent by default; enable with `localStorage.setItem(
+  // "pear:log", "debug")` in devtools, then refresh.
+  useEffect(() => {
+    if (signOutModeLogged) return;
+    signOutModeLogged = true;
+    log.debug("sign-out path resolved:", {
+      hostLogoutUrl: HOST_LOGOUT_URL || null,
+      oidcConfigured: OIDC_CONFIGURED,
+      mode: HOST_LOGOUT_URL ? "host" : OIDC_CONFIGURED ? "oidc" : "native",
+    });
+  }, []);
 
   function toggle() {
     setOpen((v) => !v);
