@@ -1,16 +1,30 @@
 /**
- * Conversation handler — watches for human messages in conversations and
- * generates AI responses via the inference provider with streaming support.
+ * Conversation handler — runs in the context of one AI user. Watches for
+ * messages from anyone *other than* the AI user itself in any conversation
+ * the AI user is a participant of, and generates a streaming reply.
+ *
+ * Connection model: this handler must be registered against an AI-user-scoped
+ * `DbConnection` (i.e. one that authenticated with the AI user's identity
+ * token), because:
+ *
+ *   1. `client_visibility_filter` on `ai_user_config` only exposes the row
+ *      whose `identity = :sender`. The AI user's API key is therefore only
+ *      readable when we connect AS that AI user.
+ *   2. Reducer calls (e.g. `send_message`) record `ctx.sender()` as the
+ *      message author. Connecting as the AI user makes the placeholder /
+ *      response messages naturally show up as `MessageSender::User(<ai>)`.
  *
  * Flow:
- *   1. Human sends a ConversationMessage (via @mention or the AiPanel input)
- *   2. Worker detects the new message (onInsert callback)
- *   3. Worker looks up the Conversation → AiUserProfile → provider config
- *   4. Creates a placeholder AI message with status=Thinking
- *   5. Streams the response (thinking → tool use → text) with periodic flushes
- *   6. Finalizes the message with status=Complete
+ *   1. Some other participant sends a ConversationMessage.
+ *   2. AiUserWorker observes the insert (only on conversations where it is
+ *      a participant — guaranteed by visibility, but we double-check).
+ *   3. We post a placeholder message with status=Thinking.
+ *   4. We stream the LLM response (thinking → tool_use → text) with
+ *      periodic flushes via update_message.
+ *   5. We finalize with status=Complete (or Error).
  */
 
+import type { Identity } from "spacetimedb";
 import type { ConnLike } from "./tools.js";
 import {
   type Message,
@@ -30,16 +44,26 @@ import {
   todayIso8601,
   type WorkspaceContext,
 } from "./workspace-context.js";
-import { loadCompactionSummary, reconstructSessionTail } from "./session-reconstruct.js";
+import {
+  loadCompactionSummary,
+  reconstructSessionTail,
+} from "./session-reconstruct.js";
 
 type ConversationRow = {
   id: bigint;
-  pageId: bigint;
-  aiUserId: bigint;
+  pageId: bigint | undefined;
   initiatedBy: { toHexString(): string };
   status: { tag: string };
   createdAt: { microsSinceUnixEpoch: bigint };
   updatedAt: { microsSinceUnixEpoch: bigint };
+};
+
+type ConversationParticipantRow = {
+  id: bigint;
+  conversationId: bigint;
+  identity: { toHexString(): string };
+  role: { tag: string };
+  joinedAt: { microsSinceUnixEpoch: bigint };
 };
 
 type ConversationMessageRow = {
@@ -60,98 +84,13 @@ type ConversationMessageRow = {
 
 type AiUserProfileRow = {
   aiUserId: bigint;
+  identity: { toHexString(): string };
   displayName: string;
   avatarUrl: string | undefined;
   providerName: string;
   modelName: string;
+  hasApiKey: boolean;
 };
-
-/** Fallback system prompt for conversations without a full WorkspaceContext. */
-const CONVERSATION_SYSTEM_FALLBACK = `\
-You are an AI assistant embedded in **Pear**, a real-time collaborative workspace built on SpacetimeDB.
-You are participating in a conversation attached to a specific page. You have context about that page's content.
-
-# About Pear
-
-Pear is a collaborative workspace (similar in concept to Notion) where users create, organize, and collaborate on documents and databases. Everything lives in a single shared workspace — there are no per-page permissions. All authenticated users see the same data.
-
-## Page Types
-
-There are two page types, both using the same underlying Page entity:
-
-- **Doc** — A rich-text document. The editor is built on BlockNote (a block-based editor like Notion). Docs support headings, paragraphs, bullet/numbered/check lists, blockquotes, horizontal rules, code blocks (with syntax highlighting for TypeScript, JavaScript, Python, SQL, Bash, HTML, CSS, JSON, Markdown), images (uploaded to object storage), and page links (embedded references to child pages).
-- **Database** — A structured table/grid. Its rows are child Doc pages, so opening a row reveals a full document editor plus the row's property values. Databases have a schema of typed columns (properties).
-
-## Page Organization
-
-- Pages are organized in a **tree** via parent/child relationships. Any page can be nested under another.
-- Pages can be **reordered** and **moved** between parents via drag-and-drop in the sidebar.
-- Each page can have an optional **emoji icon** and a **title**.
-- **Sidebar navigation** shows the page tree with expand/collapse. There's also a **Quick Switcher** (⌘K) for fuzzy search across all pages.
-- **Trash**: Deleted pages are soft-deleted and can be restored. Hard purge reparents children to the deleted page's parent.
-- **Breadcrumbs** show the page ancestry for navigation.
-
-## Database Features
-
-Databases support these column (property) types:
-
-| Type | Description |
-|------|-------------|
-| Text | Plain text |
-| Number | Numeric values |
-| Date | Date values with before/after/on filtering |
-| Select | Single-select dropdown with configurable options |
-| MultiSelect | Multi-select tags |
-| Relation | Links to pages in other databases |
-| Checkbox | Boolean toggle |
-| Url | URL/link |
-
-Database UI features:
-- **Grid and List** view modes
-- **Filters** per column type (contains, equals, gt/lt, empty, etc.)
-- **Sorts** by title or any property (asc/desc)
-- **Column resize**, auto-fit, and drag-to-reorder
-- **Row detail modal** for editing a row as a full page
-- **Cell selection**, multi-select, bulk delete
-- New databases are seeded with Name, Tags (Select: Todo/In Progress/Done), and Notes columns plus 3 starter rows.
-
-## Editor Capabilities
-
-The BlockNote editor supports:
-- Standard blocks: paragraphs, headings (H1–H3), bullet lists, numbered lists, checklists, blockquotes, dividers
-- **Code blocks** with language selection
-- **Image blocks** with upload and captions
-- **Page link blocks** — embedded links to child pages
-- **Slash menu** (/): insert any block type, upload images, create child pages, or trigger an AI job
-- **@ mentions**: mention workspace users or AI users. Mentioning an AI user opens a conversation.
-- Rich text formatting: bold, italic, underline, strikethrough, code, links, text color, background color
-
-## AI Features
-
-- **AI Users**: AI assistants configured with a provider (Anthropic, OpenAI, Ollama, OpenAI-compatible), model, and optional custom system prompt. Created and managed in Settings.
-- **Conversations**: Initiated by @mentioning an AI user in the editor or from the AI panel. Each conversation is attached to a specific page, giving the AI context about that page's content.
-- **AI Jobs (Orcha)**: Triggered via the slash menu "Ask AI" command. Creates a multi-step task that can plan subtasks, create pages, add database properties, create rows, set values, and update page content. Jobs appear in the AI panel.
-- **Your tools**: create_page, update_page_title, update_page_content, add_property, create_row, set_property_value, get_schema_id, list_properties, web_search, fetch_url. You can directly create and modify pages, databases, and their content from within conversations.
-
-## Version History
-
-- Pages have **snapshots** (manual or automatic every 5 minutes) that can be restored.
-- Snapshot types: Manual, Periodic, PreAgentEdit, PostAgentEdit.
-
-## Collaboration
-
-- Real-time data sync via SpacetimeDB subscriptions — all table changes propagate to connected clients instantly.
-- Document content uses Yjs for CRDT-based editing with IndexedDB local caching.
-
-# Guidelines
-
-- Be helpful, concise, and conversational.
-- You have context about the page this conversation is attached to — reference specific content when relevant.
-- When a user asks you to create pages, databases, add columns, or modify content, do it directly using your tools. Don't tell users to use AI Jobs or the slash menu — just do it.
-- When creating a Database, call create_page first, then add_property for each column. For pre-populated databases, also call create_row and set_property_value for each row/cell.
-- Use markdown for formatting when it helps readability.
-- Keep responses focused and actionable.
-- When suggesting how to organize content in Pear, leverage your knowledge of its features (databases with typed columns, nested pages, page links, etc.) to give concrete, practical advice.`;
 
 const processing = new Set<string>();
 const FLUSH_INTERVAL_MS = 300;
@@ -162,51 +101,39 @@ function messageKey(convId: bigint, msgId: bigint): string {
   return `${convId}:${msgId}`;
 }
 
-function buildConversationMessages(
-  messages: ConversationMessageRow[],
-  aiUserId: bigint,
-  pageContext: string,
-): Message[] {
-  const llmMessages: Message[] = [];
-
-  if (pageContext) {
-    llmMessages.push({
-      role: "user",
-      content: `[Page context]\n${pageContext}`,
-    });
-    llmMessages.push({
-      role: "assistant",
-      content: [{ type: "text", text: "I've reviewed the page context. How can I help?" }],
-    });
+function identityHex(id: { toHexString(): string } | unknown): string {
+  if (id && typeof (id as { toHexString?: () => string }).toHexString === "function") {
+    return (id as { toHexString(): string }).toHexString();
   }
+  return String(id);
+}
 
-  for (const msg of messages) {
-    const isAi = msg.sender.tag === "AiUser" && msg.sender.value === aiUserId;
-    if (isAi) {
-      if (!msg.content) continue;
-      llmMessages.push({
-        role: "assistant",
-        content: [{ type: "text", text: msg.content }],
-      });
-    } else {
-      if (!msg.content) continue;
-      llmMessages.push({
-        role: "user",
-        content: msg.content,
-      });
-    }
-  }
+/** True if `msg.sender` is `User(identity)` and the identity matches `selfHex`. */
+function isFromSelf(
+  msg: ConversationMessageRow,
+  selfHex: string,
+): boolean {
+  if (msg.sender.tag !== "User") return false;
+  return identityHex(msg.sender.value) === selfHex;
+}
 
-  return llmMessages;
+/** True if `msg.sender` is `User(identity)` and the identity is NOT us. */
+function isFromOtherUser(
+  msg: ConversationMessageRow,
+  selfHex: string,
+): boolean {
+  if (msg.sender.tag !== "User") return false;
+  return identityHex(msg.sender.value) !== selfHex;
 }
 
 /**
- * Find the AI message we just created by looking for the latest one
- * from this AI user in the conversation.
+ * Find the AI message we just created by looking for the latest `Thinking`
+ * message authored by *us* in this conversation.
  */
 async function findAiMessageId(
   conn: ConnLike,
   conversationId: bigint,
+  selfHex: string,
   retries = 5,
 ): Promise<bigint | null> {
   for (let i = 0; i < retries; i++) {
@@ -216,12 +143,15 @@ async function findAiMessageId(
       .filter(
         (m) =>
           m.conversationId === conversationId &&
-          m.sender.tag === "AiUser" &&
+          isFromSelf(m, selfHex) &&
           m.status?.tag === "Thinking",
       )
       .sort(
         (a, b) =>
-          Number(b.createdAt.microsSinceUnixEpoch - a.createdAt.microsSinceUnixEpoch),
+          Number(
+            b.createdAt.microsSinceUnixEpoch -
+              a.createdAt.microsSinceUnixEpoch,
+          ),
       );
 
     if (msgs.length > 0) return msgs[0].id;
@@ -250,117 +180,186 @@ async function flushMessage(
       content,
       status: { tag: status },
       thinking: thinking || undefined,
-      toolCallsJson: toolCalls.length > 0 ? JSON.stringify(toolCalls) : undefined,
+      toolCallsJson:
+        toolCalls.length > 0 ? JSON.stringify(toolCalls) : undefined,
     });
   } catch (err) {
-    console.warn(`[conversation] flush failed:`, err instanceof Error ? err.message : err);
+    console.warn(
+      `[conversation] flush failed:`,
+      err instanceof Error ? err.message : err,
+    );
   }
+}
+
+/** Resolve the AiUserProfile for `selfHex` from the subscribed `ai_user_profile` table. */
+function findOwnProfile(
+  conn: ConnLike,
+  selfHex: string,
+): AiUserProfileRow | null {
+  for (const row of conn.db.ai_user_profile.iter() as Iterable<AiUserProfileRow>) {
+    if (identityHex(row.identity) === selfHex) return row;
+  }
+  return null;
+}
+
+/**
+ * Confirm the AI user is a participant in `conversationId`. Cheap defensive
+ * check on top of visibility filters.
+ */
+function isParticipant(
+  conn: ConnLike,
+  conversationId: bigint,
+  selfHex: string,
+): boolean {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const partTable = (conn.db as any).conversation_participant;
+  if (!partTable?.iter) return true; // Older bindings — best-effort allow.
+  for (const row of partTable.iter() as Iterable<ConversationParticipantRow>) {
+    if (
+      row.conversationId === conversationId &&
+      identityHex(row.identity) === selfHex
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function handleConversationMessage(
   conn: ConnLike,
   msg: ConversationMessageRow,
+  selfHex: string,
+  logTag: string,
 ): Promise<void> {
   const key = messageKey(msg.conversationId, msg.id);
   if (processing.has(key)) return;
   processing.add(key);
 
   try {
-    const ageMs = Number(BigInt(Date.now()) * 1000n - msg.createdAt.microsSinceUnixEpoch) / 1000;
+    const ageMs =
+      Number(BigInt(Date.now()) * 1000n - msg.createdAt.microsSinceUnixEpoch) /
+      1000;
     if (ageMs > 30_000) return;
 
-    const conv = conn.db.conversation.id.find(msg.conversationId) as ConversationRow | undefined;
+    const conv = conn.db.conversation.id.find(msg.conversationId) as
+      | ConversationRow
+      | undefined;
     if (!conv || conv.status.tag !== "Active") return;
 
+    if (!isParticipant(conn, conv.id, selfHex)) {
+      // Visibility usually prevents this, but bail rather than spam reducers.
+      return;
+    }
+
+    // Respect ordering: if we already replied later than this message, skip.
     const laterReplies = [
       ...(conn.db.conversation_message.iter() as Iterable<ConversationMessageRow>),
     ].filter(
       (m) =>
         m.conversationId === msg.conversationId &&
-        m.sender.tag === "AiUser" &&
+        isFromSelf(m, selfHex) &&
         m.createdAt.microsSinceUnixEpoch > msg.createdAt.microsSinceUnixEpoch,
     );
     if (laterReplies.length > 0) return;
 
-    const aiProfile = conn.db.ai_user_profile.aiUserId.find(conv.aiUserId) as AiUserProfileRow | undefined;
+    const aiProfile = findOwnProfile(conn, selfHex);
     if (!aiProfile) {
-      console.warn(`[conversation] AI user profile not found for id=${conv.aiUserId}`);
+      console.warn(
+        `${logTag} no AiUserProfile row visible for self ${selfHex.slice(0, 12)}…`,
+      );
       return;
     }
 
     console.log(
-      `[conversation] Responding as "${aiProfile.displayName}" in conversation ${conv.id} (page ${conv.pageId})`,
+      `${logTag} responding as "${aiProfile.displayName}" in conversation ${conv.id}` +
+        (conv.pageId !== undefined ? ` (page ${conv.pageId})` : ""),
     );
 
-    // Step 1: Create placeholder AI message with Thinking status
+    // Step 1: placeholder message (Thinking)
     await conn.reducers.sendMessage({
       conversationId: conv.id,
       content: "",
-      senderAiUserId: conv.aiUserId,
       jobId: undefined,
       status: { tag: "Thinking" },
       thinking: undefined,
       toolCallsJson: undefined,
+      inputTokens: undefined,
+      outputTokens: undefined,
+      cacheCreationInputTokens: undefined,
+      cacheReadInputTokens: undefined,
     });
 
-    const aiMsgId = await findAiMessageId(conn, conv.id);
+    const aiMsgId = await findAiMessageId(conn, conv.id, selfHex);
     if (!aiMsgId) {
-      console.error(`[conversation] Could not find placeholder AI message`);
+      console.error(`${logTag} could not find placeholder AI message`);
       return;
     }
 
-    const pageContext = await buildPageContext(conn, conv.pageId);
+    const pageContext = conv.pageId
+      ? await buildPageContext(conn, conv.pageId)
+      : "";
 
-    // Build WorkspaceContext from SpacetimeDB subscription cache
-    const pageRow = conn.db.page.id.find(conv.pageId) as { title: string } | undefined;
-    const instructionPages = discoverInstructionPages(conn, conv.pageId);
-    const breadcrumb = buildBreadcrumb(conn, conv.pageId);
-    const pageHistory = summarizePageHistory(conn, conv.pageId);
-    const compactionSummary = loadCompactionSummary(conn, conv.id);
-
-    const workspaceCtx: WorkspaceContext = {
-      currentPageId: conv.pageId,
-      currentPageTitle: pageRow?.title ?? "Unknown page",
-      breadcrumb,
-      currentDate: todayIso8601(),
-      aiDisplayName: aiProfile.displayName,
-      modelName: aiProfile.modelName,
-      providerName: aiProfile.providerName,
-      instructionPages,
-      pageHistory,
-    };
-
-    const builder = new SystemPromptBuilder()
-      .withWorkspaceContext(workspaceCtx)
-      .withAiUserSystemPrompt(
-        aiProfile.displayName
-          ? `Your name is "${aiProfile.displayName}". You are powered by ${aiProfile.providerName} (${aiProfile.modelName}).`
-          : "",
-      );
-
-    const systemPrompt = compactionSummary
-      ? builder.withCompactionSummary(compactionSummary).render()
-      : builder.render();
-
-    // Reconstruct message tail (respects compaction floor)
-    const tailMessages = reconstructSessionTail(conn, conv.id);
-    // Filter out the placeholder AI message we just created
-    const llmMessages: Message[] = tailMessages.filter((m) => {
-      // The placeholder message has no content — it won't appear in the tail
-      // since reconstructSessionTail only includes messages before the insert.
-      // Extra safety: skip assistant messages with empty content arrays.
-      return !(m.role === "assistant" && Array.isArray(m.content) && m.content.length === 0);
-    });
-
-    // Prepend page context as a user/assistant pair (same as before)
-    if (pageContext) {
-      llmMessages.unshift(
-        { role: "assistant", content: [{ type: "text", text: "I've reviewed the page context. How can I help?" }] },
-      );
-      llmMessages.unshift({ role: "user", content: `[Page context]\n${pageContext}` });
+    // Build WorkspaceContext (page-anchored conversations only).
+    let workspaceCtx: WorkspaceContext | undefined;
+    if (conv.pageId !== undefined) {
+      const pageRow = conn.db.page.id.find(conv.pageId) as
+        | { title: string }
+        | undefined;
+      const instructionPages = discoverInstructionPages(conn, conv.pageId);
+      const breadcrumb = buildBreadcrumb(conn, conv.pageId);
+      const pageHistory = summarizePageHistory(conn, conv.pageId);
+      workspaceCtx = {
+        currentPageId: conv.pageId,
+        currentPageTitle: pageRow?.title ?? "Unknown page",
+        breadcrumb,
+        currentDate: todayIso8601(),
+        aiDisplayName: aiProfile.displayName,
+        modelName: aiProfile.modelName,
+        providerName: aiProfile.providerName,
+        instructionPages,
+        pageHistory,
+      };
     }
 
-    const { provider: aiProvider, model, maxTokens } = getProviderForAiUser(conn, conv.aiUserId);
+    const compactionSummary = loadCompactionSummary(conn, conv.id);
+
+    let builder = new SystemPromptBuilder().withAiUserSystemPrompt(
+      aiProfile.displayName
+        ? `Your name is "${aiProfile.displayName}". You are powered by ${aiProfile.providerName} (${aiProfile.modelName}).`
+        : "",
+    );
+    if (workspaceCtx) builder = builder.withWorkspaceContext(workspaceCtx);
+    if (compactionSummary) {
+      builder = builder.withCompactionSummary(compactionSummary);
+    }
+    const systemPrompt = builder.render();
+
+    // Reconstruct message tail (respects compaction floor). Filter out the
+    // placeholder we just inserted (no content).
+    const tailMessages = reconstructSessionTail(conn, conv.id);
+    const llmMessages: Message[] = tailMessages.filter(
+      (m) =>
+        !(m.role === "assistant" && Array.isArray(m.content) && m.content.length === 0),
+    );
+
+    if (pageContext) {
+      llmMessages.unshift({
+        role: "assistant",
+        content: [
+          { type: "text", text: "I've reviewed the page context. How can I help?" },
+        ],
+      });
+      llmMessages.unshift({
+        role: "user",
+        content: `[Page context]\n${pageContext}`,
+      });
+    }
+
+    const {
+      provider: aiProvider,
+      model,
+      maxTokens,
+    } = getProviderForAiUser(conn, aiProfile.aiUserId);
 
     const tools: ToolDef[] = getConversationTools() as ToolDef[];
     const allToolCalls: ToolCallInfo[] = [];
@@ -368,7 +367,6 @@ async function handleConversationMessage(
     let responseText = "";
     let iterations = 0;
 
-    // Step 2: Streaming tool-use loop
     if (aiProvider.chatStream) {
       while (iterations++ < MAX_TOOL_ITERATIONS) {
         let lastFlush = Date.now();
@@ -383,25 +381,46 @@ async function handleConversationMessage(
           thinkingBudget: THINKING_BUDGET,
         };
 
-        let doneResponse: StreamEvent & { type: "done" } | null = null;
+        let doneResponse: (StreamEvent & { type: "done" }) | null = null;
 
         for await (const event of aiProvider.chatStream(streamReq)) {
           if (event.type === "thinking_delta") {
             thinkingText += event.text;
             if (Date.now() - lastFlush > FLUSH_INTERVAL_MS) {
-              await flushMessage(conn, aiMsgId, responseText, "Thinking", thinkingText, allToolCalls);
+              await flushMessage(
+                conn,
+                aiMsgId,
+                responseText,
+                "Thinking",
+                thinkingText,
+                allToolCalls,
+              );
               lastFlush = Date.now();
             }
           } else if (event.type === "text_delta") {
             responseText += event.text;
             const currentStatus = responseText ? "Streaming" : "Thinking";
             if (Date.now() - lastFlush > FLUSH_INTERVAL_MS) {
-              await flushMessage(conn, aiMsgId, responseText, currentStatus, thinkingText, allToolCalls);
+              await flushMessage(
+                conn,
+                aiMsgId,
+                responseText,
+                currentStatus,
+                thinkingText,
+                allToolCalls,
+              );
               lastFlush = Date.now();
             }
           } else if (event.type === "tool_use_start") {
             allToolCalls.push({ name: event.block.name, status: "executing" });
-            await flushMessage(conn, aiMsgId, responseText, "ToolUse", thinkingText, allToolCalls);
+            await flushMessage(
+              conn,
+              aiMsgId,
+              responseText,
+              "ToolUse",
+              thinkingText,
+              allToolCalls,
+            );
           } else if (event.type === "done") {
             doneResponse = event;
           }
@@ -413,42 +432,69 @@ async function handleConversationMessage(
           (b): b is ToolUseBlock => b.type === "tool_use",
         );
 
-        if (toolBlocks.length === 0 || doneResponse.response.stopReason === "end_turn") {
-          const textBlock = doneResponse.response.content.find((b) => b.type === "text");
+        if (
+          toolBlocks.length === 0 ||
+          doneResponse.response.stopReason === "end_turn"
+        ) {
+          const textBlock = doneResponse.response.content.find(
+            (b) => b.type === "text",
+          );
           if (textBlock?.type === "text") {
             responseText = textBlock.text;
           }
           break;
         }
 
-        // Execute tools
-        llmMessages.push({ role: "assistant", content: doneResponse.response.content });
+        llmMessages.push({
+          role: "assistant",
+          content: doneResponse.response.content,
+        });
 
-        const toolResults: { type: "tool_result"; tool_use_id: string; content: string }[] = [];
+        const toolResults: {
+          type: "tool_result";
+          tool_use_id: string;
+          content: string;
+        }[] = [];
         for (const block of toolBlocks) {
           const idx = allToolCalls.findIndex(
             (tc) => tc.name === block.name && tc.status === "executing",
           );
 
-          console.log(`[conversation] Tool call [${block.name}]: ${JSON.stringify(block.input).slice(0, 200)}`);
-          const result = await executeTool(conn, block.name, block.input, BigInt(0));
-          console.log(`[conversation] Tool result [${block.name}]: ${result.slice(0, 200)}`);
+          console.log(
+            `${logTag} tool call [${block.name}]: ${JSON.stringify(block.input).slice(0, 200)}`,
+          );
+          const result = await executeTool(
+            conn,
+            block.name,
+            block.input,
+            BigInt(0),
+          );
+          console.log(`${logTag} tool result [${block.name}]: ${result.slice(0, 200)}`);
 
           if (idx >= 0) {
             allToolCalls[idx].status = "done";
             allToolCalls[idx].result = result.slice(0, 200);
           }
-          toolResults.push({ type: "tool_result", tool_use_id: block.id, content: result });
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: block.id,
+            content: result,
+          });
         }
 
-        await flushMessage(conn, aiMsgId, responseText, "ToolUse", thinkingText, allToolCalls);
+        await flushMessage(
+          conn,
+          aiMsgId,
+          responseText,
+          "ToolUse",
+          thinkingText,
+          allToolCalls,
+        );
         llmMessages.push({ role: "user", content: toolResults });
 
-        // Reset response text for next iteration's streaming
         responseText = "";
       }
     } else {
-      // Fallback: non-streaming path for providers that don't support chatStream
       while (iterations++ < MAX_TOOL_ITERATIONS) {
         const response = await aiProvider.chat({
           model,
@@ -471,33 +517,63 @@ async function handleConversationMessage(
 
         llmMessages.push({ role: "assistant", content: response.content });
 
-        const toolResults: { type: "tool_result"; tool_use_id: string; content: string }[] = [];
+        const toolResults: {
+          type: "tool_result";
+          tool_use_id: string;
+          content: string;
+        }[] = [];
         for (const block of toolCalls) {
-          console.log(`[conversation] Tool call [${block.name}]: ${JSON.stringify(block.input).slice(0, 200)}`);
-          const result = await executeTool(conn, block.name, block.input, BigInt(0));
-          console.log(`[conversation] Tool result [${block.name}]: ${result.slice(0, 200)}`);
-          toolResults.push({ type: "tool_result", tool_use_id: block.id, content: result });
+          console.log(
+            `${logTag} tool call [${block.name}]: ${JSON.stringify(block.input).slice(0, 200)}`,
+          );
+          const result = await executeTool(
+            conn,
+            block.name,
+            block.input,
+            BigInt(0),
+          );
+          console.log(`${logTag} tool result [${block.name}]: ${result.slice(0, 200)}`);
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: block.id,
+            content: result,
+          });
         }
 
         llmMessages.push({ role: "user", content: toolResults });
       }
     }
 
-    // Step 3: Finalize message
     if (!responseText) {
-      console.warn(`[conversation] No text response generated for conversation ${conv.id}`);
-      await flushMessage(conn, aiMsgId, "(No response generated)", "Error", thinkingText, allToolCalls);
+      console.warn(
+        `${logTag} no text response generated for conversation ${conv.id}`,
+      );
+      await flushMessage(
+        conn,
+        aiMsgId,
+        "(No response generated)",
+        "Error",
+        thinkingText,
+        allToolCalls,
+      );
       return;
     }
 
-    await flushMessage(conn, aiMsgId, responseText, "Complete", thinkingText, allToolCalls);
+    await flushMessage(
+      conn,
+      aiMsgId,
+      responseText,
+      "Complete",
+      thinkingText,
+      allToolCalls,
+    );
 
     console.log(
-      `[conversation] Responded in conversation ${conv.id} (${responseText.length} chars, thinking: ${thinkingText.length} chars, tools: ${allToolCalls.length})`,
+      `${logTag} responded in conversation ${conv.id} (${responseText.length} chars, thinking: ${thinkingText.length} chars, tools: ${allToolCalls.length})`,
     );
   } catch (err) {
     console.error(
-      `[conversation] Failed to respond in conversation ${msg.conversationId}:`,
+      `${logTag} failed to respond in conversation ${msg.conversationId}:`,
       err instanceof Error ? err.message : err,
     );
   } finally {
@@ -505,14 +581,27 @@ async function handleConversationMessage(
   }
 }
 
-export function registerConversationHandlers(conn: ConnLike): void {
+/**
+ * Register conversation handlers against an AI-user-scoped connection.
+ *
+ * @param conn          Connection authenticated as the AI user
+ * @param selfIdentity  The AI user's Identity (used to filter own messages)
+ * @param logTag        Prefix for log lines (e.g. `[ai:eclosion/Kira]`)
+ */
+export function registerConversationHandlers(
+  conn: ConnLike,
+  selfIdentity: Identity,
+  logTag = "[conversation]",
+): void {
+  const selfHex = selfIdentity.toHexString();
+
   conn.db.conversation_message.onInsert(
     (_ctx: unknown, msg: ConversationMessageRow) => {
-      if (msg.sender.tag === "Human") {
-        void handleConversationMessage(conn, msg);
+      if (isFromOtherUser(msg, selfHex)) {
+        void handleConversationMessage(conn, msg, selfHex, logTag);
       }
     },
   );
 
-  console.log("[conversation] Handlers registered");
+  console.log(`${logTag} handlers registered (self=${selfHex.slice(0, 12)}…)`);
 }

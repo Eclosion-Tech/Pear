@@ -1,6 +1,7 @@
 "use client";
 
 import { useTable, useReducer } from "spacetimedb/react";
+import type { Identity } from "spacetimedb";
 import { tables, reducers } from "@/src/module_bindings";
 
 export function useConversations() {
@@ -36,6 +37,18 @@ export function useMessagesForConversation(conversationId: bigint) {
     );
 }
 
+/** All conversation_participant rows. */
+export function useConversationParticipants() {
+  const [participants] = useTable(tables.conversation_participant);
+  return participants;
+}
+
+/** Participants in a single conversation. */
+export function useParticipantsForConversation(conversationId: bigint) {
+  const all = useConversationParticipants();
+  return all.filter((p) => p.conversationId === conversationId);
+}
+
 export function useCreateConversation() {
   return useReducer(reducers.createConversation);
 }
@@ -48,5 +61,12 @@ export function useCloseConversation() {
   return useReducer(reducers.closeConversation);
 }
 
+/** Compare two Identity values structurally (Identity has no equality op). */
+export function identitiesEqual(a: Identity | undefined, b: Identity | undefined): boolean {
+  if (!a || !b) return false;
+  return a.toHexString() === b.toHexString();
+}
+
 export type ConversationRow = ReturnType<typeof useConversations>["conversations"][number];
 export type ConversationMessageRow = ReturnType<typeof useConversationMessages>[number];
+export type ConversationParticipantRow = ReturnType<typeof useConversationParticipants>[number];

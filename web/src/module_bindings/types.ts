@@ -19,6 +19,7 @@ export type ActorType = __Infer<typeof ActorType>;
 
 export const AiUserConfig = __t.object("AiUserConfig", {
   id: __t.u64(),
+  identity: __t.identity(),
   createdBy: __t.identity(),
   get provider() {
     return InferenceProvider;
@@ -35,10 +36,12 @@ export type AiUserConfig = __Infer<typeof AiUserConfig>;
 
 export const AiUserProfile = __t.object("AiUserProfile", {
   aiUserId: __t.u64(),
+  identity: __t.identity(),
   displayName: __t.string(),
   avatarUrl: __t.option(__t.string()),
   providerName: __t.string(),
   modelName: __t.string(),
+  hasApiKey: __t.bool(),
   createdBy: __t.identity(),
   createdAt: __t.timestamp(),
   updatedAt: __t.timestamp(),
@@ -109,8 +112,7 @@ export type AuthScheme = __Infer<typeof AuthScheme>;
 
 export const Conversation = __t.object("Conversation", {
   id: __t.u64(),
-  pageId: __t.u64(),
-  aiUserId: __t.u64(),
+  pageId: __t.option(__t.u64()),
   initiatedBy: __t.identity(),
   get status() {
     return ConversationStatus;
@@ -140,6 +142,17 @@ export const ConversationMessage = __t.object("ConversationMessage", {
   cacheReadInputTokens: __t.u32(),
 });
 export type ConversationMessage = __Infer<typeof ConversationMessage>;
+
+export const ConversationParticipant = __t.object("ConversationParticipant", {
+  id: __t.u64(),
+  conversationId: __t.u64(),
+  identity: __t.identity(),
+  get role() {
+    return ParticipantRole;
+  },
+  joinedAt: __t.timestamp(),
+});
+export type ConversationParticipant = __Infer<typeof ConversationParticipant>;
 
 // The tagged union or sum type for the algebraic type `ConversationStatus`.
 export const ConversationStatus = __t.enum("ConversationStatus", {
@@ -271,8 +284,7 @@ export type InstalledExtension = __Infer<typeof InstalledExtension>;
 
 // The tagged union or sum type for the algebraic type `MessageSender`.
 export const MessageSender = __t.enum("MessageSender", {
-  Human: __t.identity(),
-  AiUser: __t.u64(),
+  User: __t.identity(),
   System: __t.string(),
 });
 export type MessageSender = __Infer<typeof MessageSender>;
@@ -325,6 +337,19 @@ export const OrchaTask = __t.object("OrchaTask", {
   result: __t.option(__t.string()),
 });
 export type OrchaTask = __Infer<typeof OrchaTask>;
+
+export const OrchaUsageEvent = __t.object("OrchaUsageEvent", {
+  id: __t.u64(),
+  taskId: __t.u64(),
+  taskType: __t.string(),
+  agentId: __t.string(),
+  aiUserId: __t.option(__t.u64()),
+  tokensIn: __t.u64(),
+  tokensOut: __t.u64(),
+  wallClockMs: __t.u64(),
+  createdAt: __t.timestamp(),
+});
+export type OrchaUsageEvent = __Infer<typeof OrchaUsageEvent>;
 
 export const Page = __t.object("Page", {
   id: __t.u64(),
@@ -405,6 +430,13 @@ export const PageYjsState = __t.object("PageYjsState", {
   updatedAt: __t.timestamp(),
 });
 export type PageYjsState = __Infer<typeof PageYjsState>;
+
+// The tagged union or sum type for the algebraic type `ParticipantRole`.
+export const ParticipantRole = __t.enum("ParticipantRole", {
+  Initiator: __t.unit(),
+  Member: __t.unit(),
+});
+export type ParticipantRole = __Infer<typeof ParticipantRole>;
 
 // The tagged union or sum type for the algebraic type `PermissionAction`.
 export const PermissionAction = __t.enum("PermissionAction", {

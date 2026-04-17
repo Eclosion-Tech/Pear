@@ -10,10 +10,16 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
+import {
+  HttpMethod,
+} from "./types";
+
 export default {
-  manifestId: __t.u64(),
-  aiApiKey: __t.option(__t.string()),
-  mcpApiKey: __t.option(__t.string()),
-  endpointOverride: __t.option(__t.string()),
-  aiUserIdentity: __t.option(__t.identity()),
+  endpointId: __t.u64(),
+  keyHash: __t.string(),
+  label: __t.string(),
+  get allowedMethods() {
+    return __t.array(HttpMethod);
+  },
+  expiresAt: __t.option(__t.timestamp()),
 };

@@ -1,16 +1,23 @@
 /**
- * DatabaseWorker — encapsulates a single SpacetimeDB connection and all
- * per-database state (in-flight tasks, conversation processing, provider cache).
+ * DatabaseWorker — owns the *admin* SpacetimeDB connection for a single
+ * database (workspace). Responsibilities:
+ *
+ *   - Register an Orcha agent, claim and execute orcha tasks.
+ *   - Spawn / tear down per-AI-user `AiUserWorker`s for conversation
+ *     handling. (Conversation reducers must run as the AI user so the
+ *     `MessageSender::User(<ai>)` identity is correct, and so the
+ *     `client_visibility_filter` on `ai_user_config` lets us read the
+ *     AI user's API key.)
  *
  * Designed for both single-database (standalone Pear) and multi-database
- * (Pear Cloud) deployments. Each instance manages its own connection lifecycle,
- * Orcha agent registration, task claiming, and conversation handling.
+ * (Pear Cloud) deployments. Pear Cloud's manager additionally calls
+ * {@link DatabaseWorker.reconcileAiUsers} with tokens fetched from
+ * `lifecycle/api/internal/ai-users/<server_ip>`.
  */
 
 import { DbConnection, type EventContext } from "./module_bindings/index.js";
 import { callLlm, planTasks, buildPageContext } from "./llm.js";
-import { registerConversationHandlers } from "./conversation.js";
-import { clearProviderCache, invalidateProviderCache } from "./providers.js";
+import { AiUserWorker } from "./ai-user-worker.js";
 
 const CAPABILITIES = ["orchestrate", "llm"];
 const MAX_ORCHESTRATE_DEPTH = 3;
@@ -41,10 +48,23 @@ export interface DatabaseWorkerOptions {
   token?: string;
 }
 
+/** AI user identity description supplied by the host (lifecycle in pear-cloud). */
+export interface AiUserDescriptor {
+  /** SpacetimeDB `auto_inc` id, useful for logs and reconciliation keying. */
+  aiUserId: bigint;
+  /** Display name used in log lines. */
+  label?: string;
+  /** SpacetimeDB-issued JWT for this AI user's identity. */
+  token: string;
+}
+
 export class DatabaseWorker {
   private conn: DbConnection | null = null;
   private inFlight = new Set<bigint>();
   private stopped = false;
+
+  /** AI-user-scoped sub-workers, keyed by aiUserId. */
+  private aiUserWorkers = new Map<bigint, AiUserWorker>();
 
   readonly uri: string;
   readonly dbName: string;
@@ -80,7 +100,6 @@ export class DatabaseWorker {
       .onDisconnect(() => {
         console.log(`[worker:${this.dbName}] Disconnected`);
         this.conn = null;
-        clearProviderCache();
       })
       .onConnectError((_ctx: EventContext, err: Error) => {
         console.error(`[worker:${this.dbName}] Connection error:`, err?.message ?? err);
@@ -90,16 +109,29 @@ export class DatabaseWorker {
 
   async stop(): Promise<void> {
     this.stopped = true;
-    clearProviderCache();
+
+    // Tear down all per-AI-user connections first so they stop responding
+    // to messages while we drain orcha tasks.
+    const aiStops = [...this.aiUserWorkers.values()].map((w) =>
+      w.stop().catch((e: unknown) =>
+        console.warn(`[worker:${this.dbName}] AI worker stop failed:`, e),
+      ),
+    );
+    this.aiUserWorkers.clear();
+    await Promise.all(aiStops);
 
     if (this.inFlight.size > 0) {
-      console.log(`[worker:${this.dbName}] Draining ${this.inFlight.size} in-flight tasks…`);
+      console.log(
+        `[worker:${this.dbName}] Draining ${this.inFlight.size} in-flight tasks…`,
+      );
       const deadline = Date.now() + 30_000;
       while (this.inFlight.size > 0 && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 500));
       }
       if (this.inFlight.size > 0) {
-        console.warn(`[worker:${this.dbName}] Timed out waiting for ${this.inFlight.size} tasks`);
+        console.warn(
+          `[worker:${this.dbName}] Timed out waiting for ${this.inFlight.size} tasks`,
+        );
       }
     }
 
@@ -107,36 +139,66 @@ export class DatabaseWorker {
     console.log(`[worker:${this.dbName}] Stopped`);
   }
 
+  /**
+   * Reconcile per-AI-user workers against the authoritative list from the
+   * host. Spawns a new {@link AiUserWorker} for any token we haven't seen,
+   * tears down workers for AI users no longer in the list, and rotates
+   * the connection if a token has changed.
+   *
+   * Safe to call repeatedly (e.g. on a poll interval).
+   */
+  async reconcileAiUsers(descriptors: AiUserDescriptor[]): Promise<void> {
+    if (this.stopped) return;
+
+    const desired = new Map<bigint, AiUserDescriptor>();
+    for (const d of descriptors) desired.set(d.aiUserId, d);
+
+    // Tear down workers no longer wanted.
+    for (const [aiUserId, worker] of [...this.aiUserWorkers.entries()]) {
+      if (!desired.has(aiUserId)) {
+        console.log(
+          `[worker:${this.dbName}] Removing AI user worker (id=${aiUserId})`,
+        );
+        this.aiUserWorkers.delete(aiUserId);
+        await worker.stop().catch((e: unknown) =>
+          console.warn(`[worker:${this.dbName}] AI worker stop failed:`, e),
+        );
+      }
+    }
+
+    // Spawn workers for new AI users.
+    for (const [aiUserId, d] of desired.entries()) {
+      if (this.aiUserWorkers.has(aiUserId)) continue;
+      console.log(
+        `[worker:${this.dbName}] Spawning AI user worker (id=${aiUserId}, label=${d.label ?? "?"})`,
+      );
+      const w = new AiUserWorker({
+        uri: this.uri,
+        dbName: this.dbName,
+        token: d.token,
+        label: d.label ?? `ai-${aiUserId}`,
+      });
+      this.aiUserWorkers.set(aiUserId, w);
+      w.start();
+    }
+  }
+
   private registerHandlers(conn: DbConnection): void {
     conn.db.orcha_task.onInsert((_ctx: EventContext, task: TaskRow) => {
       this.checkAndClaim(conn, task);
     });
 
-    conn.db.orcha_task.onUpdate((_ctx: EventContext, _old: TaskRow, task: TaskRow) => {
-      this.checkAndClaim(conn, task);
+    conn.db.orcha_task.onUpdate(
+      (_ctx: EventContext, _old: TaskRow, task: TaskRow) => {
+        this.checkAndClaim(conn, task);
 
-      if (task.status === "done") {
-        for (const t of conn.db.orcha_task.iter() as Iterable<TaskRow>) {
-          this.checkAndClaim(conn, t);
+        if (task.status === "done") {
+          for (const t of conn.db.orcha_task.iter() as Iterable<TaskRow>) {
+            this.checkAndClaim(conn, t);
+          }
         }
-      }
-    });
-
-    // Invalidate provider cache when AI user config changes
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const configTable = (conn.db as any).ai_user_config;
-    if (configTable) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      configTable.onUpdate?.((_ctx: any, _old: any, row: any) => {
-        invalidateProviderCache(BigInt(row.id));
-      });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      configTable.onDelete?.((_ctx: any, row: any) => {
-        invalidateProviderCache(BigInt(row.id));
-      });
-    }
-
-    registerConversationHandlers(conn);
+      },
+    );
 
     conn
       .subscriptionBuilder()
@@ -146,9 +208,13 @@ export class DatabaseWorker {
         void conn.reducers
           .registerAgent({ agentId: this.agentId, capabilities: CAPABILITIES })
           .then(() =>
-            console.log(`[worker:${this.dbName}] Registered — capabilities: ${CAPABILITIES.join(", ")}`)
+            console.log(
+              `[worker:${this.dbName}] Registered — capabilities: ${CAPABILITIES.join(", ")}`,
+            ),
           )
-          .catch((e: unknown) => console.warn(`[worker:${this.dbName}] register_agent:`, e));
+          .catch((e: unknown) =>
+            console.warn(`[worker:${this.dbName}] register_agent:`, e),
+          );
 
         for (const task of conn.db.orcha_task.iter() as Iterable<TaskRow>) {
           this.checkAndClaim(conn, task);

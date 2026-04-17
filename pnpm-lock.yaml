@@ -102,7 +102,7 @@ importers:
         specifier: ^0.34.5
         version: 0.34.5
       spacetimedb:
-        specifier: ^2.0.3
+        specifier: 2.0.3
         version: 2.0.3(react@19.2.3)
       y-indexeddb:
         specifier: ^9.0.12

@@ -9,18 +9,15 @@ import {
   type AlgebraicTypeType as __AlgebraicTypeType,
   type Infer as __Infer,
 } from "spacetimedb";
-import {
-  ConversationStatus,
-} from "./types";
-
 
 export default __t.row({
   id: __t.u64().primaryKey(),
-  pageId: __t.option(__t.u64()).name("page_id"),
-  initiatedBy: __t.identity().name("initiated_by"),
-  get status() {
-    return ConversationStatus;
-  },
+  taskId: __t.u64().name("task_id"),
+  taskType: __t.string().name("task_type"),
+  agentId: __t.string().name("agent_id"),
+  aiUserId: __t.option(__t.u64()).name("ai_user_id"),
+  tokensIn: __t.u64().name("tokens_in"),
+  tokensOut: __t.u64().name("tokens_out"),
+  wallClockMs: __t.u64().name("wall_clock_ms"),
   createdAt: __t.timestamp().name("created_at"),
-  updatedAt: __t.timestamp().name("updated_at"),
 });

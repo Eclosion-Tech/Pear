@@ -11,6 +11,6 @@ import {
 } from "spacetimedb";
 
 export default {
-  pageId: __t.u64(),
-  aiUserId: __t.u64(),
+  pageId: __t.option(__t.u64()),
+  participantIdentities: __t.array(__t.identity()),
 };

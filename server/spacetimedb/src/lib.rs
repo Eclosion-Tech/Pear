@@ -1,7 +1,10 @@
 use hex;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use spacetimedb::{reducer, table, Identity, ReducerContext, SpacetimeType, Table, Timestamp};
+use spacetimedb::{
+    client_visibility_filter, reducer, table, Filter, Identity, ReducerContext, SpacetimeType,
+    Table, Timestamp,
+};
 use serde_json;
 
 mod pear_import;
@@ -72,12 +75,23 @@ pub enum ConversationStatus {
     Closed,
 }
 
+/// Sender of a conversation message. After the AI-user-identity refactor, both
+/// humans and AI users are represented by `User(Identity)`; clients tell them
+/// apart by joining against `ai_user_profile.identity`. `System(...)` is reserved
+/// for server-generated events (e.g. "compaction").
 #[derive(SpacetimeType, Clone, Debug, PartialEq)]
 pub enum MessageSender {
-    Human(Identity),
-    AiUser(u64),
-    /// System-generated messages — inner string is the event kind (e.g. "compaction").
+    User(Identity),
     System(String),
+}
+
+/// Role within a conversation. Today we only distinguish the initiator (the
+/// human who started the thread) from regular members, but this leaves room
+/// for future channel/DM models with admins, observers, etc.
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum ParticipantRole {
+    Initiator,
+    Member,
 }
 
 #[derive(SpacetimeType, Clone, Debug, PartialEq)]
@@ -281,22 +295,33 @@ pub struct Attachment {
     pub created_at: Timestamp,
 }
 
-/// AI user inference configuration. Private table — never synced to clients.
-/// The presence of a row here means the associated AiUserProfile is an AI user.
-/// Credentials are stored server-side only; the worker reads this table to
-/// initialize the correct provider client per AI user.
-#[table(accessor = ai_user_config, private)]
+/// AI user inference configuration. Public table guarded by an RLS rule
+/// (`AI_USER_CONFIG_FILTER` below) that exposes each row only to the matching
+/// AI user identity. The worker connects as the AI user and reads its own row;
+/// no other client (including the human creator) can see this row.
+///
+/// Module owners (the workspace admin Identity used by lifecycle/worker for
+/// orchestration) bypass RLS and can see every row — that's how the worker
+/// can also inventory configs when needed.
+#[table(accessor = ai_user_config, public)]
 pub struct AiUserConfig {
     #[primary_key]
     #[auto_inc]
     pub id: u64,
-    /// The human who created and owns this AI user.
+    /// SpacetimeDB Identity owned by this AI user. Minted by lifecycle and
+    /// stored in pear-cloud's Postgres alongside the corresponding token.
+    /// This is the field RLS keys on.
+    #[unique]
+    pub identity: Identity,
+    /// The human who created this AI user. Workspace owners/admins inherit
+    /// management rights via lifecycle's Postgres-side authz.
     pub created_by: Identity,
     pub provider: InferenceProvider,
     pub model: String,
     /// Required for Ollama / OpenAICompatible providers.
     pub endpoint: Option<String>,
-    /// Stored in a private table — never leaves the server.
+    /// Per-AI-user secret. Visible only to the matching identity (and module
+    /// owner). Never echoed back via web or worker code paths.
     pub api_key: Option<String>,
     pub system_prompt: Option<String>,
     pub max_tokens: u32,
@@ -304,38 +329,74 @@ pub struct AiUserConfig {
     pub updated_at: Timestamp,
 }
 
+/// Row-level visibility filter for `ai_user_config`. Each AI user sees only
+/// its own row; module owners (workspace admin / worker) bypass this filter.
+#[client_visibility_filter]
+const AI_USER_CONFIG_FILTER: Filter = Filter::Sql(
+    "SELECT * FROM ai_user_config WHERE identity = :sender",
+);
+
 /// Public projection of an AI user — display info only, no credentials.
 /// Clients subscribe to this table for @mention autocomplete, avatars, etc.
+/// `has_api_key` is the only signal exposed to the human creator about the
+/// state of the AI user's secret.
 #[table(accessor = ai_user_profile, public)]
 pub struct AiUserProfile {
     #[primary_key]
     pub ai_user_id: u64,
+    /// Mirrors `AiUserConfig.identity` so clients can resolve
+    /// `MessageSender::User(identity)` back to a profile without server help.
+    #[unique]
+    pub identity: Identity,
     pub display_name: String,
     pub avatar_url: Option<String>,
     /// Human-readable provider name (e.g. "Anthropic", "OpenAI").
     pub provider_name: String,
     pub model_name: String,
+    /// Public indicator that an api_key is currently configured. Updated in
+    /// lockstep with `set_ai_user_api_key`. Never reveals the key itself.
+    pub has_api_key: bool,
     pub created_by: Identity,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
 
-/// A conversation between a human and an AI user, attached to a page.
-/// A page can have multiple conversations (different AI users, or separate threads).
+/// A conversation thread. May be attached to a page (today's @mention flow) or
+/// detached (future workspace channels / DMs — `page_id = None`). Participants
+/// are tracked via `conversation_participant`; the legacy `ai_user_id` FK has
+/// been removed in favor of the more general participant model.
 #[table(accessor = conversation, public)]
 pub struct Conversation {
     #[primary_key]
     #[auto_inc]
     pub id: u64,
+    /// `Some(page_id)` for page-attached conversations (current behavior).
+    /// `None` for future channel/DM-style threads.
     #[index(btree)]
-    pub page_id: u64,
-    /// References AiUserProfile.ai_user_id / AiUserConfig.id.
-    pub ai_user_id: u64,
-    /// The human who started this conversation via @mention.
+    pub page_id: Option<u64>,
+    /// The Identity that opened the thread (a human today; could be any
+    /// participant in future flows).
     pub initiated_by: Identity,
     pub status: ConversationStatus,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+}
+
+/// Membership join between conversations and identities. The worker
+/// subscribes to `conversation_participant WHERE identity = self` to discover
+/// every thread an AI user is part of, regardless of whether it's attached to
+/// a page or (future) a channel/DM.
+#[table(accessor = conversation_participant, public)]
+pub struct ConversationParticipant {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub conversation_id: u64,
+    #[index(btree)]
+    pub identity: Identity,
+    pub role: ParticipantRole,
+    pub joined_at: Timestamp,
 }
 
 /// A single message within a conversation. Sender can be human, AI, or system.
@@ -693,6 +754,15 @@ fn next_conversation_id(ctx: &ReducerContext) -> u64 {
 fn next_conversation_message_id(ctx: &ReducerContext) -> u64 {
     ctx.db.conversation_message().iter().map(|r| r.id).max().unwrap_or(0) + 1
 }
+fn next_conversation_participant_id(ctx: &ReducerContext) -> u64 {
+    ctx.db
+        .conversation_participant()
+        .iter()
+        .map(|r| r.id)
+        .max()
+        .unwrap_or(0)
+        + 1
+}
 fn next_orcha_job_id(ctx: &ReducerContext) -> u64 {
     ctx.db.orcha_job().iter().map(|r| r.id).max().unwrap_or(0) + 1
 }
@@ -720,10 +790,17 @@ fn provider_display_name(provider: &InferenceProvider) -> &'static str {
 }
 
 /// Create an AI user with its inference configuration and public profile.
-/// Only authenticated humans can create AI users.
+///
+/// All authz lives in lifecycle (workspace member check + Syntropy session).
+/// Lifecycle mints a fresh SpacetimeDB Identity for the AI user, persists the
+/// token in its Postgres, and calls this reducer with a workspace admin token.
+/// The reducer trusts the supplied identity params; the only protection
+/// against spoofing is that lifecycle is the sole holder of the admin token.
 #[reducer]
 pub fn create_ai_user(
     ctx: &ReducerContext,
+    ai_user_identity: Identity,
+    created_by_identity: Identity,
     display_name: String,
     provider: InferenceProvider,
     model: String,
@@ -745,13 +822,21 @@ pub fn create_ai_user(
     {
         return Err("Endpoint is required for Ollama and OpenAI Compatible providers".to_string());
     }
+    if ai_user_identity == Identity::ZERO {
+        return Err("ai_user_identity must be a non-zero Identity".to_string());
+    }
+    if created_by_identity == Identity::ZERO {
+        return Err("created_by_identity must be a non-zero Identity".to_string());
+    }
 
     let prov_name = provider_display_name(&provider).to_string();
     let model_name = model.trim().to_string();
+    let has_api_key = api_key.is_some();
 
     let config = ctx.db.ai_user_config().insert(AiUserConfig {
         id: next_ai_user_config_id(ctx),
-        created_by: ctx.sender(),
+        identity: ai_user_identity,
+        created_by: created_by_identity,
         provider,
         model: model_name.clone(),
         endpoint,
@@ -764,16 +849,22 @@ pub fn create_ai_user(
 
     ctx.db.ai_user_profile().insert(AiUserProfile {
         ai_user_id: config.id,
+        identity: ai_user_identity,
         display_name,
         avatar_url,
         provider_name: prov_name,
         model_name,
-        created_by: ctx.sender(),
+        has_api_key,
+        created_by: created_by_identity,
         created_at: ctx.timestamp,
         updated_at: ctx.timestamp,
     });
 
-    log::info!("AI user created: id={}", config.id);
+    log::info!(
+        "AI user created: id={}, identity={}",
+        config.id,
+        ai_user_identity
+    );
     Ok(())
 }
 
@@ -859,7 +950,9 @@ pub fn update_ai_user_config(
 }
 
 /// Set or clear the API key for an AI user. Separated from update_ai_user_config
-/// so callers can update config without re-submitting the key.
+/// so callers can update config without re-submitting the key. Lifecycle gates
+/// access; the key itself is never read back through any client subscription
+/// path (RLS on `ai_user_config` ensures only the AI user identity can see it).
 #[reducer]
 pub fn set_ai_user_api_key(
     ctx: &ReducerContext,
@@ -872,11 +965,19 @@ pub fn set_ai_user_api_key(
         .id()
         .find(&ai_user_id)
         .ok_or("AI user config not found")?;
+    let has_api_key = api_key.is_some();
     ctx.db.ai_user_config().id().update(AiUserConfig {
         api_key,
         updated_at: ctx.timestamp,
         ..config
     });
+    if let Some(profile) = ctx.db.ai_user_profile().ai_user_id().find(&ai_user_id) {
+        ctx.db.ai_user_profile().ai_user_id().update(AiUserProfile {
+            has_api_key,
+            updated_at: ctx.timestamp,
+            ..profile
+        });
+    }
     Ok(())
 }
 
@@ -899,50 +1000,84 @@ pub fn delete_ai_user(ctx: &ReducerContext, ai_user_id: u64) -> Result<(), Strin
 // Conversation Reducers
 // ============================================================
 
-/// Start a new conversation on a page with an AI user.
-/// Called when a human @mentions an AI user in page content.
+/// Start a new conversation. Today this is called when a human @mentions an
+/// AI user in page content (`page_id = Some(...)`, `participant_identities`
+/// contains the AI user's Identity), but the same shape supports future
+/// channel/DM threads (`page_id = None`, multiple participants).
+///
+/// The caller's Identity (`ctx.sender()`) is automatically added as the
+/// `Initiator` participant in addition to whatever `participant_identities`
+/// supplies.
 #[reducer]
 pub fn create_conversation(
     ctx: &ReducerContext,
-    page_id: u64,
-    ai_user_id: u64,
+    page_id: Option<u64>,
+    participant_identities: Vec<Identity>,
 ) -> Result<(), String> {
-    ctx.db.page().id().find(&page_id).ok_or("Page not found")?;
-    ctx.db
-        .ai_user_profile()
-        .ai_user_id()
-        .find(&ai_user_id)
-        .ok_or("AI user not found")?;
+    if let Some(pid) = page_id {
+        ctx.db.page().id().find(&pid).ok_or("Page not found")?;
+    }
+
+    for ident in &participant_identities {
+        if *ident == Identity::ZERO {
+            return Err("participant_identities must not contain the zero Identity".to_string());
+        }
+    }
 
     let conv = ctx.db.conversation().insert(Conversation {
         id: next_conversation_id(ctx),
         page_id,
-        ai_user_id,
         initiated_by: ctx.sender(),
         status: ConversationStatus::Active,
         created_at: ctx.timestamp,
         updated_at: ctx.timestamp,
     });
 
+    let mut seen: Vec<Identity> = Vec::new();
+    let initiator = ctx.sender();
+    ctx.db.conversation_participant().insert(ConversationParticipant {
+        id: next_conversation_participant_id(ctx),
+        conversation_id: conv.id,
+        identity: initiator,
+        role: ParticipantRole::Initiator,
+        joined_at: ctx.timestamp,
+    });
+    seen.push(initiator);
+
+    for ident in participant_identities {
+        if seen.contains(&ident) {
+            continue;
+        }
+        ctx.db.conversation_participant().insert(ConversationParticipant {
+            id: next_conversation_participant_id(ctx),
+            conversation_id: conv.id,
+            identity: ident,
+            role: ParticipantRole::Member,
+            joined_at: ctx.timestamp,
+        });
+        seen.push(ident);
+    }
+
     log::info!(
-        "Conversation created: id={}, page={}, ai_user={}",
+        "Conversation created: id={}, page={:?}, participants={}",
         conv.id,
         page_id,
-        ai_user_id
+        seen.len()
     );
     Ok(())
 }
 
-/// Add a message to an active conversation.
-/// The sender is inferred from ctx.sender() for humans. For AI user messages,
-/// the worker calls this with the AI user's id.
+/// Add a message to an active conversation. The sender is *always* derived
+/// from `ctx.sender()` — humans, AI users, and any future participant write
+/// as themselves. Clients distinguish AI from human by joining against
+/// `ai_user_profile.identity`.
+///
 /// Token fields are zero for human messages — only populate for AI assistant turns.
 #[reducer]
 pub fn send_message(
     ctx: &ReducerContext,
     conversation_id: u64,
     content: String,
-    sender_ai_user_id: Option<u64>,
     job_id: Option<u64>,
     status: Option<MessageStatus>,
     thinking: Option<String>,
@@ -962,22 +1097,10 @@ pub fn send_message(
         return Err("Conversation is closed".to_string());
     }
 
-    let sender = match sender_ai_user_id {
-        Some(ai_id) => {
-            ctx.db
-                .ai_user_profile()
-                .ai_user_id()
-                .find(&ai_id)
-                .ok_or("AI user not found")?;
-            MessageSender::AiUser(ai_id)
-        }
-        None => MessageSender::Human(ctx.sender()),
-    };
-
     ctx.db.conversation_message().insert(ConversationMessage {
         id: next_conversation_message_id(ctx),
         conversation_id,
-        sender,
+        sender: MessageSender::User(ctx.sender()),
         content,
         job_id,
         created_at: ctx.timestamp,
@@ -1019,8 +1142,23 @@ pub fn update_message(
         .find(&message_id)
         .ok_or("Message not found")?;
 
-    if matches!(msg.sender, MessageSender::Human(_) | MessageSender::System(_)) {
-        return Err("Cannot update a human or system message".to_string());
+    let sender_identity = match &msg.sender {
+        MessageSender::User(id) => *id,
+        MessageSender::System(_) => {
+            return Err("Cannot update a system message".to_string());
+        }
+    };
+    if sender_identity != ctx.sender() {
+        return Err("Only the original sender can update this message".to_string());
+    }
+    if ctx
+        .db
+        .ai_user_profile()
+        .identity()
+        .find(&sender_identity)
+        .is_none()
+    {
+        return Err("Cannot update a human message".to_string());
     }
 
     let conv = ctx
@@ -2949,12 +3087,21 @@ fn create_extension_permissions(
 
 /// Create an AiUserConfig + AiUserProfile for a ConfigBundle extension.
 /// Returns the new ai_user_id.
+///
+/// `ai_user_identity` must be a freshly minted SpacetimeDB Identity for the new
+/// AI user (in pear-cloud, lifecycle mints this; in self-hosted Pear, the
+/// extension-install caller must supply one). It's the field RLS keys on for
+/// reading the per-AI-user api_key.
 fn create_extension_ai_user(
     ctx: &ReducerContext,
     installed_by: Identity,
+    ai_user_identity: Identity,
     cb: &ManifestConfigBundle,
     ai_api_key: Option<String>,
 ) -> Result<u64, String> {
+    if ai_user_identity == Identity::ZERO {
+        return Err("ai_user_identity must be a non-zero Identity".to_string());
+    }
     let provider = match cb.provider.as_str() {
         "Anthropic" | "anthropic" => InferenceProvider::Anthropic,
         "OpenAI" | "openai" => InferenceProvider::OpenAI,
@@ -2968,8 +3115,10 @@ fn create_extension_ai_user(
     } else {
         cb.model.clone()
     };
+    let has_api_key = ai_api_key.is_some();
     let config_row = ctx.db.ai_user_config().insert(AiUserConfig {
         id: next_ai_user_config_id(ctx),
+        identity: ai_user_identity,
         created_by: installed_by,
         provider,
         model: model.clone(),
@@ -2986,10 +3135,12 @@ fn create_extension_ai_user(
     });
     ctx.db.ai_user_profile().insert(AiUserProfile {
         ai_user_id: config_row.id,
+        identity: ai_user_identity,
         display_name: cb.display_name.clone(),
         avatar_url: cb.avatar_url.clone(),
         provider_name,
         model_name: model,
+        has_api_key,
         created_by: installed_by,
         created_at: ctx.timestamp,
         updated_at: ctx.timestamp,
@@ -3104,6 +3255,11 @@ pub fn install_extension(
     ai_api_key: Option<String>,
     mcp_api_key: Option<String>,
     endpoint_override: Option<String>,
+    // ai_user_identity is required when the manifest's extension_type is
+    // ConfigBundle or Hybrid. Lifecycle (pear-cloud) mints this Identity per
+    // install; self-hosted Pear callers must supply one minted via the
+    // SpacetimeDB HTTP identity API.
+    ai_user_identity: Option<Identity>,
 ) -> Result<(), String> {
     let manifest_row = ctx
         .db
@@ -3163,7 +3319,16 @@ pub fn install_extension(
             .config_bundle
             .as_ref()
             .ok_or("config_bundle required for ConfigBundle/Hybrid extension")?;
-        ai_user_id = Some(create_extension_ai_user(ctx, ctx.sender(), cb, ai_api_key)?);
+        let ident = ai_user_identity.ok_or(
+            "ai_user_identity is required for ConfigBundle/Hybrid extensions",
+        )?;
+        ai_user_id = Some(create_extension_ai_user(
+            ctx,
+            ctx.sender(),
+            ident,
+            cb,
+            ai_api_key,
+        )?);
     }
 
     if matches!(
@@ -3218,6 +3383,9 @@ pub fn confirm_extension_install(
     ai_api_key: Option<String>,
     mcp_api_key: Option<String>,
     endpoint_override: Option<String>,
+    // ai_user_identity is required when the manifest's extension_type is
+    // ConfigBundle or Hybrid. See `install_extension` for the rationale.
+    ai_user_identity: Option<Identity>,
 ) -> Result<(), String> {
     let installed = ctx
         .db
@@ -3262,7 +3430,16 @@ pub fn confirm_extension_install(
             .config_bundle
             .as_ref()
             .ok_or("config_bundle required for ConfigBundle/Hybrid extension")?;
-        ai_user_id = Some(create_extension_ai_user(ctx, ctx.sender(), cb, ai_api_key)?);
+        let ident = ai_user_identity.ok_or(
+            "ai_user_identity is required for ConfigBundle/Hybrid extensions",
+        )?;
+        ai_user_id = Some(create_extension_ai_user(
+            ctx,
+            ctx.sender(),
+            ident,
+            cb,
+            ai_api_key,
+        )?);
     }
 
     if matches!(

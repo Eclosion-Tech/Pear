@@ -15,4 +15,5 @@ export default {
   aiApiKey: __t.option(__t.string()),
   mcpApiKey: __t.option(__t.string()),
   endpointOverride: __t.option(__t.string()),
+  aiUserIdentity: __t.option(__t.identity()),
 };

@@ -11,9 +11,11 @@ import {
 } from "spacetimedb";
 
 export default {
-  manifestId: __t.u64(),
-  aiApiKey: __t.option(__t.string()),
-  mcpApiKey: __t.option(__t.string()),
-  endpointOverride: __t.option(__t.string()),
-  aiUserIdentity: __t.option(__t.identity()),
+  taskId: __t.u64(),
+  taskType: __t.string(),
+  agentId: __t.string(),
+  aiUserId: __t.option(__t.u64()),
+  tokensIn: __t.u64(),
+  tokensOut: __t.u64(),
+  wallClockMs: __t.u64(),
 };

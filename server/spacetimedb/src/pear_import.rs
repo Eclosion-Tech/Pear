@@ -2,17 +2,18 @@
 
 use crate::{
     attachment, ai_user_config, ai_user_profile, conversation, conversation_message,
-    database_schema, database_view, extension_manifest, installed_extension, orcha_agent,
-    orcha_job, orcha_task, orcha_shared_context, page, page_content, page_property_value,
-    page_property_value_history, page_snapshot, page_yjs_state, property_definition, user,
+    conversation_participant, database_schema, database_view, extension_manifest,
+    installed_extension, orcha_agent, orcha_job, orcha_task, orcha_shared_context, page,
+    page_content, page_property_value, page_property_value_history, page_snapshot, page_yjs_state,
+    property_definition, user,
 };
 use crate::{
     ActorType, AiUserConfig, AiUserProfile, Attachment, Conversation, ConversationMessage,
-    ConversationStatus, DatabaseSchema, DatabaseView, ExtensionManifest, InferenceProvider,
-    InstalledExtension, MessageSender, MessageStatus, OrchaAgent, OrchaJob, OrchaSharedContext,
-    OrchaTask, Page, PageContent, PagePropertyValue, PagePropertyValueHistory, PageSnapshot,
-    PageType, PageYjsState, PropertyDefinition, PropertyType, PropertyValue, SnapshotType, User,
-    ViewType,
+    ConversationParticipant, ConversationStatus, DatabaseSchema, DatabaseView, ExtensionManifest,
+    InferenceProvider, InstalledExtension, MessageSender, MessageStatus, OrchaAgent, OrchaJob,
+    OrchaSharedContext, OrchaTask, Page, PageContent, PagePropertyValue, PagePropertyValueHistory,
+    PageSnapshot, PageType, PageYjsState, ParticipantRole, PropertyDefinition, PropertyType,
+    PropertyValue, SnapshotType, User, ViewType,
 };
 use hex;
 use serde_json::Value;
@@ -65,6 +66,7 @@ pub fn apply_snapshot(ctx: &ReducerContext, snapshot_json: &str) -> Result<(), S
     import_attachment(ctx, tables)?;
     import_ai_user_profile(ctx, tables)?;
     import_conversation(ctx, tables)?;
+    import_conversation_participant(ctx, tables)?;
     import_conversation_message(ctx, tables)?;
     import_extension_manifest(ctx, tables)?;
     import_installed_extension(ctx, tables)?;
@@ -221,11 +223,16 @@ fn import_ai_user_profile(ctx: &ReducerContext, tables: &Value) -> Result<(), St
     };
     for row in arr {
         let p: AiUserProfile = decode_ai_user_profile(row)?;
-        // Restore AI users without private AiUserConfig: insert stub config so FKs resolve.
+        // Restore AI users with stub AiUserConfig (no api_key) so FKs resolve.
+        // Operators must reconfigure provider/model/key after import via the
+        // pear-cloud lifecycle endpoints — minted Identities aren't recoverable
+        // from an exported snapshot, so the imported `identity` carries over
+        // but no fresh token is provisioned by this path.
         let id = p.ai_user_id;
         if ctx.db.ai_user_config().id().find(id).is_none() {
             ctx.db.ai_user_config().insert(AiUserConfig {
                 id,
+                identity: p.identity,
                 created_by: ctx.sender(),
                 provider: InferenceProvider::Anthropic,
                 model: p.model_name.clone(),
@@ -248,6 +255,21 @@ fn import_conversation(ctx: &ReducerContext, tables: &Value) -> Result<(), Strin
     };
     for row in arr {
         ctx.db.conversation().insert(decode_conversation(row)?);
+    }
+    Ok(())
+}
+
+fn import_conversation_participant(ctx: &ReducerContext, tables: &Value) -> Result<(), String> {
+    let Some(arr) = tables
+        .get("conversation_participant")
+        .and_then(|v| v.as_array())
+    else {
+        return Ok(());
+    };
+    for row in arr {
+        ctx.db
+            .conversation_participant()
+            .insert(decode_conversation_participant(row)?);
     }
     Ok(())
 }
@@ -698,10 +720,15 @@ fn decode_ai_user_profile(v: &Value) -> Result<AiUserProfile, String> {
     let m = obj(v, "ai_user_profile")?;
     Ok(AiUserProfile {
         ai_user_id: u64_at(m, "aiUserId")?,
+        identity: decode_identity(m.get("identity").ok_or("identity")?)?,
         display_name: string_at(m, "displayName")?,
         avatar_url: opt_string_at(m, "avatarUrl")?,
         provider_name: string_at(m, "providerName")?,
         model_name: string_at(m, "modelName")?,
+        // hasApiKey is informational only — fall back to false when absent so
+        // older snapshots can still decode (the operator must reconfigure keys
+        // post-import anyway).
+        has_api_key: m.get("hasApiKey").and_then(|v| v.as_bool()).unwrap_or(false),
         created_by: decode_identity(m.get("createdBy").ok_or("createdBy")?)?,
         created_at: decode_timestamp(m.get("createdAt").ok_or("createdAt")?)?,
         updated_at: decode_timestamp(m.get("updatedAt").ok_or("updatedAt")?)?,
@@ -712,13 +739,34 @@ fn decode_conversation(v: &Value) -> Result<Conversation, String> {
     let m = obj(v, "conversation")?;
     Ok(Conversation {
         id: u64_at(m, "id")?,
-        page_id: u64_at(m, "pageId")?,
-        ai_user_id: u64_at(m, "aiUserId")?,
+        page_id: opt_u64_at(m, "pageId")?,
         initiated_by: decode_identity(m.get("initiatedBy").ok_or("initiatedBy")?)?,
         status: decode_conversation_status(m.get("status").ok_or("status")?)?,
         created_at: decode_timestamp(m.get("createdAt").ok_or("createdAt")?)?,
         updated_at: decode_timestamp(m.get("updatedAt").ok_or("updatedAt")?)?,
     })
+}
+
+fn decode_conversation_participant(v: &Value) -> Result<ConversationParticipant, String> {
+    let m = obj(v, "conversation_participant")?;
+    Ok(ConversationParticipant {
+        id: u64_at(m, "id")?,
+        conversation_id: u64_at(m, "conversationId")?,
+        identity: decode_identity(m.get("identity").ok_or("identity")?)?,
+        role: decode_participant_role(m.get("role").ok_or("role")?)?,
+        joined_at: decode_timestamp(m.get("joinedAt").ok_or("joinedAt")?)?,
+    })
+}
+
+fn decode_participant_role(v: &Value) -> Result<ParticipantRole, String> {
+    decode_enum_tag2(
+        v,
+        &[
+            ("Initiator", ParticipantRole::Initiator),
+            ("Member", ParticipantRole::Member),
+        ],
+        "ParticipantRole",
+    )
 }
 
 fn decode_conversation_status(v: &Value) -> Result<ConversationStatus, String> {
@@ -772,14 +820,21 @@ fn decode_message_sender(v: &Value) -> Result<MessageSender, String> {
         .and_then(|t| t.as_str())
         .ok_or("MessageSender.tag")?;
     match tag {
-        "Human" => Ok(MessageSender::Human(decode_identity(
+        "User" => Ok(MessageSender::User(decode_identity(
+            o.get("value").ok_or("User.identity")?,
+        )?)),
+        "System" => Ok(MessageSender::System(string_at(o, "value")?)),
+        // Legacy v1 snapshots distinguished Human(Identity) and AiUser(u64);
+        // accept Human here for forward compat but reject AiUser since we have
+        // no way to recover the AI user's Identity from just the legacy id.
+        "Human" => Ok(MessageSender::User(decode_identity(
             o.get("value").ok_or("Human.identity")?,
         )?)),
-        "AiUser" => {
-            let v = o.get("value").ok_or("AiUser.value")?;
-            Ok(MessageSender::AiUser(decode_u64(v)?))
-        }
-        "System" => Ok(MessageSender::System(string_at(o, "value")?)),
+        "AiUser" => Err(
+            "Legacy AiUser(u64) sender is not migratable: re-export the snapshot from an upgraded \
+             Pear version that emits AI user Identities."
+                .to_string(),
+        ),
         _ => Err(format!("MessageSender::{tag}")),
     }
 }

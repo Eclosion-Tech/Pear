@@ -15,6 +15,8 @@ import {
 } from "./types";
 
 export default {
+  aiUserIdentity: __t.identity(),
+  createdByIdentity: __t.identity(),
   displayName: __t.string(),
   get provider() {
     return InferenceProvider;

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Identity } from "spacetimedb";
 import {
   useExtensionManifests,
   useInstalledExtensions,
@@ -15,6 +16,25 @@ import {
   type ExtensionManifestRow,
   type InstalledExtensionRow,
 } from "@/src/hooks/useExtensions";
+import { mintIdentity } from "@/src/lib/aiUserApi";
+
+const SELF_HOSTED_WS_URI = process.env.NEXT_PUBLIC_SPACETIMEDB_URI?.trim() ?? "";
+
+/**
+ * Mint a fresh SpacetimeDB Identity for a ConfigBundle/Hybrid extension's
+ * AI user. In pear-cloud the lifecycle service should mint identities itself
+ * (via a future host-delegated install endpoint); for self-hosted Pear the
+ * web client mints directly.
+ */
+async function mintAiUserIdentityForExtension(): Promise<Identity> {
+  if (!SELF_HOSTED_WS_URI) {
+    throw new Error(
+      "Cannot mint AI user identity for extension: NEXT_PUBLIC_SPACETIMEDB_URI is not set."
+    );
+  }
+  const minted = await mintIdentity(SELF_HOSTED_WS_URI);
+  return Identity.fromString(minted.identity);
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -696,15 +716,20 @@ function InstallExtensionForm({
 
   const needsMcpKey = manifest.extensionType.tag === "McpServer" || manifest.extensionType.tag === "Hybrid";
   const needsAiKey = manifest.extensionType.tag === "ConfigBundle" || manifest.extensionType.tag === "Hybrid";
+  const needsAiUserIdentity = needsAiKey;
 
   async function handleInstall() {
     setError("");
     try {
+      const aiUserIdentity = needsAiUserIdentity
+        ? await mintAiUserIdentityForExtension()
+        : undefined;
       await installExtension({
         manifestId: manifest.id,
         aiApiKey: needsAiKey && aiApiKey ? aiApiKey : undefined,
         mcpApiKey: needsMcpKey && mcpApiKey ? mcpApiKey : undefined,
         endpointOverride: endpointOverride || undefined,
+        aiUserIdentity,
       });
       onClose();
     } catch (err) {
@@ -900,17 +925,27 @@ export function ExtensionsSettings() {
     aiApiKey: string | undefined,
     mcpApiKey: string | undefined,
     endpointOverride: string | undefined,
+    needsAiUser: boolean,
   ) {
-    confirmExtensionInstall({
-      installedExtensionId,
-      confirmedCapabilities,
-      confirmedPermissionsJson,
-      aiApiKey,
-      mcpApiKey,
-      endpointOverride,
-    })
-      .then(() => setConfirmTarget(null))
-      .catch(console.error);
+    (async () => {
+      try {
+        const aiUserIdentity = needsAiUser
+          ? await mintAiUserIdentityForExtension()
+          : undefined;
+        await confirmExtensionInstall({
+          installedExtensionId,
+          confirmedCapabilities,
+          confirmedPermissionsJson,
+          aiApiKey,
+          mcpApiKey,
+          endpointOverride,
+          aiUserIdentity,
+        });
+        setConfirmTarget(null);
+      } catch (err) {
+        console.error(err);
+      }
+    })();
   }
 
   function handleCancelInstall(id: bigint) {
@@ -938,7 +973,11 @@ export function ExtensionsSettings() {
           installed={confirmTarget}
           manifest={manifests.find((m) => m.id === confirmTarget.manifestId)}
           onConfirm={(id, caps, perms, aiKey, mcpKey, endpoint) => {
-            handleConfirmInstall(id, caps, perms, aiKey, mcpKey, endpoint);
+            const m = manifests.find((mm) => mm.id === confirmTarget.manifestId);
+            const needsAiUser =
+              m?.extensionType.tag === "ConfigBundle" ||
+              m?.extensionType.tag === "Hybrid";
+            handleConfirmInstall(id, caps, perms, aiKey, mcpKey, endpoint, needsAiUser);
           }}
           onCancel={() => setConfirmTarget(null)}
         />

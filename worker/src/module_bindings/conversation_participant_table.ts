@@ -9,11 +9,17 @@ import {
   type AlgebraicTypeType as __AlgebraicTypeType,
   type Infer as __Infer,
 } from "spacetimedb";
+import {
+  ParticipantRole,
+} from "./types";
 
-export default {
-  manifestId: __t.u64(),
-  aiApiKey: __t.option(__t.string()),
-  mcpApiKey: __t.option(__t.string()),
-  endpointOverride: __t.option(__t.string()),
-  aiUserIdentity: __t.option(__t.identity()),
-};
+
+export default __t.row({
+  id: __t.u64().primaryKey(),
+  conversationId: __t.u64().name("conversation_id"),
+  identity: __t.identity(),
+  get role() {
+    return ParticipantRole;
+  },
+  joinedAt: __t.timestamp().name("joined_at"),
+});

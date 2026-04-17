@@ -5,12 +5,17 @@
  * tool_use / tool_result). Each provider converts to/from its native API.
  *
  * Two ways to create a provider:
- *   1. `createProvider(name, endpoint?)` — reads API keys from env vars (self-hosted default)
- *   2. `createProviderFromConfig(config)` — reads from an AiUserConfig row (per-user keys)
+ *   1. `createProvider(name, endpoint?)` — reads API keys from env vars
+ *      (used by the orcha planner / self-hosted single-tenant deployments)
+ *   2. `createProviderFromConfig(config)` — reads from an AiUserConfig row
+ *      (per-AI-user keys, what conversation handlers always use)
  *
- * Use `getProviderForAiUser(conn, aiUserId)` to resolve per-user config with
- * env-var fallback. Requires the worker to connect with admin/owner credentials
- * so the private `ai_user_config` table is accessible.
+ * Use `getProviderForAiUser(conn, aiUserId)` from inside an AI-user-scoped
+ * connection. The `client_visibility_filter` on `ai_user_config` ensures
+ * the connection only ever sees its own row, so this is a 1-row lookup.
+ * It throws if the row doesn't exist or has no api_key — there is no
+ * env-var fallback (a missing key is a configuration error, not a transient
+ * issue, and falling back to env silently exfiltrates the operator's key).
  */
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -303,16 +308,25 @@ class OpenAIProvider implements InferenceProvider {
 
 // ── Factory ─────────────────────────────────────────────────────────────────────
 
-export type ProviderType = "Anthropic" | "OpenAI" | "Ollama" | "OpenAI Compatible";
+/**
+ * Provider tag as it appears in SpacetimeDB's `InferenceProvider` enum.
+ * (Note: Spacetime spells it `OpenAi` / `OpenAiCompatible`, not `OpenAI`.)
+ */
+export type ProviderTag = "Anthropic" | "OpenAi" | "Ollama" | "OpenAiCompatible";
+
+/** Legacy alias used by self-hosted env-var bootstrap (`createProvider`). */
+export type ProviderType = ProviderTag;
 
 /**
- * Shape of an AiUserConfig row from SpacetimeDB's private table.
- * The worker can read this when connected with owner/admin credentials.
+ * Shape of an AiUserConfig row visible from an AI-user-scoped connection.
+ * The `client_visibility_filter` ensures only the AI user's own row is in
+ * the local cache.
  */
 export interface AiUserConfigRow {
   id: bigint;
+  identity: { toHexString(): string };
   createdBy: { toHexString(): string };
-  provider: { tag: ProviderType };
+  provider: { tag: ProviderTag };
   model: string;
   endpoint: string | undefined;
   apiKey: string | undefined;
@@ -322,11 +336,12 @@ export interface AiUserConfigRow {
 
 /**
  * Create an inference provider from env-var API keys.
- * Used as a fallback when no per-user config is available (self-hosted default).
+ * Used by orcha task fallbacks and self-hosted single-tenant deployments.
+ * Conversation handlers should always use {@link createProviderFromConfig}.
  */
 export function createProvider(
-  providerName: ProviderType,
-  endpoint?: string
+  providerName: ProviderTag,
+  endpoint?: string,
 ): InferenceProvider {
   switch (providerName) {
     case "Anthropic": {
@@ -334,18 +349,20 @@ export function createProvider(
       if (!key) throw new Error("ANTHROPIC_API_KEY not set");
       return new AnthropicProvider(key);
     }
-    case "OpenAI": {
+    case "OpenAi": {
       const key = process.env.OPENAI_API_KEY;
       if (!key) throw new Error("OPENAI_API_KEY not set");
       return new OpenAIProvider(key);
     }
     case "Ollama": {
-      const base = endpoint || process.env.OLLAMA_ENDPOINT || "http://localhost:11434/v1";
+      const base =
+        endpoint || process.env.OLLAMA_ENDPOINT || "http://localhost:11434/v1";
       return new OpenAIProvider("ollama", base);
     }
-    case "OpenAI Compatible": {
+    case "OpenAiCompatible": {
       const key = process.env.OPENAI_COMPATIBLE_API_KEY || "no-key";
-      if (!endpoint) throw new Error("Endpoint required for OpenAI Compatible provider");
+      if (!endpoint)
+        throw new Error("Endpoint required for OpenAI-compatible provider");
       return new OpenAIProvider(key, endpoint);
     }
     default:
@@ -357,26 +374,33 @@ export function createProvider(
  * Create an inference provider from an AiUserConfig row (per-user API keys).
  * Throws if the config has no api_key and the provider requires one.
  */
-export function createProviderFromConfig(config: AiUserConfigRow): InferenceProvider {
+export function createProviderFromConfig(
+  config: AiUserConfigRow,
+): InferenceProvider {
   const providerName = config.provider.tag;
   const apiKey = config.apiKey;
   const endpoint = config.endpoint;
 
   switch (providerName) {
     case "Anthropic": {
-      if (!apiKey) throw new Error(`AI user ${config.id}: Anthropic API key not set`);
+      if (!apiKey)
+        throw new Error(`AI user ${config.id}: Anthropic API key not set`);
       return new AnthropicProvider(apiKey);
     }
-    case "OpenAI": {
-      if (!apiKey) throw new Error(`AI user ${config.id}: OpenAI API key not set`);
-      return new OpenAIProvider(apiKey);
+    case "OpenAi": {
+      if (!apiKey)
+        throw new Error(`AI user ${config.id}: OpenAI API key not set`);
+      return new OpenAIProvider(apiKey, endpoint);
     }
     case "Ollama": {
       const base = endpoint || "http://localhost:11434/v1";
       return new OpenAIProvider("ollama", base);
     }
-    case "OpenAI Compatible": {
-      if (!endpoint) throw new Error(`AI user ${config.id}: endpoint required for OpenAI Compatible`);
+    case "OpenAiCompatible": {
+      if (!endpoint)
+        throw new Error(
+          `AI user ${config.id}: endpoint required for OpenAI-compatible provider`,
+        );
       return new OpenAIProvider(apiKey || "no-key", endpoint);
     }
     default:
@@ -398,9 +422,12 @@ export function clearProviderCache(): void {
 }
 
 /**
- * Resolve a provider for a specific AI user. Reads from the private
- * `ai_user_config` table (requires admin/owner connection), falls back
- * to env-var config if the table is inaccessible or the user has no key.
+ * Resolve a provider for a specific AI user. Must be called from an
+ * AI-user-scoped connection — the `client_visibility_filter` on
+ * `ai_user_config` ensures the only row visible is the AI user's own.
+ *
+ * Throws if the row is missing (not subscribed yet, or schema drift)
+ * or has no api_key. There is no env-var fallback by design.
  */
 export function getProviderForAiUser(
   conn: { db: Record<string, unknown> },
@@ -411,32 +438,34 @@ export function getProviderForAiUser(
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const configTable = (conn.db as any).ai_user_config;
-  if (configTable) {
-    const config = configTable.id?.find(aiUserId) as AiUserConfigRow | undefined;
-    if (config?.apiKey) {
-      try {
-        const entry = {
-          provider: createProviderFromConfig(config),
-          model: config.model,
-          maxTokens: config.maxTokens || 8192,
-        };
-        providerCache.set(aiUserId, entry);
-        return entry;
-      } catch (err) {
-        console.warn(
-          `[providers] Failed to create provider from AiUserConfig ${aiUserId}, falling back to env:`,
-          err instanceof Error ? err.message : err,
-        );
-      }
-    }
+  if (!configTable) {
+    throw new Error(
+      `[providers] ai_user_config table is not present in module bindings`,
+    );
   }
 
-  try {
-    const fallback = getDefaultProvider();
-    return { provider: fallback.provider, model: fallback.model, maxTokens: fallback.maxTokens };
-  } catch {
-    throw new Error(`No API key configured for AI user ${aiUserId} and no fallback ANTHROPIC_API_KEY in env`);
+  const config = configTable.id?.find(aiUserId) as AiUserConfigRow | undefined;
+  if (!config) {
+    throw new Error(
+      `[providers] no ai_user_config row visible for AI user ${aiUserId} — ` +
+        `the worker may not be connected as the AI user, or the subscription ` +
+        `hasn't applied yet`,
+    );
   }
+  if (!config.apiKey && config.provider.tag !== "Ollama") {
+    throw new Error(
+      `[providers] AI user ${aiUserId} (${config.provider.tag}) has no API key — ` +
+        `ask the workspace owner to set one in Settings → AI Users`,
+    );
+  }
+
+  const entry = {
+    provider: createProviderFromConfig(config),
+    model: config.model,
+    maxTokens: config.maxTokens || 8192,
+  };
+  providerCache.set(aiUserId, entry);
+  return entry;
 }
 
 /** Convenience: get the default provider (backwards-compatible with env-var config). */

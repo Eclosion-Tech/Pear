@@ -14,10 +14,17 @@ import {
   useMessagesForConversation,
   useSendMessage,
   useCloseConversation,
+  useParticipantsForConversation,
+  identitiesEqual,
   type ConversationRow,
   type ConversationMessageRow,
 } from "@/src/hooks/useConversations";
-import { useAiUserProfile, type AiUserProfileRow } from "@/src/hooks/useAiUsers";
+import {
+  useAiUserProfiles,
+  useAiUserProfileByIdentity,
+  useAiUserInConversation,
+  type AiUserProfileRow,
+} from "@/src/hooks/useAiUsers";
 
 function StatusBadge({ status }: { status: string }) {
   const colors: Record<string, string> = {
@@ -267,8 +274,10 @@ function AiMessageContent({ msg, aiName }: { msg: ConversationMessageRow; aiName
 // ── Conversation thread ──────────────────────────────────────────────────────
 
 function ConversationThread({ conversation, onBack }: { conversation: ConversationRow; onBack: () => void }) {
-  const aiUser = useAiUserProfile(conversation.aiUserId);
+  const aiUser = useAiUserInConversation(conversation.id);
   const messages = useMessagesForConversation(conversation.id);
+  const { profiles: allAiProfiles } = useAiUserProfiles();
+  const aiIdentityHexes = new Set(allAiProfiles.map((p) => p.identity.toHexString()));
   const sendMessage = useSendMessage();
   const closeConversation = useCloseConversation();
   const { identity } = useSpacetimeDB();
@@ -280,11 +289,18 @@ function ConversationThread({ conversation, onBack }: { conversation: Conversati
   const aiName = aiUser?.displayName ?? "AI";
 
   const lastMessage = messages[messages.length - 1];
+  // After the identity refactor, both human and AI senders are tagged "User";
+  // we tell them apart by Identity lookup against ai_user_profile.
+  const lastSenderIdentity =
+    lastMessage?.sender.tag === "User" ? lastMessage.sender.value : undefined;
+  const lastSenderAiUser = useAiUserProfileByIdentity(lastSenderIdentity);
+  const lastSenderIsHuman =
+    lastMessage?.sender.tag === "User" && !lastSenderAiUser;
   const isAiActive =
     isActive &&
     lastMessage != null &&
-    (lastMessage.sender.tag === "Human" ||
-      (lastMessage.sender.tag === "AiUser" &&
+    (lastSenderIsHuman ||
+      (!!lastSenderAiUser &&
         lastMessage.status?.tag !== "Complete" &&
         lastMessage.status?.tag !== "Error"));
 
@@ -299,7 +315,6 @@ function ConversationThread({ conversation, onBack }: { conversation: Conversati
       await sendMessage({
         conversationId: conversation.id,
         content: input.trim(),
-        senderAiUserId: undefined,
         jobId: undefined,
         status: undefined,
         thinking: undefined,
@@ -355,13 +370,16 @@ function ConversationThread({ conversation, onBack }: { conversation: Conversati
           </p>
         )}
         {messages.map((msg) => {
-          const isHuman = msg.sender.tag === "Human";
+          // System messages render as their own thing; for User-tagged messages
+          // we tell humans from AI users by membership in ai_user_profile.
+          const senderIdentity = msg.sender.tag === "User" ? msg.sender.value : undefined;
+          const isHuman =
+            msg.sender.tag === "User" &&
+            !aiIdentityHexes.has(senderIdentity!.toHexString());
           const isMe =
             isHuman &&
             identity &&
-            typeof msg.sender.value === "object" &&
-            "toHexString" in msg.sender.value &&
-            msg.sender.value.toHexString() === identity.toHexString();
+            senderIdentity!.toHexString() === identity.toHexString();
 
           return (
             <div key={String(msg.id)} className={`flex ${isMe ? "justify-end" : "justify-start"}`}>
@@ -446,10 +464,15 @@ function ConversationListItem({
   conversation: ConversationRow;
   onClick: () => void;
 }) {
-  const aiUser = useAiUserProfile(conversation.aiUserId);
+  const aiUser = useAiUserInConversation(conversation.id);
   const messages = useMessagesForConversation(conversation.id);
+  const { profiles: allAiProfiles } = useAiUserProfiles();
+  const aiIdentityHexes = new Set(allAiProfiles.map((p) => p.identity.toHexString()));
   const lastMessage = messages[messages.length - 1];
   const isActive = conversation.status.tag === "Active";
+  const lastSenderIsHuman =
+    lastMessage?.sender.tag === "User" &&
+    !aiIdentityHexes.has(lastMessage.sender.value.toHexString());
 
   return (
     <button
@@ -468,7 +491,7 @@ function ConversationListItem({
         </div>
         {lastMessage && (
           <p className="text-xs text-neutral-400 truncate mt-0.5">
-            {lastMessage.sender.tag === "Human" ? "You: " : ""}
+            {lastSenderIsHuman ? "You: " : ""}
             {lastMessage.content}
           </p>
         )}

@@ -17,7 +17,6 @@ import {
 export default {
   conversationId: __t.u64(),
   content: __t.string(),
-  senderAiUserId: __t.option(__t.u64()),
   jobId: __t.option(__t.u64()),
   get status() {
     return __t.option(MessageStatus);

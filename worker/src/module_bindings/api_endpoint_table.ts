@@ -10,17 +10,21 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 import {
-  ConversationStatus,
+  HttpMethod,
 } from "./types";
 
 
 export default __t.row({
   id: __t.u64().primaryKey(),
-  pageId: __t.option(__t.u64()).name("page_id"),
-  initiatedBy: __t.identity().name("initiated_by"),
-  get status() {
-    return ConversationStatus;
+  databasePageId: __t.u64().name("database_page_id"),
+  slug: __t.string(),
+  displayName: __t.string().name("display_name"),
+  description: __t.string(),
+  get allowedMethods() {
+    return __t.array(HttpMethod).name("allowed_methods");
   },
+  requireAuth: __t.bool().name("require_auth"),
+  createdBy: __t.identity().name("created_by"),
   createdAt: __t.timestamp().name("created_at"),
   updatedAt: __t.timestamp().name("updated_at"),
 });

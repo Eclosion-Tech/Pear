@@ -12,10 +12,12 @@ import {
 
 export default __t.row({
   aiUserId: __t.u64().primaryKey().name("ai_user_id"),
+  identity: __t.identity(),
   displayName: __t.string().name("display_name"),
   avatarUrl: __t.option(__t.string()).name("avatar_url"),
   providerName: __t.string().name("provider_name"),
   modelName: __t.string().name("model_name"),
+  hasApiKey: __t.bool().name("has_api_key"),
   createdBy: __t.identity().name("created_by"),
   createdAt: __t.timestamp().name("created_at"),
   updatedAt: __t.timestamp().name("updated_at"),

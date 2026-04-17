@@ -69,6 +69,7 @@ import PublishExtensionReducer from "./publish_extension_reducer";
 import PurgePageReducer from "./purge_page_reducer";
 import RecordCompactionReducer from "./record_compaction_reducer";
 import RecordToolCallAuditReducer from "./record_tool_call_audit_reducer";
+import RecordUsageEventReducer from "./record_usage_event_reducer";
 import RegisterReducer from "./register_reducer";
 import RegisterAgentReducer from "./register_agent_reducer";
 import RenamePropertyReducer from "./rename_property_reducer";
@@ -111,12 +112,14 @@ import UpdateViewConfigReducer from "./update_view_config_reducer";
 // Import all procedure arg schemas
 
 // Import all table schema definitions
+import AiUserConfigRow from "./ai_user_config_table";
 import AiUserProfileRow from "./ai_user_profile_table";
 import ApiEndpointRow from "./api_endpoint_table";
 import ApiFieldMappingRow from "./api_field_mapping_table";
 import AttachmentRow from "./attachment_table";
 import ConversationRow from "./conversation_table";
 import ConversationMessageRow from "./conversation_message_table";
+import ConversationParticipantRow from "./conversation_participant_table";
 import DatabaseSchemaRow from "./database_schema_table";
 import DatabaseViewRow from "./database_view_table";
 import ExtensionManifestRow from "./extension_manifest_table";
@@ -125,6 +128,7 @@ import OrchaAgentRow from "./orcha_agent_table";
 import OrchaJobRow from "./orcha_job_table";
 import OrchaSharedContextRow from "./orcha_shared_context_table";
 import OrchaTaskRow from "./orcha_task_table";
+import OrchaUsageEventRow from "./orcha_usage_event_table";
 import PageRow from "./page_table";
 import PageContentRow from "./page_content_table";
 import PagePropertyValueRow from "./page_property_value_table";
@@ -138,15 +142,34 @@ import UserRow from "./user_table";
 
 /** The schema information for all tables in this module. This is defined the same was as the tables would have been defined in the server. */
 const tablesSchema = __schema({
+  ai_user_config: __table({
+    name: 'ai_user_config',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'identity', algorithm: 'btree', columns: [
+        'identity',
+      ] },
+    ],
+    constraints: [
+      { name: 'ai_user_config_id_key', constraint: 'unique', columns: ['id'] },
+      { name: 'ai_user_config_identity_key', constraint: 'unique', columns: ['identity'] },
+    ],
+  }, AiUserConfigRow),
   ai_user_profile: __table({
     name: 'ai_user_profile',
     indexes: [
       { name: 'ai_user_id', algorithm: 'btree', columns: [
         'aiUserId',
       ] },
+      { name: 'identity', algorithm: 'btree', columns: [
+        'identity',
+      ] },
     ],
     constraints: [
       { name: 'ai_user_profile_ai_user_id_key', constraint: 'unique', columns: ['aiUserId'] },
+      { name: 'ai_user_profile_identity_key', constraint: 'unique', columns: ['identity'] },
     ],
   }, AiUserProfileRow),
   api_endpoint: __table({
@@ -220,6 +243,23 @@ const tablesSchema = __schema({
       { name: 'conversation_message_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, ConversationMessageRow),
+  conversation_participant: __table({
+    name: 'conversation_participant',
+    indexes: [
+      { name: 'conversation_id', algorithm: 'btree', columns: [
+        'conversationId',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'identity', algorithm: 'btree', columns: [
+        'identity',
+      ] },
+    ],
+    constraints: [
+      { name: 'conversation_participant_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, ConversationParticipantRow),
   database_schema: __table({
     name: 'database_schema',
     indexes: [
@@ -326,6 +366,17 @@ const tablesSchema = __schema({
       { name: 'orcha_task_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, OrchaTaskRow),
+  orcha_usage_event: __table({
+    name: 'orcha_usage_event',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'orcha_usage_event_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, OrchaUsageEventRow),
   page: __table({
     name: 'page',
     indexes: [
@@ -474,6 +525,7 @@ const reducersSchema = __reducers(
   __reducerSchema("purge_page", PurgePageReducer),
   __reducerSchema("record_compaction", RecordCompactionReducer),
   __reducerSchema("record_tool_call_audit", RecordToolCallAuditReducer),
+  __reducerSchema("record_usage_event", RecordUsageEventReducer),
   __reducerSchema("register", RegisterReducer),
   __reducerSchema("register_agent", RegisterAgentReducer),
   __reducerSchema("rename_property", RenamePropertyReducer),

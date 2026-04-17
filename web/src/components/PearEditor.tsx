@@ -24,7 +24,11 @@ import type { PageRow } from "@/src/hooks/usePages";
 import { useCreateJob } from "@/src/hooks/useOrcha";
 import { useAiUserProfiles } from "@/src/hooks/useAiUsers";
 import { useUsers } from "@/src/hooks/useUser";
-import { useCreateConversation, useConversationsForPage } from "@/src/hooks/useConversations";
+import {
+  useCreateConversation,
+  useConversationsForPage,
+  useConversationParticipants,
+} from "@/src/hooks/useConversations";
 import { SpacetimeYjsProvider } from "@/src/lib/SpacetimeYjsProvider";
 import { PageLinkBlockSpec } from "@/src/components/PageLinkBlock";
 import { ImageBlockSpec } from "@/src/components/ImageBlock";
@@ -101,6 +105,7 @@ export function PearEditor({ pageId, initialContent, childPages, onMentionAiUser
   const { users: workspaceUsers } = useUsers();
   const createConversation = useCreateConversation();
   const { conversations } = useConversationsForPage(pageId);
+  const allParticipants = useConversationParticipants();
 
   const [aiPromptOpen, setAiPromptOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
@@ -671,16 +676,30 @@ export function PearEditor({ pageId, initialContent, childPages, onMentionAiUser
   };
 
   async function handleMentionAiUser(aiUserId: bigint) {
-    const activeConv = conversations.find(
-      (c) => c.aiUserId === aiUserId && c.status.tag === "Active"
-    );
+    const aiUser = aiUsers.find((u) => u.aiUserId === aiUserId);
+    if (!aiUser) {
+      console.error("[PearEditor] AI user not found:", aiUserId);
+      return;
+    }
+    const aiHex = aiUser.identity.toHexString();
+
+    const activeConv = conversations.find((c) => {
+      if (c.status.tag !== "Active") return false;
+      return allParticipants.some(
+        (p) =>
+          p.conversationId === c.id && p.identity.toHexString() === aiHex
+      );
+    });
     if (activeConv) {
       onMentionAiUser?.();
       return;
     }
 
     try {
-      await createConversation({ pageId, aiUserId });
+      await createConversation({
+        pageId,
+        participantIdentities: [aiUser.identity],
+      });
       onMentionAiUser?.();
     } catch (err) {
       console.error("[PearEditor] Failed to create conversation", err);

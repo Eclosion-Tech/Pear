@@ -10,17 +10,22 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 import {
-  ConversationStatus,
+  InferenceProvider,
 } from "./types";
 
 
 export default __t.row({
   id: __t.u64().primaryKey(),
-  pageId: __t.option(__t.u64()).name("page_id"),
-  initiatedBy: __t.identity().name("initiated_by"),
-  get status() {
-    return ConversationStatus;
+  identity: __t.identity(),
+  createdBy: __t.identity().name("created_by"),
+  get provider() {
+    return InferenceProvider;
   },
+  model: __t.string(),
+  endpoint: __t.option(__t.string()),
+  apiKey: __t.option(__t.string()).name("api_key"),
+  systemPrompt: __t.option(__t.string()).name("system_prompt"),
+  maxTokens: __t.u32().name("max_tokens"),
   createdAt: __t.timestamp().name("created_at"),
   updatedAt: __t.timestamp().name("updated_at"),
 });

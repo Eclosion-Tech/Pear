@@ -42,6 +42,9 @@ import ClearPropertyValueReducer from "./clear_property_value_reducer";
 import CloseConversationReducer from "./close_conversation_reducer";
 import ConfirmExtensionInstallReducer from "./confirm_extension_install_reducer";
 import CreateAiUserReducer from "./create_ai_user_reducer";
+import CreateApiEndpointReducer from "./create_api_endpoint_reducer";
+import CreateApiEndpointKeyReducer from "./create_api_endpoint_key_reducer";
+import CreateApiFieldMappingReducer from "./create_api_field_mapping_reducer";
 import CreateAttachmentReducer from "./create_attachment_reducer";
 import CreateConversationReducer from "./create_conversation_reducer";
 import CreateDatabaseSchemaReducer from "./create_database_schema_reducer";
@@ -49,12 +52,15 @@ import CreateJobReducer from "./create_job_reducer";
 import CreatePageReducer from "./create_page_reducer";
 import CreateViewReducer from "./create_view_reducer";
 import DeleteAiUserReducer from "./delete_ai_user_reducer";
+import DeleteApiEndpointReducer from "./delete_api_endpoint_reducer";
+import DeleteApiFieldMappingReducer from "./delete_api_field_mapping_reducer";
 import DeleteAttachmentReducer from "./delete_attachment_reducer";
 import DeletePageReducer from "./delete_page_reducer";
 import DeletePropertyReducer from "./delete_property_reducer";
 import DeleteViewReducer from "./delete_view_reducer";
 import FailTaskReducer from "./fail_task_reducer";
 import GrantExtensionPermissionReducer from "./grant_extension_permission_reducer";
+import ImportPearSnapshotV1Reducer from "./import_pear_snapshot_v_1_reducer";
 import InstallExtensionReducer from "./install_extension_reducer";
 import LoginReducer from "./login_reducer";
 import LogoutReducer from "./logout_reducer";
@@ -63,6 +69,7 @@ import PublishExtensionReducer from "./publish_extension_reducer";
 import PurgePageReducer from "./purge_page_reducer";
 import RecordCompactionReducer from "./record_compaction_reducer";
 import RecordToolCallAuditReducer from "./record_tool_call_audit_reducer";
+import RecordUsageEventReducer from "./record_usage_event_reducer";
 import RegisterReducer from "./register_reducer";
 import RegisterAgentReducer from "./register_agent_reducer";
 import RenamePropertyReducer from "./rename_property_reducer";
@@ -70,6 +77,7 @@ import RenameViewReducer from "./rename_view_reducer";
 import ReorderPropertyReducer from "./reorder_property_reducer";
 import RestorePageReducer from "./restore_page_reducer";
 import RestorePageToSnapshotReducer from "./restore_page_to_snapshot_reducer";
+import RevokeApiEndpointKeyReducer from "./revoke_api_endpoint_key_reducer";
 import RevokeExtensionPermissionReducer from "./revoke_extension_permission_reducer";
 import SaveYjsStateReducer from "./save_yjs_state_reducer";
 import SeedAgentInstructionPropertyReducer from "./seed_agent_instruction_property_reducer";
@@ -89,6 +97,8 @@ import TakeSnapshotWithContentReducer from "./take_snapshot_with_content_reducer
 import UninstallExtensionReducer from "./uninstall_extension_reducer";
 import UpdateAiUserConfigReducer from "./update_ai_user_config_reducer";
 import UpdateAiUserProfileReducer from "./update_ai_user_profile_reducer";
+import UpdateApiEndpointReducer from "./update_api_endpoint_reducer";
+import UpdateApiFieldMappingReducer from "./update_api_field_mapping_reducer";
 import UpdateDatabaseSchemaConfigReducer from "./update_database_schema_config_reducer";
 import UpdateExtensionReducer from "./update_extension_reducer";
 import UpdateMessageReducer from "./update_message_reducer";
@@ -102,10 +112,14 @@ import UpdateViewConfigReducer from "./update_view_config_reducer";
 // Import all procedure arg schemas
 
 // Import all table schema definitions
+import AiUserConfigRow from "./ai_user_config_table";
 import AiUserProfileRow from "./ai_user_profile_table";
+import ApiEndpointRow from "./api_endpoint_table";
+import ApiFieldMappingRow from "./api_field_mapping_table";
 import AttachmentRow from "./attachment_table";
 import ConversationRow from "./conversation_table";
 import ConversationMessageRow from "./conversation_message_table";
+import ConversationParticipantRow from "./conversation_participant_table";
 import DatabaseSchemaRow from "./database_schema_table";
 import DatabaseViewRow from "./database_view_table";
 import ExtensionManifestRow from "./extension_manifest_table";
@@ -114,6 +128,7 @@ import OrchaAgentRow from "./orcha_agent_table";
 import OrchaJobRow from "./orcha_job_table";
 import OrchaSharedContextRow from "./orcha_shared_context_table";
 import OrchaTaskRow from "./orcha_task_table";
+import OrchaUsageEventRow from "./orcha_usage_event_table";
 import PageRow from "./page_table";
 import PageContentRow from "./page_content_table";
 import PagePropertyValueRow from "./page_property_value_table";
@@ -127,24 +142,72 @@ import UserRow from "./user_table";
 
 /** The schema information for all tables in this module. This is defined the same was as the tables would have been defined in the server. */
 const tablesSchema = __schema({
+  ai_user_config: __table({
+    name: 'ai_user_config',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'identity', algorithm: 'btree', columns: [
+        'identity',
+      ] },
+    ],
+    constraints: [
+      { name: 'ai_user_config_id_key', constraint: 'unique', columns: ['id'] },
+      { name: 'ai_user_config_identity_key', constraint: 'unique', columns: ['identity'] },
+    ],
+  }, AiUserConfigRow),
   ai_user_profile: __table({
     name: 'ai_user_profile',
     indexes: [
-      { name: 'ai_user_id', accessor: 'aiUserId', algorithm: 'btree', columns: [
+      { name: 'ai_user_id', algorithm: 'btree', columns: [
         'aiUserId',
+      ] },
+      { name: 'identity', algorithm: 'btree', columns: [
+        'identity',
       ] },
     ],
     constraints: [
       { name: 'ai_user_profile_ai_user_id_key', constraint: 'unique', columns: ['aiUserId'] },
+      { name: 'ai_user_profile_identity_key', constraint: 'unique', columns: ['identity'] },
     ],
   }, AiUserProfileRow),
+  api_endpoint: __table({
+    name: 'api_endpoint',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'slug', algorithm: 'btree', columns: [
+        'slug',
+      ] },
+    ],
+    constraints: [
+      { name: 'api_endpoint_id_key', constraint: 'unique', columns: ['id'] },
+      { name: 'api_endpoint_slug_key', constraint: 'unique', columns: ['slug'] },
+    ],
+  }, ApiEndpointRow),
+  api_field_mapping: __table({
+    name: 'api_field_mapping',
+    indexes: [
+      { name: 'endpoint_id', algorithm: 'btree', columns: [
+        'endpointId',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'api_field_mapping_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, ApiFieldMappingRow),
   attachment: __table({
     name: 'attachment',
     indexes: [
-      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
+      { name: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'page_id', accessor: 'pageId', algorithm: 'btree', columns: [
+      { name: 'page_id', algorithm: 'btree', columns: [
         'pageId',
       ] },
     ],
@@ -155,10 +218,10 @@ const tablesSchema = __schema({
   conversation: __table({
     name: 'conversation',
     indexes: [
-      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
+      { name: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'page_id', accessor: 'pageId', algorithm: 'btree', columns: [
+      { name: 'page_id', algorithm: 'btree', columns: [
         'pageId',
       ] },
     ],
@@ -169,10 +232,10 @@ const tablesSchema = __schema({
   conversation_message: __table({
     name: 'conversation_message',
     indexes: [
-      { name: 'conversation_id', accessor: 'conversationId', algorithm: 'btree', columns: [
+      { name: 'conversation_id', algorithm: 'btree', columns: [
         'conversationId',
       ] },
-      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
+      { name: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
     ],
@@ -180,13 +243,30 @@ const tablesSchema = __schema({
       { name: 'conversation_message_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, ConversationMessageRow),
+  conversation_participant: __table({
+    name: 'conversation_participant',
+    indexes: [
+      { name: 'conversation_id', algorithm: 'btree', columns: [
+        'conversationId',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'identity', algorithm: 'btree', columns: [
+        'identity',
+      ] },
+    ],
+    constraints: [
+      { name: 'conversation_participant_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, ConversationParticipantRow),
   database_schema: __table({
     name: 'database_schema',
     indexes: [
-      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
+      { name: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'page_id', accessor: 'pageId', algorithm: 'btree', columns: [
+      { name: 'page_id', algorithm: 'btree', columns: [
         'pageId',
       ] },
     ],
@@ -197,10 +277,10 @@ const tablesSchema = __schema({
   database_view: __table({
     name: 'database_view',
     indexes: [
-      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
+      { name: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'page_id', accessor: 'pageId', algorithm: 'btree', columns: [
+      { name: 'page_id', algorithm: 'btree', columns: [
         'pageId',
       ] },
     ],
@@ -211,7 +291,7 @@ const tablesSchema = __schema({
   extension_manifest: __table({
     name: 'extension_manifest',
     indexes: [
-      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
+      { name: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
     ],
@@ -222,10 +302,10 @@ const tablesSchema = __schema({
   installed_extension: __table({
     name: 'installed_extension',
     indexes: [
-      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
+      { name: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'manifest_id', accessor: 'manifestId', algorithm: 'btree', columns: [
+      { name: 'manifest_id', algorithm: 'btree', columns: [
         'manifestId',
       ] },
     ],
@@ -236,7 +316,7 @@ const tablesSchema = __schema({
   orcha_agent: __table({
     name: 'orcha_agent',
     indexes: [
-      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
+      { name: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
     ],
@@ -247,10 +327,10 @@ const tablesSchema = __schema({
   orcha_job: __table({
     name: 'orcha_job',
     indexes: [
-      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
+      { name: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'page_id', accessor: 'pageId', algorithm: 'btree', columns: [
+      { name: 'page_id', algorithm: 'btree', columns: [
         'pageId',
       ] },
     ],
@@ -261,10 +341,10 @@ const tablesSchema = __schema({
   orcha_shared_context: __table({
     name: 'orcha_shared_context',
     indexes: [
-      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
+      { name: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'job_id', accessor: 'jobId', algorithm: 'btree', columns: [
+      { name: 'job_id', algorithm: 'btree', columns: [
         'jobId',
       ] },
     ],
@@ -275,10 +355,10 @@ const tablesSchema = __schema({
   orcha_task: __table({
     name: 'orcha_task',
     indexes: [
-      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
+      { name: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'job_id', accessor: 'jobId', algorithm: 'btree', columns: [
+      { name: 'job_id', algorithm: 'btree', columns: [
         'jobId',
       ] },
     ],
@@ -286,13 +366,24 @@ const tablesSchema = __schema({
       { name: 'orcha_task_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, OrchaTaskRow),
+  orcha_usage_event: __table({
+    name: 'orcha_usage_event',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'orcha_usage_event_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, OrchaUsageEventRow),
   page: __table({
     name: 'page',
     indexes: [
-      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
+      { name: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'parent_id', accessor: 'parentId', algorithm: 'btree', columns: [
+      { name: 'parent_id', algorithm: 'btree', columns: [
         'parentId',
       ] },
     ],
@@ -303,7 +394,7 @@ const tablesSchema = __schema({
   page_content: __table({
     name: 'page_content',
     indexes: [
-      { name: 'page_id', accessor: 'pageId', algorithm: 'btree', columns: [
+      { name: 'page_id', algorithm: 'btree', columns: [
         'pageId',
       ] },
     ],
@@ -314,13 +405,13 @@ const tablesSchema = __schema({
   page_property_value: __table({
     name: 'page_property_value',
     indexes: [
-      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
+      { name: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'page_id', accessor: 'pageId', algorithm: 'btree', columns: [
+      { name: 'page_id', algorithm: 'btree', columns: [
         'pageId',
       ] },
-      { name: 'property_definition_id', accessor: 'propertyDefinitionId', algorithm: 'btree', columns: [
+      { name: 'property_definition_id', algorithm: 'btree', columns: [
         'propertyDefinitionId',
       ] },
     ],
@@ -331,13 +422,13 @@ const tablesSchema = __schema({
   page_property_value_history: __table({
     name: 'page_property_value_history',
     indexes: [
-      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
+      { name: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'page_id', accessor: 'pageId', algorithm: 'btree', columns: [
+      { name: 'page_id', algorithm: 'btree', columns: [
         'pageId',
       ] },
-      { name: 'property_definition_id', accessor: 'propertyDefinitionId', algorithm: 'btree', columns: [
+      { name: 'property_definition_id', algorithm: 'btree', columns: [
         'propertyDefinitionId',
       ] },
     ],
@@ -348,10 +439,10 @@ const tablesSchema = __schema({
   page_snapshot: __table({
     name: 'page_snapshot',
     indexes: [
-      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
+      { name: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'page_id', accessor: 'pageId', algorithm: 'btree', columns: [
+      { name: 'page_id', algorithm: 'btree', columns: [
         'pageId',
       ] },
     ],
@@ -362,7 +453,7 @@ const tablesSchema = __schema({
   page_yjs_state: __table({
     name: 'page_yjs_state',
     indexes: [
-      { name: 'page_id', accessor: 'pageId', algorithm: 'btree', columns: [
+      { name: 'page_id', algorithm: 'btree', columns: [
         'pageId',
       ] },
     ],
@@ -373,10 +464,10 @@ const tablesSchema = __schema({
   property_definition: __table({
     name: 'property_definition',
     indexes: [
-      { name: 'id', accessor: 'id', algorithm: 'btree', columns: [
+      { name: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
-      { name: 'schema_id', accessor: 'schemaId', algorithm: 'btree', columns: [
+      { name: 'schema_id', algorithm: 'btree', columns: [
         'schemaId',
       ] },
     ],
@@ -387,7 +478,7 @@ const tablesSchema = __schema({
   user: __table({
     name: 'user',
     indexes: [
-      { name: 'identity', accessor: 'identity', algorithm: 'btree', columns: [
+      { name: 'identity', algorithm: 'btree', columns: [
         'identity',
       ] },
     ],
@@ -407,6 +498,9 @@ const reducersSchema = __reducers(
   __reducerSchema("close_conversation", CloseConversationReducer),
   __reducerSchema("confirm_extension_install", ConfirmExtensionInstallReducer),
   __reducerSchema("create_ai_user", CreateAiUserReducer),
+  __reducerSchema("create_api_endpoint", CreateApiEndpointReducer),
+  __reducerSchema("create_api_endpoint_key", CreateApiEndpointKeyReducer),
+  __reducerSchema("create_api_field_mapping", CreateApiFieldMappingReducer),
   __reducerSchema("create_attachment", CreateAttachmentReducer),
   __reducerSchema("create_conversation", CreateConversationReducer),
   __reducerSchema("create_database_schema", CreateDatabaseSchemaReducer),
@@ -414,12 +508,15 @@ const reducersSchema = __reducers(
   __reducerSchema("create_page", CreatePageReducer),
   __reducerSchema("create_view", CreateViewReducer),
   __reducerSchema("delete_ai_user", DeleteAiUserReducer),
+  __reducerSchema("delete_api_endpoint", DeleteApiEndpointReducer),
+  __reducerSchema("delete_api_field_mapping", DeleteApiFieldMappingReducer),
   __reducerSchema("delete_attachment", DeleteAttachmentReducer),
   __reducerSchema("delete_page", DeletePageReducer),
   __reducerSchema("delete_property", DeletePropertyReducer),
   __reducerSchema("delete_view", DeleteViewReducer),
   __reducerSchema("fail_task", FailTaskReducer),
   __reducerSchema("grant_extension_permission", GrantExtensionPermissionReducer),
+  __reducerSchema("import_pear_snapshot_v_1", ImportPearSnapshotV1Reducer),
   __reducerSchema("install_extension", InstallExtensionReducer),
   __reducerSchema("login", LoginReducer),
   __reducerSchema("logout", LogoutReducer),
@@ -428,6 +525,7 @@ const reducersSchema = __reducers(
   __reducerSchema("purge_page", PurgePageReducer),
   __reducerSchema("record_compaction", RecordCompactionReducer),
   __reducerSchema("record_tool_call_audit", RecordToolCallAuditReducer),
+  __reducerSchema("record_usage_event", RecordUsageEventReducer),
   __reducerSchema("register", RegisterReducer),
   __reducerSchema("register_agent", RegisterAgentReducer),
   __reducerSchema("rename_property", RenamePropertyReducer),
@@ -435,6 +533,7 @@ const reducersSchema = __reducers(
   __reducerSchema("reorder_property", ReorderPropertyReducer),
   __reducerSchema("restore_page", RestorePageReducer),
   __reducerSchema("restore_page_to_snapshot", RestorePageToSnapshotReducer),
+  __reducerSchema("revoke_api_endpoint_key", RevokeApiEndpointKeyReducer),
   __reducerSchema("revoke_extension_permission", RevokeExtensionPermissionReducer),
   __reducerSchema("save_yjs_state", SaveYjsStateReducer),
   __reducerSchema("seed_agent_instruction_property", SeedAgentInstructionPropertyReducer),
@@ -454,6 +553,8 @@ const reducersSchema = __reducers(
   __reducerSchema("uninstall_extension", UninstallExtensionReducer),
   __reducerSchema("update_ai_user_config", UpdateAiUserConfigReducer),
   __reducerSchema("update_ai_user_profile", UpdateAiUserProfileReducer),
+  __reducerSchema("update_api_endpoint", UpdateApiEndpointReducer),
+  __reducerSchema("update_api_field_mapping", UpdateApiFieldMappingReducer),
   __reducerSchema("update_database_schema_config", UpdateDatabaseSchemaConfigReducer),
   __reducerSchema("update_extension", UpdateExtensionReducer),
   __reducerSchema("update_message", UpdateMessageReducer),

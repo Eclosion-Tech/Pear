@@ -16,8 +16,7 @@ import {
 
 export default __t.row({
   id: __t.u64().primaryKey(),
-  pageId: __t.u64().name("page_id"),
-  aiUserId: __t.u64().name("ai_user_id"),
+  pageId: __t.option(__t.u64()).name("page_id"),
   initiatedBy: __t.identity().name("initiated_by"),
   get status() {
     return ConversationStatus;
