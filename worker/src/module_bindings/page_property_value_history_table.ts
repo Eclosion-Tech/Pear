@@ -10,8 +10,8 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 import {
-  ActorType,
   PropertyValue,
+  ActorType,
 } from "./types";
 
 

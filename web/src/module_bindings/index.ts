@@ -47,6 +47,7 @@ import CreateApiEndpointKeyReducer from "./create_api_endpoint_key_reducer";
 import CreateApiFieldMappingReducer from "./create_api_field_mapping_reducer";
 import CreateAttachmentReducer from "./create_attachment_reducer";
 import CreateConversationReducer from "./create_conversation_reducer";
+import CreateDatabaseRowReducer from "./create_database_row_reducer";
 import CreateDatabaseSchemaReducer from "./create_database_schema_reducer";
 import CreateJobReducer from "./create_job_reducer";
 import CreatePageReducer from "./create_page_reducer";
@@ -55,6 +56,7 @@ import DeleteAiUserReducer from "./delete_ai_user_reducer";
 import DeleteApiEndpointReducer from "./delete_api_endpoint_reducer";
 import DeleteApiFieldMappingReducer from "./delete_api_field_mapping_reducer";
 import DeleteAttachmentReducer from "./delete_attachment_reducer";
+import DeleteDatabaseRowReducer from "./delete_database_row_reducer";
 import DeletePageReducer from "./delete_page_reducer";
 import DeletePropertyReducer from "./delete_property_reducer";
 import DeleteViewReducer from "./delete_view_reducer";
@@ -62,6 +64,7 @@ import FailTaskReducer from "./fail_task_reducer";
 import GrantExtensionPermissionReducer from "./grant_extension_permission_reducer";
 import ImportPearSnapshotV1Reducer from "./import_pear_snapshot_v_1_reducer";
 import InstallExtensionReducer from "./install_extension_reducer";
+import LogApiCallReducer from "./log_api_call_reducer";
 import LoginReducer from "./login_reducer";
 import LogoutReducer from "./logout_reducer";
 import MovePageReducer from "./move_page_reducer";
@@ -94,11 +97,13 @@ import SetUserProfileReducer from "./set_user_profile_reducer";
 import SubmitResultReducer from "./submit_result_reducer";
 import TakeSnapshotReducer from "./take_snapshot_reducer";
 import TakeSnapshotWithContentReducer from "./take_snapshot_with_content_reducer";
+import TouchApiEndpointKeyReducer from "./touch_api_endpoint_key_reducer";
 import UninstallExtensionReducer from "./uninstall_extension_reducer";
 import UpdateAiUserConfigReducer from "./update_ai_user_config_reducer";
 import UpdateAiUserProfileReducer from "./update_ai_user_profile_reducer";
 import UpdateApiEndpointReducer from "./update_api_endpoint_reducer";
 import UpdateApiFieldMappingReducer from "./update_api_field_mapping_reducer";
+import UpdateDatabaseRowReducer from "./update_database_row_reducer";
 import UpdateDatabaseSchemaConfigReducer from "./update_database_schema_config_reducer";
 import UpdateExtensionReducer from "./update_extension_reducer";
 import UpdateMessageReducer from "./update_message_reducer";
@@ -114,12 +119,14 @@ import UpdateViewConfigReducer from "./update_view_config_reducer";
 // Import all table schema definitions
 import AiUserConfigRow from "./ai_user_config_table";
 import AiUserProfileRow from "./ai_user_profile_table";
+import ApiCallLogRow from "./api_call_log_table";
 import ApiEndpointRow from "./api_endpoint_table";
 import ApiFieldMappingRow from "./api_field_mapping_table";
 import AttachmentRow from "./attachment_table";
 import ConversationRow from "./conversation_table";
 import ConversationMessageRow from "./conversation_message_table";
 import ConversationParticipantRow from "./conversation_participant_table";
+import DatabaseRowMarkerRow from "./database_row_marker_table";
 import DatabaseSchemaRow from "./database_schema_table";
 import DatabaseViewRow from "./database_view_table";
 import ExtensionManifestRow from "./extension_manifest_table";
@@ -172,6 +179,23 @@ const tablesSchema = __schema({
       { name: 'ai_user_profile_identity_key', constraint: 'unique', columns: ['identity'] },
     ],
   }, AiUserProfileRow),
+  api_call_log: __table({
+    name: 'api_call_log',
+    indexes: [
+      { name: 'at', algorithm: 'btree', columns: [
+        'at',
+      ] },
+      { name: 'endpoint_id', algorithm: 'btree', columns: [
+        'endpointId',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'api_call_log_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, ApiCallLogRow),
   api_endpoint: __table({
     name: 'api_endpoint',
     indexes: [
@@ -260,6 +284,21 @@ const tablesSchema = __schema({
       { name: 'conversation_participant_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, ConversationParticipantRow),
+  database_row_marker: __table({
+    name: 'database_row_marker',
+    indexes: [
+      { name: 'client_request_id', algorithm: 'btree', columns: [
+        'clientRequestId',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'database_row_marker_client_request_id_key', constraint: 'unique', columns: ['clientRequestId'] },
+      { name: 'database_row_marker_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, DatabaseRowMarkerRow),
   database_schema: __table({
     name: 'database_schema',
     indexes: [
@@ -503,6 +542,7 @@ const reducersSchema = __reducers(
   __reducerSchema("create_api_field_mapping", CreateApiFieldMappingReducer),
   __reducerSchema("create_attachment", CreateAttachmentReducer),
   __reducerSchema("create_conversation", CreateConversationReducer),
+  __reducerSchema("create_database_row", CreateDatabaseRowReducer),
   __reducerSchema("create_database_schema", CreateDatabaseSchemaReducer),
   __reducerSchema("create_job", CreateJobReducer),
   __reducerSchema("create_page", CreatePageReducer),
@@ -511,6 +551,7 @@ const reducersSchema = __reducers(
   __reducerSchema("delete_api_endpoint", DeleteApiEndpointReducer),
   __reducerSchema("delete_api_field_mapping", DeleteApiFieldMappingReducer),
   __reducerSchema("delete_attachment", DeleteAttachmentReducer),
+  __reducerSchema("delete_database_row", DeleteDatabaseRowReducer),
   __reducerSchema("delete_page", DeletePageReducer),
   __reducerSchema("delete_property", DeletePropertyReducer),
   __reducerSchema("delete_view", DeleteViewReducer),
@@ -518,6 +559,7 @@ const reducersSchema = __reducers(
   __reducerSchema("grant_extension_permission", GrantExtensionPermissionReducer),
   __reducerSchema("import_pear_snapshot_v_1", ImportPearSnapshotV1Reducer),
   __reducerSchema("install_extension", InstallExtensionReducer),
+  __reducerSchema("log_api_call", LogApiCallReducer),
   __reducerSchema("login", LoginReducer),
   __reducerSchema("logout", LogoutReducer),
   __reducerSchema("move_page", MovePageReducer),
@@ -550,11 +592,13 @@ const reducersSchema = __reducers(
   __reducerSchema("submit_result", SubmitResultReducer),
   __reducerSchema("take_snapshot", TakeSnapshotReducer),
   __reducerSchema("take_snapshot_with_content", TakeSnapshotWithContentReducer),
+  __reducerSchema("touch_api_endpoint_key", TouchApiEndpointKeyReducer),
   __reducerSchema("uninstall_extension", UninstallExtensionReducer),
   __reducerSchema("update_ai_user_config", UpdateAiUserConfigReducer),
   __reducerSchema("update_ai_user_profile", UpdateAiUserProfileReducer),
   __reducerSchema("update_api_endpoint", UpdateApiEndpointReducer),
   __reducerSchema("update_api_field_mapping", UpdateApiFieldMappingReducer),
+  __reducerSchema("update_database_row", UpdateDatabaseRowReducer),
   __reducerSchema("update_database_schema_config", UpdateDatabaseSchemaConfigReducer),
   __reducerSchema("update_extension", UpdateExtensionReducer),
   __reducerSchema("update_message", UpdateMessageReducer),

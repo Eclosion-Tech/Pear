@@ -3838,6 +3838,14 @@ pub enum HttpMethod {
     Delete,
 }
 
+/// A `(property_definition_id, value)` pair passed to the atomic row
+/// reducers. Tuples aren't `SpacetimeType`, so we wrap them in a struct.
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub struct PropertyValueInput {
+    pub property_definition_id: u64,
+    pub value: PropertyValue,
+}
+
 // ============================================================
 // Custom API Endpoints — Tables
 // ============================================================
@@ -3907,6 +3915,48 @@ pub struct ApiEndpointKey {
     pub expires_at: Option<Timestamp>,
 }
 
+/// Audit log for every external HTTP call made through a custom API endpoint.
+/// Public so the workspace UI can render a "Recent calls" panel without
+/// admin privileges. Insert-only; older rows are pruned by ops tooling.
+#[table(accessor = api_call_log, public)]
+pub struct ApiCallLog {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub endpoint_id: u64,
+    /// None when the request authenticated via session instead of an API key.
+    pub key_id: Option<u64>,
+    pub method: HttpMethod,
+    /// Original request path (e.g. "/e/fruit/42"). Truncated to 1024 chars.
+    pub path: String,
+    pub status_code: u16,
+    pub latency_ms: u32,
+    /// Best-effort caller IP (X-Forwarded-For first hop).
+    pub caller_ip: Option<String>,
+    /// Short error string when `status_code >= 400`. None on success.
+    pub error_message: Option<String>,
+    #[index(btree)]
+    pub at: Timestamp,
+}
+
+/// Idempotency + id-resolution marker for atomic database-row creation
+/// from the HTTP handler. Reducers can't return values to HTTP callers,
+/// so the handler generates a UUID, passes it as `client_request_id`, and
+/// then SQL-queries this table for the resulting `page_id`.
+///
+/// A second `create_database_row` call with the same key is a no-op.
+#[table(accessor = database_row_marker, public)]
+pub struct DatabaseRowMarker {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[unique]
+    pub client_request_id: String,
+    pub page_id: u64,
+    pub created_at: Timestamp,
+}
+
 // ============================================================
 // Custom API Endpoints — ID Helpers
 // ============================================================
@@ -3920,6 +3970,22 @@ fn next_api_field_mapping_id(ctx: &ReducerContext) -> u64 {
 fn next_api_endpoint_key_id(ctx: &ReducerContext) -> u64 {
     ctx.db.api_endpoint_key().iter().map(|r| r.id).max().unwrap_or(0) + 1
 }
+fn next_api_call_log_id(ctx: &ReducerContext) -> u64 {
+    ctx.db.api_call_log().iter().map(|r| r.id).max().unwrap_or(0) + 1
+}
+fn next_database_row_marker_id(ctx: &ReducerContext) -> u64 {
+    ctx.db.database_row_marker().iter().map(|r| r.id).max().unwrap_or(0) + 1
+}
+
+/// Slugs that would collide with system routes the HTTP handler reserves
+/// (`/_schema`, `/_health`, `/_meta`) or with namespace conventions an
+/// operator might add later. The leading-underscore variants are belt-and-
+/// braces — the slug regex below already rejects underscores.
+const RESERVED_API_SLUGS: &[&str] = &[
+    "_schema", "_health", "_meta", "_admin", "_internal",
+    "schema", "health", "meta", "admin", "internal", "system",
+    "api", "auth", "openapi", "docs",
+];
 
 /// Validate a slug: lowercase, alphanumeric + hyphens, 1-64 chars, no leading/trailing hyphens.
 fn validate_slug(slug: &str) -> Result<(), String> {
@@ -3934,6 +4000,12 @@ fn validate_slug(slug: &str) -> Result<(), String> {
     }
     if slug.starts_with('-') || slug.ends_with('-') {
         return Err("Slug must not start or end with a hyphen".to_string());
+    }
+    if slug.starts_with('_') {
+        return Err("Slug must not start with an underscore (reserved)".to_string());
+    }
+    if RESERVED_API_SLUGS.contains(&slug) {
+        return Err(format!("Slug '{}' is reserved", slug));
     }
     Ok(())
 }
@@ -4424,6 +4496,310 @@ pub fn revoke_api_endpoint_key(ctx: &ReducerContext, key_id: u64) -> Result<(), 
     }
 
     ctx.db.api_endpoint_key().id().delete(&key_id);
+    Ok(())
+}
+
+// ============================================================
+// Custom API Endpoints — Atomic row reducers (HTTP-handler facing)
+// ============================================================
+//
+// These reducers exist so the HTTP layer can mutate database rows in a
+// single transaction instead of chaining `create_page` + N x
+// `set_property_value`. They intentionally do **not** check `created_by`
+// ownership — the HTTP handler authenticates the request (session or API
+// key) before invoking them and runs as the workspace's service identity.
+//
+// Reducers can't return values to HTTP callers, so `create_database_row`
+// records the new `page_id` against a caller-supplied `client_request_id`
+// in `database_row_marker`. The handler then looks up the id via SQL.
+
+/// Atomically create a row in a database page along with all its property values.
+///
+/// Idempotent on `client_request_id`: a second call with the same key is a
+/// no-op (still resolves to the same `page_id` via `database_row_marker`).
+#[reducer]
+pub fn create_database_row(
+    ctx: &ReducerContext,
+    database_page_id: u64,
+    title: String,
+    values: Vec<PropertyValueInput>,
+    client_request_id: String,
+) -> Result<(), String> {
+    if client_request_id.is_empty() || client_request_id.len() > 128 {
+        return Err("client_request_id must be 1-128 characters".to_string());
+    }
+    if title.trim().is_empty() {
+        return Err("Title cannot be empty".to_string());
+    }
+
+    let database = ctx
+        .db
+        .page()
+        .id()
+        .find(&database_page_id)
+        .ok_or("Database page not found")?;
+    if database.page_type != PageType::Database {
+        return Err("Target page must be a Database".to_string());
+    }
+    if database.deleted_at.is_some() {
+        return Err("Cannot create row in a deleted database".to_string());
+    }
+
+    if let Some(existing) = ctx
+        .db
+        .database_row_marker()
+        .client_request_id()
+        .find(&client_request_id)
+    {
+        if ctx.db.page().id().find(&existing.page_id).is_some() {
+            return Ok(());
+        }
+    }
+
+    let sort_order = next_sort_order(ctx, Some(database_page_id));
+    let row = ctx.db.page().insert(Page {
+        id: next_page_id(ctx),
+        parent_id: Some(database_page_id),
+        sort_order,
+        page_type: PageType::Database,
+        title,
+        icon: None,
+        embedding: None,
+        created_by: ActorType::Human,
+        created_at: ctx.timestamp,
+        updated_at: ctx.timestamp,
+        deleted_at: None,
+    });
+    ctx.db.page_content().insert(PageContent {
+        page_id: row.id,
+        content: String::new(),
+        updated_at: ctx.timestamp,
+    });
+
+    for PropertyValueInput {
+        property_definition_id,
+        value,
+    } in values
+    {
+        ctx.db
+            .page_property_value_history()
+            .insert(PagePropertyValueHistory {
+                id: next_page_property_value_history_id(ctx),
+                page_id: row.id,
+                property_definition_id,
+                value: value.clone(),
+                is_current: true,
+                changed_at: ctx.timestamp,
+                changed_by: ActorType::Human,
+            });
+        ctx.db.page_property_value().insert(PagePropertyValue {
+            id: next_page_property_value_id(ctx),
+            page_id: row.id,
+            property_definition_id,
+            value,
+        });
+    }
+
+    ctx.db.database_row_marker().insert(DatabaseRowMarker {
+        id: next_database_row_marker_id(ctx),
+        client_request_id,
+        page_id: row.id,
+        created_at: ctx.timestamp,
+    });
+
+    Ok(())
+}
+
+/// Atomically update a row's title and a set of property values.
+///
+/// `set_values` upserts the given `(property_definition_id, value)` pairs
+/// (with full history entries). `clear_values` deletes the current
+/// `PagePropertyValue` for the given property ids. Pass `None` for `title`
+/// to leave it unchanged.
+#[reducer]
+pub fn update_database_row(
+    ctx: &ReducerContext,
+    page_id: u64,
+    title: Option<String>,
+    set_values: Vec<PropertyValueInput>,
+    clear_values: Vec<u64>,
+) -> Result<(), String> {
+    let row = ctx
+        .db
+        .page()
+        .id()
+        .find(&page_id)
+        .ok_or("Page not found")?;
+    if row.page_type != PageType::Database {
+        return Err("Target page must be a database row".to_string());
+    }
+    if row.deleted_at.is_some() {
+        return Err("Cannot update a deleted row".to_string());
+    }
+
+    let new_title = match title {
+        Some(t) => {
+            if t.trim().is_empty() {
+                return Err("Title cannot be empty".to_string());
+            }
+            t
+        }
+        None => row.title.clone(),
+    };
+
+    ctx.db.page().id().update(Page {
+        title: new_title,
+        updated_at: ctx.timestamp,
+        ..row
+    });
+
+    for PropertyValueInput {
+        property_definition_id,
+        value,
+    } in set_values
+    {
+        let stale: Vec<PagePropertyValueHistory> = ctx
+            .db
+            .page_property_value_history()
+            .page_id()
+            .filter(&page_id)
+            .filter(|h| h.property_definition_id == property_definition_id && h.is_current)
+            .collect();
+        for h in stale {
+            ctx.db
+                .page_property_value_history()
+                .id()
+                .update(PagePropertyValueHistory {
+                    is_current: false,
+                    ..h
+                });
+        }
+        ctx.db
+            .page_property_value_history()
+            .insert(PagePropertyValueHistory {
+                id: next_page_property_value_history_id(ctx),
+                page_id,
+                property_definition_id,
+                value: value.clone(),
+                is_current: true,
+                changed_at: ctx.timestamp,
+                changed_by: ActorType::Human,
+            });
+
+        let existing: Option<PagePropertyValue> = ctx
+            .db
+            .page_property_value()
+            .page_id()
+            .filter(&page_id)
+            .find(|v| v.property_definition_id == property_definition_id);
+        match existing {
+            Some(existing) => {
+                ctx.db
+                    .page_property_value()
+                    .id()
+                    .update(PagePropertyValue { value, ..existing });
+            }
+            None => {
+                ctx.db.page_property_value().insert(PagePropertyValue {
+                    id: next_page_property_value_id(ctx),
+                    page_id,
+                    property_definition_id,
+                    value,
+                });
+            }
+        }
+    }
+
+    for property_definition_id in clear_values {
+        let existing: Option<PagePropertyValue> = ctx
+            .db
+            .page_property_value()
+            .page_id()
+            .filter(&page_id)
+            .find(|v| v.property_definition_id == property_definition_id);
+        if let Some(pv) = existing {
+            ctx.db.page_property_value().id().delete(&pv.id);
+        }
+    }
+
+    Ok(())
+}
+
+/// Soft-delete a database row by setting `deleted_at`.
+/// Idempotent — already-deleted rows succeed without modification.
+#[reducer]
+pub fn delete_database_row(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
+    let row = ctx
+        .db
+        .page()
+        .id()
+        .find(&page_id)
+        .ok_or("Page not found")?;
+    if row.page_type != PageType::Database {
+        return Err("Target page must be a database row".to_string());
+    }
+    if row.deleted_at.is_some() {
+        return Ok(());
+    }
+    ctx.db.page().id().update(Page {
+        deleted_at: Some(ctx.timestamp),
+        updated_at: ctx.timestamp,
+        ..row
+    });
+    Ok(())
+}
+
+/// Bump `last_used_at` on an API key. Called fire-and-forget by the HTTP
+/// handler after a successful authenticated request.
+#[reducer]
+pub fn touch_api_endpoint_key(ctx: &ReducerContext, key_id: u64) -> Result<(), String> {
+    let key = ctx
+        .db
+        .api_endpoint_key()
+        .id()
+        .find(&key_id)
+        .ok_or("API key not found")?;
+    ctx.db.api_endpoint_key().id().update(ApiEndpointKey {
+        last_used_at: Some(ctx.timestamp),
+        ..key
+    });
+    Ok(())
+}
+
+/// Append an entry to the `ApiCallLog`. Called fire-and-forget by the HTTP
+/// handler after every request (success or failure).
+#[reducer]
+pub fn log_api_call(
+    ctx: &ReducerContext,
+    endpoint_id: u64,
+    key_id: Option<u64>,
+    method: HttpMethod,
+    path: String,
+    status_code: u16,
+    latency_ms: u32,
+    caller_ip: Option<String>,
+    error_message: Option<String>,
+) -> Result<(), String> {
+    if path.len() > 1024 {
+        return Err("path too long".to_string());
+    }
+    if let Some(ref msg) = error_message {
+        if msg.len() > 2048 {
+            return Err("error_message too long".to_string());
+        }
+    }
+    ctx.db.api_call_log().insert(ApiCallLog {
+        id: next_api_call_log_id(ctx),
+        endpoint_id,
+        key_id,
+        method,
+        path,
+        status_code,
+        latency_ms,
+        caller_ip,
+        error_message,
+        at: ctx.timestamp,
+    });
     Ok(())
 }
 

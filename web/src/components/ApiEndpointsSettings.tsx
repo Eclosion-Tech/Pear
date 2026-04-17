@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo } from "react";
+import dynamic from "next/dynamic";
 import { useTable } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
 import {
@@ -16,6 +17,61 @@ import {
   useRevokeApiEndpointKey,
   type ApiEndpointRow,
 } from "@/src/hooks/useApiEndpoints";
+import { resolveEndpointUrl } from "@/src/lib/api-endpoint";
+
+/**
+ * Stoplight Elements is a ~600KB dependency that's only needed when the
+ * operator opens the API docs panel for an endpoint. Loading it via
+ * `next/dynamic({ ssr: false })` keeps it out of the main settings bundle
+ * and out of the SSR pass entirely (it touches `window` on import).
+ */
+const ApiEndpointsDocsPanel = dynamic(
+  () => import("./ApiEndpointsDocsPanel"),
+  {
+    ssr: false,
+    loading: () => (
+      <p className="text-xs text-neutral-500 dark:text-neutral-400">
+        Loading API docs…
+      </p>
+    ),
+  }
+);
+
+/**
+ * Parse `acme` from `/workspace/acme/settings` so the URL template can
+ * substitute `{workspaceSlug}` even though Pear's OSS routes are
+ * workspace-agnostic.
+ */
+function getCurrentWorkspaceSlug(): string {
+  if (typeof window === "undefined") return "";
+  const match = window.location.pathname.match(/^\/workspace\/([^/]+)/);
+  return match?.[1] ?? "";
+}
+
+function buildEndpointUrl(endpointSlug: string): string {
+  const origin =
+    typeof window !== "undefined" ? window.location.origin : "";
+  return resolveEndpointUrl({
+    template: process.env.NEXT_PUBLIC_PEAR_API_URL_TEMPLATE,
+    workspaceSlug: getCurrentWorkspaceSlug(),
+    endpointSlug,
+    origin,
+  });
+}
+
+function buildEndpointDisplayPath(endpointSlug: string): string {
+  // Used by the list-row label where we want a short path-style preview
+  // independent of the absolute URL. Strips the scheme + host from the
+  // resolved URL so it stays compact when the operator points the UI at a
+  // multi-tenant gateway.
+  const url = buildEndpointUrl(endpointSlug);
+  try {
+    const parsed = new URL(url);
+    return parsed.pathname || `/${endpointSlug}`;
+  } catch {
+    return `/api/e/${endpointSlug}`;
+  }
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -140,8 +196,11 @@ function CreateEndpointForm({ onClose }: { onClose: () => void }) {
               URL Slug
             </label>
             <div className="flex items-center">
-              <span className="text-xs text-neutral-400 dark:text-neutral-500 mr-1">
-                /api/e/
+              <span
+                className="text-xs text-neutral-400 dark:text-neutral-500 mr-1 truncate max-w-[60%]"
+                title={buildEndpointDisplayPath("").replace(/\/+$/, "") + "/"}
+              >
+                {buildEndpointDisplayPath("").replace(/\/+$/, "") + "/"}
               </span>
               <input
                 type="text"
@@ -460,6 +519,197 @@ function FieldMappingRow({
   );
 }
 
+// ── Disable Auth Confirm Modal ────────────────────────────────────────────────
+
+/**
+ * "Are you absolutely sure" modal shown before turning auth off on an
+ * existing endpoint. Removing auth converts a private API into a fully
+ * public, internet-reachable mutation surface — that's almost never what
+ * the operator wants by accident, so we require typing the slug to
+ * confirm rather than relying on a single click.
+ */
+function DisableAuthConfirmModal({
+  endpoint,
+  onCancel,
+  onConfirm,
+}: {
+  endpoint: ApiEndpointRow;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const [typed, setTyped] = useState("");
+  const matches = typed.trim() === endpoint.slug;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-md rounded-lg bg-white dark:bg-neutral-900 border border-red-300 dark:border-red-800 shadow-xl p-5">
+        <div className="flex items-start gap-3 mb-3">
+          <div className="text-red-600 dark:text-red-400 text-2xl leading-none">
+            !
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-red-700 dark:text-red-300">
+              Make this endpoint public?
+            </h3>
+            <p className="mt-1 text-xs text-neutral-600 dark:text-neutral-400">
+              You're about to disable authentication on{" "}
+              <span className="font-mono text-neutral-900 dark:text-white">
+                {endpoint.slug}
+              </span>
+              . Anyone on the internet who knows the URL will be able to{" "}
+              {endpoint.allowedMethods.length > 1 ? "read and modify" : "call"}{" "}
+              data in this database. There is no rate limit beyond what the
+              host enforces.
+            </p>
+          </div>
+        </div>
+
+        <p className="text-xs text-neutral-600 dark:text-neutral-400 mb-1.5">
+          Type the slug{" "}
+          <span className="font-mono text-neutral-900 dark:text-white">
+            {endpoint.slug}
+          </span>{" "}
+          to confirm:
+        </p>
+        <input
+          autoFocus
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          className="w-full px-2 py-1.5 text-sm border border-neutral-300 dark:border-neutral-600 rounded bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-mono"
+          placeholder={endpoint.slug}
+        />
+
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            className="px-3 py-1.5 text-xs text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white"
+          >
+            Cancel
+          </button>
+          <button
+            disabled={!matches}
+            onClick={() => {
+              if (matches) onConfirm();
+            }}
+            className="px-3 py-1.5 text-xs rounded bg-red-600 hover:bg-red-700 disabled:bg-red-300 dark:disabled:bg-red-900/50 disabled:cursor-not-allowed text-white"
+          >
+            Make public
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Recent API Calls Panel ────────────────────────────────────────────────────
+
+const HTTP_STATUS_TONE: Array<{
+  test: (code: number) => boolean;
+  className: string;
+}> = [
+  { test: (c) => c < 300, className: "text-green-600 dark:text-green-400" },
+  { test: (c) => c < 400, className: "text-blue-600 dark:text-blue-400" },
+  { test: (c) => c < 500, className: "text-amber-600 dark:text-amber-400" },
+  { test: () => true, className: "text-red-600 dark:text-red-400" },
+];
+
+function statusToneClassName(code: number): string {
+  return HTTP_STATUS_TONE.find((t) => t.test(code))!.className;
+}
+
+function formatRelativeTime(at: { toDate: () => Date } | Date): string {
+  const date = at instanceof Date ? at : at.toDate();
+  const diffMs = Date.now() - date.getTime();
+  const sec = Math.round(diffMs / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  return date.toLocaleString();
+}
+
+function EndpointRecentCalls({ endpointId }: { endpointId: bigint }) {
+  const [logs] = useTable(tables.api_call_log);
+  const recent = useMemo(() => {
+    return logs
+      .filter((row) => row.endpointId === endpointId)
+      .sort((a, b) => {
+        const aMs = a.at.toDate().getTime();
+        const bMs = b.at.toDate().getTime();
+        return bMs - aMs;
+      })
+      .slice(0, 20);
+  }, [logs, endpointId]);
+
+  if (recent.length === 0) {
+    return (
+      <p className="text-sm text-neutral-500 dark:text-neutral-400">
+        No requests yet.
+      </p>
+    );
+  }
+
+  return (
+    <table className="w-full text-left">
+      <thead>
+        <tr className="border-b border-neutral-200 dark:border-neutral-700">
+          <th className="py-1.5 pr-3 text-xs font-medium text-neutral-500 dark:text-neutral-400">
+            When
+          </th>
+          <th className="py-1.5 pr-3 text-xs font-medium text-neutral-500 dark:text-neutral-400">
+            Method
+          </th>
+          <th className="py-1.5 pr-3 text-xs font-medium text-neutral-500 dark:text-neutral-400">
+            Path
+          </th>
+          <th className="py-1.5 pr-3 text-xs font-medium text-neutral-500 dark:text-neutral-400 text-right">
+            Status
+          </th>
+          <th className="py-1.5 pr-3 text-xs font-medium text-neutral-500 dark:text-neutral-400 text-right">
+            Latency
+          </th>
+          <th className="py-1.5 text-xs font-medium text-neutral-500 dark:text-neutral-400">
+            Caller
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        {recent.map((row) => (
+          <tr
+            key={String(row.id)}
+            className="border-b border-neutral-100 dark:border-neutral-800"
+          >
+            <td className="py-1.5 pr-3 text-xs text-neutral-500 dark:text-neutral-400 whitespace-nowrap">
+              {formatRelativeTime(row.at)}
+            </td>
+            <td className="py-1.5 pr-3 text-xs font-mono text-neutral-700 dark:text-neutral-300">
+              {httpMethodLabel(row.method.tag)}
+            </td>
+            <td
+              className="py-1.5 pr-3 text-xs font-mono text-neutral-700 dark:text-neutral-300 truncate max-w-[260px]"
+              title={row.path}
+            >
+              {row.path}
+            </td>
+            <td
+              className={`py-1.5 pr-3 text-xs font-mono text-right ${statusToneClassName(row.statusCode)}`}
+            >
+              {row.statusCode}
+            </td>
+            <td className="py-1.5 pr-3 text-xs text-neutral-500 dark:text-neutral-400 text-right">
+              {row.latencyMs}ms
+            </td>
+            <td className="py-1.5 text-xs text-neutral-500 dark:text-neutral-400 font-mono truncate max-w-[140px]">
+              {row.callerIp ?? "—"}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 // ── Endpoint Detail ───────────────────────────────────────────────────────────
 
 function EndpointDetail({
@@ -505,9 +755,40 @@ function EndpointDetail({
   }, [propDefsForDb]);
 
   const deleteEndpoint = useDeleteApiEndpoint();
+  const updateEndpoint = useUpdateApiEndpoint();
 
-  const baseUrl =
-    typeof window !== "undefined" ? window.location.origin : "";
+  const [disableAuthModalOpen, setDisableAuthModalOpen] = useState(false);
+  const [showDocs, setShowDocs] = useState(false);
+
+  const endpointUrl = useMemo(
+    () => buildEndpointUrl(endpoint.slug),
+    [endpoint.slug]
+  );
+  const schemaUrl = useMemo(
+    () => `${endpointUrl}/_schema`,
+    [endpointUrl]
+  );
+
+  function applyAuthChange(nextRequireAuth: boolean) {
+    updateEndpoint({
+      endpointId: endpoint.id,
+      slug: endpoint.slug,
+      displayName: endpoint.displayName,
+      description: endpoint.description,
+      allowedMethods: endpoint.allowedMethods,
+      requireAuth: nextRequireAuth,
+    });
+  }
+
+  function handleAuthToggleClick() {
+    if (endpoint.requireAuth) {
+      // Disabling — gate behind the confirm modal.
+      setDisableAuthModalOpen(true);
+    } else {
+      // Re-enabling auth is always safe and doesn't need confirmation.
+      applyAuthChange(true);
+    }
+  }
 
   return (
     <div className="mt-4 p-4 border border-neutral-200 dark:border-neutral-700 rounded-lg bg-neutral-50 dark:bg-neutral-800/50">
@@ -530,7 +811,7 @@ function EndpointDetail({
             Endpoint URL
           </label>
           <code className="block text-sm bg-white dark:bg-neutral-800 px-3 py-1.5 rounded border border-neutral-200 dark:border-neutral-700 font-mono text-neutral-700 dark:text-neutral-300">
-            {baseUrl}/api/e/{endpoint.slug}
+            {endpointUrl}
           </code>
         </div>
 
@@ -540,14 +821,14 @@ function EndpointDetail({
             Example
           </label>
           <code className="block text-xs bg-white dark:bg-neutral-800 px-3 py-2 rounded border border-neutral-200 dark:border-neutral-700 font-mono text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap break-all">
-            {`curl ${baseUrl}/api/e/${endpoint.slug}${endpoint.requireAuth ? ' \\\n  -H "Authorization: Bearer <key>"' : ""}`}
+            {`curl ${endpointUrl}${endpoint.requireAuth ? ' \\\n  -H "Authorization: Bearer <key>"' : ""}`}
           </code>
         </div>
 
-        {/* OpenAPI link */}
-        <div className="flex items-center gap-2 text-xs">
+        {/* OpenAPI link + auth toggle */}
+        <div className="flex flex-wrap items-center gap-2 text-xs">
           <a
-            href={`/api/e/${endpoint.slug}/_schema`}
+            href={schemaUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="text-blue-600 dark:text-blue-400 hover:underline"
@@ -555,14 +836,48 @@ function EndpointDetail({
             OpenAPI Schema
           </a>
           <span className="text-neutral-400">|</span>
+          <button
+            onClick={() => setShowDocs((v) => !v)}
+            className="text-blue-600 dark:text-blue-400 hover:underline"
+          >
+            {showDocs ? "Hide API docs" : "Show API docs"}
+          </button>
+          <span className="text-neutral-400">|</span>
           <span className="text-neutral-500 dark:text-neutral-400">
             Methods: {allowedMethodsList(endpoint)}
           </span>
           <span className="text-neutral-400">|</span>
-          <span className="text-neutral-500 dark:text-neutral-400">
-            Auth: {endpoint.requireAuth ? "Required" : "Open"}
-          </span>
+          <button
+            onClick={handleAuthToggleClick}
+            className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 ${
+              endpoint.requireAuth
+                ? "text-amber-700 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/20"
+                : "text-red-700 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/20"
+            }`}
+            title={
+              endpoint.requireAuth
+                ? "Click to make this endpoint public"
+                : "Click to require an API key"
+            }
+          >
+            <span
+              className={`inline-block w-1.5 h-1.5 rounded-full ${
+                endpoint.requireAuth ? "bg-amber-400" : "bg-red-500"
+              }`}
+            />
+            Auth: {endpoint.requireAuth ? "Required" : "Public (no key)"}
+          </button>
         </div>
+
+        {/* Stoplight Elements docs panel — lazy-loaded on demand */}
+        {showDocs && (
+          <div>
+            <h4 className="text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-2">
+              API Docs
+            </h4>
+            <ApiEndpointsDocsPanel schemaUrl={schemaUrl} />
+          </div>
+        )}
 
         {/* Field Mappings */}
         <div>
@@ -616,6 +931,14 @@ function EndpointDetail({
           <ApiKeySection endpointId={endpoint.id} />
         </div>
 
+        {/* Recent Calls */}
+        <div>
+          <h4 className="text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-2">
+            Recent Calls
+          </h4>
+          <EndpointRecentCalls endpointId={endpoint.id} />
+        </div>
+
         {/* Danger zone */}
         <div className="pt-3 border-t border-neutral-200 dark:border-neutral-700">
           <button
@@ -635,6 +958,17 @@ function EndpointDetail({
           </button>
         </div>
       </div>
+
+      {disableAuthModalOpen && (
+        <DisableAuthConfirmModal
+          endpoint={endpoint}
+          onCancel={() => setDisableAuthModalOpen(false)}
+          onConfirm={() => {
+            applyAuthChange(false);
+            setDisableAuthModalOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -699,7 +1033,7 @@ export function ApiEndpointsSettings() {
                 {ep.displayName}
               </p>
               <p className="text-xs text-neutral-500 dark:text-neutral-400 font-mono">
-                /api/e/{ep.slug}
+                {buildEndpointDisplayPath(ep.slug)}
               </p>
             </div>
           </div>

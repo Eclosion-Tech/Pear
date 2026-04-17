@@ -9,22 +9,10 @@ import {
   type AlgebraicTypeType as __AlgebraicTypeType,
   type Infer as __Infer,
 } from "spacetimedb";
-import {
-  PropertyValue,
-  ActorType,
-} from "./types";
-
 
 export default __t.row({
   id: __t.u64().primaryKey(),
+  clientRequestId: __t.string().name("client_request_id"),
   pageId: __t.u64().name("page_id"),
-  propertyDefinitionId: __t.u64().name("property_definition_id"),
-  get value() {
-    return PropertyValue;
-  },
-  isCurrent: __t.bool().name("is_current"),
-  changedAt: __t.timestamp().name("changed_at"),
-  get changedBy() {
-    return ActorType.name("changed_by");
-  },
+  createdAt: __t.timestamp().name("created_at"),
 });

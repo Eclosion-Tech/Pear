@@ -48,6 +48,22 @@ export const AiUserProfile = __t.object("AiUserProfile", {
 });
 export type AiUserProfile = __Infer<typeof AiUserProfile>;
 
+export const ApiCallLog = __t.object("ApiCallLog", {
+  id: __t.u64(),
+  endpointId: __t.u64(),
+  keyId: __t.option(__t.u64()),
+  get method() {
+    return HttpMethod;
+  },
+  path: __t.string(),
+  statusCode: __t.u16(),
+  latencyMs: __t.u32(),
+  callerIp: __t.option(__t.string()),
+  errorMessage: __t.option(__t.string()),
+  at: __t.timestamp(),
+});
+export type ApiCallLog = __Infer<typeof ApiCallLog>;
+
 export const ApiEndpoint = __t.object("ApiEndpoint", {
   id: __t.u64(),
   databasePageId: __t.u64(),
@@ -160,6 +176,14 @@ export const ConversationStatus = __t.enum("ConversationStatus", {
   Closed: __t.unit(),
 });
 export type ConversationStatus = __Infer<typeof ConversationStatus>;
+
+export const DatabaseRowMarker = __t.object("DatabaseRowMarker", {
+  id: __t.u64(),
+  clientRequestId: __t.string(),
+  pageId: __t.u64(),
+  createdAt: __t.timestamp(),
+});
+export type DatabaseRowMarker = __Infer<typeof DatabaseRowMarker>;
 
 export const DatabaseSchema = __t.object("DatabaseSchema", {
   id: __t.u64(),
@@ -499,6 +523,14 @@ export const PropertyValue = __t.enum("PropertyValue", {
   Person: __t.array(__t.string()),
 });
 export type PropertyValue = __Infer<typeof PropertyValue>;
+
+export const PropertyValueInput = __t.object("PropertyValueInput", {
+  propertyDefinitionId: __t.u64(),
+  get value() {
+    return PropertyValue;
+  },
+});
+export type PropertyValueInput = __Infer<typeof PropertyValueInput>;
 
 // The tagged union or sum type for the algebraic type `SnapshotType`.
 export const SnapshotType = __t.enum("SnapshotType", {

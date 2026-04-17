@@ -10,21 +10,21 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 import {
-  PropertyValue,
-  ActorType,
+  HttpMethod,
 } from "./types";
 
 
 export default __t.row({
   id: __t.u64().primaryKey(),
-  pageId: __t.u64().name("page_id"),
-  propertyDefinitionId: __t.u64().name("property_definition_id"),
-  get value() {
-    return PropertyValue;
+  endpointId: __t.u64().name("endpoint_id"),
+  keyId: __t.option(__t.u64()).name("key_id"),
+  get method() {
+    return HttpMethod;
   },
-  isCurrent: __t.bool().name("is_current"),
-  changedAt: __t.timestamp().name("changed_at"),
-  get changedBy() {
-    return ActorType.name("changed_by");
-  },
+  path: __t.string(),
+  statusCode: __t.u16().name("status_code"),
+  latencyMs: __t.u32().name("latency_ms"),
+  callerIp: __t.option(__t.string()).name("caller_ip"),
+  errorMessage: __t.option(__t.string()).name("error_message"),
+  at: __t.timestamp(),
 });
