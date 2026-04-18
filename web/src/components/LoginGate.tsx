@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useReducer } from "spacetimedb/react";
 import { reducers } from "@/src/module_bindings";
+import { consumeIdentityDriftReason } from "@/src/lib/identityRecovery";
 
 type Mode = "login" | "register";
 
@@ -13,6 +14,14 @@ export function LoginGate() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Pop the identity-drift reason exactly once per mount so it survives the
+  // post-recovery reload but doesn't reappear if the user later logs out
+  // normally. Reading inside useEffect keeps SSR happy (sessionStorage is
+  // window-only).
+  const [driftReason, setDriftReason] = useState<string | null>(null);
+  useEffect(() => {
+    setDriftReason(consumeIdentityDriftReason());
+  }, []);
 
   const login = useReducer(reducers.login);
   const register = useReducer(reducers.register);
@@ -49,6 +58,12 @@ export function LoginGate() {
             {mode === "login" ? "Sign in to your workspace" : "Create your account"}
           </p>
         </div>
+
+        {driftReason && (
+          <p className="mb-4 text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/50 rounded-lg px-3 py-2">
+            {driftReason}
+          </p>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-3">
           {mode === "register" && (

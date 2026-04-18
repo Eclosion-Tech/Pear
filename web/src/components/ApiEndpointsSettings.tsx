@@ -17,6 +17,7 @@ import {
   useRevokeApiEndpointKey,
   type ApiEndpointRow,
 } from "@/src/hooks/useApiEndpoints";
+import { useIdentityDriftRecovery } from "@/src/hooks/useIdentityDriftRecovery";
 import { resolveEndpointUrl } from "@/src/lib/api-endpoint";
 
 /**
@@ -301,11 +302,17 @@ function ApiKeySection({ endpointId }: { endpointId: bigint }) {
   const [label, setLabel] = useState("");
   const [generatedKey, setGeneratedKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
 
   const createKey = useCreateApiEndpointKey();
+  const checkDrift = useIdentityDriftRecovery();
 
   const handleCreateKey = useCallback(async () => {
-    if (!label.trim()) return;
+    if (!label.trim() || pending) return;
+
+    setError(null);
+    setPending(true);
 
     const rawKey = `pear_${crypto.randomUUID().replace(/-/g, "")}`;
     const keyHash = await sha256Hex(rawKey);
@@ -317,17 +324,32 @@ function ApiKeySection({ endpointId }: { endpointId: bigint }) {
       { tag: "Delete" as const },
     ];
 
-    createKey({
-      endpointId,
-      keyHash,
-      label: label.trim(),
-      allowedMethods: allMethods as never,
-      expiresAt: undefined,
-    });
-
-    setGeneratedKey(rawKey);
-    setLabel("");
-  }, [label, endpointId, createKey]);
+    try {
+      // The SDK returns a Promise that rejects with `SenderError` if the
+      // reducer returns `Err(_)` (e.g. ownership check failures). Without
+      // awaiting, we'd happily display `rawKey` to the user even though it
+      // was never persisted, leaving them with a "valid-looking" key that
+      // 401s every request.
+      await createKey({
+        endpointId,
+        keyHash,
+        label: label.trim(),
+        allowedMethods: allMethods as never,
+        expiresAt: undefined,
+      });
+      setGeneratedKey(rawKey);
+      setLabel("");
+    } catch (err) {
+      // Identity-mismatch means the local SDK identity doesn't match the
+      // endpoint's `created_by` — almost always a stale-tab / wipe-orphan
+      // scenario. Don't just show a red error; bounce to login so the
+      // connection can be re-established. See `docs/SECURITY.md` §10.
+      if (checkDrift(err, "create an API key")) return;
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPending(false);
+    }
+  }, [label, endpointId, createKey, pending, checkDrift]);
 
   const handleCopy = useCallback(() => {
     if (generatedKey) {
@@ -379,32 +401,45 @@ function ApiKeySection({ endpointId }: { endpointId: bigint }) {
   }
 
   return (
-    <div className="mt-3 flex items-end gap-2">
-      <div className="flex-1">
-        <label className="block text-xs text-neutral-500 dark:text-neutral-400 mb-1">
-          Key Label
-        </label>
-        <input
-          type="text"
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-          placeholder="CI pipeline"
-          className="w-full px-2 py-1 text-sm border border-neutral-300 dark:border-neutral-600 rounded bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white"
-          onKeyDown={(e) => e.key === "Enter" && handleCreateKey()}
-        />
+    <div className="mt-3 space-y-2">
+      <div className="flex items-end gap-2">
+        <div className="flex-1">
+          <label className="block text-xs text-neutral-500 dark:text-neutral-400 mb-1">
+            Key Label
+          </label>
+          <input
+            type="text"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            placeholder="CI pipeline"
+            disabled={pending}
+            className="w-full px-2 py-1 text-sm border border-neutral-300 dark:border-neutral-600 rounded bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white disabled:opacity-50"
+            onKeyDown={(e) => e.key === "Enter" && handleCreateKey()}
+          />
+        </div>
+        <button
+          onClick={handleCreateKey}
+          disabled={pending || !label.trim()}
+          className="px-3 py-1 text-sm bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 rounded hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {pending ? "Generating…" : "Generate"}
+        </button>
+        <button
+          onClick={() => {
+            setShowCreate(false);
+            setError(null);
+          }}
+          disabled={pending}
+          className="px-2 py-1 text-sm text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 disabled:opacity-50"
+        >
+          Cancel
+        </button>
       </div>
-      <button
-        onClick={handleCreateKey}
-        className="px-3 py-1 text-sm bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 rounded hover:opacity-90 transition-opacity"
-      >
-        Generate
-      </button>
-      <button
-        onClick={() => setShowCreate(false)}
-        className="px-2 py-1 text-sm text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
-      >
-        Cancel
-      </button>
+      {error && (
+        <p className="text-xs text-red-600 dark:text-red-400">
+          Failed to create key: {error}
+        </p>
+      )}
     </div>
   );
 }
