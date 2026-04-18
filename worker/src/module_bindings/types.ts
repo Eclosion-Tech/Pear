@@ -95,6 +95,17 @@ export const ApiEndpointKey = __t.object("ApiEndpointKey", {
 });
 export type ApiEndpointKey = __Infer<typeof ApiEndpointKey>;
 
+export const ApiEndpointKeyLookupRow = __t.object("ApiEndpointKeyLookupRow", {
+  id: __t.u64(),
+  endpointId: __t.u64(),
+  keyHash: __t.string(),
+  get allowedMethods() {
+    return __t.array(HttpMethod);
+  },
+  expiresAt: __t.option(__t.timestamp()),
+});
+export type ApiEndpointKeyLookupRow = __Infer<typeof ApiEndpointKeyLookupRow>;
+
 export const ApiFieldMapping = __t.object("ApiFieldMapping", {
   id: __t.u64(),
   endpointId: __t.u64(),

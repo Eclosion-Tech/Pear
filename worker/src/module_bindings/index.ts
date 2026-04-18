@@ -121,6 +121,7 @@ import AiUserConfigRow from "./ai_user_config_table";
 import AiUserProfileRow from "./ai_user_profile_table";
 import ApiCallLogRow from "./api_call_log_table";
 import ApiEndpointRow from "./api_endpoint_table";
+import ApiEndpointKeyLookupRow from "./api_endpoint_key_lookup_table";
 import ApiFieldMappingRow from "./api_field_mapping_table";
 import AttachmentRow from "./attachment_table";
 import ConversationRow from "./conversation_table";
@@ -525,6 +526,13 @@ const tablesSchema = __schema({
       { name: 'user_identity_key', constraint: 'unique', columns: ['identity'] },
     ],
   }, UserRow),
+  api_endpoint_key_lookup: __table({
+    name: 'api_endpoint_key_lookup',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, ApiEndpointKeyLookupRow),
 });
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */

@@ -2,8 +2,8 @@ use hex;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use spacetimedb::{
-    client_visibility_filter, reducer, table, Filter, Identity, ReducerContext, SpacetimeType,
-    Table, Timestamp,
+    client_visibility_filter, reducer, table, view, AnonymousViewContext, Filter, Identity,
+    ReducerContext, SpacetimeType, Table, Timestamp,
 };
 use serde_json;
 
@@ -3913,6 +3913,52 @@ pub struct ApiEndpointKey {
     pub last_used_at: Option<Timestamp>,
     /// None = no expiry.
     pub expires_at: Option<Timestamp>,
+}
+
+/// Public projection of `api_endpoint_key` for anonymous Bearer-token
+/// validation by the HTTP API gateway.
+///
+/// Why this exists: `api_endpoint_key` is a `private` table so its full row
+/// (including human label and creator identity) never syncs to client
+/// subscriptions. But the public HTTP gateway runs as a per-workspace service
+/// identity that is NOT the database owner, and SpacetimeDB rejects
+/// `SELECT … FROM api_endpoint_key …` from non-owners with a 403. This view
+/// re-exposes only the fields a Bearer-token check needs (`key_hash`,
+/// `endpoint_id`, `allowed_methods`, `expires_at`, plus the row id for audit
+/// logging). Callers query it via SQL with a `WHERE key_hash = '…'` filter.
+///
+/// Security note: `key_hash` is the SHA-256 of a 256-bit random secret, so
+/// publishing it in this projection does not let an attacker forge auth — the
+/// plaintext token is still required in the `Authorization` header. Fields
+/// that DO leak metadata (`label`, `created_by`, `created_at`, `last_used_at`)
+/// remain private.
+#[derive(SpacetimeType, Clone, Debug)]
+pub struct ApiEndpointKeyLookupRow {
+    pub id: u64,
+    pub endpoint_id: u64,
+    pub key_hash: String,
+    pub allowed_methods: Vec<HttpMethod>,
+    pub expires_at: Option<Timestamp>,
+}
+
+#[view(accessor = api_endpoint_key_lookup, public)]
+fn api_endpoint_key_lookup(ctx: &AnonymousViewContext) -> Vec<ApiEndpointKeyLookupRow> {
+    // View bodies can't call `.iter()` (the view handle deliberately omits
+    // `Table`); we full-scan via the `endpoint_id` btree index with an
+    // unbounded range. The materialised vec is then SQL-filterable by callers
+    // (`SELECT … WHERE key_hash = '…' AND endpoint_id = …`).
+    ctx.db
+        .api_endpoint_key()
+        .endpoint_id()
+        .filter(0u64..)
+        .map(|k| ApiEndpointKeyLookupRow {
+            id: k.id,
+            endpoint_id: k.endpoint_id,
+            key_hash: k.key_hash,
+            allowed_methods: k.allowed_methods,
+            expires_at: k.expires_at,
+        })
+        .collect()
 }
 
 /// Audit log for every external HTTP call made through a custom API endpoint.

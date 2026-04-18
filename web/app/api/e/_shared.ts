@@ -70,9 +70,14 @@ async function authenticateRequest(
     const safeHash = hash.replace(/'/g, "''");
     const safeSlug = endpointSlug.replace(/'/g, "''");
 
+    // Query the public `api_endpoint_key_lookup` view — a narrow projection
+    // of the private `api_endpoint_key` table — so non-owner identities can
+    // validate Bearer tokens. The default Next.js handler uses the database
+    // owner token and could read the private table directly, but we go
+    // through the view in both runtimes for a single auth code path.
     const rows = await transport.sql<ApiKeyRow>(
       `SELECT k.id, k.endpoint_id, k.allowed_methods, k.expires_at
-         FROM api_endpoint_key k
+         FROM api_endpoint_key_lookup k
          JOIN api_endpoint e ON e.id = k.endpoint_id
         WHERE e.slug = '${safeSlug}'
           AND k.key_hash = '${safeHash}'

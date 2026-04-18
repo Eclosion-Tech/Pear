@@ -50,7 +50,17 @@ export class HttpStdbTransport implements StdbTransport {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
     this.dbName = encodeURIComponent(opts.dbName);
     this.token = opts.token;
-    this.fetchImpl = opts.fetchImpl ?? fetch;
+    // Wrap rather than alias the global. Cloudflare Workers' `fetch` is a
+    // method on `globalThis` and detaching it (storing the bare reference
+    // as a class field) raises `TypeError: Illegal invocation` when invoked
+    // because `this` is no longer the global. Node.js's `fetch` is lenient
+    // about `this`, which is why the default Next.js handler doesn't trip
+    // this. The wrapper preserves the binding in every runtime.
+    // See: https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors
+    const userFetch = opts.fetchImpl;
+    this.fetchImpl = userFetch
+      ? (url, init) => userFetch(url, init)
+      : (url, init) => fetch(url, init);
     this.timeoutMs = opts.timeoutMs;
   }
 
