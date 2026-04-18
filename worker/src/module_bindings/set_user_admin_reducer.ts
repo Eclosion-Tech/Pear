@@ -10,12 +10,7 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
-export default __t.row({
-  identity: __t.identity().primaryKey(),
-  name: __t.string(),
-  email: __t.string(),
-  isAuthenticated: __t.bool().name("is_authenticated"),
-  createdAt: __t.timestamp().name("created_at"),
-  lastSeenAt: __t.timestamp().name("last_seen_at"),
-  isAdmin: __t.bool().name("is_admin"),
-});
+export default {
+  targetIdentity: __t.identity(),
+  isAdmin: __t.bool(),
+};

@@ -5,6 +5,7 @@ import { useTheme } from "next-themes";
 import { AiUsersSettings } from "@/src/components/AiUsersSettings";
 import { ApiEndpointsSettings } from "@/src/components/ApiEndpointsSettings";
 import { ExtensionsSettings } from "@/src/components/ExtensionsSettings";
+import { MembersSettings } from "@/src/components/MembersSettings";
 import { WorkspaceConnectionsPanel } from "@/src/components/WorkspaceConnectionsPanel";
 
 export default function SettingsPage() {
@@ -48,6 +49,8 @@ export default function SettingsPage() {
         </section>
 
         <WorkspaceConnectionsPanel />
+
+        <MembersSettings />
 
         <AiUsersSettings />
 

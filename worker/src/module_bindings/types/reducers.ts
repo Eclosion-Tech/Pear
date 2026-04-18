@@ -65,6 +65,7 @@ import SetMcpServerApiKeyReducer from "../set_mcp_server_api_key_reducer";
 import SetPageEmbeddingReducer from "../set_page_embedding_reducer";
 import SetPropertyValueReducer from "../set_property_value_reducer";
 import SetSharedContextReducer from "../set_shared_context_reducer";
+import SetUserAdminReducer from "../set_user_admin_reducer";
 import SetUserProfileReducer from "../set_user_profile_reducer";
 import SubmitResultReducer from "../submit_result_reducer";
 import TakeSnapshotReducer from "../take_snapshot_reducer";
@@ -145,6 +146,7 @@ export type SetMcpServerApiKeyParams = __Infer<typeof SetMcpServerApiKeyReducer>
 export type SetPageEmbeddingParams = __Infer<typeof SetPageEmbeddingReducer>;
 export type SetPropertyValueParams = __Infer<typeof SetPropertyValueReducer>;
 export type SetSharedContextParams = __Infer<typeof SetSharedContextReducer>;
+export type SetUserAdminParams = __Infer<typeof SetUserAdminReducer>;
 export type SetUserProfileParams = __Infer<typeof SetUserProfileReducer>;
 export type SubmitResultParams = __Infer<typeof SubmitResultReducer>;
 export type TakeSnapshotParams = __Infer<typeof TakeSnapshotReducer>;

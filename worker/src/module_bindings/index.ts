@@ -93,6 +93,7 @@ import SetMcpServerApiKeyReducer from "./set_mcp_server_api_key_reducer";
 import SetPageEmbeddingReducer from "./set_page_embedding_reducer";
 import SetPropertyValueReducer from "./set_property_value_reducer";
 import SetSharedContextReducer from "./set_shared_context_reducer";
+import SetUserAdminReducer from "./set_user_admin_reducer";
 import SetUserProfileReducer from "./set_user_profile_reducer";
 import SubmitResultReducer from "./submit_result_reducer";
 import TakeSnapshotReducer from "./take_snapshot_reducer";
@@ -596,6 +597,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_page_embedding", SetPageEmbeddingReducer),
   __reducerSchema("set_property_value", SetPropertyValueReducer),
   __reducerSchema("set_shared_context", SetSharedContextReducer),
+  __reducerSchema("set_user_admin", SetUserAdminReducer),
   __reducerSchema("set_user_profile", SetUserProfileReducer),
   __reducerSchema("submit_result", SubmitResultReducer),
   __reducerSchema("take_snapshot", TakeSnapshotReducer),

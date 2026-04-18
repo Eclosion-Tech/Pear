@@ -126,6 +126,28 @@ pub struct User {
     pub is_authenticated: bool,
     pub created_at: Timestamp,
     pub last_seen_at: Timestamp,
+    /// Workspace admin flag.
+    ///
+    /// In Pear's trust model an authenticated user can read and edit any
+    /// workspace content (Pages have no per-row ownership check). Admins
+    /// additionally inherit management rights over shared *infrastructure*
+    /// rows that DO have a `created_by` field — `api_endpoint`,
+    /// `api_field_mapping`, `api_endpoint_key` — so a co-worker can clean
+    /// up an orphaned endpoint after a teammate leaves the workspace, a
+    /// stale-tab/wipe accident leaves a row owned by an unreachable
+    /// identity, or an OIDC `sub` rotation strands the original creator.
+    ///
+    /// Bootstrap: the first user to authenticate (native register/login
+    /// or OIDC connect) on a fresh database is auto-promoted to admin.
+    /// After that, only existing admins can promote or demote others via
+    /// `set_user_admin`. The reducer also forbids removing the last admin
+    /// so a workspace can never end up with zero admins.
+    ///
+    /// Extension and AI-user rows deliberately do NOT honor this flag —
+    /// they're per-installer / per-creator by design (see
+    /// `docs/PEAR_EXTENSIONS_SECURITY.MD`).
+    #[default(false)]
+    pub is_admin: bool,
 }
 
 /// Stores hashed credentials — never synced to clients (private).
@@ -546,11 +568,17 @@ pub fn client_connected(ctx: &ReducerContext) {
     let (email, name) = extract_oidc_profile(ctx);
     let via_oidc = !email.is_empty() || !name.is_empty();
 
+    // Bootstrap: the first authenticated user on a fresh database is
+    // auto-promoted to admin. We compute this once before the User row is
+    // inserted/updated so the new row itself can be the bootstrap.
+    let needs_bootstrap_admin = via_oidc && workspace_has_no_admin(ctx);
+
     if let Some(existing) = ctx.db.user().identity().find(&identity) {
         ctx.db.user().identity().update(User {
-            email: if email.is_empty() { existing.email } else { email },
-            name: if name.is_empty() { existing.name } else { name },
+            email: if email.is_empty() { existing.email.clone() } else { email },
+            name: if name.is_empty() { existing.name.clone() } else { name },
             is_authenticated: existing.is_authenticated || via_oidc,
+            is_admin: existing.is_admin || needs_bootstrap_admin,
             last_seen_at: ctx.timestamp,
             ..existing
         });
@@ -560,6 +588,7 @@ pub fn client_connected(ctx: &ReducerContext) {
             name,
             email,
             is_authenticated: via_oidc,
+            is_admin: needs_bootstrap_admin,
             created_at: ctx.timestamp,
             last_seen_at: ctx.timestamp,
         });
@@ -613,11 +642,13 @@ pub fn register(
     });
 
     let identity = ctx.sender();
+    let needs_bootstrap_admin = workspace_has_no_admin(ctx);
     if let Some(existing) = ctx.db.user().identity().find(&identity) {
         ctx.db.user().identity().update(User {
             email,
             name,
             is_authenticated: true,
+            is_admin: existing.is_admin || needs_bootstrap_admin,
             last_seen_at: ctx.timestamp,
             ..existing
         });
@@ -641,15 +672,64 @@ pub fn login(ctx: &ReducerContext, email: String, password: String) -> Result<()
     }
 
     let identity = ctx.sender();
+    let needs_bootstrap_admin = workspace_has_no_admin(ctx);
     if let Some(existing) = ctx.db.user().identity().find(&identity) {
         ctx.db.user().identity().update(User {
             email,
             name: cred.name,
             is_authenticated: true,
+            is_admin: existing.is_admin || needs_bootstrap_admin,
             last_seen_at: ctx.timestamp,
             ..existing
         });
     }
+    Ok(())
+}
+
+/// Promote or demote a workspace user. Only existing admins can call this.
+///
+/// Refuses to demote the last remaining admin so the workspace can never
+/// end up admin-less (which would lock everyone out of orphan-cleanup
+/// operations on shared infrastructure rows).
+#[reducer]
+pub fn set_user_admin(
+    ctx: &ReducerContext,
+    target_identity: Identity,
+    is_admin: bool,
+) -> Result<(), String> {
+    if !sender_is_admin(ctx) {
+        return Err("Only workspace admins can change admin status".to_string());
+    }
+
+    let target = ctx
+        .db
+        .user()
+        .identity()
+        .find(&target_identity)
+        .ok_or("Target user not found")?;
+
+    if target.is_admin == is_admin {
+        return Ok(());
+    }
+
+    if !is_admin && target.is_admin {
+        let other_admins = ctx
+            .db
+            .user()
+            .iter()
+            .filter(|u| u.identity != target_identity && u.is_admin && u.is_authenticated)
+            .count();
+        if other_admins == 0 {
+            return Err(
+                "Cannot demote the last admin — promote another user first".to_string(),
+            );
+        }
+    }
+
+    ctx.db.user().identity().update(User {
+        is_admin,
+        ..target
+    });
     Ok(())
 }
 
@@ -700,6 +780,47 @@ fn extract_oidc_profile(ctx: &ReducerContext) -> (String, String) {
         .unwrap_or("")
         .to_string();
     (email, name)
+}
+
+/// True iff the calling identity is an authenticated workspace admin.
+///
+/// Used by ownership-gated reducers that want to grant admins a management
+/// override on shared infrastructure rows (currently the `api_endpoint`,
+/// `api_field_mapping`, and `api_endpoint_key` family). Anyone querying
+/// this MUST also separately enforce that the row is the right *kind* of
+/// resource for an admin override — extension and AI-user rows are
+/// per-installer / per-creator by design and don't honor this flag.
+fn sender_is_admin(ctx: &ReducerContext) -> bool {
+    ctx.db
+        .user()
+        .identity()
+        .find(&ctx.sender())
+        .map(|u| u.is_admin && u.is_authenticated)
+        .unwrap_or(false)
+}
+
+/// True iff there is currently zero authenticated admin in the workspace.
+/// Drives the bootstrap rule: the first user to authenticate on a fresh
+/// database is auto-promoted, so a workspace can never be admin-less.
+fn workspace_has_no_admin(ctx: &ReducerContext) -> bool {
+    !ctx.db.user().iter().any(|u| u.is_admin && u.is_authenticated)
+}
+
+/// Authorization helper for `created_by`-gated infrastructure reducers.
+/// Returns `Ok(())` if the sender is the original creator OR an admin,
+/// otherwise the standard rejection used by the API endpoint family.
+fn require_creator_or_admin(
+    ctx: &ReducerContext,
+    created_by: Identity,
+    action: &str,
+) -> Result<(), String> {
+    if created_by == ctx.sender() || sender_is_admin(ctx) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Only the creator or a workspace admin can {action}"
+        ))
+    }
 }
 
 /// SHA-256( email + NUL + password + NUL + "pear-auth-v1" ) as lowercase hex.
@@ -4238,9 +4359,7 @@ pub fn update_api_endpoint(
         .find(&endpoint_id)
         .ok_or("API endpoint not found")?;
 
-    if endpoint.created_by != ctx.sender() {
-        return Err("Only the creator can update this endpoint".to_string());
-    }
+    require_creator_or_admin(ctx, endpoint.created_by, "update this endpoint")?;
 
     validate_slug(&slug)?;
     if display_name.trim().is_empty() {
@@ -4280,9 +4399,7 @@ pub fn delete_api_endpoint(ctx: &ReducerContext, endpoint_id: u64) -> Result<(),
         .find(&endpoint_id)
         .ok_or("API endpoint not found")?;
 
-    if endpoint.created_by != ctx.sender() {
-        return Err("Only the creator can delete this endpoint".to_string());
-    }
+    require_creator_or_admin(ctx, endpoint.created_by, "delete this endpoint")?;
 
     // Remove all field mappings
     let mapping_ids: Vec<u64> = ctx
@@ -4330,9 +4447,7 @@ pub fn create_api_field_mapping(
         .find(&endpoint_id)
         .ok_or("API endpoint not found")?;
 
-    if endpoint.created_by != ctx.sender() {
-        return Err("Only the endpoint creator can manage field mappings".to_string());
-    }
+    require_creator_or_admin(ctx, endpoint.created_by, "manage field mappings")?;
 
     validate_field_name(&field_name)?;
 
@@ -4405,9 +4520,7 @@ pub fn update_api_field_mapping(
         .find(&mapping.endpoint_id)
         .ok_or("API endpoint not found")?;
 
-    if endpoint.created_by != ctx.sender() {
-        return Err("Only the endpoint creator can manage field mappings".to_string());
-    }
+    require_creator_or_admin(ctx, endpoint.created_by, "manage field mappings")?;
 
     validate_field_name(&field_name)?;
 
@@ -4454,9 +4567,7 @@ pub fn delete_api_field_mapping(ctx: &ReducerContext, mapping_id: u64) -> Result
         .find(&mapping.endpoint_id)
         .ok_or("API endpoint not found")?;
 
-    if endpoint.created_by != ctx.sender() {
-        return Err("Only the endpoint creator can manage field mappings".to_string());
-    }
+    require_creator_or_admin(ctx, endpoint.created_by, "manage field mappings")?;
 
     ctx.db.api_field_mapping().id().delete(&mapping_id);
     Ok(())
@@ -4481,9 +4592,7 @@ pub fn create_api_endpoint_key(
         .find(&endpoint_id)
         .ok_or("API endpoint not found")?;
 
-    if endpoint.created_by != ctx.sender() {
-        return Err("Only the endpoint creator can manage API keys".to_string());
-    }
+    require_creator_or_admin(ctx, endpoint.created_by, "manage API keys")?;
 
     if label.trim().is_empty() {
         return Err("Key label cannot be empty".to_string());
@@ -4537,9 +4646,7 @@ pub fn revoke_api_endpoint_key(ctx: &ReducerContext, key_id: u64) -> Result<(), 
         .find(&key.endpoint_id)
         .ok_or("API endpoint not found")?;
 
-    if endpoint.created_by != ctx.sender() {
-        return Err("Only the endpoint creator can revoke API keys".to_string());
-    }
+    require_creator_or_admin(ctx, endpoint.created_by, "revoke API keys")?;
 
     ctx.db.api_endpoint_key().id().delete(&key_id);
     Ok(())

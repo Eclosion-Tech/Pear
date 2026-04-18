@@ -83,6 +83,42 @@ guards this transition behind a typed-confirmation modal because flipping
 that switch on a write-enabled endpoint exposes mutations to the entire
 internet.
 
+### Who can manage endpoints and keys
+
+Endpoints, field mappings, and API keys are **shared workspace
+infrastructure**. The reducer family (`update_api_endpoint`,
+`delete_api_endpoint`, `create_api_field_mapping`,
+`update_api_field_mapping`, `delete_api_field_mapping`,
+`create_api_endpoint_key`, `revoke_api_endpoint_key`) routes its
+ownership check through `require_creator_or_admin`, so a mutation is
+accepted from either:
+
+- the original `created_by` identity, or
+- any **workspace admin** (`User.is_admin = true`).
+
+Pear's admin model lives entirely on the `User` table:
+
+- The first user to authenticate on a fresh database is auto-promoted
+  in `client_connected` / `register` / `login`, so a workspace can never
+  start admin-less.
+- Subsequent promotions/demotions go through the admin-only
+  `set_user_admin(target_identity, is_admin)` reducer, which refuses to
+  demote the last remaining admin so a workspace can never *become*
+  admin-less either.
+- The Members panel
+  ([`pear/web/src/components/MembersSettings.tsx`](../web/src/components/MembersSettings.tsx))
+  surfaces every authenticated member with an "Admin" badge and gives
+  admins Promote/Demote controls.
+
+This means an endpoint orphaned by a stale-tab/wipe accident or an
+OIDC `sub` rotation can be deleted by any other admin in the workspace
+without admin SQL — see `docs/SECURITY.md` §9 for the full failure
+mode this resolves.
+
+Extension and AI-user reducers deliberately **do not** honor `is_admin`
+— those rows are per-installer / per-creator by design (see
+`docs/PEAR_EXTENSIONS_SECURITY.MD`).
+
 ### Audit log
 
 Every request — successful or not — is appended to the `ApiCallLog`

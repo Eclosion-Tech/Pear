@@ -492,6 +492,10 @@ fn decode_user(v: &Value) -> Result<User, String> {
         is_authenticated: bool_at(m, "isAuthenticated")?,
         created_at: decode_timestamp(m.get("createdAt").ok_or("createdAt")?)?,
         last_seen_at: decode_timestamp(m.get("lastSeenAt").ok_or("lastSeenAt")?)?,
+        // Optional in older snapshots — defaults to non-admin so an import
+        // never silently grants admin rights. Workspace owner can promote
+        // post-import via `set_user_admin`.
+        is_admin: m.get("isAdmin").and_then(|_| bool_at(m, "isAdmin").ok()).unwrap_or(false),
     })
 }
 

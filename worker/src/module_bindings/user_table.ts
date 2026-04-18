@@ -17,4 +17,5 @@ export default __t.row({
   isAuthenticated: __t.bool().name("is_authenticated"),
   createdAt: __t.timestamp().name("created_at"),
   lastSeenAt: __t.timestamp().name("last_seen_at"),
+  isAdmin: __t.bool().name("is_admin"),
 });

@@ -575,6 +575,7 @@ export const User = __t.object("User", {
   isAuthenticated: __t.bool(),
   createdAt: __t.timestamp(),
   lastSeenAt: __t.timestamp(),
+  isAdmin: __t.bool(),
 });
 export type User = __Infer<typeof User>;
 
