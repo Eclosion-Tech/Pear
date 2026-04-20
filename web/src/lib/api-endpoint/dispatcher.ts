@@ -384,23 +384,29 @@ async function loadEndpointConfig(
   }
   const e = endpoints[0];
 
-  const mappings = await transport.sql<{
-    id: string | number;
-    endpoint_id: string | number;
-    property_definition_id: string | number;
-    field_name: string;
-    required_on_create: boolean | number;
-    default_value: string | null;
-    read_only: boolean | number;
-    field_order: number;
-  }>(
-    `SELECT id, endpoint_id, property_definition_id, field_name,
-            required_on_create, default_value, read_only, field_order
-       FROM api_field_mapping
-      WHERE endpoint_id = ?
-      ORDER BY field_order ASC`,
-    [e.id],
-  );
+  // SpacetimeDB's SQL subset rejects `ORDER BY` on non-indexed columns
+  // (`field_order` has no btree index; only `id` PK and `endpoint_id` do),
+  // so fetch unordered and sort in JS. Mapping counts per endpoint are tiny
+  // — capped by the column count of the underlying database page — so the
+  // O(n log n) is irrelevant.
+  const mappings = (
+    await transport.sql<{
+      id: string | number;
+      endpoint_id: string | number;
+      property_definition_id: string | number;
+      field_name: string;
+      required_on_create: boolean | number;
+      default_value: string | null;
+      read_only: boolean | number;
+      field_order: number;
+    }>(
+      `SELECT id, endpoint_id, property_definition_id, field_name,
+              required_on_create, default_value, read_only, field_order
+         FROM api_field_mapping
+        WHERE endpoint_id = ?`,
+      [e.id],
+    )
+  ).sort((a, b) => a.field_order - b.field_order);
 
   const propIds = mappings.map((m) => m.property_definition_id);
   let properties: Array<{
