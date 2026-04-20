@@ -418,10 +418,12 @@ async function loadEndpointConfig(
     order: number;
   }> = [];
   if (propIds.length > 0) {
+    // STDB's SQL subset doesn't support `IN (...)`; expand to an OR chain
+    // over the indexed PK so the planner still uses the btree.
     properties = await transport.sql<typeof properties[number]>(
       `SELECT id, schema_id, name, property_type, config, "order"
          FROM property_definition
-        WHERE id IN (${propIds.map(() => "?").join(",")})`,
+        WHERE ${orClause("id", propIds.length)}`,
       propIds,
     );
   }
@@ -511,9 +513,11 @@ async function assembleRows(
     property_definition_id: string | number;
     value: SatsPropertyValue;
   }>(
+    // STDB's SQL subset doesn't support `IN (...)` — expand to an OR chain
+    // (page_id has a btree index so the planner still uses it).
     `SELECT page_id, property_definition_id, value
        FROM page_property_value
-      WHERE page_id IN (${ids.map(() => "?").join(",")})`,
+      WHERE ${orClause("page_id", ids.length)}`,
     ids,
   );
 
@@ -768,6 +772,16 @@ function json(status: number, body: unknown, extraHeaders: Record<string, string
 
 function replaceBigInt(_: string, value: unknown): unknown {
   return typeof value === "bigint" ? value.toString() : value;
+}
+
+/** Build `col = ? OR col = ? OR …` for `n` placeholders. SpacetimeDB's SQL
+ * subset rejects `IN (…)`, so callers expand to an OR chain. The placeholder
+ * order matches the params array passed to `transport.sql`. */
+function orClause(col: string, n: number): string {
+  if (n <= 0) {
+    throw new Error(`orClause: n must be >= 1, got ${n}`);
+  }
+  return Array.from({ length: n }, () => `${col} = ?`).join(" OR ");
 }
 
 function errorResponse(err: unknown): Response {
