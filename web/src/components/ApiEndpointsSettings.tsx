@@ -128,8 +128,9 @@ function CreateEndpointForm({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState("");
 
   const createEndpoint = useCreateApiEndpoint();
+  const checkDrift = useIdentityDriftRecovery();
 
-  function handleCreate() {
+  async function handleCreate() {
     setError("");
     if (!databasePageId) {
       setError("Select a database");
@@ -155,15 +156,20 @@ function CreateEndpointForm({ onClose }: { onClose: () => void }) {
       return;
     }
 
-    createEndpoint({
-      databasePageId: BigInt(databasePageId),
-      slug: slug.trim().toLowerCase(),
-      displayName: displayName.trim(),
-      description: description.trim(),
-      allowedMethods: allowedMethods as never,
-      requireAuth,
-    });
-    onClose();
+    try {
+      await createEndpoint({
+        databasePageId: BigInt(databasePageId),
+        slug: slug.trim().toLowerCase(),
+        displayName: displayName.trim(),
+        description: description.trim(),
+        allowedMethods: allowedMethods as never,
+        requireAuth,
+      });
+      onClose();
+    } catch (err) {
+      if (checkDrift(err, "create the API endpoint")) return;
+      setError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   return (
@@ -460,17 +466,40 @@ function FieldMappingRow({
 
   const updateMapping = useUpdateApiFieldMapping();
   const deleteMapping = useDeleteApiFieldMapping();
+  const checkDrift = useIdentityDriftRecovery();
 
-  function handleSave() {
-    updateMapping({
-      mappingId: mapping.id,
-      fieldName: fieldName.trim().toLowerCase().replace(/[^a-z0-9_]/g, ""),
-      requiredOnCreate: required,
-      defaultValue: mapping.defaultValue ?? undefined,
-      readOnly,
-      fieldOrder: mapping.fieldOrder,
-    });
-    setEditing(false);
+  async function handleSave() {
+    try {
+      await updateMapping({
+        mappingId: mapping.id,
+        fieldName: fieldName.trim().toLowerCase().replace(/[^a-z0-9_]/g, ""),
+        requiredOnCreate: required,
+        defaultValue: mapping.defaultValue ?? undefined,
+        readOnly,
+        fieldOrder: mapping.fieldOrder,
+      });
+      setEditing(false);
+    } catch (err) {
+      if (checkDrift(err, "update the field mapping")) return;
+      alert(
+        `Failed to update field mapping: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+  }
+
+  async function handleDelete() {
+    try {
+      await deleteMapping({ mappingId: mapping.id });
+    } catch (err) {
+      if (checkDrift(err, "delete the field mapping")) return;
+      alert(
+        `Failed to delete field mapping: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
   }
 
   if (editing) {
@@ -544,7 +573,7 @@ function FieldMappingRow({
           Edit
         </button>
         <button
-          onClick={() => deleteMapping({ mappingId: mapping.id })}
+          onClick={handleDelete}
           className="text-xs text-red-500 hover:text-red-700 dark:hover:text-red-400"
         >
           Remove
@@ -791,6 +820,7 @@ function EndpointDetail({
 
   const deleteEndpoint = useDeleteApiEndpoint();
   const updateEndpoint = useUpdateApiEndpoint();
+  const checkDrift = useIdentityDriftRecovery();
 
   const [disableAuthModalOpen, setDisableAuthModalOpen] = useState(false);
   const [showDocs, setShowDocs] = useState(false);
@@ -804,15 +834,45 @@ function EndpointDetail({
     [endpointUrl]
   );
 
-  function applyAuthChange(nextRequireAuth: boolean) {
-    updateEndpoint({
-      endpointId: endpoint.id,
-      slug: endpoint.slug,
-      displayName: endpoint.displayName,
-      description: endpoint.description,
-      allowedMethods: endpoint.allowedMethods,
-      requireAuth: nextRequireAuth,
-    });
+  async function applyAuthChange(nextRequireAuth: boolean) {
+    try {
+      await updateEndpoint({
+        endpointId: endpoint.id,
+        slug: endpoint.slug,
+        displayName: endpoint.displayName,
+        description: endpoint.description,
+        allowedMethods: endpoint.allowedMethods,
+        requireAuth: nextRequireAuth,
+      });
+    } catch (err) {
+      if (checkDrift(err, "update the endpoint's auth setting")) return;
+      alert(
+        `Failed to update endpoint: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+  }
+
+  async function handleDeleteEndpoint() {
+    if (
+      !confirm(
+        `Delete endpoint "${endpoint.displayName}"? This will also delete all field mappings and API keys.`
+      )
+    ) {
+      return;
+    }
+    try {
+      await deleteEndpoint({ endpointId: endpoint.id });
+      onClose();
+    } catch (err) {
+      if (checkDrift(err, "delete the endpoint")) return;
+      alert(
+        `Failed to delete endpoint: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
   }
 
   function handleAuthToggleClick() {
@@ -977,16 +1037,7 @@ function EndpointDetail({
         {/* Danger zone */}
         <div className="pt-3 border-t border-neutral-200 dark:border-neutral-700">
           <button
-            onClick={() => {
-              if (
-                confirm(
-                  `Delete endpoint "${endpoint.displayName}"? This will also delete all field mappings and API keys.`
-                )
-              ) {
-                deleteEndpoint({ endpointId: endpoint.id });
-                onClose();
-              }
-            }}
+            onClick={handleDeleteEndpoint}
             className="text-xs text-red-500 hover:text-red-700 dark:hover:text-red-400"
           >
             Delete Endpoint

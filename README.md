@@ -191,6 +191,51 @@ NEXT_PUBLIC_OIDC_AUTHORITY=https://your-provider.example.com
 NEXT_PUBLIC_OIDC_CLIENT_ID=pear
 ```
 
+#### IdP requirements
+
+For the Pear module to populate the workspace `User` row and auto-promote the first authenticated user to admin, the **ID token** (not the `userinfo` endpoint) must contain at minimum one of `email`, `name`, or `preferred_username`. SpacetimeDB validates the JWT against your provider's JWKS and the `client_connected` reducer reads the profile claims directly off the JWT payload — there is no userinfo round-trip from the module.
+
+Both placements are valid per OIDC Core §5, but many IdPs default to the minimal-ID-token configuration (claims live in `userinfo` only). If your IdP does this, configure it to also emit the claims in the ID token when the corresponding scopes are granted:
+
+| Scope | ID-token claims |
+|------|-----------------|
+| `email` | `email`, `email_verified` |
+| `profile` | `name`, `preferred_username` (others optional: `given_name`, `family_name`, `picture`, `updated_at`) |
+
+Provider-specific notes:
+
+- **Keycloak** — Client → *Client scopes* → `email`/`profile` → *Mappers* → ensure each mapper has *"Add to ID token"* enabled.
+- **Authentik** — Provider → *Property mappings* → make sure `email` and `profile` scope mappings have `userinfo: true` **and** `id_token: true`.
+- **Auth0** — Action triggered on Post-Login: `api.idToken.setCustomClaim('email', event.user.email)` (built-in claims are normally already in the ID token by default for `openid email profile` scopes).
+- **Cognito** — User pool → App integration → App client → ensure `email` and `name` are checked under *"Allowed read attributes"* and the corresponding scopes are requested.
+
+#### Verifying the ID token
+
+After login, decode the ID token (JWT) at <https://jwt.io> or with `jq`:
+
+```bash
+echo "$ID_TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null | jq .
+```
+
+The payload should include `email`, `name`, and/or `preferred_username` alongside the standard `iss`/`sub`/`aud`/`iat`/`exp`. If only the standard claims are present, the User row will land `is_authenticated=false` and the **Members** section in workspace settings will appear empty — that's the smoke test.
+
+#### Custom auth bridges
+
+If you're wiring a non-standard auth provider (or building Pear into another product), pass the JWT to SpacetimeDB at connect time:
+
+```ts
+import { DbConnection } from "./module_bindings";
+
+const conn = DbConnection.builder()
+  .withUri(wsUri)
+  .withDatabaseName(dbName)
+  .withToken(idToken)  // your IdP's ID token (RS256 JWT, validated by your IdP's JWKS)
+  .onConnect((c, identity) => { /* ... */ })
+  .build();
+```
+
+The identity SpacetimeDB derives is `SHA-256(iss ‖ sub)`, so the same user from the same IdP always maps to the same `Identity` across browsers/devices. The first authenticated user on a fresh database is auto-promoted to admin; subsequent admin changes go through `set_user_admin` and are gated on the caller already being admin.
+
 ---
 
 ## Backend API surface
