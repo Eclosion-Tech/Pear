@@ -38,6 +38,13 @@ import { EndpointConfigCache } from "./cache";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 500;
+/**
+ * Hard ceiling on rows pulled from STDB before JS-side sort + paginate.
+ * STDB's SQL subset doesn't accept `ORDER BY` on non-indexed columns nor
+ * `OFFSET`, so deep pagination (offset > MAX_LIST_FETCH) effectively isn't
+ * supported. Revisit with cursor-based paging if we ever need it.
+ */
+const MAX_LIST_FETCH = 1000;
 
 export interface DispatchArgs {
   /** Full request URL — used to read query params and build self-links. */
@@ -184,25 +191,47 @@ async function listRows(
   );
   const offset = Math.max(0, Number(url.searchParams.get("offset") ?? 0));
 
-  const pages = await transport.sql<{
-    id: string | number;
-    title: string;
-    sort_order: number;
-    created_at?: string;
-    updated_at?: string;
-  }>(
-    `SELECT id, title, sort_order, created_at, updated_at
-       FROM page
-      WHERE parent_id = ?
-        AND deleted_at IS NULL
-        AND page_type = 'Database'
-      ORDER BY sort_order ASC, id ASC
-      LIMIT ?
-     OFFSET ?`,
-    [config.endpoint.databasePageId, limit, offset],
-  );
+  // STDB's SQL subset is restrictive in several ways we still have to
+  // work around in JS:
+  //   • no `ORDER BY` on non-indexed columns (`sort_order` isn't indexed)
+  //   • no `OFFSET`
+  //   • no `IS NULL`
+  //   • enum/sum-typed columns like `page_type` can't be compared to a
+  //     string literal at the planner level
+  // We CAN now filter on `parent_pk` (the non-nullable indexed shadow of
+  // `parent_id` added in pear's STDB module) — the original `parent_id`
+  // is `Option<u64>` and STDB rejects `WHERE parent_id = 1` because it
+  // can't parse the literal as a sum type (clockworklabs/SpacetimeDB#2696).
+  // So fetch a bounded window keyed on the indexed `parent_pk` predicate,
+  // then filter + sort + paginate in JS. The hard ceiling protects us
+  // against pathological databases with millions of rows; if a workspace
+  // ever bumps it we can revisit with cursor-based paging.
+  const fetchCap = Math.min(MAX_LIST_FETCH, offset + limit + 1);
+  const pages = (
+    await transport.sql<{
+      id: string | number;
+      title: string;
+      sort_order: number;
+      page_type: unknown;
+      deleted_at: string | null;
+      created_at?: string;
+      updated_at?: string;
+    }>(
+      `SELECT id, title, sort_order, page_type, deleted_at, created_at, updated_at
+         FROM page
+        WHERE parent_pk = ?
+        LIMIT ?`,
+      [config.endpoint.databasePageId, fetchCap],
+    )
+  )
+    .filter((p) => p.deleted_at === null && isDatabasePageType(p.page_type))
+    .sort((a, b) => {
+      if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+      return Number(a.id) - Number(b.id);
+    });
 
-  const rows = await assembleRows(transport, config, pages);
+  const windowed = pages.slice(offset, offset + limit);
+  const rows = await assembleRows(transport, config, windowed);
 
   const body: ListBody = {
     data: rows,
@@ -462,21 +491,37 @@ async function loadEndpointConfig(
   return config;
 }
 
+/**
+ * Tag-index order MUST match the order of variants on the Rust enum
+ * `HttpMethod` in `pear/server/spacetimedb/src/lib.rs`. SpacetimeDB's
+ * SQL HTTP response sometimes encodes a `Vec<HttpMethod>` as a list of
+ * BSATN tag indices (e.g. `[0, 1, 2, 3]`) instead of named-variant objects,
+ * so we need a stable index → name map.
+ */
+const HTTP_METHOD_TAGS = ["GET", "POST", "PATCH", "DELETE"] as const;
+
 function parseAllowedMethods(raw: unknown): HttpMethodName[] {
-  // SpacetimeDB returns Vec<HttpMethod> as a JSON array of either
-  // `"Get"` strings or `{ "Get": [] }` objects depending on version. Be
-  // defensive: accept both.
+  // SpacetimeDB's SQL HTTP endpoint encodes `Vec<HttpMethod>` in several
+  // shapes depending on version. Accept everything we've seen:
+  //   • `"Get"`                       — bare variant name
+  //   • `{ "Get": [] }`               — object with variant key
+  //   • `{ "tag": "Get" }`            — explicit tag wrapper
+  //   • `{ "tag": 0, "value": [] }`   — numeric-tag wrapper
+  //   • `[0, []]`                     — [tag, value] tuple
+  //   • `0`                           — bare tag index (BSATN ordering)
   if (Array.isArray(raw)) {
-    return raw
-      .map((v) => {
-        if (typeof v === "string") return v.toUpperCase() as HttpMethodName;
-        if (typeof v === "object" && v !== null) {
-          const tag = Object.keys(v as object)[0];
-          return tag.toUpperCase() as HttpMethodName;
-        }
-        return null;
-      })
+    const parsed = raw
+      .map((v) => decodeHttpMethod(v))
       .filter((m): m is HttpMethodName => m !== null);
+    if (parsed.length === 0 && raw.length > 0) {
+      // We received a non-empty list but recognised none of it. Surface
+      // the raw payload to logs so the next investigation has data.
+      console.warn(
+        "parseAllowedMethods: failed to decode Vec<HttpMethod>; raw =",
+        JSON.stringify(raw),
+      );
+    }
+    return parsed;
   }
   if (typeof raw === "string") {
     try {
@@ -485,7 +530,68 @@ function parseAllowedMethods(raw: unknown): HttpMethodName[] {
       return [];
     }
   }
+  if (raw != null) {
+    console.warn(
+      "parseAllowedMethods: expected array, got",
+      typeof raw,
+      "—",
+      JSON.stringify(raw),
+    );
+  }
   return [];
+}
+
+/**
+ * STDB enum-variant ordering for `PageType` in
+ * `pear/server/spacetimedb/src/lib.rs` line 17. Same multi-shape encoding
+ * problem as `HttpMethod` — STDB's SQL HTTP can return any of: bare string,
+ * `{ "Database": [] }`, `{ "tag": ... }`, `[tag, value]`, or bare BSATN
+ * tag index. Decode and check against the variant we care about.
+ */
+const PAGE_TYPE_TAGS = ["DOC", "DATABASE"] as const;
+
+function isDatabasePageType(v: unknown): boolean {
+  return decodeEnumVariant(v, PAGE_TYPE_TAGS) === "DATABASE";
+}
+
+/**
+ * Generic decoder for STDB sum-type variants. Returns the upper-cased
+ * variant name if it matches one of the provided tags, otherwise null.
+ */
+function decodeEnumVariant<T extends readonly string[]>(
+  v: unknown,
+  tags: T,
+): T[number] | null {
+  if (typeof v === "string") {
+    const upper = v.toUpperCase();
+    return (tags as readonly string[]).includes(upper)
+      ? (upper as T[number])
+      : null;
+  }
+  if (typeof v === "number") {
+    return (tags[v] ?? null) as T[number] | null;
+  }
+  if (Array.isArray(v) && v.length >= 1) {
+    return decodeEnumVariant(v[0], tags);
+  }
+  if (typeof v === "object" && v !== null) {
+    const obj = v as Record<string, unknown>;
+    if ("tag" in obj) {
+      return decodeEnumVariant(obj.tag, tags);
+    }
+    const firstKey = Object.keys(obj)[0];
+    if (firstKey !== undefined) {
+      const upper = firstKey.toUpperCase();
+      return (tags as readonly string[]).includes(upper)
+        ? (upper as T[number])
+        : null;
+    }
+  }
+  return null;
+}
+
+function decodeHttpMethod(v: unknown): HttpMethodName | null {
+  return decodeEnumVariant(v, HTTP_METHOD_TAGS) as HttpMethodName | null;
 }
 
 async function assembleRows(

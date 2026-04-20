@@ -501,9 +501,10 @@ fn decode_user(v: &Value) -> Result<User, String> {
 
 fn decode_page(v: &Value) -> Result<Page, String> {
     let m = obj(v, "page")?;
+    let parent_id = opt_u64_at(m, "parentId")?;
     Ok(Page {
         id: u64_at(m, "id")?,
-        parent_id: opt_u64_at(m, "parentId")?,
+        parent_id,
         page_type: decode_page_type(m.get("pageType").ok_or("pageType")?)?,
         title: string_at(m, "title")?,
         sort_order: u64_at(m, "sortOrder")? as u32,
@@ -513,6 +514,7 @@ fn decode_page(v: &Value) -> Result<Page, String> {
         updated_at: decode_timestamp(m.get("updatedAt").ok_or("updatedAt")?)?,
         deleted_at: opt_timestamp_at(m, "deletedAt")?,
         icon: opt_string_at(m, "icon")?,
+        parent_pk: parent_id.unwrap_or(0),
     })
 }
 

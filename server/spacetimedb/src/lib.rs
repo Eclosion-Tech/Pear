@@ -115,6 +115,27 @@ pub enum InferenceProvider {
 // Tables
 // ============================================================
 
+/// Records which one-shot data migrations have already run on this database.
+///
+/// CONTRACT: lifecycle's provisioner calls `run_pending_migrations` after
+/// every successful `publish_module` (both new provisions and version
+/// upgrades). The reducer is responsible for deciding what's new based on
+/// rows in this table — it MUST NOT re-run a migration whose key is
+/// already recorded. See `run_pending_migrations` for the canonical list.
+///
+/// Keys are free-form strings (e.g. `"page_parent_pk_backfill_v1"`) and
+/// MUST be unique-and-stable across releases — once recorded, the same
+/// key will never re-run, so changing data semantics requires a new key.
+#[table(accessor = migration_state, public)]
+pub struct MigrationState {
+    #[primary_key]
+    pub key: String,
+    pub completed_at: Timestamp,
+    /// Module version (`Cargo.toml`'s `[package].version`) that introduced
+    /// this migration. Stored for forensics — not used for dispatch.
+    pub module_version: String,
+}
+
 /// Connected user — upserted on every client_connected event.
 /// is_authenticated is set to true only after a successful login/register call.
 #[table(accessor = user, public)]
@@ -180,9 +201,29 @@ pub struct Page {
     pub updated_at: Timestamp,
     /// None = active, Some = soft deleted. Hard purge after 30 days.
     pub deleted_at: Option<Timestamp>,
-    /// Optional emoji/icon (single character or short string) for sidebar and header. Must be last for schema migration.
+    /// Optional emoji/icon (single character or short string) for sidebar and header.
     #[default(Option::<String>::None)]
     pub icon: Option<String>,
+    /// Indexed shadow of `parent_id` with `0` representing root.
+    ///
+    /// WHY: SpacetimeDB's SQL HTTP subset cannot filter `Option<T>` columns by
+    /// literal — `WHERE parent_id = 1` errors with `"The literal expression
+    /// '1' cannot be parsed as type '(some: U64 | none: ())'"` (see
+    /// clockworklabs/SpacetimeDB#2696, closed wontfix). Custom API endpoint
+    /// dispatch needs to scan all rows of a database page (= "child rows of
+    /// parent X"), so we mirror `parent_id` into a non-nullable indexed
+    /// column that the SQL planner is happy to filter on.
+    ///
+    /// INVARIANT: every reducer that writes `parent_id` MUST also write
+    /// `parent_pk = parent_id.unwrap_or(0)`. The `page_parent_pk_backfill_v1`
+    /// migration step (in `run_pending_migrations`) one-shots existing rows
+    /// after a deploy.
+    ///
+    /// Must be last for schema migration (STDB only allows additive changes
+    /// at the end of a struct).
+    #[index(btree)]
+    #[default(0u64)]
+    pub parent_pk: u64,
 }
 
 /// Separated from Page so listing/filtering never loads content blobs.
@@ -555,6 +596,79 @@ pub fn init(ctx: &ReducerContext) {
 #[reducer]
 pub fn seed_builtin_extensions(ctx: &ReducerContext) -> Result<(), String> {
     seed_builtin_extensions_inner(ctx);
+    Ok(())
+}
+
+// ----------------------------------------------------------------------
+// Migrations: standardised post-upgrade hook
+// ----------------------------------------------------------------------
+//
+// CONTRACT (lifecycle ↔ pear module):
+//
+//   After every successful `publish_module` call (both fresh provisions
+//   and version upgrades), pear-cloud's lifecycle calls the
+//   `run_pending_migrations` reducer with the workspace's admin token.
+//
+//   Each migration step:
+//     1. Has a stable, unique key (string).
+//     2. Checks `MigrationState` for that key — skips if already recorded.
+//     3. Runs its work (typically a backfill or one-shot data transform).
+//     4. Inserts a `MigrationState` row to mark itself complete.
+//
+// Keys are append-only — once shipped, NEVER rename or re-use one. To
+// re-run the SAME logic on already-migrated databases, define a new key
+// with a `_v2` suffix.
+//
+// New migrations are added by:
+//   - Implementing the body as a private `fn` returning `Result<(), String>`.
+//   - Appending a `run_step!(ctx, "<key>", <fn>);` line to
+//     `run_pending_migrations` below.
+//
+// Failure of any step short-circuits the whole reducer — the next tick of
+// the lifecycle upgrader will retry. State is committed per-step, so a
+// partial failure doesn't roll back already-completed migrations.
+
+/// Standardised post-publish hook called by lifecycle after every
+/// `publish_module`. Idempotent and safe to call repeatedly. Adds new
+/// `MigrationState` rows for any unfinished migrations.
+#[reducer]
+pub fn run_pending_migrations(ctx: &ReducerContext) -> Result<(), String> {
+    macro_rules! run_step {
+        ($ctx:expr, $key:expr, $body:expr) => {{
+            let key: &str = $key;
+            if $ctx.db.migration_state().key().find(&key.to_string()).is_none() {
+                $body($ctx)?;
+                $ctx.db.migration_state().insert(MigrationState {
+                    key: key.to_string(),
+                    completed_at: $ctx.timestamp,
+                    module_version: env!("CARGO_PKG_VERSION").to_string(),
+                });
+                log::info!("migration completed: {key}");
+            }
+        }};
+    }
+
+    run_step!(ctx, "page_parent_pk_backfill_v1", backfill_page_parent_pk_inner);
+    Ok(())
+}
+
+/// Backfill `Page.parent_pk` from `Page.parent_id` for rows that predate
+/// the field. Skips soft-deleted pages (the API gateway never queries
+/// them) so the on-disk diff stays small.
+fn backfill_page_parent_pk_inner(ctx: &ReducerContext) -> Result<(), String> {
+    let stale: Vec<Page> = ctx
+        .db
+        .page()
+        .iter()
+        .filter(|p| p.deleted_at.is_none() && p.parent_pk != p.parent_id.unwrap_or(0))
+        .collect();
+
+    let n = stale.len();
+    for page in stale {
+        let parent_pk = page.parent_id.unwrap_or(0);
+        ctx.db.page().id().update(Page { parent_pk, ..page });
+    }
+    log::info!("page_parent_pk_backfill_v1: updated {n} rows");
     Ok(())
 }
 
@@ -1417,6 +1531,7 @@ pub fn create_page(
         created_at: ctx.timestamp,
         updated_at: ctx.timestamp,
         deleted_at: None,
+        parent_pk: parent_id.unwrap_or(0),
     });
     ctx.db.page_content().insert(PageContent {
         page_id: page.id,
@@ -1476,6 +1591,7 @@ pub fn move_page(
         if sibling.id == page_id {
             ctx.db.page().id().update(Page {
                 parent_id: new_parent_id,
+                parent_pk: new_parent_id.unwrap_or(0),
                 sort_order: new_order,
                 updated_at: ctx.timestamp,
                 ..sibling
@@ -1724,6 +1840,7 @@ pub fn purge_page(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
         if let Some(child) = ctx.db.page().id().find(&cid) {
             ctx.db.page().id().update(Page {
                 parent_id: page.parent_id,
+                parent_pk: page.parent_id.unwrap_or(0),
                 updated_at: ctx.timestamp,
                 ..child
             });
@@ -4722,6 +4839,7 @@ pub fn create_database_row(
         created_at: ctx.timestamp,
         updated_at: ctx.timestamp,
         deleted_at: None,
+        parent_pk: database_page_id,
     });
     ctx.db.page_content().insert(PageContent {
         page_id: row.id,
