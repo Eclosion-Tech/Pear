@@ -82,6 +82,7 @@ import RestorePageReducer from "./restore_page_reducer";
 import RestorePageToSnapshotReducer from "./restore_page_to_snapshot_reducer";
 import RevokeApiEndpointKeyReducer from "./revoke_api_endpoint_key_reducer";
 import RevokeExtensionPermissionReducer from "./revoke_extension_permission_reducer";
+import RunPendingMigrationsReducer from "./run_pending_migrations_reducer";
 import SaveYjsStateReducer from "./save_yjs_state_reducer";
 import SeedAgentInstructionPropertyReducer from "./seed_agent_instruction_property_reducer";
 import SeedBuiltinExtensionsReducer from "./seed_builtin_extensions_reducer";
@@ -133,6 +134,7 @@ import DatabaseSchemaRow from "./database_schema_table";
 import DatabaseViewRow from "./database_view_table";
 import ExtensionManifestRow from "./extension_manifest_table";
 import InstalledExtensionRow from "./installed_extension_table";
+import MigrationStateRow from "./migration_state_table";
 import OrchaAgentRow from "./orcha_agent_table";
 import OrchaJobRow from "./orcha_job_table";
 import OrchaSharedContextRow from "./orcha_shared_context_table";
@@ -354,6 +356,17 @@ const tablesSchema = __schema({
       { name: 'installed_extension_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, InstalledExtensionRow),
+  migration_state: __table({
+    name: 'migration_state',
+    indexes: [
+      { name: 'key', algorithm: 'btree', columns: [
+        'key',
+      ] },
+    ],
+    constraints: [
+      { name: 'migration_state_key_key', constraint: 'unique', columns: ['key'] },
+    ],
+  }, MigrationStateRow),
   orcha_agent: __table({
     name: 'orcha_agent',
     indexes: [
@@ -426,6 +439,9 @@ const tablesSchema = __schema({
       ] },
       { name: 'parent_id', algorithm: 'btree', columns: [
         'parentId',
+      ] },
+      { name: 'parent_pk', algorithm: 'btree', columns: [
+        'parentPk',
       ] },
     ],
     constraints: [
@@ -586,6 +602,7 @@ const reducersSchema = __reducers(
   __reducerSchema("restore_page_to_snapshot", RestorePageToSnapshotReducer),
   __reducerSchema("revoke_api_endpoint_key", RevokeApiEndpointKeyReducer),
   __reducerSchema("revoke_extension_permission", RevokeExtensionPermissionReducer),
+  __reducerSchema("run_pending_migrations", RunPendingMigrationsReducer),
   __reducerSchema("save_yjs_state", SaveYjsStateReducer),
   __reducerSchema("seed_agent_instruction_property", SeedAgentInstructionPropertyReducer),
   __reducerSchema("seed_builtin_extensions", SeedBuiltinExtensionsReducer),
