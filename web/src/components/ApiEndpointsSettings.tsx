@@ -908,7 +908,13 @@ export function ApiEndpointsSettings() {
   const [showCreate, setShowCreate] = useState(false);
   const [selectedId, setSelectedId] = useState<bigint | null>(null);
 
-  if (!isReady) return null;
+  // NOTE: we deliberately do NOT early-return null when !isReady.
+  // `useTable` flips isReady back to false momentarily after every reducer
+  // call (create/delete/rotate) while STDB re-applies the row set — if we
+  // unmount the whole <section> on that flip the operator sees the entire
+  // panel vanish for a frame and then reappear, which looks like the
+  // mutation broke the UI. Render a stable shell instead and only show
+  // a transient loading state in the content area.
 
   return (
     <section className="mb-10">
@@ -927,7 +933,13 @@ export function ApiEndpointsSettings() {
         </button>
       </div>
 
-      {endpoints.length === 0 && !showCreate && (
+      {!isReady && endpoints.length === 0 && (
+        <p className="text-sm text-neutral-500 dark:text-neutral-400 py-3">
+          Loading…
+        </p>
+      )}
+
+      {isReady && endpoints.length === 0 && !showCreate && (
         <p className="text-sm text-neutral-500 dark:text-neutral-400 py-3">
           No API endpoints configured. Create one to expose a database for
           external access.
