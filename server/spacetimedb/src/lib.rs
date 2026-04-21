@@ -4131,9 +4131,20 @@ pub struct ApiFieldMapping {
 }
 
 /// Scoped API key for authenticating external requests to a custom endpoint.
-/// Private table — only the SHA-256 hash of the key is stored; the raw key
-/// is shown once at creation and never persisted.
-#[table(accessor = api_endpoint_key, private)]
+/// Public table with row-level visibility — only the SHA-256 hash of the key
+/// is stored; the raw key is shown once at creation and never persisted.
+///
+/// RLS (see `API_ENDPOINT_KEY_FILTER` below): each row is visible to the
+/// `created_by` identity (the human who minted it) and to module owners
+/// (lifecycle / worker / per-workspace service identity used by the API
+/// gateway). That lets the workspace UI render label / created_at /
+/// last_used_at to the operator who created the key, without leaking those
+/// fields to other workspace members or anonymous callers.
+///
+/// Anonymous Bearer-token validation by the API gateway uses the separate
+/// `api_endpoint_key_lookup` view below — see its doc comment for why both
+/// shapes exist.
+#[table(accessor = api_endpoint_key, public)]
 pub struct ApiEndpointKey {
     #[primary_key]
     #[auto_inc]
@@ -4156,20 +4167,20 @@ pub struct ApiEndpointKey {
 /// Public projection of `api_endpoint_key` for anonymous Bearer-token
 /// validation by the HTTP API gateway.
 ///
-/// Why this exists: `api_endpoint_key` is a `private` table so its full row
-/// (including human label and creator identity) never syncs to client
-/// subscriptions. But the public HTTP gateway runs as a per-workspace service
-/// identity that is NOT the database owner, and SpacetimeDB rejects
-/// `SELECT … FROM api_endpoint_key …` from non-owners with a 403. This view
-/// re-exposes only the fields a Bearer-token check needs (`key_hash`,
-/// `endpoint_id`, `allowed_methods`, `expires_at`, plus the row id for audit
-/// logging). Callers query it via SQL with a `WHERE key_hash = '…'` filter.
+/// Why this still exists after `api_endpoint_key` went public-with-RLS:
+/// the API gateway authenticates as the per-workspace service identity (NOT
+/// the human creator), which is unrelated to any `created_by`. RLS on the
+/// real table would correctly hide every row from it. The view bypasses RLS
+/// (it's anonymous public) and re-exposes only the fields a Bearer-token
+/// check needs (`key_hash`, `endpoint_id`, `allowed_methods`, `expires_at`,
+/// plus the row id for audit logging). Callers query it via SQL with a
+/// `WHERE key_hash = '…'` filter.
 ///
 /// Security note: `key_hash` is the SHA-256 of a 256-bit random secret, so
 /// publishing it in this projection does not let an attacker forge auth — the
 /// plaintext token is still required in the `Authorization` header. Fields
 /// that DO leak metadata (`label`, `created_by`, `created_at`, `last_used_at`)
-/// remain private.
+/// stay on the underlying table behind RLS.
 #[derive(SpacetimeType, Clone, Debug)]
 pub struct ApiEndpointKeyLookupRow {
     pub id: u64,
@@ -4178,6 +4189,22 @@ pub struct ApiEndpointKeyLookupRow {
     pub allowed_methods: Vec<HttpMethod>,
     pub expires_at: Option<Timestamp>,
 }
+
+/// Row-level visibility filter for `api_endpoint_key`. The creator (the
+/// human who minted the key) sees their own keys' full metadata (label,
+/// created_at, last_used_at, allowed_methods, expires_at). Module owners
+/// (workspace admin / lifecycle / worker) bypass this filter automatically
+/// and see every row, which is required for the gateway's bearer-token
+/// resolution and for backfills.
+///
+/// We deliberately do NOT join through `api_endpoint.created_by` here:
+/// keys are scoped per-mint, not per-endpoint. If endpoint ownership
+/// changes (today there's no UI for this; tomorrow there might be), each
+/// minter still controls their own keys until they explicitly revoke.
+#[client_visibility_filter]
+const API_ENDPOINT_KEY_FILTER: Filter = Filter::Sql(
+    "SELECT * FROM api_endpoint_key WHERE created_by = :sender",
+);
 
 #[view(accessor = api_endpoint_key_lookup, public)]
 fn api_endpoint_key_lookup(ctx: &AnonymousViewContext) -> Vec<ApiEndpointKeyLookupRow> {

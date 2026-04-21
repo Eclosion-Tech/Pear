@@ -13,12 +13,11 @@ import {
   useUpdateApiFieldMapping,
   useDeleteApiFieldMapping,
   useCreateApiFieldMapping,
-  useCreateApiEndpointKey,
-  useRevokeApiEndpointKey,
   type ApiEndpointRow,
 } from "@/src/hooks/useApiEndpoints";
 import { useIdentityDriftRecovery } from "@/src/hooks/useIdentityDriftRecovery";
 import { resolveEndpointUrl } from "@/src/lib/api-endpoint";
+import { ApiEndpointKeysPanel } from "./api-endpoints/ApiEndpointKeysPanel";
 
 /**
  * Stoplight Elements is a ~600KB dependency that's only needed when the
@@ -95,14 +94,6 @@ function allowedMethodsList(endpoint: ApiEndpointRow) {
   return endpoint.allowedMethods
     .map((m) => httpMethodLabel(m.tag))
     .join(", ");
-}
-
-async function sha256Hex(text: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(text);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 // ── Create Endpoint Form ──────────────────────────────────────────────────────
@@ -297,155 +288,6 @@ function CreateEndpointForm({ onClose }: { onClose: () => void }) {
           </button>
         </div>
       </div>
-    </div>
-  );
-}
-
-// ── API Key Management ────────────────────────────────────────────────────────
-
-function ApiKeySection({ endpointId }: { endpointId: bigint }) {
-  const [showCreate, setShowCreate] = useState(false);
-  const [label, setLabel] = useState("");
-  const [generatedKey, setGeneratedKey] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
-
-  const createKey = useCreateApiEndpointKey();
-  const checkDrift = useIdentityDriftRecovery();
-
-  const handleCreateKey = useCallback(async () => {
-    if (!label.trim() || pending) return;
-
-    setError(null);
-    setPending(true);
-
-    const rawKey = `pear_${crypto.randomUUID().replace(/-/g, "")}`;
-    const keyHash = await sha256Hex(rawKey);
-
-    const allMethods = [
-      { tag: "Get" as const },
-      { tag: "Post" as const },
-      { tag: "Patch" as const },
-      { tag: "Delete" as const },
-    ];
-
-    try {
-      // The SDK returns a Promise that rejects with `SenderError` if the
-      // reducer returns `Err(_)` (e.g. ownership check failures). Without
-      // awaiting, we'd happily display `rawKey` to the user even though it
-      // was never persisted, leaving them with a "valid-looking" key that
-      // 401s every request.
-      await createKey({
-        endpointId,
-        keyHash,
-        label: label.trim(),
-        allowedMethods: allMethods as never,
-        expiresAt: undefined,
-      });
-      setGeneratedKey(rawKey);
-      setLabel("");
-    } catch (err) {
-      // Identity-mismatch means the local SDK identity doesn't match the
-      // endpoint's `created_by` — almost always a stale-tab / wipe-orphan
-      // scenario. Don't just show a red error; bounce to login so the
-      // connection can be re-established. See `docs/SECURITY.md` §10.
-      if (checkDrift(err, "create an API key")) return;
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setPending(false);
-    }
-  }, [label, endpointId, createKey, pending, checkDrift]);
-
-  const handleCopy = useCallback(() => {
-    if (generatedKey) {
-      navigator.clipboard.writeText(generatedKey);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  }, [generatedKey]);
-
-  if (generatedKey) {
-    return (
-      <div className="mt-3 p-3 border border-amber-300 dark:border-amber-600 rounded bg-amber-50 dark:bg-amber-900/20">
-        <p className="text-xs font-medium text-amber-800 dark:text-amber-300 mb-2">
-          Copy this key now — it will not be shown again.
-        </p>
-        <div className="flex items-center gap-2">
-          <code className="flex-1 text-xs bg-white dark:bg-neutral-800 px-2 py-1 rounded border border-neutral-200 dark:border-neutral-700 font-mono break-all text-neutral-900 dark:text-neutral-100">
-            {generatedKey}
-          </code>
-          <button
-            onClick={handleCopy}
-            className="px-2 py-1 text-xs bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 rounded hover:opacity-90 transition-opacity shrink-0"
-          >
-            {copied ? "Copied" : "Copy"}
-          </button>
-        </div>
-        <button
-          onClick={() => {
-            setGeneratedKey(null);
-            setShowCreate(false);
-          }}
-          className="mt-2 text-xs text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
-        >
-          Done
-        </button>
-      </div>
-    );
-  }
-
-  if (!showCreate) {
-    return (
-      <button
-        onClick={() => setShowCreate(true)}
-        className="mt-2 text-xs text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
-      >
-        + Create API Key
-      </button>
-    );
-  }
-
-  return (
-    <div className="mt-3 space-y-2">
-      <div className="flex items-end gap-2">
-        <div className="flex-1">
-          <label className="block text-xs text-neutral-500 dark:text-neutral-400 mb-1">
-            Key Label
-          </label>
-          <input
-            type="text"
-            value={label}
-            onChange={(e) => setLabel(e.target.value)}
-            placeholder="CI pipeline"
-            disabled={pending}
-            className="w-full px-2 py-1 text-sm border border-neutral-300 dark:border-neutral-600 rounded bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white disabled:opacity-50"
-            onKeyDown={(e) => e.key === "Enter" && handleCreateKey()}
-          />
-        </div>
-        <button
-          onClick={handleCreateKey}
-          disabled={pending || !label.trim()}
-          className="px-3 py-1 text-sm bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 rounded hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {pending ? "Generating…" : "Generate"}
-        </button>
-        <button
-          onClick={() => {
-            setShowCreate(false);
-            setError(null);
-          }}
-          disabled={pending}
-          className="px-2 py-1 text-sm text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 disabled:opacity-50"
-        >
-          Cancel
-        </button>
-      </div>
-      {error && (
-        <p className="text-xs text-red-600 dark:text-red-400">
-          Failed to create key: {error}
-        </p>
-      )}
     </div>
   );
 }
@@ -1023,7 +865,7 @@ function EndpointDetail({
           <h4 className="text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-2">
             API Keys
           </h4>
-          <ApiKeySection endpointId={endpoint.id} />
+          <ApiEndpointKeysPanel endpointId={endpoint.id} />
         </div>
 
         {/* Recent Calls */}

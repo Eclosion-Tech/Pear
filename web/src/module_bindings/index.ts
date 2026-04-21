@@ -123,6 +123,7 @@ import AiUserConfigRow from "./ai_user_config_table";
 import AiUserProfileRow from "./ai_user_profile_table";
 import ApiCallLogRow from "./api_call_log_table";
 import ApiEndpointRow from "./api_endpoint_table";
+import ApiEndpointKeyRow from "./api_endpoint_key_table";
 import ApiEndpointKeyLookupRow from "./api_endpoint_key_lookup_table";
 import ApiFieldMappingRow from "./api_field_mapping_table";
 import AttachmentRow from "./attachment_table";
@@ -215,6 +216,20 @@ const tablesSchema = __schema({
       { name: 'api_endpoint_slug_key', constraint: 'unique', columns: ['slug'] },
     ],
   }, ApiEndpointRow),
+  api_endpoint_key: __table({
+    name: 'api_endpoint_key',
+    indexes: [
+      { name: 'endpoint_id', algorithm: 'btree', columns: [
+        'endpointId',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'api_endpoint_key_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, ApiEndpointKeyRow),
   api_field_mapping: __table({
     name: 'api_field_mapping',
     indexes: [
