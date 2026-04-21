@@ -908,11 +908,6 @@ export function ApiEndpointsSettings() {
   const [showCreate, setShowCreate] = useState(false);
   const [selectedId, setSelectedId] = useState<bigint | null>(null);
 
-  const selectedEndpoint = useMemo(
-    () => endpoints.find((e) => e.id === selectedId) ?? null,
-    [endpoints, selectedId]
-  );
-
   if (!isReady) return null;
 
   return (
@@ -939,59 +934,64 @@ export function ApiEndpointsSettings() {
         </p>
       )}
 
-      {/* Endpoint list */}
-      {endpoints.map((ep) => (
-        <div
-          key={String(ep.id)}
-          className={`flex items-center justify-between py-3 border-b border-neutral-200 dark:border-neutral-800 ${
-            selectedId === ep.id
-              ? ""
-              : "cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-800/50"
-          } transition-colors`}
-          onClick={() => {
-            if (selectedId !== ep.id) {
-              setSelectedId(ep.id);
-              setShowCreate(false);
-            }
-          }}
-        >
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="min-w-0">
-              <p className="text-sm font-medium text-neutral-900 dark:text-white truncate">
-                {ep.displayName}
-              </p>
-              <p className="text-xs text-neutral-500 dark:text-neutral-400 font-mono">
-                {buildEndpointDisplayPath(ep.slug)}
-              </p>
+      {/* Endpoint list — clicking a row toggles its detail panel inline */}
+      {endpoints.map((ep) => {
+        const isOpen = selectedId === ep.id;
+        return (
+          <div
+            key={String(ep.id)}
+            className="border-b border-neutral-200 dark:border-neutral-800"
+          >
+            <div
+              className="flex items-center justify-between py-3 cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-800/50 transition-colors"
+              onClick={() => {
+                setSelectedId(isOpen ? null : ep.id);
+                if (!isOpen) setShowCreate(false);
+              }}
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <span
+                  className={`text-neutral-400 dark:text-neutral-500 text-xs transition-transform ${
+                    isOpen ? "rotate-90" : ""
+                  }`}
+                  aria-hidden
+                >
+                  ▶
+                </span>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-neutral-900 dark:text-white truncate">
+                    {ep.displayName}
+                  </p>
+                  <p className="text-xs text-neutral-500 dark:text-neutral-400 font-mono">
+                    {buildEndpointDisplayPath(ep.slug)}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="text-xs text-neutral-400 dark:text-neutral-500">
+                  {allowedMethodsList(ep)}
+                </span>
+                <span
+                  className={`inline-block w-2 h-2 rounded-full ${
+                    ep.requireAuth ? "bg-amber-400" : "bg-green-400"
+                  }`}
+                  title={ep.requireAuth ? "Auth required" : "Open"}
+                />
+              </div>
             </div>
+            {isOpen && (
+              <EndpointDetail
+                endpoint={ep}
+                onClose={() => setSelectedId(null)}
+              />
+            )}
           </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <span className="text-xs text-neutral-400 dark:text-neutral-500">
-              {allowedMethodsList(ep)}
-            </span>
-            <span
-              className={`inline-block w-2 h-2 rounded-full ${
-                ep.requireAuth
-                  ? "bg-amber-400"
-                  : "bg-green-400"
-              }`}
-              title={ep.requireAuth ? "Auth required" : "Open"}
-            />
-          </div>
-        </div>
-      ))}
+        );
+      })}
 
       {/* Create form */}
       {showCreate && (
         <CreateEndpointForm onClose={() => setShowCreate(false)} />
-      )}
-
-      {/* Detail view */}
-      {selectedEndpoint && (
-        <EndpointDetail
-          endpoint={selectedEndpoint}
-          onClose={() => setSelectedId(null)}
-        />
       )}
     </section>
   );
