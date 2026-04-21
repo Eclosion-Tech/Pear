@@ -212,19 +212,30 @@ async function listRows(
       id: string | number;
       title: string;
       sort_order: number;
-      page_type: unknown;
-      deleted_at: string | null;
-      created_at?: string;
-      updated_at?: string;
+      // Option<Timestamp> / Timestamp on the wire, decoded by helpers below
+      // — never a JS string/null directly.
+      deleted_at: unknown;
+      created_at?: unknown;
+      updated_at?: unknown;
     }>(
-      `SELECT id, title, sort_order, page_type, deleted_at, created_at, updated_at
+      `SELECT id, title, sort_order, deleted_at, created_at, updated_at
          FROM page
         WHERE parent_pk = ?
         LIMIT ?`,
       [config.endpoint.databasePageId, fetchCap],
     )
   )
-    .filter((p) => p.deleted_at === null && isDatabasePageType(p.page_type))
+    // We intentionally do NOT filter on `page_type == Database` here. The
+    // STDB module has two reducers that produce database rows and they
+    // disagree on the stored type:
+    //   • `create_database_row`  → page_type = Database
+    //   • `create_page` (UI path)→ page_type = Doc (whatever the caller passes)
+    // Real-world data has both. Since `parent_pk = <database_page_id>`
+    // already restricts to children of *this* database, the page_type
+    // discriminator was redundant — and silently dropped every row created
+    // through the UI. Reconcile upstream eventually (one canonical row
+    // type) but until then, accept both.
+    .filter((p) => isOptionNone(p.deleted_at))
     .sort((a, b) => {
       if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
       return Number(a.id) - Number(b.id);
@@ -248,10 +259,10 @@ async function getRow(
   const pages = await transport.sql<{
     id: string | number;
     title: string;
-    parent_id: string | number | null;
-    deleted_at: string | null;
-    created_at?: string;
-    updated_at?: string;
+    parent_id: unknown;
+    deleted_at: unknown;
+    created_at?: unknown;
+    updated_at?: unknown;
   }>(
     `SELECT id, title, parent_id, deleted_at, created_at, updated_at
        FROM page
@@ -262,8 +273,9 @@ async function getRow(
 
   if (
     pages.length === 0 ||
-    pages[0].deleted_at !== null ||
-    String(pages[0].parent_id) !== String(config.endpoint.databasePageId)
+    !isOptionNone(pages[0].deleted_at) ||
+    String(unwrapScalar(pages[0].parent_id)) !==
+      String(config.endpoint.databasePageId)
   ) {
     throw new ApiEndpointError(404, "not_found", `Row ${rowId} not found`);
   }
@@ -307,8 +319,8 @@ async function createRow(
   const pages = await transport.sql<{
     id: string | number;
     title: string;
-    created_at?: string;
-    updated_at?: string;
+    created_at?: unknown;
+    updated_at?: unknown;
   }>(
     `SELECT id, title, created_at, updated_at FROM page WHERE id = ? LIMIT 1`,
     [newId],
@@ -326,16 +338,17 @@ async function updateRow(
   body: unknown,
 ): Promise<Response> {
   const pages = await transport.sql<{
-    parent_id: string | number | null;
-    deleted_at: string | null;
+    parent_id: unknown;
+    deleted_at: unknown;
   }>(
     `SELECT parent_id, deleted_at FROM page WHERE id = ? LIMIT 1`,
     [rowId],
   );
   if (
     pages.length === 0 ||
-    pages[0].deleted_at !== null ||
-    String(pages[0].parent_id) !== String(config.endpoint.databasePageId)
+    !isOptionNone(pages[0].deleted_at) ||
+    String(unwrapScalar(pages[0].parent_id)) !==
+      String(config.endpoint.databasePageId)
   ) {
     throw new ApiEndpointError(404, "not_found", `Row ${rowId} not found`);
   }
@@ -363,15 +376,16 @@ async function deleteRow(
   rowId: number | string,
 ): Promise<Response> {
   const pages = await transport.sql<{
-    parent_id: string | number | null;
-    deleted_at: string | null;
+    parent_id: unknown;
+    deleted_at: unknown;
   }>(
     `SELECT parent_id, deleted_at FROM page WHERE id = ? LIMIT 1`,
     [rowId],
   );
   if (
     pages.length === 0 ||
-    String(pages[0].parent_id) !== String(config.endpoint.databasePageId)
+    String(unwrapScalar(pages[0].parent_id)) !==
+      String(config.endpoint.databasePageId)
   ) {
     throw new ApiEndpointError(404, "not_found", `Row ${rowId} not found`);
   }
@@ -542,19 +556,6 @@ function parseAllowedMethods(raw: unknown): HttpMethodName[] {
 }
 
 /**
- * STDB enum-variant ordering for `PageType` in
- * `pear/server/spacetimedb/src/lib.rs` line 17. Same multi-shape encoding
- * problem as `HttpMethod` — STDB's SQL HTTP can return any of: bare string,
- * `{ "Database": [] }`, `{ "tag": ... }`, `[tag, value]`, or bare BSATN
- * tag index. Decode and check against the variant we care about.
- */
-const PAGE_TYPE_TAGS = ["DOC", "DATABASE"] as const;
-
-function isDatabasePageType(v: unknown): boolean {
-  return decodeEnumVariant(v, PAGE_TYPE_TAGS) === "DATABASE";
-}
-
-/**
  * Generic decoder for STDB sum-type variants. Returns the upper-cased
  * variant name if it matches one of the provided tags, otherwise null.
  */
@@ -594,14 +595,79 @@ function decodeHttpMethod(v: unknown): HttpMethodName | null {
   return decodeEnumVariant(v, HTTP_METHOD_TAGS) as HttpMethodName | null;
 }
 
+/**
+ * Wire shapes for `Option<T>` observed from STDB's HTTP `/sql` endpoint:
+ *   • `null`            — absence (rare; SDK-shaped paths only)
+ *   • `{ none: [] }`    — object form for None
+ *   • `{ some: <T> }`   — object form for Some
+ *   • `[1, []]`         — positional sum, variant 1 = None
+ *   • `[0, <T>]`        — positional sum, variant 0 = Some
+ *
+ * `decodeOptionSome` returns the inner value if the option is Some, or
+ * `undefined` if it's None / absent. `isOptionNone` is the dual.
+ *
+ * These exist because earlier code compared option columns directly to JS
+ * `null` (e.g. `deleted_at === null`), which silently mis-classified every
+ * row as deleted once STDB started returning `[1, []]` for None — every
+ * list/get/update would 404 or come back with `data: []`.
+ */
+function decodeOptionSome(raw: unknown): unknown {
+  if (raw == null) return undefined;
+  if (Array.isArray(raw)) {
+    if (raw.length >= 2 && raw[0] === 0) return raw[1];
+    return undefined;
+  }
+  if (typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    if ("some" in obj) return obj.some;
+    if ("none" in obj) return undefined;
+  }
+  // Bare value (some non-Option SQL projections fall here) — treat as Some.
+  return raw;
+}
+
+function isOptionNone(raw: unknown): boolean {
+  return decodeOptionSome(raw) === undefined;
+}
+
+/**
+ * Coerce a STDB-returned scalar that *might* be wrapped in an Option or a
+ * single-element Product (Timestamp's wire form is `[micros]`) down to a
+ * primitive comparable value. Used for parent_id / page_id checks where we
+ * only need string equality, not the structured shape.
+ */
+function unwrapScalar(raw: unknown): string | number | null {
+  const some = decodeOptionSome(raw);
+  if (some === undefined) return null;
+  if (Array.isArray(some)) {
+    if (some.length === 1) return unwrapScalar(some[0]);
+    return null;
+  }
+  if (typeof some === "object" && some !== null) {
+    const obj = some as Record<string, unknown>;
+    // Timestamp / TimeDuration object shape.
+    const v =
+      obj.__timestamp_micros_since_unix_epoch__ ??
+      obj.__time_duration_micros__ ??
+      obj.microsSinceUnixEpoch;
+    if (typeof v === "number" || typeof v === "string") return v;
+    return null;
+  }
+  if (typeof some === "string" || typeof some === "number") return some;
+  return null;
+}
+
 async function assembleRows(
   transport: StdbTransport,
   config: EndpointConfig,
   pages: Array<{
     id: string | number;
     title: string;
-    created_at?: string;
-    updated_at?: string;
+    // Timestamps from STDB's HTTP `/sql` come back as `[micros]` (a
+    // single-element Product), not a string — keep the parameter shape
+    // generic and let `normaliseTs` do the decoding.
+    created_at?: unknown;
+    updated_at?: unknown;
   }>,
 ): Promise<RowBody[]> {
   if (pages.length === 0) return [];
@@ -647,11 +713,22 @@ async function assembleRows(
   }));
 }
 
-function normaliseTs(raw: string | undefined): string | undefined {
-  if (!raw) return undefined;
-  const ms = Number(raw);
-  if (Number.isFinite(ms)) return new Date(ms).toISOString();
-  return raw;
+/**
+ * STDB's HTTP `/sql` returns Timestamp columns as a single-element Product
+ * `[<i64 micros>]` (the wire shape of `Timestamp { __timestamp_micros... }`),
+ * not a millisecond number. Earlier code did `new Date(Number(raw))` which:
+ *   • only worked accidentally when `raw` was already a number (it isn't), and
+ *   • interpreted micros as ms — producing year ~58294 ISO strings.
+ * Use `unwrapScalar` to peel both Option<Timestamp> and bare Timestamp into
+ * a numeric micros value, then divide.
+ */
+function normaliseTs(raw: unknown): string | undefined {
+  if (raw == null) return undefined;
+  const v = unwrapScalar(raw);
+  if (v == null) return undefined;
+  const micros = typeof v === "string" ? Number(v) : v;
+  if (!Number.isFinite(micros)) return undefined;
+  return new Date(micros / 1000).toISOString();
 }
 
 interface ParsedRowBody {

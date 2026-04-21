@@ -161,27 +161,114 @@ export function encodePropertyValue(
 }
 
 /**
- * Convert a SATS-JSON tagged `PropertyValue` (as returned by `transport.sql`)
- * into a plain JSON value for the external API response.
- *
- * Dates are emitted as ISO-8601 strings to keep the contract self-describing.
+ * Variant ordering for the Rust enum `PropertyValue` in
+ * `pear/server/spacetimedb/src/lib.rs`. STDB's HTTP `/sql` endpoint
+ * encodes sum-type values positionally as `[variantIndex, payload]`, so we
+ * need a stable tag → name map. If you reorder the Rust enum, this list
+ * must move with it.
  */
-export function decodePropertyValue(value: SatsPropertyValue): unknown {
-  if ("Text" in value) return value.Text;
-  if ("Url" in value) return value.Url;
-  if ("Select" in value) return value.Select;
-  if ("MultiSelect" in value) return value.MultiSelect;
-  if ("Person" in value) return value.Person;
-  if ("Relation" in value)
-    return value.Relation.map((v) => (typeof v === "string" ? v : String(v)));
-  if ("Number" in value) return value.Number;
-  if ("Checkbox" in value) return value.Checkbox;
-  if ("Date" in value) {
-    const ms =
-      typeof value.Date === "string" ? Number(value.Date) : value.Date;
-    return new Date(ms).toISOString();
+const PROPERTY_VALUE_TAGS = [
+  "Text", // 0
+  "Number", // 1
+  "Date", // 2
+  "Select", // 3
+  "MultiSelect", // 4
+  "Relation", // 5
+  "Checkbox", // 6
+  "Url", // 7
+  "Person", // 8
+] as const;
+
+type PropertyValueTag = (typeof PROPERTY_VALUE_TAGS)[number];
+
+/**
+ * Normalize the three wire shapes STDB produces for a sum-type cell into a
+ * `{ tag, payload }` pair:
+ *   • `{ Text: "x" }`         — object form (BSATN-shaped / SDK)
+ *   • `[0, "x"]`              — positional sum (HTTP /sql)
+ *   • `"Text"`                — bare string for unit-only variants (rare)
+ *
+ * Returns null if `raw` doesn't match any known PropertyValue variant —
+ * which manifests externally as a `null` value for that field, the same
+ * fallback the previous all-object decoder used.
+ */
+function normalisePropertyValue(
+  raw: unknown,
+): { tag: PropertyValueTag; payload: unknown } | null {
+  if (raw == null) return null;
+
+  // Positional `[index, payload]`.
+  if (Array.isArray(raw) && raw.length >= 1 && typeof raw[0] === "number") {
+    const tag = PROPERTY_VALUE_TAGS[raw[0]];
+    if (!tag) return null;
+    return { tag, payload: raw.length > 1 ? raw[1] : undefined };
   }
+
+  // Object `{ Tag: payload }` — first matching key wins.
+  if (typeof raw === "object") {
+    for (const tag of PROPERTY_VALUE_TAGS) {
+      if (tag in (raw as Record<string, unknown>)) {
+        return { tag, payload: (raw as Record<string, unknown>)[tag] };
+      }
+    }
+  }
+
+  // Bare string — unit variants only; PropertyValue has no unit variants
+  // today but accept it for forward-compat.
+  if (typeof raw === "string") {
+    if ((PROPERTY_VALUE_TAGS as readonly string[]).includes(raw)) {
+      return { tag: raw as PropertyValueTag, payload: undefined };
+    }
+  }
+
   return null;
+}
+
+/**
+ * Convert a `PropertyValue` (in any wire shape) into a plain JSON value
+ * for the external API response. Dates are emitted as ISO-8601 strings to
+ * keep the contract self-describing.
+ */
+export function decodePropertyValue(value: SatsPropertyValue | unknown): unknown {
+  const norm = normalisePropertyValue(value);
+  if (!norm) return null;
+
+  switch (norm.tag) {
+    case "Text":
+    case "Url":
+    case "Select":
+      return typeof norm.payload === "string" ? norm.payload : null;
+    case "MultiSelect":
+    case "Person":
+      return Array.isArray(norm.payload)
+        ? (norm.payload as unknown[]).filter((v) => typeof v === "string")
+        : [];
+    case "Relation":
+      return Array.isArray(norm.payload)
+        ? (norm.payload as unknown[]).map((v) =>
+            typeof v === "string" ? v : String(v),
+          )
+        : [];
+    case "Number":
+      return typeof norm.payload === "number"
+        ? norm.payload
+        : typeof norm.payload === "string"
+          ? Number(norm.payload)
+          : null;
+    case "Checkbox":
+      return Boolean(norm.payload);
+    case "Date": {
+      const raw = norm.payload;
+      const ms =
+        typeof raw === "number"
+          ? raw
+          : typeof raw === "string"
+            ? Number(raw)
+            : NaN;
+      if (!Number.isFinite(ms)) return null;
+      return new Date(ms).toISOString();
+    }
+  }
 }
 
 /** Encode an `HttpMethod` enum for SATS-JSON reducer args. */
