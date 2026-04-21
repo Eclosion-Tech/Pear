@@ -865,7 +865,10 @@ function EndpointDetail({
           <h4 className="text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-2">
             API Keys
           </h4>
-          <ApiEndpointKeysPanel endpointId={endpoint.id} />
+          <ApiEndpointKeysPanel
+            endpointId={endpoint.id}
+            endpointAllowedMethods={endpoint.allowedMethods}
+          />
         </div>
 
         {/* Recent Calls */}

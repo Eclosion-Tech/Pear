@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
+import { Timestamp } from "spacetimedb";
 import {
   useApiEndpointKeysForEndpoint,
   useCreateApiEndpointKey,
@@ -40,6 +41,16 @@ import type { HttpMethod } from "@/src/module_bindings/types";
 
 interface Props {
   endpointId: bigint;
+  /**
+   * The endpoint's own allowed methods. Keys can never grant more than the
+   * endpoint allows (the gateway enforces both the endpoint's and the key's
+   * allow-lists), so the create form defaults to this set and prevents the
+   * operator from checking methods the endpoint itself rejects. Without
+   * this, the form would happily mint a key with `Delete` on a
+   * `GET, POST, PATCH` endpoint — which would simply look broken at request
+   * time.
+   */
+  endpointAllowedMethods: readonly HttpMethod[];
 }
 
 interface RevealedKey {
@@ -133,7 +144,10 @@ function methodBadge(tag: HttpMethod["tag"]): string {
   }
 }
 
-export function ApiEndpointKeysPanel({ endpointId }: Props) {
+export function ApiEndpointKeysPanel({
+  endpointId,
+  endpointAllowedMethods,
+}: Props) {
   const { keys, isReady } = useApiEndpointKeysForEndpoint(endpointId);
   const createKey = useCreateApiEndpointKey();
   const revokeKey = useRevokeApiEndpointKey();
@@ -164,8 +178,15 @@ export function ApiEndpointKeysPanel({ endpointId }: Props) {
         keyHash,
         label: args.label,
         allowedMethods: args.methods as never,
+        // The SDK's Timestamp class stores micros under
+        // `__timestamp_micros_since_unix_epoch__` (the public
+        // `microsSinceUnixEpoch` is just a getter). Sending a plain
+        // `{ microsSinceUnixEpoch }` object serializes the wire field as
+        // `undefined` and dies with a `BigInt(undefined)` error inside the
+        // codec. Constructing a real Timestamp instance is the supported
+        // path for any reducer that takes `Option<Timestamp>`.
         expiresAt: args.expiresAtMicros
-          ? ({ microsSinceUnixEpoch: args.expiresAtMicros } as never)
+          ? (new Timestamp(args.expiresAtMicros) as never)
           : undefined,
       });
       return rawKey;
@@ -272,6 +293,7 @@ export function ApiEndpointKeysPanel({ endpointId }: Props) {
           }}
           mintKey={mintKey}
           checkDrift={checkDrift}
+          endpointAllowedMethods={endpointAllowedMethods}
         />
       )}
     </div>
@@ -380,6 +402,7 @@ function CreateKeyForm({
   onCreated,
   mintKey,
   checkDrift,
+  endpointAllowedMethods,
 }: {
   onCancel: () => void;
   onCreated: (rawKey: string, label: string) => void;
@@ -389,24 +412,30 @@ function CreateKeyForm({
     expiresAtMicros: bigint | undefined;
   }) => Promise<string>;
   checkDrift: ReturnType<typeof useIdentityDriftRecovery>;
+  endpointAllowedMethods: readonly HttpMethod[];
 }) {
   const [label, setLabel] = useState("");
-  const [methods, setMethods] = useState<Record<string, boolean>>({
-    Get: true,
-    Post: true,
-    Patch: true,
-    Delete: true,
-  });
+  // Default to the endpoint's full method set: most operators want a key that
+  // can do everything the endpoint can. They can narrow it from there. The
+  // checkbox row below only renders methods the endpoint itself permits, so
+  // the form physically can't produce a key broader than the endpoint.
+  const allowedTags = useMemo(
+    () => new Set(endpointAllowedMethods.map((m) => m.tag)),
+    [endpointAllowedMethods]
+  );
+  const [methods, setMethods] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(endpointAllowedMethods.map((m) => [m.tag, true]))
+  );
   const [expiryDays, setExpiryDays] = useState<number | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const enabledMethods: HttpMethod[] = useMemo(
     () =>
-      ALL_METHODS.filter((m) => methods[m.tag]).map(
+      ALL_METHODS.filter((m) => allowedTags.has(m.tag) && methods[m.tag]).map(
         (m) => ({ tag: m.tag } as HttpMethod)
       ),
-    [methods]
+    [methods, allowedTags]
   );
 
   const canSubmit = label.trim().length > 0 && enabledMethods.length > 0 && !pending;
@@ -454,7 +483,7 @@ function CreateKeyForm({
           Allowed methods
         </label>
         <div className="flex gap-3">
-          {ALL_METHODS.map((m) => (
+          {ALL_METHODS.filter((m) => allowedTags.has(m.tag)).map((m) => (
             <label
               key={m.tag}
               className="inline-flex items-center gap-1 text-xs text-neutral-700 dark:text-neutral-300"
@@ -471,6 +500,9 @@ function CreateKeyForm({
             </label>
           ))}
         </div>
+        <p className="mt-1 text-[10px] text-neutral-500 dark:text-neutral-400">
+          Only methods the endpoint itself allows are listed.
+        </p>
       </div>
 
       <div>
