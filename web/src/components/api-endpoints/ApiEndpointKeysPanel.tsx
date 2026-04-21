@@ -12,13 +12,14 @@ import type { HttpMethod } from "@/src/module_bindings/types";
 /**
  * API key management for a single custom HTTP endpoint.
  *
- * Visibility model (target — full state in 0.5.3):
- *   The underlying `api_endpoint_key` table will be RLS'd to `created_by
- *   = :sender` so each operator only sees keys they minted. **In 0.5.2
- *   the RLS filter is not yet in place** (STDB rejects private→public +
- *   add-RLS as a single publish; see `lib.rs` for the full note), so this
- *   panel currently lists every key on the endpoint regardless of who
- *   minted it. Copy is written to be honest in both states.
+ * Visibility model:
+ *   The underlying `api_endpoint_key` table is RLS'd to `created_by =
+ *   :sender` (see `lib.rs::API_ENDPOINT_KEY_FILTER`), so this panel only
+ *   ever lists keys minted by the *current operator* — not other workspace
+ *   members'. That's intentional: labels and last-used timestamps are
+ *   per-operator metadata, not workspace-shared. The panel surfaces this
+ *   in copy when the list is empty so a fresh teammate doesn't think the
+ *   endpoint has zero keys when in fact someone else minted them all.
  *
  * One-time secret reveal:
  *   The raw key is generated client-side, hashed (SHA-256), and only the
@@ -280,7 +281,8 @@ export function ApiEndpointKeysPanel({ endpointId }: Props) {
 function EmptyState() {
   return (
     <div className="text-xs text-neutral-500 dark:text-neutral-400 border border-dashed border-neutral-300 dark:border-neutral-700 rounded p-3">
-      No API keys yet. Click below to mint one.
+      No keys you can see. (Other workspace members&apos; keys are not listed
+      here — RLS shows each operator only their own keys.)
     </div>
   );
 }

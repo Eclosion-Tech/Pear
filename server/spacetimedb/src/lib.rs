@@ -4131,20 +4131,26 @@ pub struct ApiFieldMapping {
 }
 
 /// Scoped API key for authenticating external requests to a custom endpoint.
-/// Public table — only the SHA-256 hash of the key is stored; the raw key
-/// is shown once at creation and never persisted.
+/// Public table with row-level visibility — only the SHA-256 hash of the
+/// key is stored; the raw key is shown once at creation and never
+/// persisted.
 ///
-/// **0.5.2 transitional state — no RLS filter yet.** This table just went
-/// from `private` to `public` in 0.5.2 to make label / created_at /
-/// last_used_at visible to the workspace UI. The intended row-level
-/// visibility filter (`created_by = :sender` so each operator only sees
-/// their own keys) lands in 0.5.3 — it's deferred because STDB's WASM
-/// validator can't accept private→public + add-RLS in a single publish.
-/// Until 0.5.3, every workspace member sees all keys' metadata.
+/// RLS (see `API_ENDPOINT_KEY_FILTER` below): each row is visible to the
+/// `created_by` identity (the human who minted it) and to module owners
+/// (lifecycle / worker / per-workspace service identity used by the API
+/// gateway). That lets the workspace UI render label / created_at /
+/// last_used_at to the operator who created the key, without leaking
+/// those fields to other workspace members.
 ///
 /// Anonymous Bearer-token validation by the API gateway uses the separate
 /// `api_endpoint_key_lookup` view below — see its doc comment for why both
 /// shapes exist.
+///
+/// History note: `api_endpoint_key` shipped as `private` through 0.5.1,
+/// flipped to `public` in 0.5.2 (no RLS filter, transitional state),
+/// then gained the RLS filter in 0.5.3. The split was forced by STDB's
+/// WASM publish validator rejecting private→public + add-RLS atomically;
+/// see `docs/RUNBOOKS/README.md` for the full history.
 #[table(accessor = api_endpoint_key, public)]
 pub struct ApiEndpointKey {
     #[primary_key]
@@ -4168,14 +4174,14 @@ pub struct ApiEndpointKey {
 /// Public projection of `api_endpoint_key` for anonymous Bearer-token
 /// validation by the HTTP API gateway.
 ///
-/// Why this still exists after `api_endpoint_key` went public: the gateway
-/// authenticates as the per-workspace service identity (NOT the human
-/// creator), so once 0.5.3 lands the RLS filter (`created_by = :sender`)
-/// will correctly hide every row from it. The view is anonymous public
-/// and bypasses RLS, re-exposing only the fields a Bearer-token check
-/// needs (`key_hash`, `endpoint_id`, `allowed_methods`, `expires_at`, plus
-/// the row id for audit logging). Callers query it via SQL with a
-/// `WHERE key_hash = '…'` filter.
+/// Why this still exists after `api_endpoint_key` went public-with-RLS:
+/// the gateway authenticates as the per-workspace service identity (NOT
+/// the human creator), which is unrelated to any `created_by`. The RLS
+/// filter on the real table correctly hides every row from it. This view
+/// is anonymous public and bypasses RLS, re-exposing only the fields a
+/// Bearer-token check needs (`key_hash`, `endpoint_id`, `allowed_methods`,
+/// `expires_at`, plus the row id for audit logging). Callers query it via
+/// SQL with a `WHERE key_hash = '…'` filter.
 ///
 /// Security note: `key_hash` is the SHA-256 of a 256-bit random secret, so
 /// publishing it in this projection does not let an attacker forge auth — the
@@ -4191,34 +4197,27 @@ pub struct ApiEndpointKeyLookupRow {
     pub expires_at: Option<Timestamp>,
 }
 
-// Row-level visibility filter for `api_endpoint_key` is intentionally
-// deferred to 0.5.3 — see the comment block below.
-//
-// SpacetimeDB's hot-publish validator reads the WASM's table-level
-// `public/private` annotation and rejects an RLS filter on what was a
-// private table in the *previous* published WASM, even when the new WASM
-// flips the same table to `public` in the same publish. The error is:
-//
-//   "Cannot define RLS rule on private table: api_endpoint_key.
-//    Please make table public if you wish to restrict access using RLS."
-//
-// (Reproduced 2026-04-21 against STDB 1.x with module 0.5.1→0.5.2.)
-//
-// To unblock 0.5.2, we ship the public-table flip *without* the filter.
-// 0.5.3 will re-introduce the filter on the now-public table:
-//
-//   #[client_visibility_filter]
-//   const API_ENDPOINT_KEY_FILTER: Filter = Filter::Sql(
-//       "SELECT * FROM api_endpoint_key WHERE created_by = :sender",
-//   );
-//
-// SECURITY NOTE for 0.5.2 only: with the table public and no filter,
-// every workspace member with a client subscription sees ALL keys'
-// label / created_by / created_at / last_used_at, not just their own.
-// The plaintext is still never exposed (only the SHA-256 hash lives on
-// the row, by design). This is a metadata-leak window that closes the
-// moment 0.5.3 lands; it must NOT be left open longer than the time it
-// takes to ship the follow-up.
+/// Row-level visibility filter for `api_endpoint_key`. Each row is visible
+/// to the `created_by` identity (the human who minted the key); module
+/// owners (lifecycle / worker / per-workspace gateway service identity)
+/// bypass this filter automatically and see every row, which is required
+/// for the gateway's bearer-token resolution and for backfills.
+///
+/// We deliberately do NOT join through `api_endpoint.created_by` here:
+/// keys are scoped per-mint, not per-endpoint. If endpoint ownership
+/// changes (today there's no UI for this; tomorrow there might be), each
+/// minter still controls their own keys until they explicitly revoke.
+///
+/// **DO NOT remove this filter without also flipping the table back to
+/// `private`.** Adding RLS to a table that was `private` in the previous
+/// published WASM trips STDB's publish validator with
+/// `Cannot define RLS rule on private table` and blocks the upgrade for
+/// every workspace on the pool — that's how this filter was forced into
+/// its own 0.5.3 release in the first place.
+#[client_visibility_filter]
+const API_ENDPOINT_KEY_FILTER: Filter = Filter::Sql(
+    "SELECT * FROM api_endpoint_key WHERE created_by = :sender",
+);
 
 #[view(accessor = api_endpoint_key_lookup, public)]
 fn api_endpoint_key_lookup(ctx: &AnonymousViewContext) -> Vec<ApiEndpointKeyLookupRow> {
