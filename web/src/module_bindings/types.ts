@@ -334,6 +334,13 @@ export const MessageStatus = __t.enum("MessageStatus", {
 });
 export type MessageStatus = __Infer<typeof MessageStatus>;
 
+export const MigrationState = __t.object("MigrationState", {
+  key: __t.string(),
+  completedAt: __t.timestamp(),
+  moduleVersion: __t.string(),
+});
+export type MigrationState = __Infer<typeof MigrationState>;
+
 export const OrchaAgent = __t.object("OrchaAgent", {
   id: __t.string(),
   capabilities: __t.array(__t.string()),
@@ -402,6 +409,7 @@ export const Page = __t.object("Page", {
   updatedAt: __t.timestamp(),
   deletedAt: __t.option(__t.timestamp()),
   icon: __t.option(__t.string()),
+  parentPk: __t.u64(),
 });
 export type Page = __Infer<typeof Page>;
 
