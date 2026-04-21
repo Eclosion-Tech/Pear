@@ -16,7 +16,7 @@
     "@anthropic-ai/sdk": "^0.39.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "openai": "^6.33.0",
-    "spacetimedb": "^2.0.3",
+    "spacetimedb": "2.0.3",
     "ws": "^8.18.0"
   },
   "devDependencies": {
