@@ -18,9 +18,26 @@
 import { DbConnection, type EventContext } from "./module_bindings/index.js";
 import { callLlm, planTasks, buildPageContext } from "./llm.js";
 import { AiUserWorker } from "./ai-user-worker.js";
+import { handleAiPrimitiveTask } from "./ai-primitive-task.js";
+import { StructuralSensorsScheduler } from "./structural-sensors.js";
 
-const CAPABILITIES = ["orchestrate", "llm"];
+const SANDBOX_BACKEND = process.env.PEAR_SANDBOX_BACKEND ?? "";
+const TOOL_BASH_ENABLED = SANDBOX_BACKEND !== "";
+
+const CAPABILITIES = [
+  "orchestrate",
+  "llm",
+  "ai_primitive",
+  ...(TOOL_BASH_ENABLED ? ["tool-bash"] : []),
+];
 const MAX_ORCHESTRATE_DEPTH = 3;
+
+function parseIntervalEnv(key: string): number | undefined {
+  const raw = process.env[key];
+  if (!raw) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
 
 type JobRow = {
   id: bigint;
@@ -66,6 +83,8 @@ export class DatabaseWorker {
   /** AI-user-scoped sub-workers, keyed by aiUserId. */
   private aiUserWorkers = new Map<bigint, AiUserWorker>();
 
+  private sensors: StructuralSensorsScheduler | null = null;
+
   readonly uri: string;
   readonly dbName: string;
   readonly agentId: string;
@@ -96,6 +115,18 @@ export class DatabaseWorker {
         this.conn = conn;
         console.log(`[worker:${this.dbName}] Connected — identity: ${identity.toHexString()}`);
         this.registerHandlers(conn);
+        if (this.token) {
+          this.sensors = new StructuralSensorsScheduler(conn, {
+            label: this.dbName,
+            intervalMs: parseIntervalEnv("STRUCTURAL_SENSORS_INTERVAL_MS"),
+            initialDelayMs: parseIntervalEnv("STRUCTURAL_SENSORS_INITIAL_DELAY"),
+          });
+          this.sensors.start();
+        } else {
+          console.log(
+            `[worker:${this.dbName}] Skipping structural sensors (no admin token)`,
+          );
+        }
       })
       .onDisconnect(() => {
         console.log(`[worker:${this.dbName}] Disconnected`);
@@ -109,6 +140,11 @@ export class DatabaseWorker {
 
   async stop(): Promise<void> {
     this.stopped = true;
+
+    if (this.sensors) {
+      this.sensors.stop();
+      this.sensors = null;
+    }
 
     // Tear down all per-AI-user connections first so they stop responding
     // to messages while we drain orcha tasks.
@@ -270,6 +306,23 @@ export class DatabaseWorker {
         case "orchestrate":
           result = await this.handleOrchestrate(conn, task);
           break;
+        case "ai_primitive":
+          result = await handleAiPrimitiveTask(conn, task.description, task.jobId);
+          break;
+        case "tool-bash":
+          // Phase D placeholder. The actual sandbox handler (Docker /
+          // Firecracker per-workspace, scoped FS, allowed_domains
+          // enforcement) is still pending infra work. We accept the
+          // capability so plans can be written against it, but refuse
+          // execution unless an explicit backend has been wired.
+          if (!TOOL_BASH_ENABLED) {
+            throw new Error(
+              "tool-bash sandbox backend not configured (set PEAR_SANDBOX_BACKEND)",
+            );
+          }
+          throw new Error(
+            `tool-bash backend "${SANDBOX_BACKEND}" recognised but not implemented yet`,
+          );
         case "llm":
         default:
           result = await callLlm(task.description, conn, task.jobId);

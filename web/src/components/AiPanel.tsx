@@ -25,6 +25,10 @@ import {
   useAiUserInConversation,
   type AiUserProfileRow,
 } from "@/src/hooks/useAiUsers";
+import { ContextBar } from "@/src/components/ContextBar";
+import { useTable } from "spacetimedb/react";
+import { tables } from "@/src/module_bindings";
+import type { Identity } from "spacetimedb";
 
 function StatusBadge({ status }: { status: string }) {
   const colors: Record<string, string> = {
@@ -409,6 +413,11 @@ function ConversationThread({ conversation, onBack }: { conversation: Conversati
         })}
       </div>
 
+      {/* Context bar — shows what the AI user can see for this turn. */}
+      {aiUser && (
+        <ContextBar pageId={conversation.pageId} aiUserIdentity={aiUser.identity} />
+      )}
+
       {/* Input */}
       {isActive ? (
         <div className="flex-shrink-0 border-t border-neutral-200 dark:border-neutral-800 p-3">
@@ -519,7 +528,161 @@ function ConversationListItem({
 
 // ── Tab type ─────────────────────────────────────────────────────────────────
 
-type PanelTab = "conversations" | "jobs";
+type PanelTab = "conversations" | "jobs" | "members";
+
+/**
+ * AI Users surfaced inside the right panel. This is the Phase A "Members"
+ * tab — distinct from the workspace-wide MembersSettings (humans + admin
+ * role) since AI users have their own provenance / harness story. Hosts a
+ * compact directory that links to the full editor in Settings; the diff
+ * review surface, auto-apply scope picker, and harness template selector
+ * land here in subsequent phases.
+ */
+function MembersTab() {
+  const { profiles } = useAiUserProfiles();
+  if (profiles.length === 0) {
+    return (
+      <div className="text-center py-10">
+        <p className="text-sm text-neutral-400 dark:text-neutral-500">No AI users yet</p>
+        <p className="text-xs text-neutral-300 dark:text-neutral-600 mt-1">
+          Create one in Settings → AI Users
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="px-2 py-2 space-y-1">
+      {profiles.map((profile) => (
+        <MemberRow key={profile.identity.toHexString()} profile={profile} />
+      ))}
+    </div>
+  );
+}
+
+function MemberRow({ profile }: { profile: AiUserProfileRow }) {
+  return (
+    <div className="flex flex-col gap-1 p-2 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-800/50">
+      <div className="flex items-start gap-3">
+        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet-400 to-indigo-500 flex items-center justify-center text-white text-xs font-bold shrink-0 mt-0.5">
+          {profile.displayName[0]?.toUpperCase() ?? "?"}
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-neutral-800 dark:text-neutral-200 truncate">
+            {profile.displayName}
+          </p>
+          <p className="text-xs text-neutral-400 truncate">
+            {profile.providerName} · {profile.modelName}
+          </p>
+        </div>
+        <CostBadge aiUserId={profile.aiUserId} />
+      </div>
+      <RetrospectiveRow aiUserIdentity={profile.identity} />
+    </div>
+  );
+}
+
+/**
+ * Steering loop retrospective. Shows last-7-day activity for an AI user:
+ *   - Edits proposed (PostAgentEdit snapshots whose author is this AI user)
+ *   - Edits rejected (PostAgentEdit snapshots whose author is this AI user
+ *     AND a later snapshot of the same page exists with the same `pre`
+ *     content — i.e. someone hit Reject)
+ *   - Open denied tool call findings for this AI user
+ * The numbers are deliberately conservative: we only count what we can
+ * derive from the relational substrate without instrumentation that
+ * doesn't exist yet (no explicit "rejected" flag on snapshots).
+ */
+function RetrospectiveRow({ aiUserIdentity }: { aiUserIdentity: Identity }) {
+  const [snapshots] = useTable(tables.page_snapshot);
+  const [findings] = useTable(tables.structural_sensor_finding);
+  const meHex = aiUserIdentity.toHexString();
+  const sevenDaysAgoMs = Date.now() - 7 * 24 * 3600 * 1000;
+  const proposed = snapshots.filter((s) => {
+    if (s.snapshotType.tag !== "PostAgentEdit") return false;
+    if (s.createdBy.tag !== "Agent") return false;
+    if (Number(s.snapshotAt.microsSinceUnixEpoch / BigInt(1000)) < sevenDaysAgoMs)
+      return false;
+    return (s.createdBy.value as string).includes(meHex.slice(0, 8));
+  }).length;
+  const denied = findings.filter((f) => {
+    if (f.resolvedAt) return false;
+    if (f.sensorKind !== "denied_tool_calls") return false;
+    return f.detailsJson.includes(meHex.slice(0, 8));
+  }).length;
+  if (proposed === 0 && denied === 0) return null;
+  return (
+    <div className="flex items-center gap-2 pl-11 text-[10px] text-neutral-400 dark:text-neutral-500">
+      {proposed > 0 && <span>{proposed} edits this week</span>}
+      {denied > 0 && (
+        <span className="text-amber-500">{denied} permission gaps</span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Compact monthly cost / budget badge for an AI user (Phase A cost surface).
+ *
+ * Sums `orcha_usage_event` rows for the current calendar month, joins with
+ * `ai_user_config.monthly_token_cap` to render `used / cap` with color
+ * thresholds:
+ *   - <80% → muted neutral
+ *   - 80-99% → amber warning
+ *   - >=100% → rose hard-stop indication (the worker should also refuse new tasks)
+ *
+ * The cell hover, column header rolling spend, pre-bulk confirmation, and
+ * workspace dashboard surfaces the doc lists all consume this same data
+ * shape; they are out of scope for the panel-level surface and land
+ * incrementally as their host UIs ship.
+ */
+function CostBadge({ aiUserId }: { aiUserId: bigint }) {
+  const [usage] = useTable(tables.orcha_usage_event);
+  const [configs] = useTable(tables.ai_user_config);
+  const config = configs.find((c) => c.id === aiUserId);
+  const cap = config?.monthlyTokenCap ?? null;
+
+  // Calendar-month rollover. Worker / billing might want a fiscal month
+  // override later; for now align to UTC for determinism.
+  const now = new Date();
+  const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+  const usedTokens = usage.reduce((sum, e) => {
+    if (e.aiUserId !== aiUserId) return sum;
+    const eventMs = Number(e.createdAt.microsSinceUnixEpoch / 1000n);
+    if (eventMs < monthStart) return sum;
+    return sum + Number(e.tokensIn) + Number(e.tokensOut);
+  }, 0);
+
+  if (cap == null) {
+    return (
+      <span className="text-[10px] text-neutral-400 dark:text-neutral-500 shrink-0">
+        {formatTokens(usedTokens)} this month
+      </span>
+    );
+  }
+
+  const capN = Number(cap);
+  const ratio = capN > 0 ? usedTokens / capN : 0;
+  const cls =
+    ratio >= 1
+      ? "bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300"
+      : ratio >= 0.8
+        ? "bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300"
+        : "bg-neutral-100 dark:bg-neutral-800 text-neutral-500 dark:text-neutral-400";
+  return (
+    <span
+      className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 font-medium ${cls}`}
+      title={`${usedTokens.toLocaleString()} / ${capN.toLocaleString()} tokens this month`}
+    >
+      {formatTokens(usedTokens)} / {formatTokens(capN)}
+    </span>
+  );
+}
+
+function formatTokens(n: number): string {
+  if (n < 1000) return `${n}`;
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
 
 // ── Main panel ───────────────────────────────────────────────────────────────
 
@@ -621,6 +784,16 @@ export function AiPanel({ pageId, onClose, openConversationId }: AiPanelProps) {
               <span className="ml-1.5 w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse inline-block" />
             )}
           </button>
+          <button
+            onClick={() => setTab("members")}
+            className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+              tab === "members"
+                ? "bg-neutral-100 dark:bg-neutral-800 text-neutral-800 dark:text-neutral-200"
+                : "text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300"
+            }`}
+          >
+            Members
+          </button>
         </div>
         <button
           onClick={onClose}
@@ -672,6 +845,8 @@ export function AiPanel({ pageId, onClose, openConversationId }: AiPanelProps) {
             ))}
           </div>
         )}
+
+        {tab === "members" && <MembersTab />}
       </div>
 
       {/* Job prompt — only on jobs tab */}

@@ -49,6 +49,54 @@ export function useParticipantsForConversation(conversationId: bigint) {
   return all.filter((p) => p.conversationId === conversationId);
 }
 
+/**
+ * Inbox view: every conversation the given identity participates in (and has
+ * not left), newest activity first. Backs the sidebar's Inbox mode.
+ *
+ * We join `conversation_participant` ⨝ `conversation` on the client because
+ * the SpacetimeDB hook layer doesn't expose ad-hoc joins, and the row counts
+ * are tiny (workspace-scoped) so the cost is negligible.
+ */
+export function useInboxConversations(identity: Identity | undefined) {
+  const { conversations } = useConversations();
+  const participants = useConversationParticipants();
+  if (!identity) return [] as ConversationRow[];
+  const meHex = identity.toHexString();
+  const myConvIds = new Set(
+    participants
+      .filter((p) => p.identity.toHexString() === meHex && !p.leftAt)
+      .map((p) => String(p.conversationId)),
+  );
+  return conversations
+    .filter((c) => myConvIds.has(String(c.id)))
+    .sort(
+      (a, b) =>
+        Number(b.updatedAt.microsSinceUnixEpoch - a.updatedAt.microsSinceUnixEpoch),
+    );
+}
+
+/**
+ * Returns the count of unread messages for a conversation given the
+ * participant's `last_viewed_message_id`. A message is unread if its id is
+ * strictly greater than the watermark (or all messages if there is no
+ * watermark yet).
+ */
+export function useUnreadCountForConversation(
+  conversationId: bigint,
+  identity: Identity | undefined,
+): number {
+  const messages = useMessagesForConversation(conversationId);
+  const participants = useConversationParticipants();
+  if (!identity) return 0;
+  const meHex = identity.toHexString();
+  const me = participants.find(
+    (p) =>
+      p.conversationId === conversationId && p.identity.toHexString() === meHex,
+  );
+  const watermark = me?.lastViewedMessageId ?? 0n;
+  return messages.filter((m) => m.id > watermark).length;
+}
+
 export function useCreateConversation() {
   return useReducer(reducers.createConversation);
 }

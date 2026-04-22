@@ -11,6 +11,7 @@ import {
 } from "spacetimedb";
 import {
   ConversationStatus,
+  ConversationVisibility,
 } from "./types";
 
 
@@ -23,4 +24,7 @@ export default __t.row({
   },
   createdAt: __t.timestamp().name("created_at"),
   updatedAt: __t.timestamp().name("updated_at"),
+  get visibility() {
+    return ConversationVisibility;
+  },
 });

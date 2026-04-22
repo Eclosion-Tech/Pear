@@ -11,6 +11,7 @@ import {
 } from "spacetimedb";
 import {
   InferenceProvider,
+  AiUserRole,
 } from "./types";
 
 
@@ -28,4 +29,10 @@ export default __t.row({
   maxTokens: __t.u32().name("max_tokens"),
   createdAt: __t.timestamp().name("created_at"),
   updatedAt: __t.timestamp().name("updated_at"),
+  monthlyTokenCap: __t.option(__t.u64()).name("monthly_token_cap"),
+  get role() {
+    return AiUserRole;
+  },
+  harnessTemplateId: __t.option(__t.u64()).name("harness_template_id"),
+  allowEvaluationSharing: __t.bool().name("allow_evaluation_sharing"),
 });

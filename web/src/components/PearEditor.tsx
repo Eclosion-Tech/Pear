@@ -29,8 +29,15 @@ import {
   useConversationsForPage,
   useConversationParticipants,
 } from "@/src/hooks/useConversations";
+import {
+  useMyUserPreference,
+  useUserPreferences,
+  resolveThreadBehavior,
+  MENTION_RECENCY_MS,
+} from "@/src/hooks/useUserPreferences";
 import { SpacetimeYjsProvider } from "@/src/lib/SpacetimeYjsProvider";
 import { PageLinkBlockSpec } from "@/src/components/PageLinkBlock";
+import { ConversationBlockSpec } from "@/src/components/ConversationBlock";
 import { ImageBlockSpec } from "@/src/components/ImageBlock";
 import { AudioBlockSpec } from "@/src/components/AudioBlock";
 import { AudioAttachmentContext } from "@/src/components/AudioAttachmentContext";
@@ -106,6 +113,11 @@ export function PearEditor({ pageId, initialContent, childPages, onMentionAiUser
   const createConversation = useCreateConversation();
   const { conversations } = useConversationsForPage(pageId);
   const allParticipants = useConversationParticipants();
+  const globalThreadBehavior = useMyUserPreference(
+    identity,
+    "mention_thread_behavior",
+  );
+  const allUserPrefs = useUserPreferences();
 
   const [aiPromptOpen, setAiPromptOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
@@ -197,6 +209,7 @@ export function PearEditor({ pageId, initialContent, childPages, onMentionAiUser
             },
           }),
           pageLink: PageLinkBlockSpec(),
+          conversation: ConversationBlockSpec(),
           image: ImageBlockSpec(),
           audio: AudioBlockSpec(),
         },
@@ -683,14 +696,48 @@ export function PearEditor({ pageId, initialContent, childPages, onMentionAiUser
     }
     const aiHex = aiUser.identity.toHexString();
 
-    const activeConv = conversations.find((c) => {
-      if (c.status.tag !== "Active") return false;
-      return allParticipants.some(
-        (p) =>
-          p.conversationId === c.id && p.identity.toHexString() === aiHex
+    // Active conversations on this page that include this AI user, sorted
+    // most-recently-updated first. Recency window matches the doc rev 3
+    // hierarchy ("continue thread" = same `(page, ai_user)` Active conversation
+    // with `updated_at > now - N min`).
+    const candidateConvs = conversations
+      .filter((c) => {
+        if (c.status.tag !== "Active") return false;
+        return allParticipants.some(
+          (p) =>
+            p.conversationId === c.id && p.identity.toHexString() === aiHex,
+        );
+      })
+      .sort(
+        (a, b) =>
+          Number(
+            b.updatedAt.microsSinceUnixEpoch -
+              a.updatedAt.microsSinceUnixEpoch,
+          ),
       );
+    const mostRecent = candidateConvs[0];
+    const nowMs = Date.now();
+    const recentEnough =
+      mostRecent != null &&
+      nowMs -
+        Number(mostRecent.updatedAt.microsSinceUnixEpoch / 1000n) <
+        MENTION_RECENCY_MS;
+
+    const meHex = identity?.toHexString();
+    const perAiUserPref = meHex
+      ? allUserPrefs.find(
+          (p) =>
+            p.identity.toHexString() === meHex &&
+            p.key === `mention_thread_behavior:ai:${aiUserId}`,
+        )?.valueJson ?? null
+      : null;
+    const behavior = resolveThreadBehavior({
+      global: globalThreadBehavior,
+      perAiUser: perAiUserPref,
+      hasRecentActiveConversation: recentEnough,
     });
-    if (activeConv) {
+
+    if (behavior === "continue" && mostRecent) {
       onMentionAiUser?.();
       return;
     }
