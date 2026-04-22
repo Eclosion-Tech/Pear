@@ -53,6 +53,13 @@ pub enum PropertyType {
     Checkbox,
     Url,
     Person,
+    /// Computed by an AI primitive over other columns of the same row.
+    /// Configuration (primitive, model, prompt, output schema, invalidation
+    /// policy) lives in `PropertyDefinition.config` as JSON; current
+    /// materialised value lives in the same `PagePropertyValue` row as
+    /// any other column. Evaluation history (cache + cost) lives in
+    /// `AiEvaluation`.
+    Ai,
 }
 
 #[derive(SpacetimeType, Clone, Debug, PartialEq)]
@@ -67,6 +74,52 @@ pub enum PropertyValue {
     Url(String),
     /// Identity hex strings of assigned users.
     Person(Vec<String>),
+    /// Materialised AI primitive output, paired with the `AiEvaluation.id`
+    /// it was produced by so the UI can show provenance and cost without a
+    /// separate query.
+    Ai(AiPropertyValue),
+}
+
+/// Materialised value of an AI column. The output is intentionally a
+/// `String` even for "extract" / "classify" — the rendering layer reads
+/// the column's `output_schema_json` to decide how to display it (chip,
+/// number, sub-table, etc.). Storing as a string also keeps the cell
+/// schema-stable when the prompt's output schema evolves.
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub struct AiPropertyValue {
+    pub output: String,
+    pub evaluation_id: u64,
+    pub is_stale: bool,
+}
+
+/// Set of supported AI primitives. Each maps to a worker handler that
+/// validates output against `AiColumnConfig.output_schema_json` before
+/// committing.
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum AiPrimitive {
+    /// Pick one of N labels.
+    Classify,
+    /// Pull structured fields out of input text.
+    Extract,
+    /// Compress to N words/sentences.
+    Summarize,
+    /// Score Positive / Negative / Neutral with confidence.
+    Sentiment,
+    /// Translate to a target language.
+    Translate,
+}
+
+/// Controls when a materialised `AiPropertyValue` is considered stale.
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum InvalidationPolicy {
+    /// Recompute whenever any column referenced by `AiColumnConfig.input_columns`
+    /// changes on the row. Default for most primitives.
+    OnInputChange,
+    /// Never auto-recompute — only manual `recompute_ai_cell`. Useful for
+    /// expensive primitives where the operator wants to manage cost.
+    Manual,
+    /// Never invalidate. Useful for one-shot enrichment.
+    Never,
 }
 
 #[derive(SpacetimeType, Clone, Debug, PartialEq)]
@@ -109,6 +162,71 @@ pub enum InferenceProvider {
     OpenAI,
     Ollama,
     OpenAICompatible,
+}
+
+/// Access permission level on a Page or Block.
+///
+/// `Write` implies `Read` — a principal that can write necessarily can also
+/// read. The two variants exist so rule storage stays compact (one row per
+/// principal, not per action).
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum Permission {
+    Read,
+    Write,
+}
+
+/// A grantee on an access rule. Today only `WorkspaceMember(Identity)` is
+/// populated; future variants (`EndUser(u64)`, etc.) can be appended without
+/// migrating existing rows because SpacetimeDB enums are forward-compatible
+/// when only adding variants. See PEAR_PROGRAMMING.md "Foundational
+/// decisions" #2 for the rationale.
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum Principal {
+    /// A workspace member identified by their SpacetimeDB Identity.
+    WorkspaceMember(Identity),
+    // Future: EndUser(u64), ApiKey(u64), ServiceAccount(u64), ...
+}
+
+/// Subject of a `ReviewAgentBinding`. Replaces the prior
+/// `subject_kind: u8 + subject_ai_user_id: u64` pair so the type system —
+/// not a comment — encodes the discriminator.
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum ReviewSubject {
+    /// Review every action by this specific AI user.
+    AiUser(u64),
+    /// Review every action in the workspace.
+    Workspace,
+    // Future: Page(u64), Database(u64), ...
+}
+
+/// Context of an `AutoApplyBinding`. Replaces the prior
+/// `context_kind: u8 + context_id: u64` pair for the same reason as
+/// `ReviewSubject`.
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum AutoApplyContext {
+    /// Auto-apply within a single page (and its descendants).
+    Page(u64),
+    /// Auto-apply across the entire workspace.
+    Workspace,
+    // Future: Database(u64), ...
+}
+
+/// Visibility scope for a `Conversation`. Conversations get their own
+/// permission model independent of page permissions because the common case
+/// is "I want a private side conversation about a public page".
+///
+/// Visibility is monotonically expanding (`Private` → `Participants` →
+/// `PageInheriting`) and cannot retroactively contract — see
+/// `set_conversation_visibility` for the guard.
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum ConversationVisibility {
+    /// Only the initiator and AI user(s) can see the thread.
+    Private,
+    /// Initiator + AI user(s) + the explicit list in `conversation_participant`.
+    Participants,
+    /// Mirrors the attached page's effective access rules. Detached
+    /// (`page_id = None`) conversations cannot use this variant.
+    PageInheriting,
 }
 
 // ============================================================
@@ -219,11 +337,19 @@ pub struct Page {
     /// migration step (in `run_pending_migrations`) one-shots existing rows
     /// after a deploy.
     ///
-    /// Must be last for schema migration (STDB only allows additive changes
-    /// at the end of a struct).
     #[index(btree)]
     #[default(0u64)]
     pub parent_pk: u64,
+    /// Excludes this page (and conventionally its subtree) from sidebar
+    /// navigation and search by default. Used to host AI-user memory
+    /// subtrees and other "infrastructure" pages users don't need to see.
+    /// Access rules still apply normally — this is a visibility hint, not
+    /// a permission.
+    ///
+    /// Must be last for schema migration (STDB only allows additive changes
+    /// at the end of a struct).
+    #[default(false)]
+    pub is_hidden: bool,
 }
 
 /// Separated from Page so listing/filtering never loads content blobs.
@@ -390,6 +516,56 @@ pub struct AiUserConfig {
     pub max_tokens: u32,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    /// Soft + hard budget cap per calendar month, in token units (input +
+    /// output). `None` = unlimited. The Orcha scheduler refuses to claim
+    /// new tasks for this AI user once the running 30d total reaches this
+    /// number; a UI warning fires at 80%.
+    ///
+    /// Must remain last for schema migration (STDB only allows additive
+    /// changes at the end of a struct).
+    #[default(None::<u64>)]
+    pub monthly_token_cap: Option<u64>,
+    /// Distinguishes regular AI users from review agents. Review agents
+    /// run between proposed mutation and human diff surface and produce
+    /// structured annotations rather than direct edits.
+    #[default(AiUserRole::Standard)]
+    pub role: AiUserRole,
+    /// Optional `HarnessTemplate.id` this AI user was provisioned from.
+    /// Lets the UI offer "reset to template" and lets the harness layer
+    /// surface drift between configured behavior and the template's
+    /// recommendations. `None` for hand-rolled AI users.
+    #[default(None::<u64>)]
+    pub harness_template_id: Option<u64>,
+    /// Per-AI-user opt-in flag: when `true`, evaluations from this AI user
+    /// that use a non-sensitive primitive (currently `Classify`,
+    /// `Summarize`, `Sentiment`, `Translate` — never `Extract`) MAY be
+    /// surfaced to *any* external evaluation cache, index, or
+    /// federation that happens to be wired in. Pear core does nothing
+    /// with this flag itself; it is a generic authority gate that
+    /// downstream consumers (federation services, hosted caches,
+    /// research mirrors, internal cost-pooling tooling, etc.) check
+    /// before reading rows.
+    ///
+    /// Cache key shape (`sha256(primitive + inputs + model +
+    /// prompt_version)`) is intentionally portable so it can be used by
+    /// anyone running such a service. Defaults to `false`.
+    ///
+    /// Must remain last for schema migration (STDB only allows additive
+    /// changes at the end of a struct).
+    #[default(false)]
+    pub allow_evaluation_sharing: bool,
+}
+
+/// Distinguishes ordinary "do work" AI users from "review work" AI users.
+///
+/// Review agents are scheduled by the harness between a proposed mutation
+/// and the human diff surface; their output is structured annotations
+/// (Pass / Warn / Fail + comment) attached to the corresponding
+/// `PostAgentEdit` snapshot, not direct edits to the page.
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum AiUserRole {
+    Standard,
+    Reviewer,
 }
 
 /// Row-level visibility filter for `ai_user_config`. Each AI user sees only
@@ -424,6 +600,196 @@ pub struct AiUserProfile {
     pub updated_at: Timestamp,
 }
 
+// ============================================================
+// Harness templates, review bindings, auto-apply, preferences
+// ============================================================
+
+/// Versioned packaging of "an AI user with a job to do" — what
+/// `ConfigBundle` will eventually be promoted into. Wraps:
+///   - system prompt fragment
+///   - default model (still overridable per AI user)
+///   - default `instruction_pages` (relation to Page rows)
+///   - default `allowed_tools` (relation to ExtensionPermission scopes)
+///   - default `review_agent_template_ids`
+///   - default `default_context_scope` (which pages the AI user can see)
+///
+/// All "default_*" fields land as JSON for now; once we have richer
+/// relation tables we can split them out without a schema-breaking change
+/// to consumers.
+#[table(accessor = harness_template, public,
+        index(accessor = harness_template_external_id, btree(columns = [external_id])))]
+pub struct HarnessTemplate {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    /// Stable cross-database identifier (sha256-derived hex). Set on insert
+    /// and never rotated; survives forking, exporting, or re-importing the
+    /// template. Use this — not `id` — when referencing a template from
+    /// outside the workspace (e.g. shared marketplaces, audit trails).
+    pub external_id: String,
+    /// Human-friendly name ("Prospect Researcher", "Copy Editor", ...).
+    pub name: String,
+    /// One-paragraph description shown in the picker.
+    pub description: String,
+    /// Authoring source: `Builtin` for shipped reference templates,
+    /// `Workspace` for ones a workspace admin built locally.
+    pub source: HarnessTemplateSource,
+    /// `system_prompt` to seed `AiUserConfig.system_prompt`.
+    pub system_prompt: String,
+    /// Suggested `provider` + `model` defaults (worker may override).
+    pub default_provider: InferenceProvider,
+    pub default_model: String,
+    pub default_max_tokens: u32,
+    /// JSON: { "instruction_page_titles": [...], "allowed_tool_scopes":
+    /// [...], "default_context_scope": "...", "review_agent_template_ids":
+    /// [...] }. UI parses lazily.
+    pub config_json: String,
+    /// Bumped every time the operator edits a template; AI users
+    /// provisioned from earlier versions display a "template updated"
+    /// affordance.
+    pub version: u32,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+}
+
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum HarnessTemplateSource {
+    /// Ships with the application; cannot be deleted, only forked.
+    Builtin,
+    /// Authored in this workspace.
+    Workspace,
+}
+
+/// Binds a review agent (an `AiUserConfig` with `role = Reviewer`) to a
+/// scope where its review runs. `Pre` reviews run on the proposed
+/// mutation before it lands in the snapshot pair; `Post` reviews run on
+/// the `PostAgentEdit` snapshot.
+///
+/// The `subject` field encodes the scope as a typed `ReviewSubject` enum:
+/// `AiUser(id)` reviews actions by a specific AI user; `Workspace` reviews
+/// every action in the workspace. Future variants (Page, Database) will
+/// extend the enum without a schema migration.
+#[table(accessor = review_agent_binding, public)]
+pub struct ReviewAgentBinding {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    /// `AiUserConfig.id` of the reviewer.
+    #[index(btree)]
+    pub reviewer_ai_user_id: u64,
+    /// Typed scope; replaces the prior `subject_kind: u8 + subject_ai_user_id: u64` pair.
+    pub subject: ReviewSubject,
+    pub mode: ReviewMode,
+    /// What to do when the reviewer itself fails (timeout, model error).
+    /// Doc default is fail-open (the proposed mutation goes through with a
+    /// warning marker), to avoid one flaky reviewer wedging all writes.
+    pub fail_open: bool,
+    pub created_by: Identity,
+    pub created_at: Timestamp,
+}
+
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum ReviewMode {
+    Pre,
+    Post,
+}
+
+/// A reviewer's annotation on a specific `PostAgentEdit` snapshot.
+/// `severity` controls how the diff review surface displays it:
+///   - Pass: green check, no friction
+///   - Warn: yellow badge, human can still one-click apply
+///   - Fail: red badge, auto-apply suspended until reviewed
+#[table(accessor = review_annotation, public)]
+pub struct ReviewAnnotation {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    /// `PageSnapshot.id` of the `PostAgentEdit` snapshot being annotated.
+    #[index(btree)]
+    pub snapshot_id: u64,
+    pub reviewer_ai_user_id: u64,
+    pub severity: ReviewSeverity,
+    pub comment: String,
+    pub created_at: Timestamp,
+}
+
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum ReviewSeverity {
+    Pass,
+    Warn,
+    Fail,
+}
+
+/// "Auto-apply mode" granted to an AI user within a context. The `context`
+/// field is a typed `AutoApplyContext` enum (`Page(id)` or `Workspace`).
+/// A row's *presence* grants auto-apply; absence means human review is
+/// required. A reviewer `Fail` annotation overrides this regardless.
+///
+/// `allowed_action_kinds` narrows the *capability* of the grant: when
+/// `Some(list)`, only mutations whose primitive action kind appears in the
+/// list may auto-apply; everything else falls back to human review.
+/// `None` means "all action kinds" (current behaviour, kept for back-compat
+/// during the rollout). Capability-bounded grants are the foundation for
+/// safer automation — see PEAR_PROGRAMMING.md "Foundational decisions" #6.
+#[table(accessor = auto_apply_binding, public,
+        index(accessor = auto_apply_binding_principal,
+              btree(columns = [ai_user_id])))]
+pub struct AutoApplyBinding {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub ai_user_id: u64,
+    /// Typed scope; replaces the prior `context_kind: u8 + context_id: u64` pair.
+    pub context: AutoApplyContext,
+    /// Optional capability scope. `None` = all action kinds (legacy).
+    /// `Some(list)` = only the listed primitive action kinds may auto-apply.
+    /// Action kind strings are the same identifiers used by the AI tool
+    /// registry (e.g. `"create_page"`, `"set_property_value"`,
+    /// `"upsert_block"`).
+    pub allowed_action_kinds: Option<Vec<String>>,
+    pub granted_by: Identity,
+    pub granted_at: Timestamp,
+}
+
+/// Per-human user preferences. Sparse — only stores the keys the user has
+/// explicitly set; defaults live in code. The `key` namespace is dotted
+/// (e.g. `mention.thread_behavior`).
+#[table(accessor = user_preference, public,
+        index(accessor = user_preference_identity_key,
+              btree(columns = [identity, key])))]
+pub struct UserPreference {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub identity: Identity,
+    pub key: String,
+    pub value_json: String,
+    pub updated_at: Timestamp,
+}
+
+/// AI-user memory: a hidden subtree per AI user, two-tier (working /
+/// long-term). `working` memory stays small and is rewritten freely;
+/// `long_term` is consolidated by a weekly Orcha job. Both are just Page
+/// rows under `root_page_id` (which has `is_hidden = true` — see Phase 0).
+#[table(accessor = ai_user_memory, public)]
+pub struct AiUserMemory {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[unique]
+    pub ai_user_id: u64,
+    /// Hidden Page that hosts the memory subtree.
+    pub root_page_id: u64,
+    /// Page under root that holds the working-memory snapshot (small,
+    /// frequently rewritten). Nullable until first write.
+    pub working_page_id: Option<u64>,
+    /// Page under root that holds the consolidated long-term memory.
+    pub long_term_page_id: Option<u64>,
+    pub created_at: Timestamp,
+    pub last_consolidated_at: Option<Timestamp>,
+}
+
 /// A conversation thread. May be attached to a page (today's @mention flow) or
 /// detached (future workspace channels / DMs — `page_id = None`). Participants
 /// are tracked via `conversation_participant`; the legacy `ai_user_id` FK has
@@ -443,6 +809,15 @@ pub struct Conversation {
     pub status: ConversationStatus,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    /// Visibility scope. Defaults to `Private` (initiator + AI user(s) only)
+    /// even when the host page is public — most conversations are thinking,
+    /// not conclusions. Can only be expanded via `set_conversation_visibility`,
+    /// never retroactively contracted.
+    ///
+    /// Must be last for schema migration (STDB only allows additive changes
+    /// at the end of a struct).
+    #[default(ConversationVisibility::Private)]
+    pub visibility: ConversationVisibility,
 }
 
 /// Membership join between conversations and identities. The worker
@@ -460,6 +835,216 @@ pub struct ConversationParticipant {
     pub identity: Identity,
     pub role: ParticipantRole,
     pub joined_at: Timestamp,
+    /// `id` of the last `conversation_message` row this participant has
+    /// viewed. Drives unread-count UI in Inbox mode. `None` until the
+    /// participant first opens the thread.
+    ///
+    /// Must remain last for schema migration (STDB only allows additive
+    /// changes at the end of a struct).
+    #[default(None::<u64>)]
+    pub last_viewed_message_id: Option<u64>,
+    /// `Some(timestamp)` once the participant has been removed from the
+    /// thread. Removal is honest — the row stays so the audit trail
+    /// records who saw what before they were removed; new messages stop
+    /// flowing to them.
+    #[default(None::<Timestamp>)]
+    pub left_at: Option<Timestamp>,
+}
+
+/// Registry of valid structural-sensor `(sensor_kind, code)` pairs. This
+/// turns the previously open string fields on `StructuralSensorFinding`
+/// into a closed vocabulary: the `upsert_finding` helper validates
+/// against this table and refuses unknown kinds/codes, so a typo in a
+/// sensor reducer can't quietly produce a finding the UI doesn't know how
+/// to render.
+///
+/// Seeded at `init` time with every shipped sensor; new sensors register
+/// by adding a row in `seed_sensor_registry_inner`. Callers (other than
+/// the seed) cannot insert here — admins can adjust `default_severity`
+/// or `description` via reducers added later if needed.
+#[table(
+    accessor = sensor_registry,
+    public,
+    index(accessor = sensor_registry_kind_code, btree(columns = [sensor_kind, code])),
+)]
+pub struct SensorRegistry {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    /// Sensor identifier (e.g. `"orphan_detector"`).
+    pub sensor_kind: String,
+    /// Specific rule code within the sensor (e.g. `"page_parent_missing"`).
+    pub code: String,
+    /// Human-readable name shown in the Inbox / settings UI.
+    pub display_name: String,
+    /// One-paragraph explanation of what this finding means.
+    pub description: String,
+    /// Default severity emitted by the sensor: `"info"`, `"warn"`, `"error"`.
+    /// The sensor may override per-finding, but this is the canonical class.
+    pub default_severity: String,
+}
+
+/// Findings emitted by computational structural sensors (orphan detector,
+/// relational integrity, schema consistency, convention sensor). These are
+/// cheap deterministic checks over the relational substrate; an Orcha worker
+/// invokes the corresponding `run_*_sensor` reducer on a schedule and the
+/// reducer (re)writes findings here.
+///
+/// `sensor_kind` + `code` MUST appear in `SensorRegistry`; the
+/// `upsert_finding` helper enforces this. This makes the sensor surface a
+/// closed, governed vocabulary rather than an open string-typed sink.
+///
+/// Findings are *advisory* — they surface in the Inbox / Members tab and
+/// optionally feed review agents; they do not block writes. Each row is
+/// keyed by `(sensor_kind, target_kind, target_id, code)` so re-runs
+/// upsert rather than spam.
+#[table(
+    accessor = structural_sensor_finding,
+    public,
+    index(accessor = structural_sensor_finding_kind,
+          btree(columns = [sensor_kind])),
+    index(accessor = structural_sensor_finding_target,
+          btree(columns = [target_kind, target_id])),
+)]
+pub struct StructuralSensorFinding {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    /// Short stable identifier for the sensor that produced this finding.
+    /// Examples: `"orphan_detector"`, `"relational_integrity"`,
+    /// `"schema_consistency"`, `"convention"`.
+    pub sensor_kind: String,
+    /// Short stable code identifying the rule that fired (e.g.
+    /// `"page_no_parent"`, `"relation_dangling"`, `"property_type_mismatch"`).
+    pub code: String,
+    /// Target entity kind, e.g. `"page"`, `"property_value"`,
+    /// `"property_definition"`, `"database_schema"`.
+    pub target_kind: String,
+    /// Primary key of the target entity (best-effort u64 coercion;
+    /// strings are not used as targets today).
+    pub target_id: u64,
+    /// Human-readable summary of the finding, intended for the Inbox.
+    pub message: String,
+    /// Severity: `"info"`, `"warn"`, `"error"`. Sensor-defined.
+    pub severity: String,
+    /// JSON bag of additional context (e.g. expected vs. actual type).
+    pub details_json: String,
+    pub created_at: Timestamp,
+    pub last_seen_at: Timestamp,
+    /// Set when the finding has been acknowledged (manual dismiss or fixed).
+    #[default(None::<Timestamp>)]
+    pub resolved_at: Option<Timestamp>,
+}
+
+// ============================================================
+// Access Control Tables
+// ============================================================
+
+/// Per-page, per-principal access grant. Rules *restrict* — the absence of
+/// any rule for a page means the open model applies (any authenticated
+/// caller can read and write). When at least one rule exists for a page,
+/// only listed principals (with the appropriate `Permission`) plus
+/// workspace admins may act on it.
+///
+/// `principal` is an `Identity`, which generalises across human and AI
+/// users — both are first-class principals per `FEATURE_ai_users.md`.
+#[table(accessor = page_access_rule, public)]
+pub struct PageAccessRule {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub page_id: u64,
+    /// Typed grantee. Today only `Principal::WorkspaceMember(Identity)` is
+    /// populated; future end-user / API-key variants slot in without
+    /// schema migration.
+    pub principal: Principal,
+    pub permission: Permission,
+    pub granted_by: Identity,
+    pub granted_at: Timestamp,
+}
+
+/// Cached evaluation of an AI primitive over a specific row. The cache key
+/// is `input_hash = sha256(primitive || NUL || model || NUL || prompt_version || NUL || serialized_inputs)`.
+/// The same `(primitive, inputs, model, prompt_version)` produces the same
+/// `input_hash`, so two `Ai` cells in different rows that happened to have
+/// the same inputs share an evaluation for free. Cross-workspace
+/// sharing is opt-in via `ai_user_config.allow_evaluation_sharing` and
+/// is the responsibility of whatever external service consumes those
+/// rows; pear core itself never publishes them.
+///
+/// `is_stale` flips to `true` when an upstream input changes; recompute
+/// inserts a fresh row and the prior row is preserved as history (cost +
+/// provenance trail). Retention policy: keep all eval rows for now;
+/// thinning is a Phase B/C polish concern once volume is real.
+#[table(
+    accessor = ai_evaluation,
+    public,
+    index(accessor = ai_evaluation_input_hash, btree(columns = [input_hash])),
+    index(accessor = ai_evaluation_property_page,
+          btree(columns = [property_definition_id, page_id])),
+)]
+pub struct AiEvaluation {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    /// PropertyDefinition.id of the AI column this evaluation belongs to.
+    #[index(btree)]
+    pub property_definition_id: u64,
+    /// Page (row) the evaluation is for.
+    #[index(btree)]
+    pub page_id: u64,
+    /// SHA-256 hex of the canonicalised cache key.
+    pub input_hash: String,
+    pub primitive: AiPrimitive,
+    pub model: String,
+    /// Monotonically incremented when the operator edits `prompt_template`
+    /// in the column config. Distinguishes "same inputs, new prompt".
+    pub prompt_version: u32,
+    /// Final tool output as serialized JSON string.
+    pub output: String,
+    /// Tokens consumed (prompt + completion).
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    /// Cost in USD micro-cents (10^-6 USD) — integer storage avoids
+    /// floating-point drift in aggregations.
+    pub cost_microcents: u64,
+    pub wall_clock_ms: u32,
+    pub created_at: Timestamp,
+    /// Identity of the AI user this primitive ran under (for cost
+    /// attribution + per-AI-user budget tracking).
+    pub ai_user_identity: Identity,
+    /// Marked `true` when an upstream input changes; UI shows a "stale"
+    /// badge. Manual recompute clears by inserting a fresh row.
+    pub is_stale: bool,
+}
+
+/// Per-block, per-principal access grant. Same restrict-not-grant semantic
+/// as `page_access_rule`. The combination `(page_id, block_id)` identifies
+/// a block within a page; `block_id` is the BlockNote block id (a string,
+/// since BlockNote uses uuid-style ids).
+///
+/// Block-level enforcement against the live Yjs blob is partial — see the
+/// Phase A discussion in `FEATURE_ai_users.md`. The MVP enforcement point
+/// is the context payload assembled for AI users; the field exists in
+/// schema today so we can subscribe and query against it from clients.
+#[table(
+    accessor = block_access_rule,
+    public,
+)]
+pub struct BlockAccessRule {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub page_id: u64,
+    pub block_id: String,
+    /// Typed grantee. See `PageAccessRule.principal` for the enum
+    /// extensibility rationale.
+    pub principal: Principal,
+    pub permission: Permission,
+    pub granted_by: Identity,
+    pub granted_at: Timestamp,
 }
 
 /// A single message within a conversation. Sender can be human, AI, or system.
@@ -589,6 +1174,7 @@ fn seed_builtin_extensions_inner(ctx: &ReducerContext) {
 #[reducer(init)]
 pub fn init(ctx: &ReducerContext) {
     seed_builtin_extensions_inner(ctx);
+    seed_sensor_registry_inner(ctx);
 }
 
 /// Seed the pear-workspace-tools built-in extension for databases that were created
@@ -597,6 +1183,97 @@ pub fn init(ctx: &ReducerContext) {
 pub fn seed_builtin_extensions(ctx: &ReducerContext) -> Result<(), String> {
     seed_builtin_extensions_inner(ctx);
     Ok(())
+}
+
+/// Idempotent seed for `SensorRegistry`. Safe to call repeatedly — every
+/// (sensor_kind, code) pair is upserted only if missing. Add new rows here
+/// when shipping a new sensor; the corresponding `run_*` reducer will then
+/// be allowed to emit findings with that code.
+#[reducer]
+pub fn seed_sensor_registry(ctx: &ReducerContext) -> Result<(), String> {
+    seed_sensor_registry_inner(ctx);
+    Ok(())
+}
+
+fn seed_sensor_registry_inner(ctx: &ReducerContext) {
+    // (sensor_kind, code, display_name, description, default_severity)
+    const ROWS: &[(&str, &str, &str, &str, &str)] = &[
+        (
+            "orphan_detector",
+            "page_parent_missing",
+            "Orphaned page",
+            "A page references a parent that no longer exists (deleted or never created).",
+            "warn",
+        ),
+        (
+            "relational_integrity",
+            "relation_dangling",
+            "Dangling relation",
+            "A relation property points at one or more pages that no longer exist.",
+            "warn",
+        ),
+        (
+            "schema_consistency",
+            "property_definition_missing",
+            "Missing property definition",
+            "A property value row references a property definition that no longer exists.",
+            "error",
+        ),
+        (
+            "schema_consistency",
+            "property_type_mismatch",
+            "Property value type mismatch",
+            "A property value's variant does not match its definition's declared type.",
+            "warn",
+        ),
+        (
+            "convention",
+            "property_definition_unnamed",
+            "Unnamed property definition",
+            "A column was created without a name. The UI will display it as a placeholder.",
+            "info",
+        ),
+        (
+            "convention",
+            "schema_no_columns",
+            "Empty database schema",
+            "A database schema has zero columns and cannot store any property values.",
+            "info",
+        ),
+        (
+            "denied_tool_calls",
+            "tool_denied",
+            "Repeatedly denied tool call",
+            "An agent is being denied access to a tool. Either grant the permission or confirm the deny is correct.",
+            "info",
+        ),
+    ];
+
+    for (kind, code, display, desc, sev) in ROWS {
+        let exists = ctx
+            .db
+            .sensor_registry()
+            .iter()
+            .any(|r| r.sensor_kind == *kind && r.code == *code);
+        if exists {
+            continue;
+        }
+        ctx.db.sensor_registry().insert(SensorRegistry {
+            id: next_sensor_registry_id(ctx),
+            sensor_kind: kind.to_string(),
+            code: code.to_string(),
+            display_name: display.to_string(),
+            description: desc.to_string(),
+            default_severity: sev.to_string(),
+        });
+    }
+}
+
+fn sensor_registry_contains(ctx: &ReducerContext, sensor_kind: &str, code: &str) -> bool {
+    ctx.db
+        .sensor_registry()
+        .iter()
+        .any(|r| r.sensor_kind == sensor_kind && r.code == code)
 }
 
 // ----------------------------------------------------------------------
@@ -649,6 +1326,49 @@ pub fn run_pending_migrations(ctx: &ReducerContext) -> Result<(), String> {
     }
 
     run_step!(ctx, "page_parent_pk_backfill_v1", backfill_page_parent_pk_inner);
+    run_step!(ctx, "sensor_registry_seed_v1", |ctx: &ReducerContext| {
+        seed_sensor_registry_inner(ctx);
+        Ok::<(), String>(())
+    });
+    run_step!(
+        ctx,
+        "harness_template_external_id_backfill_v1",
+        backfill_harness_template_external_id_inner
+    );
+    Ok(())
+}
+
+/// Backfill `HarnessTemplate.external_id` for rows that predate the field.
+/// Empty strings are replaced with a deterministic hash over the template's
+/// `(source, name, created_at)` so re-running is a no-op.
+fn backfill_harness_template_external_id_inner(
+    ctx: &ReducerContext,
+) -> Result<(), String> {
+    let stale: Vec<HarnessTemplate> = ctx
+        .db
+        .harness_template()
+        .iter()
+        .filter(|t| t.external_id.is_empty())
+        .collect();
+    let n = stale.len();
+    for tmpl in stale {
+        let mut hasher = Sha256::new();
+        hasher.update(format!("{:?}", tmpl.source).as_bytes());
+        hasher.update(b"\x00");
+        hasher.update(tmpl.name.as_bytes());
+        hasher.update(b"\x00");
+        hasher.update(
+            tmpl.created_at
+                .to_micros_since_unix_epoch()
+                .to_le_bytes(),
+        );
+        let external_id = hex::encode(hasher.finalize());
+        ctx.db.harness_template().id().update(HarnessTemplate {
+            external_id,
+            ..tmpl
+        });
+    }
+    log::info!("harness_template_external_id_backfill_v1: updated {n} rows");
     Ok(())
 }
 
@@ -937,6 +1657,116 @@ fn require_creator_or_admin(
     }
 }
 
+// ============================================================
+// Access control helpers
+// ============================================================
+//
+// Semantics: rules *restrict* rather than grant. If zero rules exist for a
+// page, the open model applies and any authenticated principal can read or
+// write. Once any rule exists for a page, only principals with an explicit
+// matching rule (or admins) may act. `Write` implies `Read`.
+
+fn page_has_any_rule(ctx: &ReducerContext, page_id: u64) -> bool {
+    ctx.db.page_access_rule().page_id().filter(&page_id).next().is_some()
+}
+
+fn principal_has_page_permission(
+    ctx: &ReducerContext,
+    page_id: u64,
+    principal: Identity,
+    needed: &Permission,
+) -> bool {
+    for rule in ctx.db.page_access_rule().page_id().filter(&page_id) {
+        if !principal_matches_identity(&rule.principal, principal) {
+            continue;
+        }
+        match (&rule.permission, needed) {
+            // Write implies Read.
+            (Permission::Write, _) => return true,
+            (Permission::Read, Permission::Read) => return true,
+            _ => continue,
+        }
+    }
+    false
+}
+
+/// True iff `identity` may read `page_id`. Open-by-default.
+pub fn can_read_page(ctx: &ReducerContext, page_id: u64, identity: Identity) -> bool {
+    if !page_has_any_rule(ctx, page_id) {
+        return true;
+    }
+    if let Some(u) = ctx.db.user().identity().find(&identity) {
+        if u.is_admin && u.is_authenticated {
+            return true;
+        }
+    }
+    principal_has_page_permission(ctx, page_id, identity, &Permission::Read)
+}
+
+/// True iff `identity` may write `page_id`. Open-by-default.
+pub fn can_write_page(ctx: &ReducerContext, page_id: u64, identity: Identity) -> bool {
+    if !page_has_any_rule(ctx, page_id) {
+        return true;
+    }
+    if let Some(u) = ctx.db.user().identity().find(&identity) {
+        if u.is_admin && u.is_authenticated {
+            return true;
+        }
+    }
+    principal_has_page_permission(ctx, page_id, identity, &Permission::Write)
+}
+
+/// Reducer guard: ensures the caller may write the page or returns the
+/// canonical rejection string used by every page-mutating reducer below.
+fn require_page_write(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
+    if can_write_page(ctx, page_id, ctx.sender()) {
+        Ok(())
+    } else {
+        Err("Caller lacks write access on this page".to_string())
+    }
+}
+
+/// Reducer guard: ensures the caller may read the page (used by reducers
+/// that surface page state through side effects, e.g. snapshotting).
+#[allow(dead_code)]
+fn require_page_read(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
+    if can_read_page(ctx, page_id, ctx.sender()) {
+        Ok(())
+    } else {
+        Err("Caller lacks read access on this page".to_string())
+    }
+}
+
+/// True iff `identity` may read a specific block. Falls back to page-level
+/// access when no block rule exists. Useful for the AI context assembler;
+/// the live Yjs blob is not server-filtered today.
+pub fn can_read_block(
+    ctx: &ReducerContext,
+    page_id: u64,
+    block_id: &str,
+    identity: Identity,
+) -> bool {
+    let block_rules: Vec<BlockAccessRule> = ctx
+        .db
+        .block_access_rule()
+        .page_id()
+        .filter(&page_id)
+        .filter(|r| r.block_id == block_id)
+        .collect();
+
+    if block_rules.is_empty() {
+        return can_read_page(ctx, page_id, identity);
+    }
+    if let Some(u) = ctx.db.user().identity().find(&identity) {
+        if u.is_admin && u.is_authenticated {
+            return true;
+        }
+    }
+    block_rules
+        .iter()
+        .any(|r| principal_matches_identity(&r.principal, identity))
+}
+
 /// SHA-256( email + NUL + password + NUL + "pear-auth-v1" ) as lowercase hex.
 /// The email acts as a per-user salt — simple and deterministic, fine for local use.
 fn hash_password(email: &str, password: &str) -> String {
@@ -1010,6 +1840,93 @@ fn next_orcha_shared_context_id(ctx: &ReducerContext) -> u64 {
 fn next_orcha_usage_event_id(ctx: &ReducerContext) -> u64 {
     ctx.db.orcha_usage_event().iter().map(|r| r.id).max().unwrap_or(0) + 1
 }
+fn next_page_access_rule_id(ctx: &ReducerContext) -> u64 {
+    ctx.db.page_access_rule().iter().map(|r| r.id).max().unwrap_or(0) + 1
+}
+fn next_block_access_rule_id(ctx: &ReducerContext) -> u64 {
+    ctx.db.block_access_rule().iter().map(|r| r.id).max().unwrap_or(0) + 1
+}
+fn next_ai_evaluation_id(ctx: &ReducerContext) -> u64 {
+    ctx.db.ai_evaluation().iter().map(|r| r.id).max().unwrap_or(0) + 1
+}
+fn next_harness_template_id(ctx: &ReducerContext) -> u64 {
+    ctx.db.harness_template().iter().map(|r| r.id).max().unwrap_or(0) + 1
+}
+fn next_review_agent_binding_id(ctx: &ReducerContext) -> u64 {
+    ctx.db.review_agent_binding().iter().map(|r| r.id).max().unwrap_or(0) + 1
+}
+fn next_review_annotation_id(ctx: &ReducerContext) -> u64 {
+    ctx.db.review_annotation().iter().map(|r| r.id).max().unwrap_or(0) + 1
+}
+fn next_auto_apply_binding_id(ctx: &ReducerContext) -> u64 {
+    ctx.db.auto_apply_binding().iter().map(|r| r.id).max().unwrap_or(0) + 1
+}
+fn next_user_preference_id(ctx: &ReducerContext) -> u64 {
+    ctx.db.user_preference().iter().map(|r| r.id).max().unwrap_or(0) + 1
+}
+fn next_ai_user_memory_id(ctx: &ReducerContext) -> u64 {
+    ctx.db.ai_user_memory().iter().map(|r| r.id).max().unwrap_or(0) + 1
+}
+
+fn next_structural_sensor_finding_id(ctx: &ReducerContext) -> u64 {
+    ctx.db
+        .structural_sensor_finding()
+        .iter()
+        .map(|r| r.id)
+        .max()
+        .unwrap_or(0)
+        + 1
+}
+
+fn next_sensor_registry_id(ctx: &ReducerContext) -> u64 {
+    ctx.db.sensor_registry().iter().map(|r| r.id).max().unwrap_or(0) + 1
+}
+
+// ============================================================
+// Cross-database stable IDs.
+// ============================================================
+// SHA-256 over (sender || NUL || timestamp_micros || NUL || kind || NUL ||
+// extra) and hex-encoded. Deterministic for the same inputs but in
+// practice unique because the timestamp component is always present.
+// Used for entities (HarnessTemplate, etc.) that may travel between
+// workspaces — `id` is a per-database surrogate and is unstable across
+// imports, but `external_id` is the entity's true identity.
+fn generate_external_id(ctx: &ReducerContext, kind: &str, extra: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(format!("{:?}", ctx.sender()).as_bytes());
+    hasher.update(b"\x00");
+    hasher.update(
+        ctx.timestamp
+            .to_micros_since_unix_epoch()
+            .to_le_bytes(),
+    );
+    hasher.update(b"\x00");
+    hasher.update(kind.as_bytes());
+    hasher.update(b"\x00");
+    hasher.update(extra.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+// ============================================================
+// Principal helpers.
+// ============================================================
+// During the rev-3 access-rule refactor, `PageAccessRule.principal` and
+// `BlockAccessRule.principal` flipped from `Identity` to the typed
+// `Principal` enum. These helpers keep the call sites readable while only
+// the `WorkspaceMember` variant exists; future variants slot in here.
+
+/// Returns true iff this principal represents the given workspace-member
+/// identity. End-user / API-key variants always return `false` today.
+fn principal_matches_identity(principal: &Principal, identity: Identity) -> bool {
+    match principal {
+        Principal::WorkspaceMember(id) => *id == identity,
+    }
+}
+
+/// Convenience: wrap an `Identity` as a workspace-member principal.
+fn workspace_member(identity: Identity) -> Principal {
+    Principal::WorkspaceMember(identity)
+}
 
 // ============================================================
 // AI User Reducers
@@ -1080,6 +1997,10 @@ pub fn create_ai_user(
         max_tokens: max_tokens.unwrap_or(8192),
         created_at: ctx.timestamp,
         updated_at: ctx.timestamp,
+        monthly_token_cap: None,
+        role: AiUserRole::Standard,
+        harness_template_id: None,
+        allow_evaluation_sharing: false,
     });
 
     ctx.db.ai_user_profile().insert(AiUserProfile {
@@ -1266,6 +2187,9 @@ pub fn create_conversation(
         status: ConversationStatus::Active,
         created_at: ctx.timestamp,
         updated_at: ctx.timestamp,
+        // Default to Private even on public pages — most conversations are
+        // thinking, not conclusions. Initiator can expand later.
+        visibility: ConversationVisibility::Private,
     });
 
     let mut seen: Vec<Identity> = Vec::new();
@@ -1276,6 +2200,8 @@ pub fn create_conversation(
         identity: initiator,
         role: ParticipantRole::Initiator,
         joined_at: ctx.timestamp,
+        last_viewed_message_id: None,
+        left_at: None,
     });
     seen.push(initiator);
 
@@ -1289,6 +2215,8 @@ pub fn create_conversation(
             identity: ident,
             role: ParticipantRole::Member,
             joined_at: ctx.timestamp,
+            last_viewed_message_id: None,
+            left_at: None,
         });
         seen.push(ident);
     }
@@ -1518,6 +2446,10 @@ pub fn create_page(
     if title.trim().is_empty() {
         return Err("Title cannot be empty".to_string());
     }
+    // Creating a child page is a write to the parent — guard it.
+    if let Some(pid) = parent_id {
+        require_page_write(ctx, pid)?;
+    }
     let sort_order = next_sort_order(ctx, parent_id);
     let page = ctx.db.page().insert(Page {
         id: next_page_id(ctx),
@@ -1532,6 +2464,7 @@ pub fn create_page(
         updated_at: ctx.timestamp,
         deleted_at: None,
         parent_pk: parent_id.unwrap_or(0),
+        is_hidden: false,
     });
     ctx.db.page_content().insert(PageContent {
         page_id: page.id,
@@ -1554,6 +2487,10 @@ pub fn move_page(
     new_parent_id: Option<u64>,
     after_page_id: Option<u64>,
 ) -> Result<(), String> {
+    require_page_write(ctx, page_id)?;
+    if let Some(pid) = new_parent_id {
+        require_page_write(ctx, pid)?;
+    }
     let page = ctx
         .db
         .page()
@@ -1612,6 +2549,7 @@ pub fn update_page_title(ctx: &ReducerContext, page_id: u64, title: String) -> R
     if title.trim().is_empty() {
         return Err("Title cannot be empty".to_string());
     }
+    require_page_write(ctx, page_id)?;
     let page = ctx
         .db
         .page()
@@ -1629,6 +2567,7 @@ pub fn update_page_title(ctx: &ReducerContext, page_id: u64, title: String) -> R
 /// Set or clear the page icon (emoji). Pass empty string to clear.
 #[reducer]
 pub fn update_page_icon(ctx: &ReducerContext, page_id: u64, icon: String) -> Result<(), String> {
+    require_page_write(ctx, page_id)?;
     let page = ctx
         .db
         .page()
@@ -1686,6 +2625,7 @@ pub fn update_page_content(
     page_id: u64,
     content: String,
 ) -> Result<(), String> {
+    require_page_write(ctx, page_id)?;
     let existing = ctx
         .db
         .page_content()
@@ -1716,6 +2656,7 @@ pub fn save_yjs_state(
     page_id: u64,
     data: Vec<u8>,
 ) -> Result<(), String> {
+    require_page_write(ctx, page_id)?;
     ctx.db.page().id().find(&page_id).ok_or("Page not found")?;
 
     if let Some(existing) = ctx.db.page_yjs_state().page_id().find(&page_id) {
@@ -1744,6 +2685,7 @@ pub fn save_yjs_state(
 /// Soft delete — sets deleted_at, never hard deletes.
 #[reducer]
 pub fn delete_page(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
+    require_page_write(ctx, page_id)?;
     let page = ctx
         .db
         .page()
@@ -1760,6 +2702,7 @@ pub fn delete_page(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
 
 #[reducer]
 pub fn restore_page(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
+    require_page_write(ctx, page_id)?;
     let page = ctx
         .db
         .page()
@@ -1818,6 +2761,7 @@ pub fn delete_attachment(ctx: &ReducerContext, attachment_id: u64) -> Result<(),
 /// non-deleted content.
 #[reducer]
 pub fn purge_page(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
+    require_page_write(ctx, page_id)?;
     let page = ctx
         .db
         .page()
@@ -2136,6 +3080,7 @@ pub fn set_property_value(
     property_definition_id: u64,
     value: PropertyValue,
 ) -> Result<(), String> {
+    require_page_write(ctx, page_id)?;
     // Collect existing current-history entries before mutating
     let stale_history: Vec<PagePropertyValueHistory> = ctx
         .db
@@ -2202,6 +3147,7 @@ pub fn clear_property_value(
     page_id: u64,
     property_definition_id: u64,
 ) -> Result<(), String> {
+    require_page_write(ctx, page_id)?;
     let existing: Option<PagePropertyValue> = ctx
         .db
         .page_property_value()
@@ -2885,6 +3831,12 @@ pub fn set_shared_context(
 }
 
 /// Record a usage event for a completed task or conversation response.
+///
+/// Phase A cost-cap surface: when the AI user has a `monthly_token_cap` set,
+/// the reducer logs (but does not refuse) the event so the UI can render
+/// the warning / hard-stop pills. Refusal happens at task acceptance time
+/// in `claim_task`; recording usage *after* the work is done would penalise
+/// honest reporting, so we always insert the row.
 #[reducer]
 pub fn record_usage_event(
     ctx: &ReducerContext,
@@ -2896,6 +3848,34 @@ pub fn record_usage_event(
     tokens_out: u64,
     wall_clock_ms: u64,
 ) -> Result<(), String> {
+    if let Some(uid) = ai_user_id {
+        if let Some(cap) = ctx
+            .db
+            .ai_user_config()
+            .id()
+            .find(uid)
+            .and_then(|c| c.monthly_token_cap)
+        {
+            let used = month_to_date_tokens(ctx, uid);
+            let projected = used + tokens_in + tokens_out;
+            if projected > cap {
+                log::warn!(
+                    "[cost] ai_user {} projected to exceed monthly_token_cap ({} > {})",
+                    uid,
+                    projected,
+                    cap,
+                );
+            } else if projected * 5 >= cap * 4 {
+                log::info!(
+                    "[cost] ai_user {} at {}% of monthly_token_cap ({} of {})",
+                    uid,
+                    projected * 100 / cap.max(1),
+                    projected,
+                    cap,
+                );
+            }
+        }
+    }
     ctx.db.orcha_usage_event().insert(OrchaUsageEvent {
         id: next_orcha_usage_event_id(ctx),
         task_id,
@@ -2908,6 +3888,26 @@ pub fn record_usage_event(
         created_at: ctx.timestamp,
     });
     Ok(())
+}
+
+/// Sum tokens_in + tokens_out for `ai_user_id` for the current calendar
+/// month (UTC). O(N) over events; for a per-AI-user btree index this drops
+/// to O(month-rows) but the ergonomics of `iter().filter` are fine until
+/// the table grows past ~10k rows per workspace.
+fn month_to_date_tokens(ctx: &ReducerContext, ai_user_id: u64) -> u64 {
+    let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
+    // Roughly the first of the month at UTC midnight; we err on the side of
+    // including a few extra days at month boundaries rather than dropping
+    // events the user can see in their dashboard.
+    let micros_per_day: i64 = 86_400 * 1_000_000;
+    let month_start = now_micros.saturating_sub(31 * micros_per_day);
+    ctx.db
+        .orcha_usage_event()
+        .iter()
+        .filter(|e| e.ai_user_id == Some(ai_user_id))
+        .filter(|e| e.created_at.to_micros_since_unix_epoch() >= month_start)
+        .map(|e| e.tokens_in + e.tokens_out)
+        .sum()
 }
 
 // ============================================================
@@ -3370,6 +4370,10 @@ fn create_extension_ai_user(
         max_tokens: if cb.max_tokens == 0 { 8192 } else { cb.max_tokens },
         created_at: ctx.timestamp,
         updated_at: ctx.timestamp,
+        monthly_token_cap: None,
+        role: AiUserRole::Standard,
+        harness_template_id: None,
+        allow_evaluation_sharing: false,
     });
     ctx.db.ai_user_profile().insert(AiUserProfile {
         ai_user_id: config_row.id,
@@ -4880,6 +5884,7 @@ pub fn create_database_row(
         updated_at: ctx.timestamp,
         deleted_at: None,
         parent_pk: database_page_id,
+        is_hidden: false,
     });
     ctx.db.page_content().insert(PageContent {
         page_id: row.id,
@@ -5120,4 +6125,1334 @@ pub fn log_api_call(
 #[reducer]
 pub fn import_pear_snapshot_v1(ctx: &ReducerContext, snapshot_json: String) -> Result<(), String> {
     pear_import::apply_snapshot(ctx, &snapshot_json)
+}
+
+// ============================================================
+// Access Control Reducers
+// ============================================================
+//
+// "Mutating the rules of the page" is itself a write on the page. Once a
+// page has any rule, only existing writers (or admins) can change the rule
+// set — otherwise a single mistake could lock the workspace out. A page
+// with zero rules is open, so anyone can install the *first* rule.
+
+fn require_rule_authority(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
+    if !page_has_any_rule(ctx, page_id) {
+        return Ok(());
+    }
+    require_page_write(ctx, page_id)
+}
+
+/// Grants `principal` `permission` on `page_id`. Upserts: if a rule already
+/// exists for the principal it is replaced (so promoting Read → Write is
+/// idempotent and Write → Read is a true demotion).
+#[reducer]
+pub fn set_page_access_rule(
+    ctx: &ReducerContext,
+    page_id: u64,
+    principal: Identity,
+    permission: Permission,
+) -> Result<(), String> {
+    ctx.db.page().id().find(&page_id).ok_or("Page not found")?;
+    require_rule_authority(ctx, page_id)?;
+
+    let existing: Vec<PageAccessRule> = ctx
+        .db
+        .page_access_rule()
+        .page_id()
+        .filter(&page_id)
+        .filter(|r| principal_matches_identity(&r.principal, principal))
+        .collect();
+    for rule in existing {
+        ctx.db.page_access_rule().id().delete(&rule.id);
+    }
+
+    ctx.db.page_access_rule().insert(PageAccessRule {
+        id: next_page_access_rule_id(ctx),
+        page_id,
+        principal: workspace_member(principal),
+        permission,
+        granted_by: ctx.sender(),
+        granted_at: ctx.timestamp,
+    });
+    Ok(())
+}
+
+/// Removes any rule for `principal` on `page_id`. If this drops the rule
+/// count to zero the page returns to the open model.
+#[reducer]
+pub fn clear_page_access_rule(
+    ctx: &ReducerContext,
+    page_id: u64,
+    principal: Identity,
+) -> Result<(), String> {
+    ctx.db.page().id().find(&page_id).ok_or("Page not found")?;
+    require_rule_authority(ctx, page_id)?;
+
+    let to_delete: Vec<PageAccessRule> = ctx
+        .db
+        .page_access_rule()
+        .page_id()
+        .filter(&page_id)
+        .filter(|r| principal_matches_identity(&r.principal, principal))
+        .collect();
+    for rule in to_delete {
+        ctx.db.page_access_rule().id().delete(&rule.id);
+    }
+    Ok(())
+}
+
+#[reducer]
+pub fn set_block_access_rule(
+    ctx: &ReducerContext,
+    page_id: u64,
+    block_id: String,
+    principal: Identity,
+    permission: Permission,
+) -> Result<(), String> {
+    if block_id.trim().is_empty() {
+        return Err("block_id cannot be empty".to_string());
+    }
+    ctx.db.page().id().find(&page_id).ok_or("Page not found")?;
+    require_rule_authority(ctx, page_id)?;
+
+    let existing: Vec<BlockAccessRule> = ctx
+        .db
+        .block_access_rule()
+        .page_id()
+        .filter(&page_id)
+        .filter(|r| {
+            r.block_id == block_id && principal_matches_identity(&r.principal, principal)
+        })
+        .collect();
+    for rule in existing {
+        ctx.db.block_access_rule().id().delete(&rule.id);
+    }
+
+    ctx.db.block_access_rule().insert(BlockAccessRule {
+        id: next_block_access_rule_id(ctx),
+        page_id,
+        block_id,
+        principal: workspace_member(principal),
+        permission,
+        granted_by: ctx.sender(),
+        granted_at: ctx.timestamp,
+    });
+    Ok(())
+}
+
+#[reducer]
+pub fn clear_block_access_rule(
+    ctx: &ReducerContext,
+    page_id: u64,
+    block_id: String,
+    principal: Identity,
+) -> Result<(), String> {
+    ctx.db.page().id().find(&page_id).ok_or("Page not found")?;
+    require_rule_authority(ctx, page_id)?;
+    let to_delete: Vec<BlockAccessRule> = ctx
+        .db
+        .block_access_rule()
+        .page_id()
+        .filter(&page_id)
+        .filter(|r| {
+            r.block_id == block_id && principal_matches_identity(&r.principal, principal)
+        })
+        .collect();
+    for rule in to_delete {
+        ctx.db.block_access_rule().id().delete(&rule.id);
+    }
+    Ok(())
+}
+
+/// Toggles the sidebar/search visibility hint on a page (used to host
+/// AI-user memory subtrees, etc.). Requires write access.
+#[reducer]
+pub fn set_page_hidden(
+    ctx: &ReducerContext,
+    page_id: u64,
+    hidden: bool,
+) -> Result<(), String> {
+    require_page_write(ctx, page_id)?;
+    let page = ctx.db.page().id().find(&page_id).ok_or("Page not found")?;
+    ctx.db.page().id().update(Page {
+        is_hidden: hidden,
+        updated_at: ctx.timestamp,
+        ..page
+    });
+    Ok(())
+}
+
+// ============================================================
+// Conversation Visibility & Participant State
+// ============================================================
+
+fn visibility_rank(v: &ConversationVisibility) -> u8 {
+    match v {
+        ConversationVisibility::Private => 0,
+        ConversationVisibility::Participants => 1,
+        ConversationVisibility::PageInheriting => 2,
+    }
+}
+
+/// Expands the visibility of a conversation. Visibility is monotonically
+/// expanding — `Private` → `Participants` → `PageInheriting` only.
+/// Re-narrowing would retroactively hide messages the new excluded
+/// principal already saw, which is not honest behavior; do `close` +
+/// `create_new` instead.
+#[reducer]
+pub fn set_conversation_visibility(
+    ctx: &ReducerContext,
+    conversation_id: u64,
+    visibility: ConversationVisibility,
+) -> Result<(), String> {
+    let conv = ctx
+        .db
+        .conversation()
+        .id()
+        .find(&conversation_id)
+        .ok_or("Conversation not found")?;
+
+    if conv.initiated_by != ctx.sender() && !sender_is_admin(ctx) {
+        return Err("Only the initiator or an admin can change visibility".to_string());
+    }
+
+    if matches!(visibility, ConversationVisibility::PageInheriting) && conv.page_id.is_none() {
+        return Err("Detached conversations cannot use PageInheriting visibility".to_string());
+    }
+
+    if visibility_rank(&visibility) < visibility_rank(&conv.visibility) {
+        return Err(format!(
+            "Visibility cannot contract ({:?} -> {:?}); start a new conversation instead",
+            conv.visibility, visibility
+        ));
+    }
+
+    ctx.db.conversation().id().update(Conversation {
+        visibility,
+        updated_at: ctx.timestamp,
+        ..conv
+    });
+    Ok(())
+}
+
+/// Mark this caller as having read up to `message_id`. Drives unread
+/// counts in Inbox mode.
+#[reducer]
+pub fn mark_conversation_read(
+    ctx: &ReducerContext,
+    conversation_id: u64,
+    message_id: u64,
+) -> Result<(), String> {
+    let participant = ctx
+        .db
+        .conversation_participant()
+        .conversation_id()
+        .filter(&conversation_id)
+        .find(|p| p.identity == ctx.sender() && p.left_at.is_none())
+        .ok_or("Caller is not an active participant")?;
+
+    ctx.db
+        .conversation_participant()
+        .id()
+        .update(ConversationParticipant {
+            last_viewed_message_id: Some(message_id),
+            ..participant
+        });
+    Ok(())
+}
+
+/// Add a participant to an existing conversation. Promotes visibility to
+/// at least `Participants` (because the new addition wouldn't see anything
+/// otherwise).
+#[reducer]
+pub fn add_conversation_participant(
+    ctx: &ReducerContext,
+    conversation_id: u64,
+    identity: Identity,
+) -> Result<(), String> {
+    if identity == Identity::ZERO {
+        return Err("Cannot add the zero Identity".to_string());
+    }
+    let conv = ctx
+        .db
+        .conversation()
+        .id()
+        .find(&conversation_id)
+        .ok_or("Conversation not found")?;
+    if conv.initiated_by != ctx.sender() && !sender_is_admin(ctx) {
+        return Err("Only the initiator or an admin can add participants".to_string());
+    }
+
+    let existing = ctx
+        .db
+        .conversation_participant()
+        .conversation_id()
+        .filter(&conversation_id)
+        .any(|p| p.identity == identity && p.left_at.is_none());
+    if existing {
+        return Ok(());
+    }
+
+    ctx.db.conversation_participant().insert(ConversationParticipant {
+        id: next_conversation_participant_id(ctx),
+        conversation_id,
+        identity,
+        role: ParticipantRole::Member,
+        joined_at: ctx.timestamp,
+        last_viewed_message_id: None,
+        left_at: None,
+    });
+
+    if visibility_rank(&conv.visibility) < visibility_rank(&ConversationVisibility::Participants) {
+        ctx.db.conversation().id().update(Conversation {
+            visibility: ConversationVisibility::Participants,
+            updated_at: ctx.timestamp,
+            ..conv
+        });
+    }
+    Ok(())
+}
+
+// ============================================================
+// AI Evaluation Reducers (Phase B primitives)
+// ============================================================
+
+/// Persist a fresh evaluation result and (atomically) update the
+/// `PagePropertyValue` on the row to point at it. Workers call this from
+/// the `ai_primitive` task handler; the worker is responsible for output
+/// schema validation before invocation.
+#[reducer]
+pub fn record_ai_evaluation(
+    ctx: &ReducerContext,
+    property_definition_id: u64,
+    page_id: u64,
+    input_hash: String,
+    primitive: AiPrimitive,
+    model: String,
+    prompt_version: u32,
+    output: String,
+    input_tokens: u32,
+    output_tokens: u32,
+    cost_microcents: u64,
+    wall_clock_ms: u32,
+    ai_user_identity: Identity,
+) -> Result<(), String> {
+    require_page_write(ctx, page_id)?;
+    ctx.db
+        .property_definition()
+        .id()
+        .find(&property_definition_id)
+        .ok_or("PropertyDefinition not found")?;
+
+    // Mark any prior evaluation rows for this (property, page) stale.
+    let prior: Vec<AiEvaluation> = ctx
+        .db
+        .ai_evaluation()
+        .property_definition_id()
+        .filter(&property_definition_id)
+        .filter(|r| r.page_id == page_id && !r.is_stale)
+        .collect();
+    for row in prior {
+        ctx.db
+            .ai_evaluation()
+            .id()
+            .update(AiEvaluation { is_stale: true, ..row });
+    }
+
+    let row = ctx.db.ai_evaluation().insert(AiEvaluation {
+        id: next_ai_evaluation_id(ctx),
+        property_definition_id,
+        page_id,
+        input_hash,
+        primitive,
+        model,
+        prompt_version,
+        output: output.clone(),
+        input_tokens,
+        output_tokens,
+        cost_microcents,
+        wall_clock_ms,
+        created_at: ctx.timestamp,
+        ai_user_identity,
+        is_stale: false,
+    });
+
+    set_property_value_inner(
+        ctx,
+        page_id,
+        property_definition_id,
+        PropertyValue::Ai(AiPropertyValue {
+            output,
+            evaluation_id: row.id,
+            is_stale: false,
+        }),
+    )
+}
+
+/// Internal upsert used by both the human-driven `set_property_value` and
+/// the AI-driven `record_ai_evaluation`. Skips the access guard because
+/// callers already enforce it (and AI evaluations may run under a service
+/// identity).
+fn set_property_value_inner(
+    ctx: &ReducerContext,
+    page_id: u64,
+    property_definition_id: u64,
+    value: PropertyValue,
+) -> Result<(), String> {
+    let stale_history: Vec<PagePropertyValueHistory> = ctx
+        .db
+        .page_property_value_history()
+        .page_id()
+        .filter(&page_id)
+        .filter(|h| h.property_definition_id == property_definition_id && h.is_current)
+        .collect();
+    for hist in stale_history {
+        ctx.db
+            .page_property_value_history()
+            .id()
+            .update(PagePropertyValueHistory {
+                is_current: false,
+                ..hist
+            });
+    }
+    ctx.db
+        .page_property_value_history()
+        .insert(PagePropertyValueHistory {
+            id: next_page_property_value_history_id(ctx),
+            page_id,
+            property_definition_id,
+            value: value.clone(),
+            is_current: true,
+            changed_at: ctx.timestamp,
+            changed_by: ActorType::Agent("ai-primitive".to_string()),
+        });
+    let existing: Option<PagePropertyValue> = ctx
+        .db
+        .page_property_value()
+        .page_id()
+        .filter(&page_id)
+        .find(|v| v.property_definition_id == property_definition_id);
+    match existing {
+        Some(existing) => {
+            ctx.db
+                .page_property_value()
+                .id()
+                .update(PagePropertyValue { value, ..existing });
+        }
+        None => {
+            ctx.db.page_property_value().insert(PagePropertyValue {
+                id: next_page_property_value_id(ctx),
+                page_id,
+                property_definition_id,
+                value,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Mark every `AiEvaluation` for `(property_definition_id, page_id)` as
+/// stale. Called when an upstream input column changes (the worker
+/// scheduler reads this to know what to recompute under
+/// `InvalidationPolicy::OnInputChange`).
+#[reducer]
+pub fn invalidate_ai_evaluations_for_row(
+    ctx: &ReducerContext,
+    property_definition_id: u64,
+    page_id: u64,
+) -> Result<(), String> {
+    require_page_write(ctx, page_id)?;
+    let live: Vec<AiEvaluation> = ctx
+        .db
+        .ai_evaluation()
+        .property_definition_id()
+        .filter(&property_definition_id)
+        .filter(|r| r.page_id == page_id && !r.is_stale)
+        .collect();
+    for row in live {
+        ctx.db
+            .ai_evaluation()
+            .id()
+            .update(AiEvaluation { is_stale: true, ..row });
+    }
+    Ok(())
+}
+
+// ============================================================
+// Harness templates / review bindings / auto-apply / preferences
+// ============================================================
+
+/// Create or update a `HarnessTemplate`. `Builtin` source is reserved for
+/// init-time seeding; user-callable updates are restricted to admins.
+#[reducer]
+pub fn upsert_harness_template(
+    ctx: &ReducerContext,
+    id: Option<u64>,
+    name: String,
+    description: String,
+    system_prompt: String,
+    default_provider: InferenceProvider,
+    default_model: String,
+    default_max_tokens: u32,
+    config_json: String,
+) -> Result<(), String> {
+    if !sender_is_admin(ctx) {
+        return Err("Only workspace admins can edit harness templates".to_string());
+    }
+    if name.trim().is_empty() {
+        return Err("Template name is required".to_string());
+    }
+    if let Some(template_id) = id {
+        let existing = ctx
+            .db
+            .harness_template()
+            .id()
+            .find(&template_id)
+            .ok_or("HarnessTemplate not found")?;
+        if matches!(existing.source, HarnessTemplateSource::Builtin) {
+            return Err("Builtin templates cannot be edited; fork and re-save".to_string());
+        }
+        ctx.db.harness_template().id().update(HarnessTemplate {
+            name,
+            description,
+            system_prompt,
+            default_provider,
+            default_model,
+            default_max_tokens,
+            config_json,
+            version: existing.version + 1,
+            updated_at: ctx.timestamp,
+            ..existing
+        });
+    } else {
+        let external_id = generate_external_id(ctx, "harness_template", &name);
+        ctx.db.harness_template().insert(HarnessTemplate {
+            id: next_harness_template_id(ctx),
+            external_id,
+            name,
+            description,
+            source: HarnessTemplateSource::Workspace,
+            system_prompt,
+            default_provider,
+            default_model,
+            default_max_tokens,
+            config_json,
+            version: 1,
+            created_at: ctx.timestamp,
+            updated_at: ctx.timestamp,
+        });
+    }
+    Ok(())
+}
+
+#[reducer]
+pub fn delete_harness_template(ctx: &ReducerContext, template_id: u64) -> Result<(), String> {
+    if !sender_is_admin(ctx) {
+        return Err("Only workspace admins can delete harness templates".to_string());
+    }
+    let existing = ctx
+        .db
+        .harness_template()
+        .id()
+        .find(&template_id)
+        .ok_or("HarnessTemplate not found")?;
+    if matches!(existing.source, HarnessTemplateSource::Builtin) {
+        return Err("Builtin templates cannot be deleted".to_string());
+    }
+    ctx.db.harness_template().id().delete(&template_id);
+    Ok(())
+}
+
+#[reducer]
+pub fn create_review_agent_binding(
+    ctx: &ReducerContext,
+    reviewer_ai_user_id: u64,
+    subject: ReviewSubject,
+    mode: ReviewMode,
+    fail_open: bool,
+) -> Result<(), String> {
+    let reviewer = ctx
+        .db
+        .ai_user_config()
+        .id()
+        .find(&reviewer_ai_user_id)
+        .ok_or("Reviewer AI user not found")?;
+    if !matches!(reviewer.role, AiUserRole::Reviewer) {
+        return Err("Selected AI user is not a reviewer".to_string());
+    }
+    if let ReviewSubject::AiUser(subject_ai_user_id) = subject {
+        if ctx
+            .db
+            .ai_user_config()
+            .id()
+            .find(&subject_ai_user_id)
+            .is_none()
+        {
+            return Err("Subject AI user not found".to_string());
+        }
+    }
+    require_creator_or_admin(ctx, reviewer.created_by, "create review bindings")?;
+
+    ctx.db.review_agent_binding().insert(ReviewAgentBinding {
+        id: next_review_agent_binding_id(ctx),
+        reviewer_ai_user_id,
+        subject,
+        mode,
+        fail_open,
+        created_by: ctx.sender(),
+        created_at: ctx.timestamp,
+    });
+    Ok(())
+}
+
+#[reducer]
+pub fn delete_review_agent_binding(ctx: &ReducerContext, binding_id: u64) -> Result<(), String> {
+    let binding = ctx
+        .db
+        .review_agent_binding()
+        .id()
+        .find(&binding_id)
+        .ok_or("Binding not found")?;
+    require_creator_or_admin(ctx, binding.created_by, "delete review bindings")?;
+    ctx.db.review_agent_binding().id().delete(&binding_id);
+    Ok(())
+}
+
+/// Worker-callable: persist a review annotation against a snapshot.
+#[reducer]
+pub fn record_review_annotation(
+    ctx: &ReducerContext,
+    snapshot_id: u64,
+    reviewer_ai_user_id: u64,
+    severity: ReviewSeverity,
+    comment: String,
+) -> Result<(), String> {
+    ctx.db
+        .page_snapshot()
+        .id()
+        .find(&snapshot_id)
+        .ok_or("Snapshot not found")?;
+    ctx.db
+        .ai_user_config()
+        .id()
+        .find(&reviewer_ai_user_id)
+        .ok_or("Reviewer AI user not found")?;
+    ctx.db.review_annotation().insert(ReviewAnnotation {
+        id: next_review_annotation_id(ctx),
+        snapshot_id,
+        reviewer_ai_user_id,
+        severity,
+        comment,
+        created_at: ctx.timestamp,
+    });
+    Ok(())
+}
+
+#[reducer]
+pub fn grant_auto_apply(
+    ctx: &ReducerContext,
+    ai_user_id: u64,
+    context: AutoApplyContext,
+    allowed_action_kinds: Option<Vec<String>>,
+) -> Result<(), String> {
+    let ai_user = ctx
+        .db
+        .ai_user_config()
+        .id()
+        .find(&ai_user_id)
+        .ok_or("AI user not found")?;
+    require_creator_or_admin(ctx, ai_user.created_by, "grant auto-apply")?;
+
+    if let Some(ref kinds) = allowed_action_kinds {
+        if kinds.is_empty() {
+            return Err(
+                "allowed_action_kinds is empty — pass None to grant all kinds, \
+                 or list at least one"
+                    .to_string(),
+            );
+        }
+        for k in kinds {
+            if k.trim().is_empty() {
+                return Err("allowed_action_kinds contains an empty string".to_string());
+            }
+        }
+    }
+
+    let already = ctx
+        .db
+        .auto_apply_binding()
+        .iter()
+        .any(|b| b.ai_user_id == ai_user_id && b.context == context);
+    if already {
+        return Ok(());
+    }
+    ctx.db.auto_apply_binding().insert(AutoApplyBinding {
+        id: next_auto_apply_binding_id(ctx),
+        ai_user_id,
+        context,
+        allowed_action_kinds,
+        granted_by: ctx.sender(),
+        granted_at: ctx.timestamp,
+    });
+    Ok(())
+}
+
+#[reducer]
+pub fn revoke_auto_apply(ctx: &ReducerContext, binding_id: u64) -> Result<(), String> {
+    let binding = ctx
+        .db
+        .auto_apply_binding()
+        .id()
+        .find(&binding_id)
+        .ok_or("Binding not found")?;
+    let ai_user = ctx
+        .db
+        .ai_user_config()
+        .id()
+        .find(&binding.ai_user_id)
+        .ok_or("AI user not found")?;
+    require_creator_or_admin(ctx, ai_user.created_by, "revoke auto-apply")?;
+    ctx.db.auto_apply_binding().id().delete(&binding_id);
+    Ok(())
+}
+
+/// Set / clear a per-user preference. `value_json` of empty string clears
+/// (matches the typical "set to default" UI gesture).
+#[reducer]
+pub fn set_user_preference(
+    ctx: &ReducerContext,
+    key: String,
+    value_json: String,
+) -> Result<(), String> {
+    if key.trim().is_empty() {
+        return Err("preference key cannot be empty".to_string());
+    }
+    let identity = ctx.sender();
+    let existing: Option<UserPreference> = ctx
+        .db
+        .user_preference()
+        .identity()
+        .filter(&identity)
+        .find(|p| p.key == key);
+
+    if value_json.is_empty() {
+        if let Some(existing) = existing {
+            ctx.db.user_preference().id().delete(&existing.id);
+        }
+        return Ok(());
+    }
+
+    match existing {
+        Some(existing) => {
+            ctx.db.user_preference().id().update(UserPreference {
+                value_json,
+                updated_at: ctx.timestamp,
+                ..existing
+            });
+        }
+        None => {
+            ctx.db.user_preference().insert(UserPreference {
+                id: next_user_preference_id(ctx),
+                identity,
+                key,
+                value_json,
+                updated_at: ctx.timestamp,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Provision the per-AI-user memory subtree. Idempotent — returns OK if
+/// the row already exists. The subtree root is created with
+/// `is_hidden = true` so it never shows up in regular sidebar nav.
+#[reducer]
+pub fn provision_ai_user_memory(ctx: &ReducerContext, ai_user_id: u64) -> Result<(), String> {
+    let ai_user = ctx
+        .db
+        .ai_user_config()
+        .id()
+        .find(&ai_user_id)
+        .ok_or("AI user not found")?;
+    require_creator_or_admin(ctx, ai_user.created_by, "provision memory")?;
+
+    if ctx
+        .db
+        .ai_user_memory()
+        .ai_user_id()
+        .find(&ai_user_id)
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    let profile = ctx
+        .db
+        .ai_user_profile()
+        .ai_user_id()
+        .find(&ai_user_id)
+        .ok_or("AI user profile missing")?;
+
+    let root = ctx.db.page().insert(Page {
+        id: next_page_id(ctx),
+        parent_id: None,
+        sort_order: next_sort_order(ctx, None),
+        page_type: PageType::Doc,
+        title: format!("Memory · {}", profile.display_name),
+        icon: Some("brain".to_string()),
+        embedding: None,
+        created_by: ActorType::Agent("memory".to_string()),
+        created_at: ctx.timestamp,
+        updated_at: ctx.timestamp,
+        deleted_at: None,
+        parent_pk: 0,
+        is_hidden: true,
+    });
+    ctx.db.page_content().insert(PageContent {
+        page_id: root.id,
+        content: String::new(),
+        updated_at: ctx.timestamp,
+    });
+    ctx.db.ai_user_memory().insert(AiUserMemory {
+        id: next_ai_user_memory_id(ctx),
+        ai_user_id,
+        root_page_id: root.id,
+        working_page_id: None,
+        long_term_page_id: None,
+        created_at: ctx.timestamp,
+        last_consolidated_at: None,
+    });
+    Ok(())
+}
+
+/// Marks a participant as having left (rather than deleting the row, so
+/// the audit trail of who saw what is preserved).
+#[reducer]
+pub fn remove_conversation_participant(
+    ctx: &ReducerContext,
+    conversation_id: u64,
+    identity: Identity,
+) -> Result<(), String> {
+    let conv = ctx
+        .db
+        .conversation()
+        .id()
+        .find(&conversation_id)
+        .ok_or("Conversation not found")?;
+    let is_self = identity == ctx.sender();
+    if !is_self && conv.initiated_by != ctx.sender() && !sender_is_admin(ctx) {
+        return Err("Only the initiator, admin, or the participant themselves can remove".to_string());
+    }
+    let participant = ctx
+        .db
+        .conversation_participant()
+        .conversation_id()
+        .filter(&conversation_id)
+        .find(|p| p.identity == identity && p.left_at.is_none())
+        .ok_or("Active participant not found")?;
+    ctx.db.conversation_participant().id().update(ConversationParticipant {
+        left_at: Some(ctx.timestamp),
+        ..participant
+    });
+    Ok(())
+}
+
+// ============================================================
+// Structural Sensors
+// ============================================================
+//
+// Computational structural sensors are cheap deterministic checks over the
+// relational substrate. An Orcha worker invokes the corresponding `run_*`
+// reducer on a schedule (cron-style; see `worker/src/structural-sensors.ts`)
+// and the reducer (re-)writes findings into `structural_sensor_finding`.
+//
+// Each sensor follows the same upsert pattern: clear prior unresolved
+// findings for that `sensor_kind`, then re-insert the current snapshot.
+// This keeps the table size proportional to live findings, not to runs.
+
+fn upsert_finding(
+    ctx: &ReducerContext,
+    sensor_kind: &str,
+    code: &str,
+    target_kind: &str,
+    target_id: u64,
+    severity: &str,
+    message: String,
+    details_json: String,
+) {
+    if !sensor_registry_contains(ctx, sensor_kind, code) {
+        log::warn!(
+            "upsert_finding: ({sensor_kind}, {code}) not in SensorRegistry; skipping"
+        );
+        return;
+    }
+    let existing = ctx
+        .db
+        .structural_sensor_finding()
+        .iter()
+        .find(|f| {
+            f.sensor_kind == sensor_kind
+                && f.code == code
+                && f.target_kind == target_kind
+                && f.target_id == target_id
+                && f.resolved_at.is_none()
+        });
+    if let Some(prior) = existing {
+        ctx.db
+            .structural_sensor_finding()
+            .id()
+            .update(StructuralSensorFinding {
+                last_seen_at: ctx.timestamp,
+                message,
+                severity: severity.to_string(),
+                details_json,
+                ..prior
+            });
+    } else {
+        ctx.db
+            .structural_sensor_finding()
+            .insert(StructuralSensorFinding {
+                id: next_structural_sensor_finding_id(ctx),
+                sensor_kind: sensor_kind.to_string(),
+                code: code.to_string(),
+                target_kind: target_kind.to_string(),
+                target_id,
+                message,
+                severity: severity.to_string(),
+                details_json,
+                created_at: ctx.timestamp,
+                last_seen_at: ctx.timestamp,
+                resolved_at: None,
+            });
+    }
+}
+
+/// Mark all live findings for `sensor_kind` whose `last_seen_at` is older
+/// than this run as resolved (they didn't reproduce). Call once at the end
+/// of every sensor run, with `run_started_at` captured before the upserts.
+fn auto_resolve_stale_findings(
+    ctx: &ReducerContext,
+    sensor_kind: &str,
+    run_started_at: Timestamp,
+) {
+    let stale: Vec<_> = ctx
+        .db
+        .structural_sensor_finding()
+        .iter()
+        .filter(|f| {
+            f.sensor_kind == sensor_kind
+                && f.resolved_at.is_none()
+                && f.last_seen_at.to_micros_since_unix_epoch()
+                    < run_started_at.to_micros_since_unix_epoch()
+        })
+        .collect();
+    for f in stale {
+        ctx.db
+            .structural_sensor_finding()
+            .id()
+            .update(StructuralSensorFinding {
+                resolved_at: Some(ctx.timestamp),
+                ..f
+            });
+    }
+}
+
+/// Orphan detector: pages whose `parent_id` references a deleted or
+/// missing parent. (Top-level pages with `parent_id = None` are not
+/// orphans — they are roots.)
+#[reducer]
+pub fn run_orphan_detector(ctx: &ReducerContext) -> Result<(), String> {
+    if !sender_is_admin(ctx) {
+        return Err("admin required to run orphan detector".to_string());
+    }
+    let run_started_at = ctx.timestamp;
+    let kind = "orphan_detector";
+
+    let live_page_ids: std::collections::HashSet<u64> = ctx
+        .db
+        .page()
+        .iter()
+        .filter(|p| p.deleted_at.is_none())
+        .map(|p| p.id)
+        .collect();
+
+    for page in ctx.db.page().iter().filter(|p| p.deleted_at.is_none()) {
+        if let Some(parent_id) = page.parent_id {
+            if !live_page_ids.contains(&parent_id) {
+                upsert_finding(
+                    ctx,
+                    kind,
+                    "page_parent_missing",
+                    "page",
+                    page.id,
+                    "warn",
+                    format!(
+                        "Page #{} ({}) references missing parent #{}",
+                        page.id, page.title, parent_id
+                    ),
+                    format!(
+                        "{{\"page_id\":{},\"parent_id\":{}}}",
+                        page.id, parent_id
+                    ),
+                );
+            }
+        }
+    }
+
+    auto_resolve_stale_findings(ctx, kind, run_started_at);
+    Ok(())
+}
+
+/// Relational integrity sensor: `PropertyValue::Relation(Vec<u64>)` entries
+/// that point to deleted or missing pages.
+#[reducer]
+pub fn run_relational_integrity_sensor(ctx: &ReducerContext) -> Result<(), String> {
+    if !sender_is_admin(ctx) {
+        return Err("admin required to run relational integrity sensor".to_string());
+    }
+    let run_started_at = ctx.timestamp;
+    let kind = "relational_integrity";
+
+    let live_page_ids: std::collections::HashSet<u64> = ctx
+        .db
+        .page()
+        .iter()
+        .filter(|p| p.deleted_at.is_none())
+        .map(|p| p.id)
+        .collect();
+
+    for ppv in ctx.db.page_property_value().iter() {
+        if let PropertyValue::Relation(targets) = &ppv.value {
+            let dangling: Vec<u64> = targets
+                .iter()
+                .copied()
+                .filter(|t| !live_page_ids.contains(t))
+                .collect();
+            if !dangling.is_empty() {
+                upsert_finding(
+                    ctx,
+                    kind,
+                    "relation_dangling",
+                    "page_property_value",
+                    ppv.id,
+                    "warn",
+                    format!(
+                        "Relation on page #{} property #{} references {} missing page(s)",
+                        ppv.page_id,
+                        ppv.property_definition_id,
+                        dangling.len()
+                    ),
+                    format!(
+                        "{{\"page_id\":{},\"property_definition_id\":{},\"missing\":{:?}}}",
+                        ppv.page_id, ppv.property_definition_id, dangling
+                    ),
+                );
+            }
+        }
+    }
+
+    auto_resolve_stale_findings(ctx, kind, run_started_at);
+    Ok(())
+}
+
+/// Schema consistency sensor: `PagePropertyValue` rows whose `value` variant
+/// does not match their `PropertyDefinition.property_type`. Catches stale
+/// rows after a column type change.
+#[reducer]
+pub fn run_schema_consistency_sensor(ctx: &ReducerContext) -> Result<(), String> {
+    if !sender_is_admin(ctx) {
+        return Err("admin required to run schema consistency sensor".to_string());
+    }
+    let run_started_at = ctx.timestamp;
+    let kind = "schema_consistency";
+
+    let defs: std::collections::HashMap<u64, PropertyType> = ctx
+        .db
+        .property_definition()
+        .iter()
+        .map(|d| (d.id, d.property_type))
+        .collect();
+
+    for ppv in ctx.db.page_property_value().iter() {
+        let Some(expected) = defs.get(&ppv.property_definition_id) else {
+            upsert_finding(
+                ctx,
+                kind,
+                "property_definition_missing",
+                "page_property_value",
+                ppv.id,
+                "error",
+                format!(
+                    "Property value #{} (page #{}) has no matching definition #{}",
+                    ppv.id, ppv.page_id, ppv.property_definition_id
+                ),
+                format!(
+                    "{{\"page_id\":{},\"property_definition_id\":{}}}",
+                    ppv.page_id, ppv.property_definition_id
+                ),
+            );
+            continue;
+        };
+
+        let actual_tag = match &ppv.value {
+            PropertyValue::Text(_) => PropertyType::Text,
+            PropertyValue::Number(_) => PropertyType::Number,
+            PropertyValue::Date(_) => PropertyType::Date,
+            PropertyValue::Select(_) => PropertyType::Select,
+            PropertyValue::MultiSelect(_) => PropertyType::MultiSelect,
+            PropertyValue::Relation(_) => PropertyType::Relation,
+            PropertyValue::Checkbox(_) => PropertyType::Checkbox,
+            PropertyValue::Url(_) => PropertyType::Url,
+            PropertyValue::Person(_) => PropertyType::Person,
+            PropertyValue::Ai(_) => PropertyType::Ai,
+        };
+
+        if &actual_tag != expected {
+            upsert_finding(
+                ctx,
+                kind,
+                "property_type_mismatch",
+                "page_property_value",
+                ppv.id,
+                "warn",
+                format!(
+                    "Property value #{} (page #{}) is {:?} but definition #{} expects {:?}",
+                    ppv.id, ppv.page_id, actual_tag, ppv.property_definition_id, expected
+                ),
+                format!(
+                    "{{\"page_id\":{},\"property_definition_id\":{},\"actual\":\"{:?}\",\"expected\":\"{:?}\"}}",
+                    ppv.page_id, ppv.property_definition_id, actual_tag, expected
+                ),
+            );
+        }
+    }
+
+    auto_resolve_stale_findings(ctx, kind, run_started_at);
+    Ok(())
+}
+
+/// Convention sensor: workspace-wide naming / structural conventions. Today
+/// it flags property definitions with empty names and database schemas that
+/// have zero columns. Operators can extend this to enforce custom conventions.
+#[reducer]
+pub fn run_convention_sensor(ctx: &ReducerContext) -> Result<(), String> {
+    if !sender_is_admin(ctx) {
+        return Err("admin required to run convention sensor".to_string());
+    }
+    let run_started_at = ctx.timestamp;
+    let kind = "convention";
+
+    for def in ctx.db.property_definition().iter() {
+        if def.name.trim().is_empty() {
+            upsert_finding(
+                ctx,
+                kind,
+                "property_definition_unnamed",
+                "property_definition",
+                def.id,
+                "info",
+                format!(
+                    "Property definition #{} (schema #{}) has an empty name",
+                    def.id, def.schema_id
+                ),
+                format!("{{\"schema_id\":{}}}", def.schema_id),
+            );
+        }
+    }
+
+    let mut counts: std::collections::HashMap<u64, u32> =
+        std::collections::HashMap::new();
+    for def in ctx.db.property_definition().iter() {
+        *counts.entry(def.schema_id).or_insert(0) += 1;
+    }
+    for schema in ctx.db.database_schema().iter() {
+        if counts.get(&schema.id).copied().unwrap_or(0) == 0 {
+            upsert_finding(
+                ctx,
+                kind,
+                "schema_no_columns",
+                "database_schema",
+                schema.id,
+                "info",
+                format!(
+                    "Database schema #{} ({}) has zero columns",
+                    schema.id, schema.name
+                ),
+                format!("{{\"page_id\":{}}}", schema.page_id),
+            );
+        }
+    }
+
+    auto_resolve_stale_findings(ctx, kind, run_started_at);
+    Ok(())
+}
+
+/// Refine-permissions sensor (steering loop). Mines the private
+/// `tool_call_audit_log` for `outcome = "denied"` entries, groups by
+/// `(agent_id, tool_name)`, and emits one finding per group. Surfaces
+/// in the same Inbox feed so operators can grant the missing permission
+/// (or confirm the denial was correct) without poking at the audit log
+/// directly.
+#[reducer]
+pub fn run_denied_tool_calls_sensor(ctx: &ReducerContext) -> Result<(), String> {
+    if !sender_is_admin(ctx) {
+        return Err("admin required to run denied tool calls sensor".to_string());
+    }
+    let run_started_at = ctx.timestamp;
+    let kind = "denied_tool_calls";
+
+    let mut counts: std::collections::HashMap<(String, String), (u64, Timestamp)> =
+        std::collections::HashMap::new();
+    for entry in ctx.db.tool_call_audit_log().iter() {
+        if entry.outcome != "denied" {
+            continue;
+        }
+        let key = (entry.agent_id.clone(), entry.tool_name.clone());
+        let slot = counts
+            .entry(key)
+            .or_insert((0u64, entry.called_at));
+        slot.0 += 1;
+        if entry.called_at.to_micros_since_unix_epoch()
+            > slot.1.to_micros_since_unix_epoch()
+        {
+            slot.1 = entry.called_at;
+        }
+    }
+
+    for ((agent_id, tool_name), (count, last_at)) in counts {
+        let target_id_hash = stable_hash_pair(&agent_id, &tool_name);
+        upsert_finding(
+            ctx,
+            kind,
+            "tool_denied",
+            "agent_tool",
+            target_id_hash,
+            "info",
+            format!(
+                "Agent `{}` was denied `{}` {} time(s) (last at {})",
+                agent_id,
+                tool_name,
+                count,
+                last_at.to_micros_since_unix_epoch(),
+            ),
+            format!(
+                "{{\"agent_id\":{:?},\"tool_name\":{:?},\"count\":{}}}",
+                agent_id, tool_name, count
+            ),
+        );
+    }
+
+    auto_resolve_stale_findings(ctx, kind, run_started_at);
+    Ok(())
+}
+
+fn stable_hash_pair(a: &str, b: &str) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    a.hash(&mut h);
+    b.hash(&mut h);
+    h.finish()
+}
+
+/// Steering loop: turn an in-the-moment correction into a durable
+/// instruction page. Creates a `Doc` page with the given title and content
+/// under `parent_page_id` (caller chooses an "Instructions" parent to keep
+/// them organised). The page is a regular Doc — instruction discovery is a
+/// worker concern (it walks the parent subtree).
+#[reducer]
+pub fn promote_to_instruction(
+    ctx: &ReducerContext,
+    parent_page_id: u64,
+    title: String,
+    content: String,
+) -> Result<(), String> {
+    let parent = ctx
+        .db
+        .page()
+        .id()
+        .find(&parent_page_id)
+        .ok_or("Parent page not found")?;
+    if parent.deleted_at.is_some() {
+        return Err("Parent page is deleted".to_string());
+    }
+    if !can_write_page(ctx, parent_page_id, ctx.sender()) {
+        return Err("missing write permission on parent page".to_string());
+    }
+
+    let trimmed_title = title.trim();
+    if trimmed_title.is_empty() {
+        return Err("Title required".to_string());
+    }
+
+    let new_page = ctx.db.page().insert(Page {
+        id: next_page_id(ctx),
+        parent_id: Some(parent_page_id),
+        sort_order: next_sort_order(ctx, Some(parent_page_id)),
+        page_type: PageType::Doc,
+        title: trimmed_title.to_string(),
+        icon: Some("📌".to_string()),
+        embedding: None,
+        created_by: ActorType::Human,
+        created_at: ctx.timestamp,
+        updated_at: ctx.timestamp,
+        deleted_at: None,
+        parent_pk: parent_page_id,
+        is_hidden: false,
+    });
+    ctx.db.page_content().insert(PageContent {
+        page_id: new_page.id,
+        content,
+        updated_at: ctx.timestamp,
+    });
+    Ok(())
+}
+
+/// Toggle the generic "evaluations from this AI user may be shared with
+/// external caches / indexes" opt-in. Pear core does nothing with the
+/// flag; it is purely an authority gate that downstream services check
+/// before reading rows. Creator/admin gated.
+#[reducer]
+pub fn set_allow_evaluation_sharing(
+    ctx: &ReducerContext,
+    ai_user_id: u64,
+    allow: bool,
+) -> Result<(), String> {
+    let cfg = ctx
+        .db
+        .ai_user_config()
+        .id()
+        .find(&ai_user_id)
+        .ok_or("AI user not found")?;
+    require_creator_or_admin(ctx, cfg.created_by, "toggle allow_evaluation_sharing")?;
+    ctx.db.ai_user_config().id().update(AiUserConfig {
+        allow_evaluation_sharing: allow,
+        updated_at: ctx.timestamp,
+        ..cfg
+    });
+    Ok(())
+}
+
+/// Manually mark a finding as resolved (e.g. when the user fixes the
+/// underlying issue and wants to clear the inbox entry).
+#[reducer]
+pub fn resolve_structural_finding(ctx: &ReducerContext, finding_id: u64) -> Result<(), String> {
+    if !sender_is_admin(ctx) {
+        return Err("admin required to resolve structural finding".to_string());
+    }
+    let f = ctx
+        .db
+        .structural_sensor_finding()
+        .id()
+        .find(&finding_id)
+        .ok_or("Finding not found")?;
+    ctx.db
+        .structural_sensor_finding()
+        .id()
+        .update(StructuralSensorFinding {
+            resolved_at: Some(ctx.timestamp),
+            ..f
+        });
+    Ok(())
 }

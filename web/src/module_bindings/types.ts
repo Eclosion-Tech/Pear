@@ -17,6 +17,44 @@ export const ActorType = __t.enum("ActorType", {
 });
 export type ActorType = __Infer<typeof ActorType>;
 
+export const AiEvaluation = __t.object("AiEvaluation", {
+  id: __t.u64(),
+  propertyDefinitionId: __t.u64(),
+  pageId: __t.u64(),
+  inputHash: __t.string(),
+  get primitive() {
+    return AiPrimitive;
+  },
+  model: __t.string(),
+  promptVersion: __t.u32(),
+  output: __t.string(),
+  inputTokens: __t.u32(),
+  outputTokens: __t.u32(),
+  costMicrocents: __t.u64(),
+  wallClockMs: __t.u32(),
+  createdAt: __t.timestamp(),
+  aiUserIdentity: __t.identity(),
+  isStale: __t.bool(),
+});
+export type AiEvaluation = __Infer<typeof AiEvaluation>;
+
+// The tagged union or sum type for the algebraic type `AiPrimitive`.
+export const AiPrimitive = __t.enum("AiPrimitive", {
+  Classify: __t.unit(),
+  Extract: __t.unit(),
+  Summarize: __t.unit(),
+  Sentiment: __t.unit(),
+  Translate: __t.unit(),
+});
+export type AiPrimitive = __Infer<typeof AiPrimitive>;
+
+export const AiPropertyValue = __t.object("AiPropertyValue", {
+  output: __t.string(),
+  evaluationId: __t.u64(),
+  isStale: __t.bool(),
+});
+export type AiPropertyValue = __Infer<typeof AiPropertyValue>;
+
 export const AiUserConfig = __t.object("AiUserConfig", {
   id: __t.u64(),
   identity: __t.identity(),
@@ -31,8 +69,25 @@ export const AiUserConfig = __t.object("AiUserConfig", {
   maxTokens: __t.u32(),
   createdAt: __t.timestamp(),
   updatedAt: __t.timestamp(),
+  monthlyTokenCap: __t.option(__t.u64()),
+  get role() {
+    return AiUserRole;
+  },
+  harnessTemplateId: __t.option(__t.u64()),
+  allowEvaluationSharing: __t.bool(),
 });
 export type AiUserConfig = __Infer<typeof AiUserConfig>;
+
+export const AiUserMemory = __t.object("AiUserMemory", {
+  id: __t.u64(),
+  aiUserId: __t.u64(),
+  rootPageId: __t.u64(),
+  workingPageId: __t.option(__t.u64()),
+  longTermPageId: __t.option(__t.u64()),
+  createdAt: __t.timestamp(),
+  lastConsolidatedAt: __t.option(__t.timestamp()),
+});
+export type AiUserMemory = __Infer<typeof AiUserMemory>;
 
 export const AiUserProfile = __t.object("AiUserProfile", {
   aiUserId: __t.u64(),
@@ -47,6 +102,13 @@ export const AiUserProfile = __t.object("AiUserProfile", {
   updatedAt: __t.timestamp(),
 });
 export type AiUserProfile = __Infer<typeof AiUserProfile>;
+
+// The tagged union or sum type for the algebraic type `AiUserRole`.
+export const AiUserRole = __t.enum("AiUserRole", {
+  Standard: __t.unit(),
+  Reviewer: __t.unit(),
+});
+export type AiUserRole = __Infer<typeof AiUserRole>;
 
 export const ApiCallLog = __t.object("ApiCallLog", {
   id: __t.u64(),
@@ -137,6 +199,40 @@ export const AuthScheme = __t.enum("AuthScheme", {
 });
 export type AuthScheme = __Infer<typeof AuthScheme>;
 
+export const AutoApplyBinding = __t.object("AutoApplyBinding", {
+  id: __t.u64(),
+  aiUserId: __t.u64(),
+  get context() {
+    return AutoApplyContext;
+  },
+  allowedActionKinds: __t.option(__t.array(__t.string())),
+  grantedBy: __t.identity(),
+  grantedAt: __t.timestamp(),
+});
+export type AutoApplyBinding = __Infer<typeof AutoApplyBinding>;
+
+// The tagged union or sum type for the algebraic type `AutoApplyContext`.
+export const AutoApplyContext = __t.enum("AutoApplyContext", {
+  Page: __t.u64(),
+  Workspace: __t.unit(),
+});
+export type AutoApplyContext = __Infer<typeof AutoApplyContext>;
+
+export const BlockAccessRule = __t.object("BlockAccessRule", {
+  id: __t.u64(),
+  pageId: __t.u64(),
+  blockId: __t.string(),
+  get principal() {
+    return Principal;
+  },
+  get permission() {
+    return Permission;
+  },
+  grantedBy: __t.identity(),
+  grantedAt: __t.timestamp(),
+});
+export type BlockAccessRule = __Infer<typeof BlockAccessRule>;
+
 export const Conversation = __t.object("Conversation", {
   id: __t.u64(),
   pageId: __t.option(__t.u64()),
@@ -146,6 +242,9 @@ export const Conversation = __t.object("Conversation", {
   },
   createdAt: __t.timestamp(),
   updatedAt: __t.timestamp(),
+  get visibility() {
+    return ConversationVisibility;
+  },
 });
 export type Conversation = __Infer<typeof Conversation>;
 
@@ -178,6 +277,8 @@ export const ConversationParticipant = __t.object("ConversationParticipant", {
     return ParticipantRole;
   },
   joinedAt: __t.timestamp(),
+  lastViewedMessageId: __t.option(__t.u64()),
+  leftAt: __t.option(__t.timestamp()),
 });
 export type ConversationParticipant = __Infer<typeof ConversationParticipant>;
 
@@ -187,6 +288,14 @@ export const ConversationStatus = __t.enum("ConversationStatus", {
   Closed: __t.unit(),
 });
 export type ConversationStatus = __Infer<typeof ConversationStatus>;
+
+// The tagged union or sum type for the algebraic type `ConversationVisibility`.
+export const ConversationVisibility = __t.enum("ConversationVisibility", {
+  Private: __t.unit(),
+  Participants: __t.unit(),
+  PageInheriting: __t.unit(),
+});
+export type ConversationVisibility = __Infer<typeof ConversationVisibility>;
 
 export const DatabaseRowMarker = __t.object("DatabaseRowMarker", {
   id: __t.u64(),
@@ -276,6 +385,34 @@ export const ExtensionType = __t.enum("ExtensionType", {
   Builtin: __t.unit(),
 });
 export type ExtensionType = __Infer<typeof ExtensionType>;
+
+export const HarnessTemplate = __t.object("HarnessTemplate", {
+  id: __t.u64(),
+  externalId: __t.string(),
+  name: __t.string(),
+  description: __t.string(),
+  get source() {
+    return HarnessTemplateSource;
+  },
+  systemPrompt: __t.string(),
+  get defaultProvider() {
+    return InferenceProvider;
+  },
+  defaultModel: __t.string(),
+  defaultMaxTokens: __t.u32(),
+  configJson: __t.string(),
+  version: __t.u32(),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+});
+export type HarnessTemplate = __Infer<typeof HarnessTemplate>;
+
+// The tagged union or sum type for the algebraic type `HarnessTemplateSource`.
+export const HarnessTemplateSource = __t.enum("HarnessTemplateSource", {
+  Builtin: __t.unit(),
+  Workspace: __t.unit(),
+});
+export type HarnessTemplateSource = __Infer<typeof HarnessTemplateSource>;
 
 // The tagged union or sum type for the algebraic type `HttpMethod`.
 export const HttpMethod = __t.enum("HttpMethod", {
@@ -410,8 +547,23 @@ export const Page = __t.object("Page", {
   deletedAt: __t.option(__t.timestamp()),
   icon: __t.option(__t.string()),
   parentPk: __t.u64(),
+  isHidden: __t.bool(),
 });
 export type Page = __Infer<typeof Page>;
+
+export const PageAccessRule = __t.object("PageAccessRule", {
+  id: __t.u64(),
+  pageId: __t.u64(),
+  get principal() {
+    return Principal;
+  },
+  get permission() {
+    return Permission;
+  },
+  grantedBy: __t.identity(),
+  grantedAt: __t.timestamp(),
+});
+export type PageAccessRule = __Infer<typeof PageAccessRule>;
 
 export const PageContent = __t.object("PageContent", {
   pageId: __t.u64(),
@@ -481,6 +633,13 @@ export const ParticipantRole = __t.enum("ParticipantRole", {
 });
 export type ParticipantRole = __Infer<typeof ParticipantRole>;
 
+// The tagged union or sum type for the algebraic type `Permission`.
+export const Permission = __t.enum("Permission", {
+  Read: __t.unit(),
+  Write: __t.unit(),
+});
+export type Permission = __Infer<typeof Permission>;
+
 // The tagged union or sum type for the algebraic type `PermissionAction`.
 export const PermissionAction = __t.enum("PermissionAction", {
   Read: __t.unit(),
@@ -502,6 +661,12 @@ export const PermissionScope = __t.enum("PermissionScope", {
   Workspace: __t.unit(),
 });
 export type PermissionScope = __Infer<typeof PermissionScope>;
+
+// The tagged union or sum type for the algebraic type `Principal`.
+export const Principal = __t.enum("Principal", {
+  WorkspaceMember: __t.identity(),
+});
+export type Principal = __Infer<typeof Principal>;
 
 export const PropertyDefinition = __t.object("PropertyDefinition", {
   id: __t.u64(),
@@ -526,6 +691,7 @@ export const PropertyType = __t.enum("PropertyType", {
   Checkbox: __t.unit(),
   Url: __t.unit(),
   Person: __t.unit(),
+  Ai: __t.unit(),
 });
 export type PropertyType = __Infer<typeof PropertyType>;
 
@@ -540,6 +706,9 @@ export const PropertyValue = __t.enum("PropertyValue", {
   Checkbox: __t.bool(),
   Url: __t.string(),
   Person: __t.array(__t.string()),
+  get Ai() {
+    return AiPropertyValue;
+  },
 });
 export type PropertyValue = __Infer<typeof PropertyValue>;
 
@@ -551,6 +720,65 @@ export const PropertyValueInput = __t.object("PropertyValueInput", {
 });
 export type PropertyValueInput = __Infer<typeof PropertyValueInput>;
 
+export const ReviewAgentBinding = __t.object("ReviewAgentBinding", {
+  id: __t.u64(),
+  reviewerAiUserId: __t.u64(),
+  get subject() {
+    return ReviewSubject;
+  },
+  get mode() {
+    return ReviewMode;
+  },
+  failOpen: __t.bool(),
+  createdBy: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type ReviewAgentBinding = __Infer<typeof ReviewAgentBinding>;
+
+export const ReviewAnnotation = __t.object("ReviewAnnotation", {
+  id: __t.u64(),
+  snapshotId: __t.u64(),
+  reviewerAiUserId: __t.u64(),
+  get severity() {
+    return ReviewSeverity;
+  },
+  comment: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type ReviewAnnotation = __Infer<typeof ReviewAnnotation>;
+
+// The tagged union or sum type for the algebraic type `ReviewMode`.
+export const ReviewMode = __t.enum("ReviewMode", {
+  Pre: __t.unit(),
+  Post: __t.unit(),
+});
+export type ReviewMode = __Infer<typeof ReviewMode>;
+
+// The tagged union or sum type for the algebraic type `ReviewSeverity`.
+export const ReviewSeverity = __t.enum("ReviewSeverity", {
+  Pass: __t.unit(),
+  Warn: __t.unit(),
+  Fail: __t.unit(),
+});
+export type ReviewSeverity = __Infer<typeof ReviewSeverity>;
+
+// The tagged union or sum type for the algebraic type `ReviewSubject`.
+export const ReviewSubject = __t.enum("ReviewSubject", {
+  AiUser: __t.u64(),
+  Workspace: __t.unit(),
+});
+export type ReviewSubject = __Infer<typeof ReviewSubject>;
+
+export const SensorRegistry = __t.object("SensorRegistry", {
+  id: __t.u64(),
+  sensorKind: __t.string(),
+  code: __t.string(),
+  displayName: __t.string(),
+  description: __t.string(),
+  defaultSeverity: __t.string(),
+});
+export type SensorRegistry = __Infer<typeof SensorRegistry>;
+
 // The tagged union or sum type for the algebraic type `SnapshotType`.
 export const SnapshotType = __t.enum("SnapshotType", {
   Manual: __t.unit(),
@@ -559,6 +787,21 @@ export const SnapshotType = __t.enum("SnapshotType", {
   PostAgentEdit: __t.unit(),
 });
 export type SnapshotType = __Infer<typeof SnapshotType>;
+
+export const StructuralSensorFinding = __t.object("StructuralSensorFinding", {
+  id: __t.u64(),
+  sensorKind: __t.string(),
+  code: __t.string(),
+  targetKind: __t.string(),
+  targetId: __t.u64(),
+  message: __t.string(),
+  severity: __t.string(),
+  detailsJson: __t.string(),
+  createdAt: __t.timestamp(),
+  lastSeenAt: __t.timestamp(),
+  resolvedAt: __t.option(__t.timestamp()),
+});
+export type StructuralSensorFinding = __Infer<typeof StructuralSensorFinding>;
 
 export const ToolCallAuditLog = __t.object("ToolCallAuditLog", {
   id: __t.u64(),
@@ -594,6 +837,15 @@ export const UserCredential = __t.object("UserCredential", {
   createdAt: __t.timestamp(),
 });
 export type UserCredential = __Infer<typeof UserCredential>;
+
+export const UserPreference = __t.object("UserPreference", {
+  id: __t.u64(),
+  identity: __t.identity(),
+  key: __t.string(),
+  valueJson: __t.string(),
+  updatedAt: __t.timestamp(),
+});
+export type UserPreference = __Infer<typeof UserPreference>;
 
 // The tagged union or sum type for the algebraic type `ViewType`.
 export const ViewType = __t.enum("ViewType", {

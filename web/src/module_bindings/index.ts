@@ -34,10 +34,13 @@ import {
 } from "spacetimedb";
 
 // Import all reducer arg schemas
+import AddConversationParticipantReducer from "./add_conversation_participant_reducer";
 import AddPropertyReducer from "./add_property_reducer";
 import AddTasksToJobReducer from "./add_tasks_to_job_reducer";
 import CancelExtensionInstallReducer from "./cancel_extension_install_reducer";
 import ClaimTaskReducer from "./claim_task_reducer";
+import ClearBlockAccessRuleReducer from "./clear_block_access_rule_reducer";
+import ClearPageAccessRuleReducer from "./clear_page_access_rule_reducer";
 import ClearPropertyValueReducer from "./clear_property_value_reducer";
 import CloseConversationReducer from "./close_conversation_reducer";
 import ConfirmExtensionInstallReducer from "./confirm_extension_install_reducer";
@@ -51,50 +54,75 @@ import CreateDatabaseRowReducer from "./create_database_row_reducer";
 import CreateDatabaseSchemaReducer from "./create_database_schema_reducer";
 import CreateJobReducer from "./create_job_reducer";
 import CreatePageReducer from "./create_page_reducer";
+import CreateReviewAgentBindingReducer from "./create_review_agent_binding_reducer";
 import CreateViewReducer from "./create_view_reducer";
 import DeleteAiUserReducer from "./delete_ai_user_reducer";
 import DeleteApiEndpointReducer from "./delete_api_endpoint_reducer";
 import DeleteApiFieldMappingReducer from "./delete_api_field_mapping_reducer";
 import DeleteAttachmentReducer from "./delete_attachment_reducer";
 import DeleteDatabaseRowReducer from "./delete_database_row_reducer";
+import DeleteHarnessTemplateReducer from "./delete_harness_template_reducer";
 import DeletePageReducer from "./delete_page_reducer";
 import DeletePropertyReducer from "./delete_property_reducer";
+import DeleteReviewAgentBindingReducer from "./delete_review_agent_binding_reducer";
 import DeleteViewReducer from "./delete_view_reducer";
 import FailTaskReducer from "./fail_task_reducer";
+import GrantAutoApplyReducer from "./grant_auto_apply_reducer";
 import GrantExtensionPermissionReducer from "./grant_extension_permission_reducer";
 import ImportPearSnapshotV1Reducer from "./import_pear_snapshot_v_1_reducer";
 import InstallExtensionReducer from "./install_extension_reducer";
+import InvalidateAiEvaluationsForRowReducer from "./invalidate_ai_evaluations_for_row_reducer";
 import LogApiCallReducer from "./log_api_call_reducer";
 import LoginReducer from "./login_reducer";
 import LogoutReducer from "./logout_reducer";
+import MarkConversationReadReducer from "./mark_conversation_read_reducer";
 import MovePageReducer from "./move_page_reducer";
+import PromoteToInstructionReducer from "./promote_to_instruction_reducer";
+import ProvisionAiUserMemoryReducer from "./provision_ai_user_memory_reducer";
 import PublishExtensionReducer from "./publish_extension_reducer";
 import PurgePageReducer from "./purge_page_reducer";
+import RecordAiEvaluationReducer from "./record_ai_evaluation_reducer";
 import RecordCompactionReducer from "./record_compaction_reducer";
+import RecordReviewAnnotationReducer from "./record_review_annotation_reducer";
 import RecordToolCallAuditReducer from "./record_tool_call_audit_reducer";
 import RecordUsageEventReducer from "./record_usage_event_reducer";
 import RegisterReducer from "./register_reducer";
 import RegisterAgentReducer from "./register_agent_reducer";
+import RemoveConversationParticipantReducer from "./remove_conversation_participant_reducer";
 import RenamePropertyReducer from "./rename_property_reducer";
 import RenameViewReducer from "./rename_view_reducer";
 import ReorderPropertyReducer from "./reorder_property_reducer";
+import ResolveStructuralFindingReducer from "./resolve_structural_finding_reducer";
 import RestorePageReducer from "./restore_page_reducer";
 import RestorePageToSnapshotReducer from "./restore_page_to_snapshot_reducer";
 import RevokeApiEndpointKeyReducer from "./revoke_api_endpoint_key_reducer";
+import RevokeAutoApplyReducer from "./revoke_auto_apply_reducer";
 import RevokeExtensionPermissionReducer from "./revoke_extension_permission_reducer";
+import RunConventionSensorReducer from "./run_convention_sensor_reducer";
+import RunDeniedToolCallsSensorReducer from "./run_denied_tool_calls_sensor_reducer";
+import RunOrphanDetectorReducer from "./run_orphan_detector_reducer";
 import RunPendingMigrationsReducer from "./run_pending_migrations_reducer";
+import RunRelationalIntegritySensorReducer from "./run_relational_integrity_sensor_reducer";
+import RunSchemaConsistencySensorReducer from "./run_schema_consistency_sensor_reducer";
 import SaveYjsStateReducer from "./save_yjs_state_reducer";
 import SeedAgentInstructionPropertyReducer from "./seed_agent_instruction_property_reducer";
 import SeedBuiltinExtensionsReducer from "./seed_builtin_extensions_reducer";
+import SeedSensorRegistryReducer from "./seed_sensor_registry_reducer";
 import SendMessageReducer from "./send_message_reducer";
 import SetAiUserApiKeyReducer from "./set_ai_user_api_key_reducer";
+import SetAllowEvaluationSharingReducer from "./set_allow_evaluation_sharing_reducer";
+import SetBlockAccessRuleReducer from "./set_block_access_rule_reducer";
+import SetConversationVisibilityReducer from "./set_conversation_visibility_reducer";
 import SetDefaultViewReducer from "./set_default_view_reducer";
 import SetExtensionEnabledReducer from "./set_extension_enabled_reducer";
 import SetMcpServerApiKeyReducer from "./set_mcp_server_api_key_reducer";
+import SetPageAccessRuleReducer from "./set_page_access_rule_reducer";
 import SetPageEmbeddingReducer from "./set_page_embedding_reducer";
+import SetPageHiddenReducer from "./set_page_hidden_reducer";
 import SetPropertyValueReducer from "./set_property_value_reducer";
 import SetSharedContextReducer from "./set_shared_context_reducer";
 import SetUserAdminReducer from "./set_user_admin_reducer";
+import SetUserPreferenceReducer from "./set_user_preference_reducer";
 import SetUserProfileReducer from "./set_user_profile_reducer";
 import SubmitResultReducer from "./submit_result_reducer";
 import TakeSnapshotReducer from "./take_snapshot_reducer";
@@ -115,11 +143,14 @@ import UpdatePageTitleReducer from "./update_page_title_reducer";
 import UpdatePropertyConfigReducer from "./update_property_config_reducer";
 import UpdatePropertyTypeReducer from "./update_property_type_reducer";
 import UpdateViewConfigReducer from "./update_view_config_reducer";
+import UpsertHarnessTemplateReducer from "./upsert_harness_template_reducer";
 
 // Import all procedure arg schemas
 
 // Import all table schema definitions
+import AiEvaluationRow from "./ai_evaluation_table";
 import AiUserConfigRow from "./ai_user_config_table";
+import AiUserMemoryRow from "./ai_user_memory_table";
 import AiUserProfileRow from "./ai_user_profile_table";
 import ApiCallLogRow from "./api_call_log_table";
 import ApiEndpointRow from "./api_endpoint_table";
@@ -127,6 +158,8 @@ import ApiEndpointKeyRow from "./api_endpoint_key_table";
 import ApiEndpointKeyLookupRow from "./api_endpoint_key_lookup_table";
 import ApiFieldMappingRow from "./api_field_mapping_table";
 import AttachmentRow from "./attachment_table";
+import AutoApplyBindingRow from "./auto_apply_binding_table";
+import BlockAccessRuleRow from "./block_access_rule_table";
 import ConversationRow from "./conversation_table";
 import ConversationMessageRow from "./conversation_message_table";
 import ConversationParticipantRow from "./conversation_participant_table";
@@ -134,6 +167,7 @@ import DatabaseRowMarkerRow from "./database_row_marker_table";
 import DatabaseSchemaRow from "./database_schema_table";
 import DatabaseViewRow from "./database_view_table";
 import ExtensionManifestRow from "./extension_manifest_table";
+import HarnessTemplateRow from "./harness_template_table";
 import InstalledExtensionRow from "./installed_extension_table";
 import MigrationStateRow from "./migration_state_table";
 import OrchaAgentRow from "./orcha_agent_table";
@@ -142,18 +176,48 @@ import OrchaSharedContextRow from "./orcha_shared_context_table";
 import OrchaTaskRow from "./orcha_task_table";
 import OrchaUsageEventRow from "./orcha_usage_event_table";
 import PageRow from "./page_table";
+import PageAccessRuleRow from "./page_access_rule_table";
 import PageContentRow from "./page_content_table";
 import PagePropertyValueRow from "./page_property_value_table";
 import PagePropertyValueHistoryRow from "./page_property_value_history_table";
 import PageSnapshotRow from "./page_snapshot_table";
 import PageYjsStateRow from "./page_yjs_state_table";
 import PropertyDefinitionRow from "./property_definition_table";
+import ReviewAgentBindingRow from "./review_agent_binding_table";
+import ReviewAnnotationRow from "./review_annotation_table";
+import SensorRegistryRow from "./sensor_registry_table";
+import StructuralSensorFindingRow from "./structural_sensor_finding_table";
 import UserRow from "./user_table";
+import UserPreferenceRow from "./user_preference_table";
 
 /** Type-only namespace exports for generated type groups. */
 
 /** The schema information for all tables in this module. This is defined the same was as the tables would have been defined in the server. */
 const tablesSchema = __schema({
+  ai_evaluation: __table({
+    name: 'ai_evaluation',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'ai_evaluation_input_hash', algorithm: 'btree', columns: [
+        'inputHash',
+      ] },
+      { name: 'page_id', algorithm: 'btree', columns: [
+        'pageId',
+      ] },
+      { name: 'property_definition_id', algorithm: 'btree', columns: [
+        'propertyDefinitionId',
+      ] },
+      { name: 'ai_evaluation_property_page', algorithm: 'btree', columns: [
+        'propertyDefinitionId',
+        'pageId',
+      ] },
+    ],
+    constraints: [
+      { name: 'ai_evaluation_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, AiEvaluationRow),
   ai_user_config: __table({
     name: 'ai_user_config',
     indexes: [
@@ -169,6 +233,21 @@ const tablesSchema = __schema({
       { name: 'ai_user_config_identity_key', constraint: 'unique', columns: ['identity'] },
     ],
   }, AiUserConfigRow),
+  ai_user_memory: __table({
+    name: 'ai_user_memory',
+    indexes: [
+      { name: 'ai_user_id', algorithm: 'btree', columns: [
+        'aiUserId',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'ai_user_memory_ai_user_id_key', constraint: 'unique', columns: ['aiUserId'] },
+      { name: 'ai_user_memory_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, AiUserMemoryRow),
   ai_user_profile: __table({
     name: 'ai_user_profile',
     indexes: [
@@ -258,6 +337,34 @@ const tablesSchema = __schema({
       { name: 'attachment_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, AttachmentRow),
+  auto_apply_binding: __table({
+    name: 'auto_apply_binding',
+    indexes: [
+      { name: 'auto_apply_binding_principal', algorithm: 'btree', columns: [
+        'aiUserId',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'auto_apply_binding_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, AutoApplyBindingRow),
+  block_access_rule: __table({
+    name: 'block_access_rule',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'page_id', algorithm: 'btree', columns: [
+        'pageId',
+      ] },
+    ],
+    constraints: [
+      { name: 'block_access_rule_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, BlockAccessRuleRow),
   conversation: __table({
     name: 'conversation',
     indexes: [
@@ -357,6 +464,20 @@ const tablesSchema = __schema({
       { name: 'extension_manifest_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, ExtensionManifestRow),
+  harness_template: __table({
+    name: 'harness_template',
+    indexes: [
+      { name: 'harness_template_external_id', algorithm: 'btree', columns: [
+        'externalId',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'harness_template_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, HarnessTemplateRow),
   installed_extension: __table({
     name: 'installed_extension',
     indexes: [
@@ -463,6 +584,20 @@ const tablesSchema = __schema({
       { name: 'page_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, PageRow),
+  page_access_rule: __table({
+    name: 'page_access_rule',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'page_id', algorithm: 'btree', columns: [
+        'pageId',
+      ] },
+    ],
+    constraints: [
+      { name: 'page_access_rule_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, PageAccessRuleRow),
   page_content: __table({
     name: 'page_content',
     indexes: [
@@ -547,6 +682,67 @@ const tablesSchema = __schema({
       { name: 'property_definition_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, PropertyDefinitionRow),
+  review_agent_binding: __table({
+    name: 'review_agent_binding',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'reviewer_ai_user_id', algorithm: 'btree', columns: [
+        'reviewerAiUserId',
+      ] },
+    ],
+    constraints: [
+      { name: 'review_agent_binding_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, ReviewAgentBindingRow),
+  review_annotation: __table({
+    name: 'review_annotation',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'snapshot_id', algorithm: 'btree', columns: [
+        'snapshotId',
+      ] },
+    ],
+    constraints: [
+      { name: 'review_annotation_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, ReviewAnnotationRow),
+  sensor_registry: __table({
+    name: 'sensor_registry',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'sensor_registry_kind_code', algorithm: 'btree', columns: [
+        'sensorKind',
+        'code',
+      ] },
+    ],
+    constraints: [
+      { name: 'sensor_registry_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, SensorRegistryRow),
+  structural_sensor_finding: __table({
+    name: 'structural_sensor_finding',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'structural_sensor_finding_kind', algorithm: 'btree', columns: [
+        'sensorKind',
+      ] },
+      { name: 'structural_sensor_finding_target', algorithm: 'btree', columns: [
+        'targetKind',
+        'targetId',
+      ] },
+    ],
+    constraints: [
+      { name: 'structural_sensor_finding_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, StructuralSensorFindingRow),
   user: __table({
     name: 'user',
     indexes: [
@@ -558,6 +754,24 @@ const tablesSchema = __schema({
       { name: 'user_identity_key', constraint: 'unique', columns: ['identity'] },
     ],
   }, UserRow),
+  user_preference: __table({
+    name: 'user_preference',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'identity', algorithm: 'btree', columns: [
+        'identity',
+      ] },
+      { name: 'user_preference_identity_key', algorithm: 'btree', columns: [
+        'identity',
+        'key',
+      ] },
+    ],
+    constraints: [
+      { name: 'user_preference_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, UserPreferenceRow),
   api_endpoint_key_lookup: __table({
     name: 'api_endpoint_key_lookup',
     indexes: [
@@ -569,10 +783,13 @@ const tablesSchema = __schema({
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
+  __reducerSchema("add_conversation_participant", AddConversationParticipantReducer),
   __reducerSchema("add_property", AddPropertyReducer),
   __reducerSchema("add_tasks_to_job", AddTasksToJobReducer),
   __reducerSchema("cancel_extension_install", CancelExtensionInstallReducer),
   __reducerSchema("claim_task", ClaimTaskReducer),
+  __reducerSchema("clear_block_access_rule", ClearBlockAccessRuleReducer),
+  __reducerSchema("clear_page_access_rule", ClearPageAccessRuleReducer),
   __reducerSchema("clear_property_value", ClearPropertyValueReducer),
   __reducerSchema("close_conversation", CloseConversationReducer),
   __reducerSchema("confirm_extension_install", ConfirmExtensionInstallReducer),
@@ -586,50 +803,75 @@ const reducersSchema = __reducers(
   __reducerSchema("create_database_schema", CreateDatabaseSchemaReducer),
   __reducerSchema("create_job", CreateJobReducer),
   __reducerSchema("create_page", CreatePageReducer),
+  __reducerSchema("create_review_agent_binding", CreateReviewAgentBindingReducer),
   __reducerSchema("create_view", CreateViewReducer),
   __reducerSchema("delete_ai_user", DeleteAiUserReducer),
   __reducerSchema("delete_api_endpoint", DeleteApiEndpointReducer),
   __reducerSchema("delete_api_field_mapping", DeleteApiFieldMappingReducer),
   __reducerSchema("delete_attachment", DeleteAttachmentReducer),
   __reducerSchema("delete_database_row", DeleteDatabaseRowReducer),
+  __reducerSchema("delete_harness_template", DeleteHarnessTemplateReducer),
   __reducerSchema("delete_page", DeletePageReducer),
   __reducerSchema("delete_property", DeletePropertyReducer),
+  __reducerSchema("delete_review_agent_binding", DeleteReviewAgentBindingReducer),
   __reducerSchema("delete_view", DeleteViewReducer),
   __reducerSchema("fail_task", FailTaskReducer),
+  __reducerSchema("grant_auto_apply", GrantAutoApplyReducer),
   __reducerSchema("grant_extension_permission", GrantExtensionPermissionReducer),
   __reducerSchema("import_pear_snapshot_v_1", ImportPearSnapshotV1Reducer),
   __reducerSchema("install_extension", InstallExtensionReducer),
+  __reducerSchema("invalidate_ai_evaluations_for_row", InvalidateAiEvaluationsForRowReducer),
   __reducerSchema("log_api_call", LogApiCallReducer),
   __reducerSchema("login", LoginReducer),
   __reducerSchema("logout", LogoutReducer),
+  __reducerSchema("mark_conversation_read", MarkConversationReadReducer),
   __reducerSchema("move_page", MovePageReducer),
+  __reducerSchema("promote_to_instruction", PromoteToInstructionReducer),
+  __reducerSchema("provision_ai_user_memory", ProvisionAiUserMemoryReducer),
   __reducerSchema("publish_extension", PublishExtensionReducer),
   __reducerSchema("purge_page", PurgePageReducer),
+  __reducerSchema("record_ai_evaluation", RecordAiEvaluationReducer),
   __reducerSchema("record_compaction", RecordCompactionReducer),
+  __reducerSchema("record_review_annotation", RecordReviewAnnotationReducer),
   __reducerSchema("record_tool_call_audit", RecordToolCallAuditReducer),
   __reducerSchema("record_usage_event", RecordUsageEventReducer),
   __reducerSchema("register", RegisterReducer),
   __reducerSchema("register_agent", RegisterAgentReducer),
+  __reducerSchema("remove_conversation_participant", RemoveConversationParticipantReducer),
   __reducerSchema("rename_property", RenamePropertyReducer),
   __reducerSchema("rename_view", RenameViewReducer),
   __reducerSchema("reorder_property", ReorderPropertyReducer),
+  __reducerSchema("resolve_structural_finding", ResolveStructuralFindingReducer),
   __reducerSchema("restore_page", RestorePageReducer),
   __reducerSchema("restore_page_to_snapshot", RestorePageToSnapshotReducer),
   __reducerSchema("revoke_api_endpoint_key", RevokeApiEndpointKeyReducer),
+  __reducerSchema("revoke_auto_apply", RevokeAutoApplyReducer),
   __reducerSchema("revoke_extension_permission", RevokeExtensionPermissionReducer),
+  __reducerSchema("run_convention_sensor", RunConventionSensorReducer),
+  __reducerSchema("run_denied_tool_calls_sensor", RunDeniedToolCallsSensorReducer),
+  __reducerSchema("run_orphan_detector", RunOrphanDetectorReducer),
   __reducerSchema("run_pending_migrations", RunPendingMigrationsReducer),
+  __reducerSchema("run_relational_integrity_sensor", RunRelationalIntegritySensorReducer),
+  __reducerSchema("run_schema_consistency_sensor", RunSchemaConsistencySensorReducer),
   __reducerSchema("save_yjs_state", SaveYjsStateReducer),
   __reducerSchema("seed_agent_instruction_property", SeedAgentInstructionPropertyReducer),
   __reducerSchema("seed_builtin_extensions", SeedBuiltinExtensionsReducer),
+  __reducerSchema("seed_sensor_registry", SeedSensorRegistryReducer),
   __reducerSchema("send_message", SendMessageReducer),
   __reducerSchema("set_ai_user_api_key", SetAiUserApiKeyReducer),
+  __reducerSchema("set_allow_evaluation_sharing", SetAllowEvaluationSharingReducer),
+  __reducerSchema("set_block_access_rule", SetBlockAccessRuleReducer),
+  __reducerSchema("set_conversation_visibility", SetConversationVisibilityReducer),
   __reducerSchema("set_default_view", SetDefaultViewReducer),
   __reducerSchema("set_extension_enabled", SetExtensionEnabledReducer),
   __reducerSchema("set_mcp_server_api_key", SetMcpServerApiKeyReducer),
+  __reducerSchema("set_page_access_rule", SetPageAccessRuleReducer),
   __reducerSchema("set_page_embedding", SetPageEmbeddingReducer),
+  __reducerSchema("set_page_hidden", SetPageHiddenReducer),
   __reducerSchema("set_property_value", SetPropertyValueReducer),
   __reducerSchema("set_shared_context", SetSharedContextReducer),
   __reducerSchema("set_user_admin", SetUserAdminReducer),
+  __reducerSchema("set_user_preference", SetUserPreferenceReducer),
   __reducerSchema("set_user_profile", SetUserProfileReducer),
   __reducerSchema("submit_result", SubmitResultReducer),
   __reducerSchema("take_snapshot", TakeSnapshotReducer),
@@ -650,6 +892,7 @@ const reducersSchema = __reducers(
   __reducerSchema("update_property_config", UpdatePropertyConfigReducer),
   __reducerSchema("update_property_type", UpdatePropertyTypeReducer),
   __reducerSchema("update_view_config", UpdateViewConfigReducer),
+  __reducerSchema("upsert_harness_template", UpsertHarnessTemplateReducer),
 );
 
 /** The schema information for all procedures in this module. This is defined the same way as the procedures would have been defined in the server. */

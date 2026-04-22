@@ -60,6 +60,50 @@ function requiredAction(toolName: string): PermissionActionTag {
   return "Read";
 }
 
+/**
+ * Heuristic — true for tools known to mutate page content / structure /
+ * properties. Kept conservative so we under-snapshot rather than over-
+ * snapshot. Read-only or auxiliary tools (search, fetch, list) skip the
+ * bracket entirely.
+ */
+function isMutatingPageTool(toolName: string): boolean {
+  const lc = toolName.toLowerCase();
+  if (lc.includes("snapshot")) return false;
+  if (lc.includes("search") || lc.includes("fetch") || lc.startsWith("list_")) {
+    return false;
+  }
+  return (
+    lc.startsWith("update_") ||
+    lc.startsWith("create_") ||
+    lc.startsWith("delete_") ||
+    lc.startsWith("set_") ||
+    lc.startsWith("clear_") ||
+    lc.startsWith("move_") ||
+    lc.includes("save_yjs")
+  );
+}
+
+/**
+ * Pull a `pageId` (or `page_id`) out of the tool input, accepting either a
+ * number / string / bigint encoding. Falls back to undefined; the caller
+ * defaults to `currentPageId` when this returns nothing.
+ */
+function extractTargetPageId(input: Record<string, unknown>): bigint | undefined {
+  const candidates = [input.pageId, input.page_id];
+  for (const v of candidates) {
+    if (typeof v === "bigint") return v;
+    if (typeof v === "number") return BigInt(Math.trunc(v));
+    if (typeof v === "string" && /^\d+$/.test(v)) {
+      try {
+        return BigInt(v);
+      } catch {
+        // fall through
+      }
+    }
+  }
+  return undefined;
+}
+
 // ── CompositeToolExecutor ─────────────────────────────────────────────────────
 
 export class CompositeToolExecutor {
@@ -135,15 +179,78 @@ export class CompositeToolExecutor {
   async execute(toolName: string, input: Record<string, unknown>): Promise<string> {
     // Static tools always win and need no permission check
     if (this.staticExecutor.hasTool(toolName)) {
-      return this.staticExecutor.execute(toolName, input);
+      return this.bracketWithSnapshots(toolName, input, () =>
+        this.staticExecutor.execute(toolName, input),
+      );
     }
 
     // MCP tool — permission check required
     if (this.mcpExecutor.hasTool(toolName)) {
-      return this.executeMcpTool(toolName, input);
+      return this.bracketWithSnapshots(toolName, input, () =>
+        this.executeMcpTool(toolName, input),
+      );
     }
 
     return JSON.stringify({ ok: false, error: `Unknown tool: ${toolName}` });
+  }
+
+  /**
+   * Wrap a tool execution in `PreAgentEdit` / `PostAgentEdit` snapshots when
+   * the tool is known to mutate page state (Phase A diff review surface).
+   *
+   * Snapshot pairs let the editor render a `PendingChange` view with
+   * Accept / Reject controls — Reject calls `restore_page_to_snapshot(pre)`.
+   * We do this here rather than per-tool so a missed wiring in any single
+   * mutator can't silently break the review surface.
+   *
+   * Snapshot calls never block the tool: failures are logged and swallowed
+   * because most tool failures we'd otherwise want to roll back into would
+   * already have a Pre snapshot.
+   */
+  private async bracketWithSnapshots(
+    toolName: string,
+    input: Record<string, unknown>,
+    run: () => Promise<string>,
+  ): Promise<string> {
+    if (!isMutatingPageTool(toolName)) return run();
+
+    const targetPageId = extractTargetPageId(input) ?? this.config.currentPageId;
+
+    let preSnapshotId: bigint | undefined;
+    try {
+      // We don't have the actual page content here; the reducer reads it
+      // from `page.content` itself. For Yjs-backed pages the canonical state
+      // lives in `page.yjsState`, which `take_snapshot` reads directly.
+      await this.config.conn.reducers.takeSnapshot({
+        pageId: targetPageId,
+        snapshotType: { tag: "PreAgentEdit" } as never,
+      });
+      // The row id is discoverable via the `page_snapshot` table
+      // subscription; the diff UI pairs Pre→Post by `snapshot_at` ordering
+      // scoped to a page.
+      void preSnapshotId;
+    } catch (err) {
+      console.warn(
+        `[composite] PreAgentEdit snapshot failed for ${toolName}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+
+    const result = await run();
+
+    try {
+      await this.config.conn.reducers.takeSnapshot({
+        pageId: targetPageId,
+        snapshotType: { tag: "PostAgentEdit" } as never,
+      });
+    } catch (err) {
+      console.warn(
+        `[composite] PostAgentEdit snapshot failed for ${toolName}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+
+    return result;
   }
 
   /** Disconnect all MCP connections (call when the conversation ends). */

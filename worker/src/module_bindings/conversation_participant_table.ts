@@ -22,4 +22,6 @@ export default __t.row({
     return ParticipantRole;
   },
   joinedAt: __t.timestamp().name("joined_at"),
+  lastViewedMessageId: __t.option(__t.u64()).name("last_viewed_message_id"),
+  leftAt: __t.option(__t.timestamp()).name("left_at"),
 });

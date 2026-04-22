@@ -8,12 +8,13 @@ use crate::{
     property_definition, user,
 };
 use crate::{
-    ActorType, AiUserConfig, AiUserProfile, Attachment, Conversation, ConversationMessage,
-    ConversationParticipant, ConversationStatus, DatabaseSchema, DatabaseView, ExtensionManifest,
-    InferenceProvider, InstalledExtension, MessageSender, MessageStatus, OrchaAgent, OrchaJob,
-    OrchaSharedContext, OrchaTask, Page, PageContent, PagePropertyValue, PagePropertyValueHistory,
-    PageSnapshot, PageType, PageYjsState, ParticipantRole, PropertyDefinition, PropertyType,
-    PropertyValue, SnapshotType, User, ViewType,
+    ActorType, AiUserConfig, AiUserProfile, AiUserRole, Attachment, Conversation,
+    ConversationMessage, ConversationParticipant, ConversationStatus, ConversationVisibility,
+    DatabaseSchema, DatabaseView, ExtensionManifest, InferenceProvider, InstalledExtension,
+    MessageSender, MessageStatus, OrchaAgent, OrchaJob, OrchaSharedContext, OrchaTask, Page,
+    PageContent, PagePropertyValue, PagePropertyValueHistory, PageSnapshot, PageType,
+    PageYjsState, ParticipantRole, PropertyDefinition, PropertyType, PropertyValue, SnapshotType,
+    User, ViewType,
 };
 use hex;
 use serde_json::Value;
@@ -242,6 +243,10 @@ fn import_ai_user_profile(ctx: &ReducerContext, tables: &Value) -> Result<(), St
                 max_tokens: 8192,
                 created_at: ctx.timestamp,
                 updated_at: ctx.timestamp,
+                monthly_token_cap: None,
+                role: AiUserRole::Standard,
+                harness_template_id: None,
+                allow_evaluation_sharing: false,
             });
         }
         ctx.db.ai_user_profile().insert(p);
@@ -387,6 +392,10 @@ fn bool_at(m: &serde_json::Map<String, Value>, key: &str) -> Result<bool, String
         .ok_or_else(|| format!("missing bool {key}"))
 }
 
+fn bool_at_or(m: &serde_json::Map<String, Value>, key: &str, default: bool) -> bool {
+    m.get(key).and_then(|v| v.as_bool()).unwrap_or(default)
+}
+
 fn decode_u64(v: &Value) -> Result<u64, String> {
     if let Some(n) = v.as_u64() {
         return Ok(n);
@@ -515,6 +524,8 @@ fn decode_page(v: &Value) -> Result<Page, String> {
         deleted_at: opt_timestamp_at(m, "deletedAt")?,
         icon: opt_string_at(m, "icon")?,
         parent_pk: parent_id.unwrap_or(0),
+        // Older snapshots predate the field; default visible.
+        is_hidden: bool_at_or(m, "isHidden", false),
     })
 }
 
@@ -750,6 +761,9 @@ fn decode_conversation(v: &Value) -> Result<Conversation, String> {
         status: decode_conversation_status(m.get("status").ok_or("status")?)?,
         created_at: decode_timestamp(m.get("createdAt").ok_or("createdAt")?)?,
         updated_at: decode_timestamp(m.get("updatedAt").ok_or("updatedAt")?)?,
+        // Older snapshots predate visibility — default Private (most
+        // restrictive safe default; expansion is reversible by the owner).
+        visibility: ConversationVisibility::Private,
     })
 }
 
@@ -761,6 +775,8 @@ fn decode_conversation_participant(v: &Value) -> Result<ConversationParticipant,
         identity: decode_identity(m.get("identity").ok_or("identity")?)?,
         role: decode_participant_role(m.get("role").ok_or("role")?)?,
         joined_at: decode_timestamp(m.get("joinedAt").ok_or("joinedAt")?)?,
+        last_viewed_message_id: opt_u64_at(m, "lastViewedMessageId")?,
+        left_at: opt_timestamp_at(m, "leftAt")?,
     })
 }
 

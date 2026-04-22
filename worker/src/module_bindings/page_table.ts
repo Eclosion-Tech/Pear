@@ -32,4 +32,5 @@ export default __t.row({
   deletedAt: __t.option(__t.timestamp()).name("deleted_at"),
   icon: __t.option(__t.string()),
   parentPk: __t.u64().name("parent_pk"),
+  isHidden: __t.bool().name("is_hidden"),
 });
