@@ -66,6 +66,7 @@ import DeletePageReducer from "./delete_page_reducer";
 import DeletePropertyReducer from "./delete_property_reducer";
 import DeleteReviewAgentBindingReducer from "./delete_review_agent_binding_reducer";
 import DeleteViewReducer from "./delete_view_reducer";
+import DisableAiUserMemoryReducer from "./disable_ai_user_memory_reducer";
 import FailTaskReducer from "./fail_task_reducer";
 import GrantAutoApplyReducer from "./grant_auto_apply_reducer";
 import GrantExtensionPermissionReducer from "./grant_extension_permission_reducer";
@@ -827,6 +828,7 @@ const reducersSchema = __reducers(
   __reducerSchema("delete_property", DeletePropertyReducer),
   __reducerSchema("delete_review_agent_binding", DeleteReviewAgentBindingReducer),
   __reducerSchema("delete_view", DeleteViewReducer),
+  __reducerSchema("disable_ai_user_memory", DisableAiUserMemoryReducer),
   __reducerSchema("fail_task", FailTaskReducer),
   __reducerSchema("grant_auto_apply", GrantAutoApplyReducer),
   __reducerSchema("grant_extension_permission", GrantExtensionPermissionReducer),

@@ -1,10 +1,13 @@
 //! Per-AI-user memory subtree: a hidden Page hosting `working` (small,
 //! frequently rewritten) and `long_term` (consolidated weekly) memory
-//! rows. Provisioned lazily by `provision_ai_user_memory`.
+//! rows. Provisioned lazily by `provision_ai_user_memory`. Torn down (soft-delete
+//! subtree + drop the link row) by `disable_ai_user_memory`.
+
+use std::collections::{HashSet, VecDeque};
 
 use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 
-use crate::access_control::helpers::require_creator_or_admin;
+use crate::access_control::helpers::{require_creator_or_admin, require_page_write};
 use crate::ai::{ai_user_config, ai_user_profile};
 use crate::id_counters::alloc_id;
 use crate::pages::{
@@ -97,5 +100,77 @@ pub fn provision_ai_user_memory(ctx: &ReducerContext, ai_user_id: u64) -> Result
         created_at: ctx.timestamp,
         last_consolidated_at: None,
     });
+    Ok(())
+}
+
+/// Live pages in the subtree rooted at `root_id` (BFS), excluding already soft-deleted pages.
+fn collect_live_subtree_page_ids(ctx: &ReducerContext, root_id: u64) -> Vec<u64> {
+    let mut out = Vec::new();
+    let mut queue = VecDeque::new();
+    let mut seen = HashSet::new();
+
+    if ctx.db.page().id().find(root_id).is_none() {
+        return out;
+    }
+    queue.push_back(root_id);
+
+    while let Some(id) = queue.pop_front() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let Some(page) = ctx.db.page().id().find(id) else {
+            continue;
+        };
+        if page.deleted_at.is_some() {
+            continue;
+        }
+        out.push(id);
+        for child in ctx.db.page().iter() {
+            if child.parent_id == Some(id) && child.deleted_at.is_none() {
+                queue.push_back(child.id);
+            }
+        }
+    }
+    out
+}
+
+/// Remove the `ai_user_memory` row and soft-delete every page in the memory subtree.
+/// Idempotent if no memory row exists. Only the AI user's creator or a workspace admin may call.
+#[reducer]
+pub fn disable_ai_user_memory(ctx: &ReducerContext, ai_user_id: u64) -> Result<(), String> {
+    let ai_user = ctx
+        .db
+        .ai_user_config()
+        .id()
+        .find(ai_user_id)
+        .ok_or("AI user not found")?;
+    require_creator_or_admin(ctx, ai_user.created_by, "disable memory")?;
+
+    let Some(mem) = ctx.db.ai_user_memory().ai_user_id().find(ai_user_id) else {
+        return Ok(());
+    };
+
+    let root_id = mem.root_page_id;
+    let to_soft_delete = collect_live_subtree_page_ids(ctx, root_id);
+
+    for pid in to_soft_delete {
+        let page = ctx
+            .db
+            .page()
+            .id()
+            .find(pid)
+            .ok_or("Page disappeared during memory teardown")?;
+        if page.deleted_at.is_some() {
+            continue;
+        }
+        require_page_write(ctx, pid)?;
+        ctx.db.page().id().update(Page {
+            deleted_at: Some(ctx.timestamp),
+            updated_at: ctx.timestamp,
+            ..page
+        });
+    }
+
+    ctx.db.ai_user_memory().id().delete(mem.id);
     Ok(())
 }

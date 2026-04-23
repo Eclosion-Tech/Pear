@@ -64,4 +64,12 @@ export function useDeleteAiUser() {
   return useReducer(reducers.deleteAiUser);
 }
 
+export function useProvisionAiUserMemory() {
+  return useReducer(reducers.provisionAiUserMemory);
+}
+
+export function useDisableAiUserMemory() {
+  return useReducer(reducers.disableAiUserMemory);
+}
+
 export type AiUserProfileRow = ReturnType<typeof useAiUserProfiles>["profiles"][number];

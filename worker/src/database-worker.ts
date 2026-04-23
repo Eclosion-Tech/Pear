@@ -75,6 +75,9 @@ export interface AiUserDescriptor {
   token: string;
 }
 
+const RECONNECT_CAP_MS = 30_000;
+const RECONNECT_BASE_MS = 1_500;
+
 export class DatabaseWorker {
   private conn: DbConnection | null = null;
   private inFlight = new Set<bigint>();
@@ -84,6 +87,9 @@ export class DatabaseWorker {
   private aiUserWorkers = new Map<bigint, AiUserWorker>();
 
   private sensors: StructuralSensorsScheduler | null = null;
+
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempt = 0;
 
   readonly uri: string;
   readonly dbName: string;
@@ -97,7 +103,40 @@ export class DatabaseWorker {
     this.token = opts.token;
   }
 
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
+  private scheduleReconnect(): void {
+    if (this.stopped) return;
+    this.clearReconnectTimer();
+    const exp = Math.min(
+      RECONNECT_CAP_MS,
+      RECONNECT_BASE_MS * Math.pow(2, this.reconnectAttempt),
+    );
+    const jitter = Math.floor(Math.random() * 400);
+    const delay = exp + jitter;
+    this.reconnectAttempt = Math.min(this.reconnectAttempt + 1, 12);
+    console.log(
+      `[worker:${this.dbName}] Will reconnect in ${delay}ms (attempt ${this.reconnectAttempt})`,
+    );
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.beginConnection();
+    }, delay);
+  }
+
   start(): void {
+    if (this.stopped) return;
+    this.reconnectAttempt = 0;
+    this.beginConnection();
+  }
+
+  /** Opens (or re-opens) the admin WebSocket. Retries with backoff after disconnect. */
+  private beginConnection(): void {
     if (this.stopped) return;
 
     console.log(`[worker:${this.dbName}] Connecting to ${this.uri} / ${this.dbName}`);
@@ -112,6 +151,7 @@ export class DatabaseWorker {
 
     builder
       .onConnect((conn, identity) => {
+        this.reconnectAttempt = 0;
         this.conn = conn;
         console.log(`[worker:${this.dbName}] Connected — identity: ${identity.toHexString()}`);
         this.registerHandlers(conn);
@@ -130,16 +170,27 @@ export class DatabaseWorker {
       })
       .onDisconnect(() => {
         console.log(`[worker:${this.dbName}] Disconnected`);
+        if (this.sensors) {
+          this.sensors.stop();
+          this.sensors = null;
+        }
         this.conn = null;
+        if (!this.stopped) {
+          this.scheduleReconnect();
+        }
       })
       .onConnectError((_ctx: EventContext, err: Error) => {
         console.error(`[worker:${this.dbName}] Connection error:`, err?.message ?? err);
+        if (!this.stopped) {
+          this.scheduleReconnect();
+        }
       })
       .build();
   }
 
   async stop(): Promise<void> {
     this.stopped = true;
+    this.clearReconnectTimer();
 
     if (this.sensors) {
       this.sensors.stop();

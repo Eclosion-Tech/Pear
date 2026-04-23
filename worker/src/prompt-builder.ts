@@ -15,9 +15,10 @@
  *   7.  Workspace context
  *   8.  AI user system prompt (if set)
  *   9.  Instruction pages (if any)
- *  10.  Compaction summary (if resuming a compacted session)
- *  11.  Additional appended sections
- *  12.  Injection defense block — ALWAYS LAST, NON-CONFIGURABLE
+ *  10.  AI user private reference pages (hidden memory subtree, if any)
+ *  11.  Compaction summary (if resuming a compacted session)
+ *  12.  Additional appended sections
+ *  13.  Injection defense block — ALWAYS LAST, NON-CONFIGURABLE
  */
 
 import type { WorkspaceContext, InstructionPage } from "./workspace-context.js";
@@ -32,6 +33,9 @@ export class SystemPromptBuilder {
   private installedExtensionId: bigint | undefined;
   /** Compaction summary from a prior session — injected after instruction pages. */
   private compactionSummary: string | undefined;
+  /** Pages under `ai_user_memory` (persona, notes); injected after workspace instructions. */
+  private aiUserPrivatePages: InstructionPage[] = [];
+  private aiUserPrivatePagesTruncated = false;
   private appendSections: string[] = [];
 
   withWorkspaceContext(ctx: WorkspaceContext): this {
@@ -65,6 +69,16 @@ export class SystemPromptBuilder {
     return this;
   }
 
+  /**
+   * Hidden per-AI-user Doc subtree (`provision_ai_user_memory`). Content is
+   * merged into the system prompt so the model can use persona / long-term notes.
+   */
+  withAiUserPrivatePages(pages: InstructionPage[], truncated = false): this {
+    this.aiUserPrivatePages = pages;
+    this.aiUserPrivatePagesTruncated = truncated;
+    return this;
+  }
+
   appendSection(section: string): this {
     this.appendSections.push(section);
     return this;
@@ -90,15 +104,23 @@ export class SystemPromptBuilder {
 
     if (this.workspaceContext) {
       sections.push(renderWorkspaceContext(this.workspaceContext));
+    }
 
-      if (this.workspaceContext.instructionPages.length > 0) {
-        if (this.aiUserSystemPrompt) {
-          sections.push(`# Assistant Configuration\n${this.aiUserSystemPrompt}`);
-        }
-        sections.push(renderInstructionPages(this.workspaceContext.instructionPages));
-      } else if (this.aiUserSystemPrompt) {
-        sections.push(`# Assistant Configuration\n${this.aiUserSystemPrompt}`);
-      }
+    if (this.aiUserSystemPrompt) {
+      sections.push(`# Assistant Configuration\n${this.aiUserSystemPrompt}`);
+    }
+
+    if (this.workspaceContext && this.workspaceContext.instructionPages.length > 0) {
+      sections.push(renderInstructionPages(this.workspaceContext.instructionPages));
+    }
+
+    if (this.aiUserPrivatePages.length > 0) {
+      sections.push(
+        renderAiUserPrivatePages(
+          this.aiUserPrivatePages,
+          this.aiUserPrivatePagesTruncated,
+        ),
+      );
     }
 
     if (this.compactionSummary) {
@@ -188,6 +210,31 @@ function renderInstructionPages(pages: InstructionPage[]): string {
     sections.push(page.content.trim());
   }
   return sections.join("\n\n");
+}
+
+function renderAiUserPrivatePages(
+  pages: InstructionPage[],
+  truncated: boolean,
+): string {
+  const lines: string[] = [
+    "# Your private reference pages",
+    "These Docs sit under your per-AI-user hidden memory subtree in the workspace (see `provision_ai_user_memory`). " +
+      "Use them for persona, long-term memory, style, and notes you want across conversations. " +
+      "You may add child pages and edit them with your usual page tools when you need more structure.",
+  ];
+  if (truncated) {
+    lines.push(
+      "Some text below was truncated to fit the context budget — open a page with tools if you need the full body.",
+    );
+  }
+  lines.push("");
+  for (const page of pages) {
+    const indent = "  ".repeat(Math.min(page.depth, 8));
+    lines.push(`${indent}## ${page.title} (page ${page.pageId})`);
+    lines.push(page.content.trim());
+    lines.push("");
+  }
+  return lines.join("\n").trimEnd();
 }
 
 function systemRulesSection(): string {

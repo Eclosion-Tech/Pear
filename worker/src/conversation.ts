@@ -39,6 +39,7 @@ import { getConversationTools, executeTool } from "./tools.js";
 import { SystemPromptBuilder } from "./prompt-builder.js";
 import {
   discoverInstructionPages,
+  discoverAiUserPrivatePages,
   buildBreadcrumb,
   summarizePageHistory,
   todayIso8601,
@@ -323,11 +324,25 @@ async function handleConversationMessage(
 
     const compactionSummary = loadCompactionSummary(conn, conv.id);
 
-    let builder = new SystemPromptBuilder().withAiUserSystemPrompt(
-      aiProfile.displayName
-        ? `Your name is "${aiProfile.displayName}". You are powered by ${aiProfile.providerName} (${aiProfile.modelName}).`
-        : "",
-    );
+    const assistantParts: string[] = [];
+    if (aiProfile.displayName) {
+      assistantParts.push(
+        `Your display name is "${aiProfile.displayName}". You are powered by ${aiProfile.providerName} (${aiProfile.modelName}).`,
+      );
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ownCfg = (conn.db as any).ai_user_config?.id?.find(aiProfile.aiUserId) as
+      | { systemPrompt?: string }
+      | undefined;
+    if (ownCfg?.systemPrompt?.trim()) {
+      assistantParts.push(ownCfg.systemPrompt.trim());
+    }
+
+    const privatePages = discoverAiUserPrivatePages(conn, aiProfile.aiUserId);
+
+    let builder = new SystemPromptBuilder()
+      .withAiUserSystemPrompt(assistantParts.join("\n\n"))
+      .withAiUserPrivatePages(privatePages.pages, privatePages.truncated);
     if (workspaceCtx) builder = builder.withWorkspaceContext(workspaceCtx);
     if (compactionSummary) {
       builder = builder.withCompactionSummary(compactionSummary);

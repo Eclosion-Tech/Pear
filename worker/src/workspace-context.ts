@@ -48,6 +48,7 @@ type PageRow = {
   id: bigint;
   parentId: bigint | undefined;
   title: string;
+  sortOrder: number;
   deletedAt?: unknown;
 };
 
@@ -188,4 +189,157 @@ export function summarizePageHistory(
 /** Return today's date as an ISO 8601 date string (YYYY-MM-DD). */
 export function todayIso8601(): string {
   return new Date().toISOString().split("T")[0]!;
+}
+
+// ── AI user private pages (hidden memory subtree) ───────────────────────────
+
+/** Max characters of page body text to inject into the system prompt (across all private pages). */
+const AI_USER_PRIVATE_PAGES_CHAR_BUDGET = 48_000;
+
+type AiUserMemoryRow = {
+  aiUserId: bigint;
+  rootPageId: bigint;
+};
+
+function collectSubtreePageIds(conn: ConnLike, rootId: bigint): Set<bigint> {
+  const ids = new Set<bigint>([rootId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const p of conn.db.page.iter() as Iterable<PageRow>) {
+      if (p.deletedAt) continue;
+      if (ids.has(p.id)) continue;
+      const par = p.parentId;
+      if (par !== undefined && ids.has(par)) {
+        ids.add(p.id);
+        changed = true;
+      }
+    }
+  }
+  return ids;
+}
+
+/**
+ * Breadth-first order under `rootId`: stable sibling order via `sort_order`, then id.
+ */
+function orderSubtreePagesBfs(
+  conn: ConnLike,
+  rootId: bigint,
+  idSet: Set<bigint>,
+): PageRow[] {
+  const byId = new Map<bigint, PageRow>();
+  for (const p of conn.db.page.iter() as Iterable<PageRow>) {
+    if (idSet.has(p.id)) byId.set(p.id, p);
+  }
+  const result: PageRow[] = [];
+  const queue: bigint[] = [rootId];
+  const seen = new Set<bigint>();
+
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const row = byId.get(id);
+    if (!row) continue;
+    result.push(row);
+
+    const children = [...byId.values()]
+      .filter((c) => c.parentId === id)
+      .sort(
+        (a, b) =>
+          Number((a.sortOrder ?? 0) - (b.sortOrder ?? 0)) ||
+          Number(a.id - b.id),
+      );
+    for (const c of children) queue.push(c.id);
+  }
+
+  return result;
+}
+
+export interface AiUserPrivatePagesResult {
+  pages: InstructionPage[];
+  /** True if at least one page body was cut off to stay within the char budget. */
+  truncated: boolean;
+}
+
+/**
+ * Load Doc pages under this AI user's `ai_user_memory.root_page_id` subtree.
+ * The subtree is normally hidden from sidebar (`is_hidden`); content is injected
+ * into the system prompt so the model keeps persona / notes across turns.
+ *
+ * If `provision_ai_user_memory` was never run for this user, returns empty pages.
+ */
+export function discoverAiUserPrivatePages(
+  conn: ConnLike,
+  aiUserId: bigint,
+  maxChars: number = AI_USER_PRIVATE_PAGES_CHAR_BUDGET,
+): AiUserPrivatePagesResult {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const memTable = (conn.db as any).ai_user_memory;
+  if (!memTable?.iter) {
+    return { pages: [], truncated: false };
+  }
+
+  let memory: AiUserMemoryRow | undefined;
+  for (const row of memTable.iter() as Iterable<{
+    aiUserId: bigint;
+    rootPageId: bigint;
+  }>) {
+    if (row.aiUserId === aiUserId) {
+      memory = { aiUserId: row.aiUserId, rootPageId: row.rootPageId };
+      break;
+    }
+  }
+
+  if (!memory) {
+    return { pages: [], truncated: false };
+  }
+
+  const rootId = memory.rootPageId;
+  const idSet = collectSubtreePageIds(conn, rootId);
+  const ordered = orderSubtreePagesBfs(conn, rootId, idSet);
+
+  const depthMap = new Map<bigint, number>();
+  depthMap.set(rootId, 0);
+  for (const p of ordered) {
+    if (p.id === rootId) continue;
+    const pd =
+      p.parentId !== undefined ? (depthMap.get(p.parentId) ?? 0) : 0;
+    depthMap.set(p.id, pd + 1);
+  }
+
+  const pages: InstructionPage[] = [];
+  let budget = maxChars;
+  let truncated = false;
+
+  for (let i = 0; i < ordered.length; i++) {
+    const p = ordered[i]!;
+    if (p.deletedAt) continue;
+
+    const pageContent = conn.db.page_content?.pageId?.find(p.id) as
+      | PageContentRow
+      | undefined;
+    const full = pageContent?.content ?? "";
+    if (budget <= 0) {
+      truncated = true;
+      break;
+    }
+    const take = Math.min(full.length, budget);
+    const slice = full.slice(0, take);
+    if (take < full.length) truncated = true;
+    budget -= take;
+
+    pages.push({
+      pageId: p.id,
+      title: p.title,
+      content: slice,
+      depth: depthMap.get(p.id) ?? 0,
+    });
+
+    if (budget <= 0 && i < ordered.length - 1) {
+      truncated = true;
+    }
+  }
+
+  return { pages, truncated };
 }
