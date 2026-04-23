@@ -4,25 +4,20 @@ import { useCallback } from "react";
 import { useTable, useReducer } from "spacetimedb/react";
 import type { Identity } from "spacetimedb";
 import { tables, reducers } from "@/src/module_bindings";
-import type { AiUserProfile } from "@/src/module_bindings/types";
 import type { UpdateAiUserSystemPromptParams } from "@/src/module_bindings/types/reducers";
 import {
   isAiUserHostDelegated,
   hostPatchAiUserSystemPrompt,
   hostPatchProfile,
 } from "@/src/lib/aiUserApi";
+import { optionStringOrNullForHost } from "@/src/lib/spacetime";
+import type { AiUserProfile } from "@/src/module_bindings/types";
 
 function toSystemPromptReducerArg(
   s: string | null
 ): NonNullable<UpdateAiUserSystemPromptParams["systemPrompt"]> {
   if (s == null || s === "") return { tag: "none" };
   return { tag: "some", value: s };
-}
-
-function optionStringForHostPatch(v: AiUserProfile["avatarUrl"]): string | null {
-  if (v == null) return null;
-  if (v.tag === "none") return null;
-  return v.value;
 }
 
 export function useAiUserProfiles() {
@@ -118,7 +113,7 @@ export function usePatchAiUserProfileSettings() {
       if (isAiUserHostDelegated()) {
         await hostPatchProfile(p.aiUserId, {
           displayName: p.displayName,
-          avatarUrl: optionStringForHostPatch(p.avatarUrl),
+          avatarUrl: optionStringOrNullForHost(p.avatarUrl),
         });
       } else {
         await run({

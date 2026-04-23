@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTable, useSpacetimeDB } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
-import type { AiUserProfile } from "@/src/module_bindings/types";
 import {
   useAiUserProfiles,
   useDisableAiUserMemory,
@@ -12,12 +11,7 @@ import {
   useUpdateAiUserSystemPrompt,
   type AiUserProfileRow,
 } from "@/src/hooks/useAiUsers";
-
-function optionString(sp: AiUserProfile["systemPrompt"]): string {
-  if (sp == null) return "";
-  if (sp.tag === "none") return "";
-  return sp.value;
-}
+import { optionStringFromRow } from "@/src/lib/spacetime";
 
 function AiUserRowEditor({
   profile,
@@ -33,13 +27,15 @@ function AiUserRowEditor({
   const patchProfile = usePatchAiUserProfileSettings();
   const updateSystemPrompt = useUpdateAiUserSystemPrompt();
   const [displayName, setDisplayName] = useState(profile.displayName);
-  const [systemPrompt, setSystemPrompt] = useState(() => optionString(profile.systemPrompt));
+  const [systemPrompt, setSystemPrompt] = useState(() =>
+    optionStringFromRow(profile.systemPrompt)
+  );
   const [busy, setBusy] = useState(false);
   const [localErr, setLocalErr] = useState<string | null>(null);
 
   useEffect(() => {
     setDisplayName(profile.displayName);
-    setSystemPrompt(optionString(profile.systemPrompt));
+    setSystemPrompt(optionStringFromRow(profile.systemPrompt));
   }, [profile.displayName, profile.systemPrompt, profile.aiUserId]);
 
   const onSave = async () => {
@@ -53,7 +49,7 @@ function AiUserRowEditor({
     setBusy(true);
     try {
       const nameChanged = name !== profile.displayName;
-      const promptChanged = prompt !== optionString(profile.systemPrompt);
+      const promptChanged = prompt !== optionStringFromRow(profile.systemPrompt);
       if (nameChanged) {
         await patchProfile({
           aiUserId: profile.aiUserId,

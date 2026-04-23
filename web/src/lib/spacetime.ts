@@ -92,6 +92,28 @@ export async function clearIdbCacheForPage(
   await deleteIdb(name);
 }
 
+/**
+ * Decode `Option<string>` / optional string columns from subscribed rows. The
+ * generated TS type is often `string | undefined`, while reducer args use a
+ * tagged shape — handle both at runtime so builds stay compatible.
+ */
+export function optionStringFromRow(v: unknown): string {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "object" && v !== null && "tag" in v) {
+    const o = v as { tag: string; value?: string };
+    if (o.tag === "none") return "";
+    if (o.tag === "some" && o.value != null) return o.value;
+  }
+  return "";
+}
+
+/** Same as {@link optionStringFromRow} but `""` → `null` for JSON patches. */
+export function optionStringOrNullForHost(v: unknown): string | null {
+  const s = optionStringFromRow(v);
+  return s === "" ? null : s;
+}
+
 /** Removes the persisted SpacetimeDB identity token for a workspace. */
 export function clearSavedToken(connectionId?: string) {
   if (typeof window === "undefined") return;
