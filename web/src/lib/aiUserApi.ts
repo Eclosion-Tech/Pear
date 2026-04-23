@@ -3,14 +3,12 @@
 /**
  * AI user management client. Two code paths:
  *
- *   1. Host-delegated (pear-cloud, multi-tenant)
- *      Set `NEXT_PUBLIC_PEAR_AI_USER_API_BASE` to a base URL template
- *      like `/api/workspaces/{slug}/ai-users`. The host app proxies
- *      these calls to its lifecycle service which holds the workspace
- *      admin token, mints Identities, and persists AI-user tokens in
- *      its own database. The `{slug}` placeholder is substituted at
- *      call time using the current cloud workspace slug derived from
- *      the URL (`/workspace/<slug>/...`).
+ *   1. Host-delegated (embed Pear in a parent app)
+ *      Set `NEXT_PUBLIC_PEAR_AI_USER_API_BASE` to a base URL template. A
+ *      typical parent app proxies to a backend that can mint SpacetimeDB
+ *      identities, invoke reducers on behalf of users, and optionally
+ *      persist credentials. The `{slug}` placeholder is substituted at
+ *      call time from the current URL (see `currentWorkspaceSlug`).
  *
  *      A literal value (no `{slug}`) is allowed when the host knows
  *      ahead of time which workspace the bundle will run under.
@@ -34,10 +32,10 @@ export function isAiUserHostDelegated(): boolean {
 }
 
 /**
- * Read the cloud workspace slug from the current URL. We expect
- * `/workspace/<slug>/...` (pear-cloud's app router pattern). Returns
- * null when the slug can't be determined — callers should fall back to
- * the self-hosted path in that case.
+ * Read the host workspace slug from the current URL when the path matches
+ * `/workspace/<slug>/...`. The embedding application defines this route;
+ * `{slug}` in `NEXT_PUBLIC_PEAR_AI_USER_API_BASE` is replaced with it.
+ * Returns null when the slug cannot be determined.
  */
 function currentWorkspaceSlug(): string | null {
   if (typeof window === "undefined") return null;
