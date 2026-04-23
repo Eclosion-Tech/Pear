@@ -423,6 +423,12 @@ export const HttpMethod = __t.enum("HttpMethod", {
 });
 export type HttpMethod = __Infer<typeof HttpMethod>;
 
+export const IdCounter = __t.object("IdCounter", {
+  name: __t.string(),
+  value: __t.u64(),
+});
+export type IdCounter = __Infer<typeof IdCounter>;
+
 // The tagged union or sum type for the algebraic type `InferenceProvider`.
 export const InferenceProvider = __t.enum("InferenceProvider", {
   Anthropic: __t.unit(),

@@ -168,6 +168,7 @@ import DatabaseSchemaRow from "./database_schema_table";
 import DatabaseViewRow from "./database_view_table";
 import ExtensionManifestRow from "./extension_manifest_table";
 import HarnessTemplateRow from "./harness_template_table";
+import IdCounterRow from "./id_counter_table";
 import InstalledExtensionRow from "./installed_extension_table";
 import MigrationStateRow from "./migration_state_table";
 import OrchaAgentRow from "./orcha_agent_table";
@@ -478,6 +479,17 @@ const tablesSchema = __schema({
       { name: 'harness_template_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, HarnessTemplateRow),
+  id_counter: __table({
+    name: 'id_counter',
+    indexes: [
+      { name: 'name', algorithm: 'btree', columns: [
+        'name',
+      ] },
+    ],
+    constraints: [
+      { name: 'id_counter_name_key', constraint: 'unique', columns: ['name'] },
+    ],
+  }, IdCounterRow),
   installed_extension: __table({
     name: 'installed_extension',
     indexes: [
