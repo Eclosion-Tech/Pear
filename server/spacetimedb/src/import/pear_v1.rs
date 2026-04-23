@@ -1,20 +1,25 @@
 //! Import [`PEAR_SNAPSHOT_FORMAT`](crate) JSON produced by the web client's `buildPearSnapshotV1`.
 
 use crate::{
-    attachment, ai_user_config, ai_user_profile, conversation, conversation_message,
-    conversation_participant, database_schema, database_view, extension_manifest,
-    installed_extension, orcha_agent, orcha_job, orcha_task, orcha_shared_context, page,
-    page_content, page_property_value, page_property_value_history, page_snapshot, page_yjs_state,
-    property_definition, user,
+    ai_user_config, ai_user_memory, ai_user_profile, api_endpoint, api_endpoint_key,
+    api_field_mapping, attachment, auto_apply_binding, block_access_rule, conversation,
+    conversation_message, conversation_participant, database_schema, database_view,
+    extension_manifest, harness_template, installed_extension, orcha_agent, orcha_job,
+    orcha_shared_context, orcha_task, page, page_access_rule, page_content, page_property_value,
+    page_property_value_history, page_snapshot, page_yjs_state, property_definition,
+    review_agent_binding, review_annotation, user, user_preference,
 };
 use crate::{
-    ActorType, AiUserConfig, AiUserProfile, AiUserRole, Attachment, Conversation,
+    ActorType, AiUserConfig, AiUserMemory, AiUserProfile, AiUserRole, ApiEndpoint, ApiEndpointKey,
+    ApiFieldMapping, Attachment, AutoApplyBinding, AutoApplyContext, BlockAccessRule, Conversation,
     ConversationMessage, ConversationParticipant, ConversationStatus, ConversationVisibility,
-    DatabaseSchema, DatabaseView, ExtensionManifest, InferenceProvider, InstalledExtension,
-    MessageSender, MessageStatus, OrchaAgent, OrchaJob, OrchaSharedContext, OrchaTask, Page,
-    PageContent, PagePropertyValue, PagePropertyValueHistory, PageSnapshot, PageType,
-    PageYjsState, ParticipantRole, PropertyDefinition, PropertyType, PropertyValue, SnapshotType,
-    User, ViewType,
+    DatabaseSchema, DatabaseView, ExtensionManifest, HarnessTemplate, HarnessTemplateSource,
+    HttpMethod, InferenceProvider, InstalledExtension, MessageSender, MessageStatus, OrchaAgent,
+    OrchaJob, OrchaSharedContext, OrchaTask, Page, PageAccessRule, PageContent, PagePropertyValue,
+    PagePropertyValueHistory, PageSnapshot, PageType, PageYjsState, ParticipantRole, Permission,
+    Principal, PropertyDefinition, PropertyType, PropertyValue, ReviewAgentBinding,
+    ReviewAnnotation, ReviewMode, ReviewSeverity, ReviewSubject, SnapshotType, User,
+    UserPreference, ViewType,
 };
 use serde_json::Value;
 use spacetimedb::{reducer, Identity, ReducerContext, Table, Timestamp};
@@ -62,6 +67,7 @@ fn apply_snapshot(ctx: &ReducerContext, snapshot_json: &str) -> Result<(), Strin
     let tables = root.get("tables").ok_or("missing tables")?;
 
     import_users(ctx, tables)?;
+    import_user_preference(ctx, tables)?;
     import_pages(ctx, tables)?;
     import_page_content(ctx, tables)?;
     import_page_yjs_state(ctx, tables)?;
@@ -72,16 +78,26 @@ fn apply_snapshot(ctx: &ReducerContext, snapshot_json: &str) -> Result<(), Strin
     import_page_property_value_history(ctx, tables)?;
     import_page_snapshot(ctx, tables)?;
     import_attachment(ctx, tables)?;
+    import_page_access_rule(ctx, tables)?;
+    import_block_access_rule(ctx, tables)?;
     import_ai_user_profile(ctx, tables)?;
+    import_ai_user_memory(ctx, tables)?;
     import_conversation(ctx, tables)?;
     import_conversation_participant(ctx, tables)?;
     import_conversation_message(ctx, tables)?;
+    import_harness_template(ctx, tables)?;
+    import_review_agent_binding(ctx, tables)?;
+    import_review_annotation(ctx, tables)?;
+    import_auto_apply_binding(ctx, tables)?;
     import_extension_manifest(ctx, tables)?;
     import_installed_extension(ctx, tables)?;
     import_orcha_agent(ctx, tables)?;
     import_orcha_job(ctx, tables)?;
     import_orcha_task(ctx, tables)?;
     import_orcha_shared_context(ctx, tables)?;
+    import_api_endpoint(ctx, tables)?;
+    import_api_field_mapping(ctx, tables)?;
+    import_api_endpoint_key(ctx, tables)?;
 
     Ok(())
 }
@@ -354,6 +370,133 @@ fn import_orcha_shared_context(ctx: &ReducerContext, tables: &Value) -> Result<(
     };
     for row in arr {
         ctx.db.orcha_shared_context().insert(decode_orcha_shared_context(row)?);
+    }
+    Ok(())
+}
+
+fn import_user_preference(ctx: &ReducerContext, tables: &Value) -> Result<(), String> {
+    let Some(arr) = tables.get("user_preference").and_then(|v| v.as_array()) else {
+        return Ok(());
+    };
+    for row in arr {
+        ctx.db.user_preference().insert(decode_user_preference(row)?);
+    }
+    Ok(())
+}
+
+fn import_page_access_rule(ctx: &ReducerContext, tables: &Value) -> Result<(), String> {
+    let Some(arr) = tables.get("page_access_rule").and_then(|v| v.as_array()) else {
+        return Ok(());
+    };
+    for row in arr {
+        ctx.db.page_access_rule().insert(decode_page_access_rule(row)?);
+    }
+    Ok(())
+}
+
+fn import_block_access_rule(ctx: &ReducerContext, tables: &Value) -> Result<(), String> {
+    let Some(arr) = tables.get("block_access_rule").and_then(|v| v.as_array()) else {
+        return Ok(());
+    };
+    for row in arr {
+        ctx.db.block_access_rule().insert(decode_block_access_rule(row)?);
+    }
+    Ok(())
+}
+
+fn import_ai_user_memory(ctx: &ReducerContext, tables: &Value) -> Result<(), String> {
+    let Some(arr) = tables.get("ai_user_memory").and_then(|v| v.as_array()) else {
+        return Ok(());
+    };
+    for row in arr {
+        ctx.db.ai_user_memory().insert(decode_ai_user_memory(row)?);
+    }
+    Ok(())
+}
+
+fn import_harness_template(ctx: &ReducerContext, tables: &Value) -> Result<(), String> {
+    let Some(arr) = tables.get("harness_template").and_then(|v| v.as_array()) else {
+        return Ok(());
+    };
+    // Skip Builtin templates — they are seeded automatically by the new
+    // module on init and would otherwise trip the unique `external_id`
+    // constraint. Workspace-authored templates are preserved verbatim.
+    for row in arr {
+        let t = decode_harness_template(row)?;
+        if matches!(t.source, HarnessTemplateSource::Builtin) {
+            continue;
+        }
+        ctx.db.harness_template().insert(t);
+    }
+    Ok(())
+}
+
+fn import_review_agent_binding(ctx: &ReducerContext, tables: &Value) -> Result<(), String> {
+    let Some(arr) = tables.get("review_agent_binding").and_then(|v| v.as_array()) else {
+        return Ok(());
+    };
+    for row in arr {
+        ctx.db
+            .review_agent_binding()
+            .insert(decode_review_agent_binding(row)?);
+    }
+    Ok(())
+}
+
+fn import_review_annotation(ctx: &ReducerContext, tables: &Value) -> Result<(), String> {
+    let Some(arr) = tables.get("review_annotation").and_then(|v| v.as_array()) else {
+        return Ok(());
+    };
+    for row in arr {
+        ctx.db
+            .review_annotation()
+            .insert(decode_review_annotation(row)?);
+    }
+    Ok(())
+}
+
+fn import_auto_apply_binding(ctx: &ReducerContext, tables: &Value) -> Result<(), String> {
+    let Some(arr) = tables.get("auto_apply_binding").and_then(|v| v.as_array()) else {
+        return Ok(());
+    };
+    for row in arr {
+        ctx.db
+            .auto_apply_binding()
+            .insert(decode_auto_apply_binding(row)?);
+    }
+    Ok(())
+}
+
+fn import_api_endpoint(ctx: &ReducerContext, tables: &Value) -> Result<(), String> {
+    let Some(arr) = tables.get("api_endpoint").and_then(|v| v.as_array()) else {
+        return Ok(());
+    };
+    for row in arr {
+        ctx.db.api_endpoint().insert(decode_api_endpoint(row)?);
+    }
+    Ok(())
+}
+
+fn import_api_field_mapping(ctx: &ReducerContext, tables: &Value) -> Result<(), String> {
+    let Some(arr) = tables.get("api_field_mapping").and_then(|v| v.as_array()) else {
+        return Ok(());
+    };
+    for row in arr {
+        ctx.db
+            .api_field_mapping()
+            .insert(decode_api_field_mapping(row)?);
+    }
+    Ok(())
+}
+
+fn import_api_endpoint_key(ctx: &ReducerContext, tables: &Value) -> Result<(), String> {
+    let Some(arr) = tables.get("api_endpoint_key").and_then(|v| v.as_array()) else {
+        return Ok(());
+    };
+    for row in arr {
+        ctx.db
+            .api_endpoint_key()
+            .insert(decode_api_endpoint_key(row)?);
     }
     Ok(())
 }
@@ -1073,4 +1216,307 @@ fn decode_property_value(v: &Value) -> Result<PropertyValue, String> {
         }
         _ => Err(format!("PropertyValue::{tag}")),
     }
+}
+
+// ── Decoders added in 0.7.x to round-trip the full public table set ──────────
+
+fn decode_user_preference(v: &Value) -> Result<UserPreference, String> {
+    let m = obj(v, "user_preference")?;
+    Ok(UserPreference {
+        id: u64_at(m, "id")?,
+        identity: decode_identity(m.get("identity").ok_or("identity")?)?,
+        key: string_at(m, "key")?,
+        value_json: string_at(m, "valueJson")?,
+        updated_at: decode_timestamp(m.get("updatedAt").ok_or("updatedAt")?)?,
+    })
+}
+
+fn decode_principal(v: &Value) -> Result<Principal, String> {
+    let o = v.as_object().ok_or("Principal")?;
+    let tag = o
+        .get("tag")
+        .and_then(|t| t.as_str())
+        .ok_or("Principal.tag")?;
+    match tag {
+        "WorkspaceMember" => Ok(Principal::WorkspaceMember(decode_identity(
+            o.get("value").ok_or("WorkspaceMember.value")?,
+        )?)),
+        _ => Err(format!("Principal::{tag}")),
+    }
+}
+
+fn decode_permission(v: &Value) -> Result<Permission, String> {
+    decode_enum_tag2(
+        v,
+        &[("Read", Permission::Read), ("Write", Permission::Write)],
+        "Permission",
+    )
+}
+
+fn decode_page_access_rule(v: &Value) -> Result<PageAccessRule, String> {
+    let m = obj(v, "page_access_rule")?;
+    Ok(PageAccessRule {
+        id: u64_at(m, "id")?,
+        page_id: u64_at(m, "pageId")?,
+        principal: decode_principal(m.get("principal").ok_or("principal")?)?,
+        permission: decode_permission(m.get("permission").ok_or("permission")?)?,
+        granted_by: decode_identity(m.get("grantedBy").ok_or("grantedBy")?)?,
+        granted_at: decode_timestamp(m.get("grantedAt").ok_or("grantedAt")?)?,
+    })
+}
+
+fn decode_block_access_rule(v: &Value) -> Result<BlockAccessRule, String> {
+    let m = obj(v, "block_access_rule")?;
+    Ok(BlockAccessRule {
+        id: u64_at(m, "id")?,
+        page_id: u64_at(m, "pageId")?,
+        block_id: string_at(m, "blockId")?,
+        principal: decode_principal(m.get("principal").ok_or("principal")?)?,
+        permission: decode_permission(m.get("permission").ok_or("permission")?)?,
+        granted_by: decode_identity(m.get("grantedBy").ok_or("grantedBy")?)?,
+        granted_at: decode_timestamp(m.get("grantedAt").ok_or("grantedAt")?)?,
+    })
+}
+
+fn decode_ai_user_memory(v: &Value) -> Result<AiUserMemory, String> {
+    let m = obj(v, "ai_user_memory")?;
+    Ok(AiUserMemory {
+        id: u64_at(m, "id")?,
+        ai_user_id: u64_at(m, "aiUserId")?,
+        root_page_id: u64_at(m, "rootPageId")?,
+        working_page_id: opt_u64_at(m, "workingPageId")?,
+        long_term_page_id: opt_u64_at(m, "longTermPageId")?,
+        created_at: decode_timestamp(m.get("createdAt").ok_or("createdAt")?)?,
+        last_consolidated_at: opt_timestamp_at(m, "lastConsolidatedAt")?,
+    })
+}
+
+fn decode_inference_provider(v: &Value) -> Result<InferenceProvider, String> {
+    decode_enum_tag2(
+        v,
+        &[
+            ("Anthropic", InferenceProvider::Anthropic),
+            ("OpenAI", InferenceProvider::OpenAI),
+            ("Ollama", InferenceProvider::Ollama),
+            ("OpenAICompatible", InferenceProvider::OpenAICompatible),
+        ],
+        "InferenceProvider",
+    )
+}
+
+fn decode_harness_template_source(v: &Value) -> Result<HarnessTemplateSource, String> {
+    decode_enum_tag2(
+        v,
+        &[
+            ("Builtin", HarnessTemplateSource::Builtin),
+            ("Workspace", HarnessTemplateSource::Workspace),
+        ],
+        "HarnessTemplateSource",
+    )
+}
+
+fn decode_harness_template(v: &Value) -> Result<HarnessTemplate, String> {
+    let m = obj(v, "harness_template")?;
+    Ok(HarnessTemplate {
+        id: u64_at(m, "id")?,
+        external_id: string_at(m, "externalId")?,
+        name: string_at(m, "name")?,
+        description: string_at(m, "description")?,
+        source: decode_harness_template_source(m.get("source").ok_or("source")?)?,
+        system_prompt: string_at(m, "systemPrompt")?,
+        default_provider: decode_inference_provider(
+            m.get("defaultProvider").ok_or("defaultProvider")?,
+        )?,
+        default_model: string_at(m, "defaultModel")?,
+        default_max_tokens: u64_at(m, "defaultMaxTokens")? as u32,
+        config_json: string_at(m, "configJson")?,
+        version: u64_at(m, "version")? as u32,
+        created_at: decode_timestamp(m.get("createdAt").ok_or("createdAt")?)?,
+        updated_at: decode_timestamp(m.get("updatedAt").ok_or("updatedAt")?)?,
+    })
+}
+
+fn decode_review_subject(v: &Value) -> Result<ReviewSubject, String> {
+    if let Some(s) = v.as_str() {
+        if s == "Workspace" {
+            return Ok(ReviewSubject::Workspace);
+        }
+    }
+    let o = v.as_object().ok_or("ReviewSubject")?;
+    let tag = o
+        .get("tag")
+        .and_then(|t| t.as_str())
+        .ok_or("ReviewSubject.tag")?;
+    match tag {
+        "Workspace" => Ok(ReviewSubject::Workspace),
+        "AiUser" => Ok(ReviewSubject::AiUser(decode_u64(
+            o.get("value").ok_or("AiUser.value")?,
+        )?)),
+        _ => Err(format!("ReviewSubject::{tag}")),
+    }
+}
+
+fn decode_review_mode(v: &Value) -> Result<ReviewMode, String> {
+    decode_enum_tag2(
+        v,
+        &[("Pre", ReviewMode::Pre), ("Post", ReviewMode::Post)],
+        "ReviewMode",
+    )
+}
+
+fn decode_review_severity(v: &Value) -> Result<ReviewSeverity, String> {
+    decode_enum_tag2(
+        v,
+        &[
+            ("Pass", ReviewSeverity::Pass),
+            ("Warn", ReviewSeverity::Warn),
+            ("Fail", ReviewSeverity::Fail),
+        ],
+        "ReviewSeverity",
+    )
+}
+
+fn decode_review_agent_binding(v: &Value) -> Result<ReviewAgentBinding, String> {
+    let m = obj(v, "review_agent_binding")?;
+    Ok(ReviewAgentBinding {
+        id: u64_at(m, "id")?,
+        reviewer_ai_user_id: u64_at(m, "reviewerAiUserId")?,
+        subject: decode_review_subject(m.get("subject").ok_or("subject")?)?,
+        mode: decode_review_mode(m.get("mode").ok_or("mode")?)?,
+        fail_open: bool_at(m, "failOpen")?,
+        created_by: decode_identity(m.get("createdBy").ok_or("createdBy")?)?,
+        created_at: decode_timestamp(m.get("createdAt").ok_or("createdAt")?)?,
+    })
+}
+
+fn decode_review_annotation(v: &Value) -> Result<ReviewAnnotation, String> {
+    let m = obj(v, "review_annotation")?;
+    Ok(ReviewAnnotation {
+        id: u64_at(m, "id")?,
+        snapshot_id: u64_at(m, "snapshotId")?,
+        reviewer_ai_user_id: u64_at(m, "reviewerAiUserId")?,
+        severity: decode_review_severity(m.get("severity").ok_or("severity")?)?,
+        comment: string_at(m, "comment")?,
+        created_at: decode_timestamp(m.get("createdAt").ok_or("createdAt")?)?,
+    })
+}
+
+fn decode_auto_apply_context(v: &Value) -> Result<AutoApplyContext, String> {
+    if let Some(s) = v.as_str() {
+        if s == "Workspace" {
+            return Ok(AutoApplyContext::Workspace);
+        }
+    }
+    let o = v.as_object().ok_or("AutoApplyContext")?;
+    let tag = o
+        .get("tag")
+        .and_then(|t| t.as_str())
+        .ok_or("AutoApplyContext.tag")?;
+    match tag {
+        "Workspace" => Ok(AutoApplyContext::Workspace),
+        "Page" => Ok(AutoApplyContext::Page(decode_u64(
+            o.get("value").ok_or("Page.value")?,
+        )?)),
+        _ => Err(format!("AutoApplyContext::{tag}")),
+    }
+}
+
+fn decode_opt_string_vec(
+    m: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<Vec<String>>, String> {
+    match m.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(a)) => {
+            let mut out = Vec::with_capacity(a.len());
+            for x in a {
+                out.push(
+                    x.as_str()
+                        .ok_or_else(|| format!("{key}: expected string"))?
+                        .to_string(),
+                );
+            }
+            Ok(Some(out))
+        }
+        _ => Err(format!("{key}: expected array or null")),
+    }
+}
+
+fn decode_auto_apply_binding(v: &Value) -> Result<AutoApplyBinding, String> {
+    let m = obj(v, "auto_apply_binding")?;
+    Ok(AutoApplyBinding {
+        id: u64_at(m, "id")?,
+        ai_user_id: u64_at(m, "aiUserId")?,
+        context: decode_auto_apply_context(m.get("context").ok_or("context")?)?,
+        allowed_action_kinds: decode_opt_string_vec(m, "allowedActionKinds")?,
+        granted_by: decode_identity(m.get("grantedBy").ok_or("grantedBy")?)?,
+        granted_at: decode_timestamp(m.get("grantedAt").ok_or("grantedAt")?)?,
+    })
+}
+
+fn decode_http_method(v: &Value) -> Result<HttpMethod, String> {
+    decode_enum_tag2(
+        v,
+        &[
+            ("Get", HttpMethod::Get),
+            ("Post", HttpMethod::Post),
+            ("Patch", HttpMethod::Patch),
+            ("Delete", HttpMethod::Delete),
+        ],
+        "HttpMethod",
+    )
+}
+
+fn decode_http_method_vec(v: &Value) -> Result<Vec<HttpMethod>, String> {
+    let arr = v.as_array().ok_or("allowedMethods: expected array")?;
+    arr.iter().map(decode_http_method).collect()
+}
+
+fn decode_api_endpoint(v: &Value) -> Result<ApiEndpoint, String> {
+    let m = obj(v, "api_endpoint")?;
+    Ok(ApiEndpoint {
+        id: u64_at(m, "id")?,
+        database_page_id: u64_at(m, "databasePageId")?,
+        slug: string_at(m, "slug")?,
+        display_name: string_at(m, "displayName")?,
+        description: string_at(m, "description")?,
+        allowed_methods: decode_http_method_vec(
+            m.get("allowedMethods").ok_or("allowedMethods")?,
+        )?,
+        require_auth: bool_at(m, "requireAuth")?,
+        created_by: decode_identity(m.get("createdBy").ok_or("createdBy")?)?,
+        created_at: decode_timestamp(m.get("createdAt").ok_or("createdAt")?)?,
+        updated_at: decode_timestamp(m.get("updatedAt").ok_or("updatedAt")?)?,
+    })
+}
+
+fn decode_api_field_mapping(v: &Value) -> Result<ApiFieldMapping, String> {
+    let m = obj(v, "api_field_mapping")?;
+    Ok(ApiFieldMapping {
+        id: u64_at(m, "id")?,
+        endpoint_id: u64_at(m, "endpointId")?,
+        property_definition_id: u64_at(m, "propertyDefinitionId")?,
+        field_name: string_at(m, "fieldName")?,
+        required_on_create: bool_at(m, "requiredOnCreate")?,
+        default_value: opt_string_at(m, "defaultValue")?,
+        read_only: bool_at(m, "readOnly")?,
+        field_order: u64_at(m, "fieldOrder")? as u32,
+    })
+}
+
+fn decode_api_endpoint_key(v: &Value) -> Result<ApiEndpointKey, String> {
+    let m = obj(v, "api_endpoint_key")?;
+    Ok(ApiEndpointKey {
+        id: u64_at(m, "id")?,
+        endpoint_id: u64_at(m, "endpointId")?,
+        key_hash: string_at(m, "keyHash")?,
+        label: string_at(m, "label")?,
+        allowed_methods: decode_http_method_vec(
+            m.get("allowedMethods").ok_or("allowedMethods")?,
+        )?,
+        created_by: decode_identity(m.get("createdBy").ok_or("createdBy")?)?,
+        created_at: decode_timestamp(m.get("createdAt").ok_or("createdAt")?)?,
+        last_used_at: opt_timestamp_at(m, "lastUsedAt")?,
+        expires_at: opt_timestamp_at(m, "expiresAt")?,
+    })
 }
