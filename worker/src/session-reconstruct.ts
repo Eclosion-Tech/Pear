@@ -46,6 +46,13 @@ interface StoredToolResult {
 
 type StoredBlock = StoredToolUse | StoredToolResult;
 
+function identityHex(value: unknown): string {
+  if (value && typeof (value as { toHexString?: () => string }).toHexString === "function") {
+    return (value as { toHexString(): string }).toHexString();
+  }
+  return String(value);
+}
+
 // ── Exported functions ────────────────────────────────────────────────────────
 
 /**
@@ -83,10 +90,16 @@ export function loadCompactionSummary(
  * tool_calls_json blocks are parsed and reconstructed as properly paired
  * assistant (ToolUse) + user (ToolResult) messages so the Anthropic API
  * can correctly resume a mid-session conversation.
+ *
+ * `assistantIdentityHex` must be the SpacetimeDB identity (hex) of the AI
+ * user whose worker is reconstructing the thread. Human messages are every
+ * other `User(identity)` row; the assistant's rows use the same `User` tag
+ * after the MessageSender refactor (there is no separate `AiUser` variant).
  */
 export function reconstructSessionTail(
   conn: ConnLike,
   conversationId: bigint,
+  assistantIdentityHex: string,
 ): Message[] {
   const allMessages = [
     ...(conn.db.conversation_message.iter() as Iterable<ConversationMessageRow>),
@@ -109,6 +122,7 @@ export function reconstructSessionTail(
       : allMessages;
 
   const result: Message[] = [];
+  const assistantHex = assistantIdentityHex.toLowerCase();
 
   for (const msg of tail) {
     if (msg.sender.tag === "System") {
@@ -116,85 +130,88 @@ export function reconstructSessionTail(
       continue;
     }
 
-    if (msg.sender.tag === "Human") {
+    if (msg.sender.tag !== "User") {
+      continue;
+    }
+
+    const senderHex = identityHex(msg.sender.value).toLowerCase();
+    const isAssistantTurn = senderHex === assistantHex;
+
+    if (!isAssistantTurn) {
       if (!msg.content) continue;
       result.push({ role: "user", content: msg.content });
       continue;
     }
 
-    if (msg.sender.tag === "AiUser") {
-      if (!msg.toolCallsJson) {
-        if (msg.content) {
-          result.push({
-            role: "assistant",
-            content: [{ type: "text", text: msg.content }],
-          });
-        }
-        continue;
-      }
-
-      let blocks: StoredBlock[];
-      try {
-        blocks = JSON.parse(msg.toolCallsJson) as StoredBlock[];
-      } catch {
-        // Malformed tool_calls_json — fall back to text-only
-        if (msg.content) {
-          result.push({
-            role: "assistant",
-            content: [{ type: "text", text: msg.content }],
-          });
-        }
-        continue;
-      }
-
-      const toolUseBlocks = blocks.filter((b): b is StoredToolUse => b.type === "tool_use");
-      const toolResultBlocks = blocks.filter(
-        (b): b is StoredToolResult => b.type === "tool_result",
-      );
-
-      // Build assistant message: text content + tool_use blocks
-      const assistantContent: Message["content"] = [];
+    // Assistant turn (AI user connected as User(identity))
+    if (!msg.toolCallsJson) {
       if (msg.content) {
-        (assistantContent as { type: "text"; text: string }[]).push({
-          type: "text",
-          text: msg.content,
+        result.push({
+          role: "assistant",
+          content: [{ type: "text", text: msg.content }],
         });
       }
-      for (const block of toolUseBlocks) {
-        let input: Record<string, unknown>;
-        try {
-          input = JSON.parse(block.input) as Record<string, unknown>;
-        } catch {
-          input = { raw: block.input };
-        }
-        (
-          assistantContent as {
-            type: "tool_use";
-            id: string;
-            name: string;
-            input: Record<string, unknown>;
-          }[]
-        ).push({
-          type: "tool_use",
-          id: block.id,
-          name: block.name,
-          input,
+      continue;
+    }
+
+    let blocks: StoredBlock[];
+    try {
+      blocks = JSON.parse(msg.toolCallsJson) as StoredBlock[];
+    } catch {
+      if (msg.content) {
+        result.push({
+          role: "assistant",
+          content: [{ type: "text", text: msg.content }],
         });
       }
+      continue;
+    }
 
-      if ((assistantContent as unknown[]).length > 0) {
-        result.push({ role: "assistant", content: assistantContent as never });
-      }
+    const toolUseBlocks = blocks.filter((b): b is StoredToolUse => b.type === "tool_use");
+    const toolResultBlocks = blocks.filter(
+      (b): b is StoredToolResult => b.type === "tool_result",
+    );
 
-      // Tool results become a separate user message following the assistant turn
-      if (toolResultBlocks.length > 0) {
-        const userContent: ToolResultBlock[] = toolResultBlocks.map((r) => ({
-          type: "tool_result",
-          tool_use_id: r.tool_use_id,
-          content: r.output,
-        }));
-        result.push({ role: "user", content: userContent });
+    const assistantContent: Message["content"] = [];
+    if (msg.content) {
+      (assistantContent as { type: "text"; text: string }[]).push({
+        type: "text",
+        text: msg.content,
+      });
+    }
+    for (const block of toolUseBlocks) {
+      let input: Record<string, unknown>;
+      try {
+        input = JSON.parse(block.input) as Record<string, unknown>;
+      } catch {
+        input = { raw: block.input };
       }
+      (
+        assistantContent as {
+          type: "tool_use";
+          id: string;
+          name: string;
+          input: Record<string, unknown>;
+        }[]
+      ).push({
+        type: "tool_use",
+        id: block.id,
+        name: block.name,
+        input,
+      });
+    }
+
+    if ((assistantContent as unknown[]).length > 0) {
+      result.push({ role: "assistant", content: assistantContent as never });
+    }
+
+    if (toolResultBlocks.length > 0) {
+      const userContent: ToolResultBlock[] = toolResultBlocks.map((r) => ({
+        type: "tool_result",
+        tool_use_id: r.tool_use_id,
+        content: r.output,
+      }));
+      result.push({ role: "user", content: userContent });
     }
   }
 

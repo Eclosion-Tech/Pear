@@ -351,7 +351,7 @@ async function handleConversationMessage(
 
     // Reconstruct message tail (respects compaction floor). Filter out the
     // placeholder we just inserted (no content).
-    const tailMessages = reconstructSessionTail(conn, conv.id);
+    const tailMessages = reconstructSessionTail(conn, conv.id, selfHex);
     const llmMessages: Message[] = tailMessages.filter(
       (m) =>
         !(m.role === "assistant" && Array.isArray(m.content) && m.content.length === 0),
