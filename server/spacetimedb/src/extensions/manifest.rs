@@ -238,8 +238,8 @@ pub(crate) fn create_extension_permissions(
 /// Returns the new ai_user_id.
 ///
 /// `ai_user_identity` must be a freshly minted SpacetimeDB Identity for the new
-/// AI user (in pear-cloud, lifecycle mints this; in self-hosted Pear, the
-/// extension-install caller must supply one). It's the field RLS keys on for
+/// AI user (some hosts mint this when installing; others require the
+/// extension-install caller to supply one). It's the field RLS keys on for
 /// reading the per-AI-user api_key.
 pub(crate) fn create_extension_ai_user(
     ctx: &ReducerContext,

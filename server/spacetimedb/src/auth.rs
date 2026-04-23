@@ -1,5 +1,5 @@
 //! Authentication: User, UserCredential, UserPreference tables and the
-//! native register/login/admin reducers. The lifecycle hooks
+//! native register/login/admin reducers. Session hooks
 //! (`client_connected`, `client_disconnected`) live in `lib.rs` but call
 //! into `extract_oidc_profile` here.
 

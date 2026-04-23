@@ -93,9 +93,9 @@ pub fn install_extension(
     mcp_api_key: Option<String>,
     endpoint_override: Option<String>,
     // ai_user_identity is required when the manifest's extension_type is
-    // ConfigBundle or Hybrid. Lifecycle (pear-cloud) mints this Identity per
-    // install; self-hosted Pear callers must supply one minted via the
-    // SpacetimeDB HTTP identity API.
+    // ConfigBundle or Hybrid. Some deployments mint this Identity per install;
+    // others require the caller to supply one (e.g. via the SpacetimeDB HTTP
+    // identity API).
     ai_user_identity: Option<Identity>,
 ) -> Result<(), String> {
     let manifest_row = ctx

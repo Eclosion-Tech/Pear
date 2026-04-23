@@ -4,7 +4,7 @@
 //! harness templates, structural sensors, extensions, custom API endpoints,
 //! and the Orcha coordination layer). Each subsystem owns its own tables,
 //! reducers, and helpers. Cross-cutting types live in `types`; the three
-//! lifecycle reducers (`init`, `client_connected`, `client_disconnected`)
+//! module hooks (`init`, `client_connected`, `client_disconnected`)
 //! and the import bridge (`import`) are wired up here.
 
 use spacetimedb::{reducer, ReducerContext, Table};
@@ -18,6 +18,7 @@ mod extensions;
 mod harness;
 mod id_counters;
 mod migrations;
+mod module_install;
 mod orcha;
 mod pages;
 mod import;
@@ -60,6 +61,7 @@ pub use crate::harness::{
 };
 pub use crate::id_counters::{id_counter, IdCounter};
 pub use crate::migrations::{migration_state, MigrationState};
+pub use crate::module_install::{module_install_meta, ModuleInstallMeta};
 pub use crate::orcha::{
     orcha_agent, orcha_job, orcha_shared_context, orcha_task, orcha_usage_event, OrchaAgent,
     OrchaJob, OrchaSharedContext, OrchaTask, OrchaUsageEvent,
@@ -86,14 +88,16 @@ pub use crate::types::{ActorType, Permission, Principal};
 
 use crate::auth::{extract_oidc_profile, workspace_has_no_admin};
 use crate::extensions::seed_builtin_extensions_inner;
+use crate::module_install::ensure_publisher_identity_recorded;
 use crate::sensors::seed_sensor_registry_inner;
 
 // ============================================================
-// Lifecycle Reducers
+// Module hooks (SpacetimeDB reducer entry points)
 // ============================================================
 
 #[reducer(init)]
 pub fn init(ctx: &ReducerContext) {
+    ensure_publisher_identity_recorded(ctx);
     seed_builtin_extensions_inner(ctx);
     seed_sensor_registry_inner(ctx);
 }

@@ -1,6 +1,6 @@
 //! `MigrationState` table + the standardised `run_pending_migrations`
-//! reducer and its backfills. Lifecycle calls `run_pending_migrations`
-//! after every successful `publish_module`.
+//! reducer and its backfills. Hosts typically invoke this reducer after each
+//! successful `publish_module` (automation, CI, or manual operator flow).
 
 use sha2::{Digest, Sha256};
 use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
@@ -10,13 +10,14 @@ use crate::ai::memory::{
     ai_user_memory, collect_live_subtree_page_ids, grant_ai_memory_page_access,
 };
 use crate::ai::ai_user_config;
+use crate::module_install::ensure_publisher_identity_recorded;
 use crate::harness::{harness_template, HarnessTemplate};
 use crate::pages::{page, Page};
 use crate::sensors::seed_sensor_registry_inner;
 /// Records which one-shot data migrations have already run on this database.
 ///
-/// CONTRACT: lifecycle's provisioner calls `run_pending_migrations` after
-/// every successful `publish_module` (both new provisions and version
+/// CONTRACT: whoever publishes this WASM should call `run_pending_migrations`
+/// after every successful `publish_module` (fresh database and version
 /// upgrades). The reducer is responsible for deciding what's new based on
 /// rows in this table — it MUST NOT re-run a migration whose key is
 /// already recorded. See `run_pending_migrations` for the canonical list.
@@ -39,11 +40,11 @@ pub struct MigrationState {
 // Migrations: standardised post-upgrade hook
 // ----------------------------------------------------------------------
 //
-// CONTRACT (lifecycle ↔ pear module):
+// CONTRACT (host ↔ module):
 //
-//   After every successful `publish_module` call (both fresh provisions
-//   and version upgrades), pear-cloud's lifecycle calls the
-//   `run_pending_migrations` reducer with the workspace's admin token.
+//   After every successful `publish_module` (fresh database and version
+//   upgrades), invoke `run_pending_migrations` with credentials that can
+//   run privileged reducers for this database (often the module publisher).
 //
 //   Each migration step:
 //     1. Has a stable, unique key (string).
@@ -60,11 +61,11 @@ pub struct MigrationState {
 //   - Appending a `run_step!(ctx, "<key>", <fn>);` line to
 //     `run_pending_migrations` below.
 //
-// Failure of any step short-circuits the whole reducer — the next tick of
-// the lifecycle upgrader will retry. State is committed per-step, so a
+// Failure of any step short-circuits the whole reducer — the next scheduled
+// or manual retry will run again. State is committed per-step, so a
 // partial failure doesn't roll back already-completed migrations.
 
-/// Standardised post-publish hook called by lifecycle after every
+/// Standardised post-publish hook: call after each successful
 /// `publish_module`. Idempotent and safe to call repeatedly. Adds new
 /// `MigrationState` rows for any unfinished migrations.
 #[reducer]
@@ -99,6 +100,10 @@ pub fn run_pending_migrations(ctx: &ReducerContext) -> Result<(), String> {
         "ai_user_memory_private_access_v1",
         backfill_ai_user_memory_private_access_inner
     );
+    run_step!(ctx, "module_install_meta_publisher_v1", |ctx: &ReducerContext| {
+        ensure_publisher_identity_recorded(ctx);
+        Ok::<(), String>(())
+    });
     Ok(())
 }
 

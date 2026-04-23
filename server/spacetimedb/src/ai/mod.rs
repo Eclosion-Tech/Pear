@@ -1,7 +1,7 @@
 //! AI users: configuration, public profile, and the reducers that
-//! create / update / delete them. Module owners (the workspace admin
-//! Identity used by lifecycle/worker for orchestration) bypass RLS and
-//! can see every row.
+//! create / update / delete them. The module publisher identity (see
+//! [`crate::module_install::ModuleInstallMeta`]) bypasses `ai_user_config` RLS
+//! the same way as in other SpacetimeDB deployments.
 
 use spacetimedb::{
     client_visibility_filter, reducer, table, Filter, Identity, ReducerContext, SpacetimeType,
@@ -29,24 +29,22 @@ pub enum InferenceProvider {
 
 /// AI user inference configuration. Public table guarded by an RLS rule
 /// (`AI_USER_CONFIG_FILTER` below) that exposes each row only to the matching
-/// AI user identity. The worker connects as the AI user and reads its own row;
-/// no other client (including the human creator) can see this row.
+/// AI user identity. Other clients (including the human who created the AI
+/// user) do not receive this row over subscriptions.
 ///
-/// Module owners (the workspace admin Identity used by lifecycle/worker for
-/// orchestration) bypass RLS and can see every row — that's how the worker
-/// can also inventory configs when needed.
+/// The module publisher identity bypasses this filter (SpacetimeDB host
+/// behavior), which tooling such as workers or HTTP gateways rely on.
 #[table(accessor = ai_user_config, public)]
 pub struct AiUserConfig {
     #[primary_key]
     #[auto_inc]
     pub id: u64,
-    /// SpacetimeDB Identity owned by this AI user. Minted by lifecycle and
-    /// stored in pear-cloud's Postgres alongside the corresponding token.
-    /// This is the field RLS keys on.
+    /// SpacetimeDB identity for this AI user (distinct from human members).
+    /// RLS on this table keys off this column.
     #[unique]
     pub identity: Identity,
-    /// The human who created this AI user. Workspace owners/admins inherit
-    /// management rights via lifecycle's Postgres-side authz.
+    /// The workspace member identity that created this AI user. Reducers use
+    /// this with [`crate::access_control::helpers::require_creator_or_admin`].
     pub created_by: Identity,
     pub provider: InferenceProvider,
     pub model: String,
@@ -112,7 +110,7 @@ pub enum AiUserRole {
 }
 
 /// Row-level visibility filter for `ai_user_config`. Each AI user sees only
-/// its own row; module owners (workspace admin / worker) bypass this filter.
+/// its own row; the module publisher bypasses this filter.
 #[client_visibility_filter]
 const AI_USER_CONFIG_FILTER: Filter = Filter::Sql(
     "SELECT * FROM ai_user_config WHERE identity = :sender",
@@ -163,11 +161,10 @@ pub(crate) fn provider_display_name(provider: &InferenceProvider) -> &'static st
 
 /// Create an AI user with its inference configuration and public profile.
 ///
-/// All authz lives in lifecycle (workspace member check + Syntropy session).
-/// Lifecycle mints a fresh SpacetimeDB Identity for the AI user, persists the
-/// token in its Postgres, and calls this reducer with a workspace admin token.
-/// The reducer trusts the supplied identity params; the only protection
-/// against spoofing is that lifecycle is the sole holder of the admin token.
+/// Callers supply `ai_user_identity` and `created_by_identity` explicitly.
+/// Deployments that mint AI identities out-of-band (separate credential store,
+/// HTTP gateway, etc.) typically invoke this reducer with the **module publisher**
+/// credential so clients cannot forge arbitrary identity pairs.
 #[reducer]
 pub fn create_ai_user(
     ctx: &ReducerContext,
@@ -273,7 +270,9 @@ pub fn update_ai_user_profile(
     Ok(())
 }
 
-/// Set or clear the per-AI-user system prompt only. Creator or workspace admin.
+/// Set or clear the per-AI-user system prompt only. Authorized like other
+/// `created_by`-gated AI user mutators (creator, workspace admin, or module
+/// publisher).
 #[reducer]
 pub fn update_ai_user_system_prompt(
     ctx: &ReducerContext,
@@ -305,7 +304,10 @@ pub fn update_ai_user_system_prompt(
 
 /// Update the inference configuration of an AI user (provider, model, endpoint,
 /// system prompt, max tokens). Does NOT update the API key — use
-/// set_ai_user_api_key for that.
+/// `set_ai_user_api_key` for that.
+///
+/// Intentionally has no `require_creator_or_admin` guard: some deployments
+/// restrict who may call reducers entirely at the HTTP/API layer.
 #[reducer]
 pub fn update_ai_user_config(
     ctx: &ReducerContext,
@@ -359,10 +361,10 @@ pub fn update_ai_user_config(
     Ok(())
 }
 
-/// Set or clear the API key for an AI user. Separated from update_ai_user_config
-/// so callers can update config without re-submitting the key. Lifecycle gates
-/// access; the key itself is never read back through any client subscription
-/// path (RLS on `ai_user_config` ensures only the AI user identity can see it).
+/// Set or clear the API key for an AI user. Separated from `update_ai_user_config`
+/// so callers can update config without re-submitting the key. The secret is not
+/// exposed on subscriptions (RLS on `ai_user_config` limits visibility to the AI
+/// user's own identity and the module publisher).
 #[reducer]
 pub fn set_ai_user_api_key(
     ctx: &ReducerContext,

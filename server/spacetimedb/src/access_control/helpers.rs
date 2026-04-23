@@ -11,6 +11,7 @@ use spacetimedb::{Identity, ReducerContext};
 
 use crate::access_control::{BlockAccessRule, block_access_rule, page_access_rule};
 use crate::auth::{sender_is_admin, user};
+use crate::module_install::sender_is_module_publisher;
 use crate::types::{Permission, Principal};
 
 pub(crate) fn page_has_any_rule(ctx: &ReducerContext, page_id: u64) -> bool {
@@ -141,18 +142,18 @@ pub(crate) fn workspace_member(identity: Identity) -> Principal {
 }
 
 /// Authorization helper for `created_by`-gated infrastructure reducers.
-/// Returns `Ok(())` if the sender is the original creator OR an admin,
-/// otherwise the standard rejection used by the API endpoint family.
+/// Returns `Ok(())` if the sender is the original creator, a workspace admin,
+/// or the [module publisher](crate::module_install::ModuleInstallMeta).
 pub(crate) fn require_creator_or_admin(
     ctx: &ReducerContext,
     created_by: Identity,
     action: &str,
 ) -> Result<(), String> {
-    if created_by == ctx.sender() || sender_is_admin(ctx) {
+    if created_by == ctx.sender() || sender_is_admin(ctx) || sender_is_module_publisher(ctx) {
         Ok(())
     } else {
         Err(format!(
-            "Only the creator or a workspace admin can {action}"
+            "Only the creator, a workspace admin, or the module publisher can {action}"
         ))
     }
 }

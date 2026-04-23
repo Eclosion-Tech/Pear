@@ -116,7 +116,7 @@ pub struct ApiFieldMapping {
 ///
 /// RLS (see `API_ENDPOINT_KEY_FILTER` below): each row is visible to the
 /// `created_by` identity (the human who minted it) and to module owners
-/// (lifecycle / worker / per-workspace service identity used by the API
+/// (module publisher / worker / per-workspace service identity used by the API
 /// gateway). That lets the workspace UI render label / created_at /
 /// last_used_at to the operator who created the key, without leaking
 /// those fields to other workspace members.
@@ -178,7 +178,7 @@ pub struct ApiEndpointKeyLookupRow {
 
 /// Row-level visibility filter for `api_endpoint_key`. Each row is visible
 /// to the `created_by` identity (the human who minted the key); module
-/// owners (lifecycle / worker / per-workspace gateway service identity)
+/// owners (module publisher / worker / per-workspace gateway service identity)
 /// bypass this filter automatically and see every row, which is required
 /// for the gateway's bearer-token resolution and for backfills.
 ///

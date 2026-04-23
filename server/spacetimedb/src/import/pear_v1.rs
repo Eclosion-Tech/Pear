@@ -249,7 +249,7 @@ fn import_ai_user_profile(ctx: &ReducerContext, tables: &Value) -> Result<(), St
         let p: AiUserProfile = decode_ai_user_profile(row)?;
         // Restore AI users with stub AiUserConfig (no api_key) so FKs resolve.
         // Operators must reconfigure provider/model/key after import via the
-        // pear-cloud lifecycle endpoints — minted Identities aren't recoverable
+        // out-of-band admin / HTTP tooling — minted Identities aren't recoverable
         // from an exported snapshot, so the imported `identity` carries over
         // but no fresh token is provisioned by this path.
         let id = p.ai_user_id;

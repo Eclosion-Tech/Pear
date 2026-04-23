@@ -2,7 +2,7 @@
 //! substrate. `SensorRegistry` is the closed vocabulary;
 //! `StructuralSensorFinding` is the rolling output. The `run_*_sensor`
 //! reducers are scheduled by an Orcha worker; `seed_sensor_registry_inner`
-//! is called by the `init` lifecycle hook.
+//! is called from the module `#[reducer(init)]` hook.
 
 use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 
