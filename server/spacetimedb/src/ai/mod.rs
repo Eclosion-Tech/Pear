@@ -141,6 +141,10 @@ pub struct AiUserProfile {
     pub created_by: Identity,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    /// Mirrored from `ai_user_config.system_prompt` so human clients can read
+    /// and edit instructions without subscribing to the RLS-guarded config row.
+    #[default(None::<String>)]
+    pub system_prompt: Option<String>,
 }
 
 
@@ -200,6 +204,7 @@ pub fn create_ai_user(
     let prov_name = provider_display_name(&provider).to_string();
     let model_name = model.trim().to_string();
     let has_api_key = api_key.is_some();
+    let system_prompt_for_profile = system_prompt.clone();
 
     let config = ctx.db.ai_user_config().insert(AiUserConfig {
         id: next_ai_user_config_id(ctx),
@@ -230,6 +235,7 @@ pub fn create_ai_user(
         created_by: created_by_identity,
         created_at: ctx.timestamp,
         updated_at: ctx.timestamp,
+        system_prompt: system_prompt_for_profile,
     });
 
     log::info!(
@@ -267,6 +273,36 @@ pub fn update_ai_user_profile(
     Ok(())
 }
 
+/// Set or clear the per-AI-user system prompt only. Creator or workspace admin.
+#[reducer]
+pub fn update_ai_user_system_prompt(
+    ctx: &ReducerContext,
+    ai_user_id: u64,
+    system_prompt: Option<String>,
+) -> Result<(), String> {
+    let cfg = ctx
+        .db
+        .ai_user_config()
+        .id()
+        .find(ai_user_id)
+        .ok_or_else(|| "AI user config not found".to_string())?;
+    require_creator_or_admin(ctx, cfg.created_by, "update AI user system prompt")?;
+    let system_prompt_for_profile = system_prompt.clone();
+    ctx.db.ai_user_config().id().update(AiUserConfig {
+        system_prompt,
+        updated_at: ctx.timestamp,
+        ..cfg
+    });
+    if let Some(profile) = ctx.db.ai_user_profile().ai_user_id().find(ai_user_id) {
+        ctx.db.ai_user_profile().ai_user_id().update(AiUserProfile {
+            system_prompt: system_prompt_for_profile,
+            updated_at: ctx.timestamp,
+            ..profile
+        });
+    }
+    Ok(())
+}
+
 /// Update the inference configuration of an AI user (provider, model, endpoint,
 /// system prompt, max tokens). Does NOT update the API key — use
 /// set_ai_user_api_key for that.
@@ -298,6 +334,7 @@ pub fn update_ai_user_config(
 
     let prov_name = provider_display_name(&provider).to_string();
     let model_name = model.trim().to_string();
+    let system_prompt_for_profile = system_prompt.clone();
 
     ctx.db.ai_user_config().id().update(AiUserConfig {
         provider,
@@ -313,6 +350,7 @@ pub fn update_ai_user_config(
         ctx.db.ai_user_profile().ai_user_id().update(AiUserProfile {
             provider_name: prov_name,
             model_name,
+            system_prompt: system_prompt_for_profile,
             updated_at: ctx.timestamp,
             ..profile
         });

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { usePages } from "@/src/hooks/usePages";
+import { usePages, filterNavVisiblePages } from "@/src/hooks/usePages";
 import type { PageRow } from "@/src/hooks/usePages";
 import { cosineSimilarity, getPageEmbeddingVector } from "@/src/lib/semanticSearch";
 
@@ -92,7 +92,8 @@ interface QuickSwitcherProps {
 
 export function QuickSwitcher({ open, onClose }: QuickSwitcherProps) {
   const router = useRouter();
-  const { pages } = usePages();
+  const { pages: allPages } = usePages();
+  const pages = useMemo(() => filterNavVisiblePages(allPages), [allPages]);
   const [query, setQuery] = useState("");
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [semanticScores, setSemanticScores] = useState<Map<string, number>>(new Map());

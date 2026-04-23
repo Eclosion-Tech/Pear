@@ -899,6 +899,7 @@ fn decode_ai_user_profile(v: &Value) -> Result<AiUserProfile, String> {
         created_by: decode_identity(m.get("createdBy").ok_or("createdBy")?)?,
         created_at: decode_timestamp(m.get("createdAt").ok_or("createdAt")?)?,
         updated_at: decode_timestamp(m.get("updatedAt").ok_or("updatedAt")?)?,
+        system_prompt: opt_string_at(m, "systemPrompt")?,
     })
 }
 

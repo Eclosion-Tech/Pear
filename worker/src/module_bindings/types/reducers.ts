@@ -104,6 +104,7 @@ import TouchApiEndpointKeyReducer from "../touch_api_endpoint_key_reducer";
 import UninstallExtensionReducer from "../uninstall_extension_reducer";
 import UpdateAiUserConfigReducer from "../update_ai_user_config_reducer";
 import UpdateAiUserProfileReducer from "../update_ai_user_profile_reducer";
+import UpdateAiUserSystemPromptReducer from "../update_ai_user_system_prompt_reducer";
 import UpdateApiEndpointReducer from "../update_api_endpoint_reducer";
 import UpdateApiFieldMappingReducer from "../update_api_field_mapping_reducer";
 import UpdateDatabaseRowReducer from "../update_database_row_reducer";
@@ -216,6 +217,7 @@ export type TouchApiEndpointKeyParams = __Infer<typeof TouchApiEndpointKeyReduce
 export type UninstallExtensionParams = __Infer<typeof UninstallExtensionReducer>;
 export type UpdateAiUserConfigParams = __Infer<typeof UpdateAiUserConfigReducer>;
 export type UpdateAiUserProfileParams = __Infer<typeof UpdateAiUserProfileReducer>;
+export type UpdateAiUserSystemPromptParams = __Infer<typeof UpdateAiUserSystemPromptReducer>;
 export type UpdateApiEndpointParams = __Infer<typeof UpdateApiEndpointReducer>;
 export type UpdateApiFieldMappingParams = __Infer<typeof UpdateApiFieldMappingReducer>;
 export type UpdateDatabaseRowParams = __Infer<typeof UpdateDatabaseRowReducer>;

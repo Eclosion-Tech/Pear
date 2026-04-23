@@ -137,6 +137,16 @@ export async function hostPatchConfig(
   });
 }
 
+export async function hostPatchAiUserSystemPrompt(
+  aiUserId: bigint,
+  systemPrompt: string | null
+): Promise<void> {
+  await hostFetch(`/${aiUserId}/system-prompt`, {
+    method: "PATCH",
+    body: JSON.stringify({ systemPrompt }),
+  });
+}
+
 export async function hostUpsertApiKey(aiUserId: bigint, apiKey: string): Promise<void> {
   await hostFetch(`/${aiUserId}/api-key`, {
     method: "PUT",

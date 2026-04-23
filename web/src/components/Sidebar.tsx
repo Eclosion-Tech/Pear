@@ -28,6 +28,7 @@ import { ContextMenu, type ContextMenuItem } from "@/src/components/ContextMenu"
 import { QuickSwitcher } from "@/src/components/QuickSwitcher";
 import { EmojiPicker } from "@/src/components/EmojiPicker";
 import type { PageRow } from "@/src/hooks/usePages";
+import { filterNavVisiblePages } from "@/src/hooks/usePages";
 import { useWorkspace } from "@/src/providers/WorkspaceProvider";
 
 // ─── Drag state shared across the whole sidebar ───────────────────────────────
@@ -417,6 +418,7 @@ export function Sidebar() {
   const activeId = pathname?.split("/").pop() ?? undefined;
 
   const { pages, isReady } = usePages();
+  const navPages = filterNavVisiblePages(pages);
   const { pages: deletedPages } = useDeletedPages();
   const createPage = useCreatePage();
   const deletePage = useDeletePage();
@@ -425,7 +427,7 @@ export function Sidebar() {
   const { user, displayName, initials } = useCurrentUser();
   const { workspaces, activeId: activeWorkspaceId, setActiveId } = useWorkspace();
 
-  const roots = pages
+  const roots = navPages
     .filter((p) => p.parentId == null)
     .sort((a, b) => a.sortOrder - b.sortOrder);
 
@@ -697,7 +699,7 @@ export function Sidebar() {
               <SidebarItem
                 key={String(page.id)}
                 page={page}
-                allPages={pages}
+                allPages={navPages}
                 depth={0}
                 activeId={activeId}
                 expandedIds={expandedIds}

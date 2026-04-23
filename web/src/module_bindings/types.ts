@@ -100,6 +100,7 @@ export const AiUserProfile = __t.object("AiUserProfile", {
   createdBy: __t.identity(),
   createdAt: __t.timestamp(),
   updatedAt: __t.timestamp(),
+  systemPrompt: __t.option(__t.string()),
 });
 export type AiUserProfile = __Infer<typeof AiUserProfile>;
 

@@ -5,11 +5,13 @@
 
 use std::collections::{HashSet, VecDeque};
 
-use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
+use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
-use crate::access_control::helpers::{require_creator_or_admin, require_page_write};
+use crate::access_control::helpers::{require_creator_or_admin, workspace_member};
+use crate::access_control::{next_page_access_rule_id, page_access_rule, PageAccessRule};
 use crate::ai::{ai_user_config, ai_user_profile};
 use crate::id_counters::alloc_id;
+use crate::types::Permission;
 use crate::pages::{
     next_page_id, next_sort_order, page, page_content, ActorType, Page, PageContent, PageType,
 };
@@ -18,6 +20,19 @@ pub(crate) fn next_ai_user_memory_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "ai_user_memory", || {
         ctx.db.ai_user_memory().iter().map(|r| r.id).max().unwrap_or(0)
     })
+}
+
+/// Restricts `page_id` so only `ai_identity` has access (write implies read). Used for
+/// AI-user memory pages so workspace members do not inherit the default open model.
+pub(crate) fn grant_ai_memory_page_access(ctx: &ReducerContext, page_id: u64, ai_identity: Identity) {
+    ctx.db.page_access_rule().insert(PageAccessRule {
+        id: next_page_access_rule_id(ctx),
+        page_id,
+        principal: workspace_member(ai_identity),
+        permission: Permission::Write,
+        granted_by: ctx.sender(),
+        granted_at: ctx.timestamp,
+    });
 }
 /// AI-user memory: a hidden subtree per AI user, two-tier (working /
 /// long-term). `working` memory stays small and is rewritten freely;
@@ -91,6 +106,7 @@ pub fn provision_ai_user_memory(ctx: &ReducerContext, ai_user_id: u64) -> Result
         content: String::new(),
         updated_at: ctx.timestamp,
     });
+    grant_ai_memory_page_access(ctx, root.id, ai_user.identity);
     ctx.db.ai_user_memory().insert(AiUserMemory {
         id: next_ai_user_memory_id(ctx),
         ai_user_id,
@@ -104,7 +120,7 @@ pub fn provision_ai_user_memory(ctx: &ReducerContext, ai_user_id: u64) -> Result
 }
 
 /// Live pages in the subtree rooted at `root_id` (BFS), excluding already soft-deleted pages.
-fn collect_live_subtree_page_ids(ctx: &ReducerContext, root_id: u64) -> Vec<u64> {
+pub(crate) fn collect_live_subtree_page_ids(ctx: &ReducerContext, root_id: u64) -> Vec<u64> {
     let mut out = Vec::new();
     let mut queue = VecDeque::new();
     let mut seen = HashSet::new();
@@ -163,7 +179,6 @@ pub fn disable_ai_user_memory(ctx: &ReducerContext, ai_user_id: u64) -> Result<(
         if page.deleted_at.is_some() {
             continue;
         }
-        require_page_write(ctx, pid)?;
         ctx.db.page().id().update(Page {
             deleted_at: Some(ctx.timestamp),
             updated_at: ctx.timestamp,

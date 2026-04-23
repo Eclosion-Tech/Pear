@@ -10,6 +10,11 @@ export function usePages() {
   return { pages: active, isReady };
 }
 
+/** Sidebar, quick switcher, etc.: omit `is_hidden` infrastructure pages (e.g. AI memory roots). */
+export function filterNavVisiblePages<T extends { isHidden: boolean }>(pages: T[]): T[] {
+  return pages.filter((p) => !p.isHidden);
+}
+
 /** Child pages of a given parent (the "rows" of a database). */
 export function useChildPages(parentId: bigint) {
   const { pages, isReady } = usePages();

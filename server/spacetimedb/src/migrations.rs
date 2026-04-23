@@ -5,6 +5,11 @@
 use sha2::{Digest, Sha256};
 use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 
+use crate::access_control::helpers::page_has_any_rule;
+use crate::ai::memory::{
+    ai_user_memory, collect_live_subtree_page_ids, grant_ai_memory_page_access,
+};
+use crate::ai::ai_user_config;
 use crate::harness::{harness_template, HarnessTemplate};
 use crate::pages::{page, Page};
 use crate::sensors::seed_sensor_registry_inner;
@@ -89,6 +94,39 @@ pub fn run_pending_migrations(ctx: &ReducerContext) -> Result<(), String> {
         "harness_template_external_id_backfill_v1",
         backfill_harness_template_external_id_inner
     );
+    run_step!(
+        ctx,
+        "ai_user_memory_private_access_v1",
+        backfill_ai_user_memory_private_access_inner
+    );
+    Ok(())
+}
+
+/// Adds `page_access_rule` rows for existing AI memory subtrees that were created
+/// under the open default (only `is_hidden` hid them from nav — not access control).
+fn backfill_ai_user_memory_private_access_inner(ctx: &ReducerContext) -> Result<(), String> {
+    let mut n = 0u64;
+    for mem in ctx.db.ai_user_memory().iter() {
+        let cfg = ctx
+            .db
+            .ai_user_config()
+            .id()
+            .find(mem.ai_user_id)
+            .ok_or_else(|| {
+                format!(
+                    "ai_user_memory references missing ai_user_id={}",
+                    mem.ai_user_id
+                )
+            })?;
+        for pid in collect_live_subtree_page_ids(ctx, mem.root_page_id) {
+            if page_has_any_rule(ctx, pid) {
+                continue;
+            }
+            grant_ai_memory_page_access(ctx, pid, cfg.identity);
+            n += 1;
+        }
+    }
+    log::info!("ai_user_memory_private_access_v1: added rules on {n} pages");
     Ok(())
 }
 

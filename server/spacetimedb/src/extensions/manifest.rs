@@ -297,6 +297,7 @@ pub(crate) fn create_extension_ai_user(
         created_by: installed_by,
         created_at: ctx.timestamp,
         updated_at: ctx.timestamp,
+        system_prompt: config_row.system_prompt,
     });
     Ok(config_row.id)
 }
