@@ -9,6 +9,7 @@ export const PEAR_SNAPSHOT_FORMAT = "pear-snapshot-v1" as const;
  */
 export const PEAR_SNAPSHOT_TABLES = [
   "user",
+  "user_preference",
   "page",
   "page_content",
   "page_yjs_state",
@@ -19,15 +20,26 @@ export const PEAR_SNAPSHOT_TABLES = [
   "page_property_value",
   "page_property_value_history",
   "attachment",
+  "page_access_rule",
+  "block_access_rule",
   "ai_user_profile",
+  "ai_user_memory",
   "conversation",
+  "conversation_participant",
   "conversation_message",
+  "harness_template",
+  "review_agent_binding",
+  "review_annotation",
+  "auto_apply_binding",
   "extension_manifest",
   "installed_extension",
   "orcha_agent",
   "orcha_job",
   "orcha_task",
   "orcha_shared_context",
+  "api_endpoint",
+  "api_field_mapping",
+  "api_endpoint_key",
 ] as const;
 
 export type PearSnapshotTableName = (typeof PEAR_SNAPSHOT_TABLES)[number];

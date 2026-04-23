@@ -414,7 +414,7 @@ function ConversationThread({ conversation, onBack }: { conversation: Conversati
       </div>
 
       {/* Context bar — shows what the AI user can see for this turn. */}
-      {aiUser && (
+      {aiUser && conversation.pageId !== undefined && (
         <ContextBar pageId={conversation.pageId} aiUserIdentity={aiUser.identity} />
       )}
 
