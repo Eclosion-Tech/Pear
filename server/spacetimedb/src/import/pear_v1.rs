@@ -1520,3 +1520,14 @@ fn decode_api_endpoint_key(v: &Value) -> Result<ApiEndpointKey, String> {
         expires_at: opt_timestamp_at(m, "expiresAt")?,
     })
 }
+
+#[cfg(test)]
+mod snapshot_format_tests {
+    use super::FORMAT;
+
+    /// Keep in sync with `PEAR_SNAPSHOT_FORMAT` in `pear/web/src/lib/pearExport.ts`.
+    #[test]
+    fn portable_snapshot_format_constant() {
+        assert_eq!(FORMAT, "pear-snapshot-v1");
+    }
+}

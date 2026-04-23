@@ -46,6 +46,14 @@ When implementing a feature that spans backend and client:
 
 ---
 
+## Schema evolution (production Pear — **read before changing row types**)
+
+1. **Sum types that are stored in tables** (e.g. `PropertyValue`, any `SpacetimeType` used in a `#[table]` column) must not gain variants that change the **maximum BSATN size** of the type without a **manual migration** plan. SpacetimeDB will refuse `AutoMigrate` and operators must export → clear → reimport (or a custom migration path).
+2. Prefer **new capability in a sidecar table** or a new optional column over stuffing more variants into an already-wide sum type.
+3. When you *must* change storage shape, coordinate: bump `Cargo.toml` / `PEAR_MODULE_VERSION`, ship client bindings, and document the operator procedure — do not rely on lifecycle auto-upgrade alone.
+
+---
+
 ## Index System
 
 SpacetimeDB automatically creates indexes for:
