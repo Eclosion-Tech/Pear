@@ -16,13 +16,20 @@ use crate::{
     PageYjsState, ParticipantRole, PropertyDefinition, PropertyType, PropertyValue, SnapshotType,
     User, ViewType,
 };
-use hex;
 use serde_json::Value;
-use spacetimedb::{Identity, ReducerContext, Table, Timestamp};
+use spacetimedb::{reducer, Identity, ReducerContext, Table, Timestamp};
 
 const FORMAT: &str = "pear-snapshot-v1";
 
-pub fn apply_snapshot(ctx: &ReducerContext, snapshot_json: &str) -> Result<(), String> {
+/// Import a `pear-snapshot-v1` JSON file exported from the Pear web app.
+/// Only succeeds when the database has **no pages** (empty workspace). Requires an authenticated user.
+/// AI users are restored with **stub** private `AiUserConfig` rows (no API keys); reconfigure after import.
+#[reducer]
+pub fn import_pear_snapshot_v1(ctx: &ReducerContext, snapshot_json: String) -> Result<(), String> {
+    apply_snapshot(ctx, &snapshot_json)
+}
+
+fn apply_snapshot(ctx: &ReducerContext, snapshot_json: &str) -> Result<(), String> {
     if ctx.db.page().iter().next().is_some() {
         return Err(
             "Import refused: database already has pages. Use an empty database (new module DB)."
@@ -35,7 +42,7 @@ pub fn apply_snapshot(ctx: &ReducerContext, snapshot_json: &str) -> Result<(), S
         .db
         .user()
         .identity()
-        .find(&me)
+        .find(me)
         .map(|u| u.is_authenticated)
         .unwrap_or(false);
     if !ok {
@@ -96,7 +103,7 @@ fn import_pages(ctx: &ReducerContext, tables: &Value) -> Result<(), String> {
     let Some(arr) = tables.get("page").and_then(|v| v.as_array()) else {
         return Ok(());
     };
-    let mut rows: Vec<Page> = arr.iter().map(|r| decode_page(r)).collect::<Result<_, _>>()?;
+    let mut rows: Vec<Page> = arr.iter().map(decode_page).collect::<Result<_, _>>()?;
     // Parents before children
     rows.sort_by_key(|p| p.id);
     let mut remaining: Vec<Page> = rows;
@@ -959,7 +966,7 @@ fn decode_orcha_task(v: &Value) -> Result<OrchaTask, String> {
         .get("dependsOn")
         .and_then(|v| v.as_array())
         .ok_or("dependsOn")?;
-    let depends_on: Vec<u64> = deps.iter().map(|x| decode_u64(x)).collect::<Result<_, _>>()?;
+    let depends_on: Vec<u64> = deps.iter().map(decode_u64).collect::<Result<_, _>>()?;
     Ok(OrchaTask {
         id: u64_at(m, "id")?,
         job_id: u64_at(m, "jobId")?,
