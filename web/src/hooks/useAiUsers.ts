@@ -13,11 +13,10 @@ import {
 import { optionStringOrNullForHost } from "@/src/lib/spacetime";
 import type { AiUserProfile } from "@/src/module_bindings/types";
 
-function toSystemPromptReducerArg(
-  s: string | null
-): NonNullable<UpdateAiUserSystemPromptParams["systemPrompt"]> {
-  if (s == null || s === "") return { tag: "none" };
-  return { tag: "some", value: s };
+/** BSATN `Option<String>` for reducers; generated `Params` types often infer `string` instead. */
+function toSystemPromptReducerArg(s: string | null) {
+  if (s == null || s === "") return { tag: "none" as const };
+  return { tag: "some" as const, value: s };
 }
 
 export function useAiUserProfiles() {
@@ -98,7 +97,7 @@ export function useUpdateAiUserSystemPrompt() {
         await run({
           aiUserId: p.aiUserId,
           systemPrompt: toSystemPromptReducerArg(p.systemPrompt),
-        });
+        } as unknown as UpdateAiUserSystemPromptParams);
       }
     },
     [run]
