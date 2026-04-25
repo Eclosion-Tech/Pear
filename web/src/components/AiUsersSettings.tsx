@@ -55,9 +55,8 @@ function AiUserRowEditor({
     try {
       const params: SetAiUserSerperApiKeyParams = {
         aiUserId: profile.aiUserId,
-        serperApiKey: trimmed
-          ? { tag: "some", value: trimmed }
-          : { tag: "none" },
+        // Generated `__t.option(__t.string())` — `string | undefined`, not tag unions.
+        serperApiKey: trimmed || undefined,
       };
       await setSerperApiKey(params);
       setSerperKeyDraft("");
