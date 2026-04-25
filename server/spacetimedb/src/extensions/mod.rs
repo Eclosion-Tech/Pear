@@ -219,7 +219,7 @@ const PEAR_WORKSPACE_TOOLS_MANIFEST: &str = r#"{
       "create_page", "update_page_content", "update_page_title",
       "search_pages", "list_child_pages", "get_page",
       "get_schema_id", "list_properties", "add_property",
-      "create_row", "set_property_value"
+      "create_row", "set_property_value", "set_property_values"
     ],
     "requested_permissions": [
       { "scope": "workspace", "action": "Read" },

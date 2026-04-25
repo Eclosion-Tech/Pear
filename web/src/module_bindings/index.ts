@@ -111,6 +111,8 @@ import SeedBuiltinExtensionsReducer from "./seed_builtin_extensions_reducer";
 import SeedSensorRegistryReducer from "./seed_sensor_registry_reducer";
 import SendMessageReducer from "./send_message_reducer";
 import SetAiUserApiKeyReducer from "./set_ai_user_api_key_reducer";
+import SetAiUserSerperApiKeyReducer from "./set_ai_user_serper_api_key_reducer";
+import SetAiUserToolSecretsJsonReducer from "./set_ai_user_tool_secrets_json_reducer";
 import SetAllowEvaluationSharingReducer from "./set_allow_evaluation_sharing_reducer";
 import SetBlockAccessRuleReducer from "./set_block_access_rule_reducer";
 import SetConversationVisibilityReducer from "./set_conversation_visibility_reducer";
@@ -173,6 +175,7 @@ import HarnessTemplateRow from "./harness_template_table";
 import IdCounterRow from "./id_counter_table";
 import InstalledExtensionRow from "./installed_extension_table";
 import MigrationStateRow from "./migration_state_table";
+import ModuleInstallMetaRow from "./module_install_meta_table";
 import OrchaAgentRow from "./orcha_agent_table";
 import OrchaJobRow from "./orcha_job_table";
 import OrchaSharedContextRow from "./orcha_shared_context_table";
@@ -517,6 +520,17 @@ const tablesSchema = __schema({
       { name: 'migration_state_key_key', constraint: 'unique', columns: ['key'] },
     ],
   }, MigrationStateRow),
+  module_install_meta: __table({
+    name: 'module_install_meta',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'module_install_meta_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, ModuleInstallMetaRow),
   orcha_agent: __table({
     name: 'orcha_agent',
     indexes: [
@@ -874,6 +888,8 @@ const reducersSchema = __reducers(
   __reducerSchema("seed_sensor_registry", SeedSensorRegistryReducer),
   __reducerSchema("send_message", SendMessageReducer),
   __reducerSchema("set_ai_user_api_key", SetAiUserApiKeyReducer),
+  __reducerSchema("set_ai_user_serper_api_key", SetAiUserSerperApiKeyReducer),
+  __reducerSchema("set_ai_user_tool_secrets_json", SetAiUserToolSecretsJsonReducer),
   __reducerSchema("set_allow_evaluation_sharing", SetAllowEvaluationSharingReducer),
   __reducerSchema("set_block_access_rule", SetBlockAccessRuleReducer),
   __reducerSchema("set_conversation_visibility", SetConversationVisibilityReducer),

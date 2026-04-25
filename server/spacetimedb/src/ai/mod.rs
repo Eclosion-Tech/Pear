@@ -10,6 +10,7 @@ use spacetimedb::{
 
 use crate::access_control::helpers::require_creator_or_admin;
 use crate::id_counters::alloc_id;
+use serde_json::Value;
 
 pub(crate) fn next_ai_user_config_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "ai_user_config", || {
@@ -95,6 +96,11 @@ pub struct AiUserConfig {
     /// changes at the end of a struct).
     #[default(false)]
     pub allow_evaluation_sharing: bool,
+    /// Opaque JSON for per-tool settings (e.g. `{"serperApiKey":"…"}` for
+    /// web search). Like `api_key`, only the AI user identity and module
+    /// publisher see the raw value. Use `set_ai_user_tool_secrets_json`.
+    #[default(None::<String>)]
+    pub tool_secrets_json: Option<String>,
 }
 
 /// Distinguishes ordinary "do work" AI users from "review work" AI users.
@@ -219,6 +225,7 @@ pub fn create_ai_user(
         role: AiUserRole::Standard,
         harness_template_id: None,
         allow_evaluation_sharing: false,
+        tool_secrets_json: None,
     });
 
     ctx.db.ai_user_profile().insert(AiUserProfile {
@@ -405,6 +412,74 @@ pub fn delete_ai_user(ctx: &ReducerContext, ai_user_id: u64) -> Result<(), Strin
     ctx.db.ai_user_config().id().delete(ai_user_id);
     ctx.db.ai_user_profile().ai_user_id().delete(ai_user_id);
     log::info!("AI user deleted: id={}", ai_user_id);
+    Ok(())
+}
+
+/// Set or clear opaque JSON for built-in tool settings (e.g. Serper API key
+/// for `web_search`). Not echoed on normal subscriptions; same visibility as
+/// `api_key`. Does not change `has_api_key` on the profile.
+#[reducer]
+pub fn set_ai_user_tool_secrets_json(
+    ctx: &ReducerContext,
+    ai_user_id: u64,
+    tool_secrets_json: Option<String>,
+) -> Result<(), String> {
+    let config = ctx
+        .db
+        .ai_user_config()
+        .id()
+        .find(ai_user_id)
+        .ok_or("AI user config not found")?;
+    ctx.db.ai_user_config().id().update(AiUserConfig {
+        tool_secrets_json,
+        updated_at: ctx.timestamp,
+        ..config
+    });
+    Ok(())
+}
+
+/// Set or clear the [Serper](https://serper.dev) API key for the built-in
+/// `web_search` tool, without replacing other keys in `tool_secrets_json`.
+/// Pass `None` or an empty string to remove the key.
+#[reducer]
+pub fn set_ai_user_serper_api_key(
+    ctx: &ReducerContext,
+    ai_user_id: u64,
+    serper_api_key: Option<String>,
+) -> Result<(), String> {
+    let config = ctx
+        .db
+        .ai_user_config()
+        .id()
+        .find(ai_user_id)
+        .ok_or("AI user config not found")?;
+
+    let mut map = match &config.tool_secrets_json {
+        Some(s) if !s.trim().is_empty() => match serde_json::from_str::<Value>(s) {
+            Ok(Value::Object(m)) => m,
+            _ => serde_json::Map::new(),
+        },
+        _ => serde_json::Map::new(),
+    };
+
+    let key = serper_api_key.unwrap_or_default();
+    if key.trim().is_empty() {
+        map.remove("serperApiKey");
+    } else {
+        map.insert("serperApiKey".to_string(), Value::String(key));
+    }
+
+    let tool_secrets_json = if map.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&Value::Object(map)).unwrap_or_else(|_| "{}".to_string()))
+    };
+
+    ctx.db.ai_user_config().id().update(AiUserConfig {
+        tool_secrets_json,
+        updated_at: ctx.timestamp,
+        ..config
+    });
     Ok(())
 }
 

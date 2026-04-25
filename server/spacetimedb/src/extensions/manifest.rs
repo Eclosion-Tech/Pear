@@ -285,6 +285,7 @@ pub(crate) fn create_extension_ai_user(
         role: AiUserRole::Standard,
         harness_template_id: None,
         allow_evaluation_sharing: false,
+        tool_secrets_json: None,
     });
     ctx.db.ai_user_profile().insert(AiUserProfile {
         ai_user_id: config_row.id,

@@ -35,4 +35,5 @@ export default __t.row({
   },
   harnessTemplateId: __t.option(__t.u64()).name("harness_template_id"),
   allowEvaluationSharing: __t.bool().name("allow_evaluation_sharing"),
+  toolSecretsJson: __t.option(__t.string()).name("tool_secrets_json"),
 });

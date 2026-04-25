@@ -270,6 +270,7 @@ fn import_ai_user_profile(ctx: &ReducerContext, tables: &Value) -> Result<(), St
                 role: AiUserRole::Standard,
                 harness_template_id: None,
                 allow_evaluation_sharing: false,
+                tool_secrets_json: None,
             });
         }
         ctx.db.ai_user_profile().insert(p);

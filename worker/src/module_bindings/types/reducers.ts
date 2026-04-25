@@ -83,6 +83,8 @@ import SeedBuiltinExtensionsReducer from "../seed_builtin_extensions_reducer";
 import SeedSensorRegistryReducer from "../seed_sensor_registry_reducer";
 import SendMessageReducer from "../send_message_reducer";
 import SetAiUserApiKeyReducer from "../set_ai_user_api_key_reducer";
+import SetAiUserSerperApiKeyReducer from "../set_ai_user_serper_api_key_reducer";
+import SetAiUserToolSecretsJsonReducer from "../set_ai_user_tool_secrets_json_reducer";
 import SetAllowEvaluationSharingReducer from "../set_allow_evaluation_sharing_reducer";
 import SetBlockAccessRuleReducer from "../set_block_access_rule_reducer";
 import SetConversationVisibilityReducer from "../set_conversation_visibility_reducer";
@@ -196,6 +198,8 @@ export type SeedBuiltinExtensionsParams = __Infer<typeof SeedBuiltinExtensionsRe
 export type SeedSensorRegistryParams = __Infer<typeof SeedSensorRegistryReducer>;
 export type SendMessageParams = __Infer<typeof SendMessageReducer>;
 export type SetAiUserApiKeyParams = __Infer<typeof SetAiUserApiKeyReducer>;
+export type SetAiUserSerperApiKeyParams = __Infer<typeof SetAiUserSerperApiKeyReducer>;
+export type SetAiUserToolSecretsJsonParams = __Infer<typeof SetAiUserToolSecretsJsonReducer>;
 export type SetAllowEvaluationSharingParams = __Infer<typeof SetAllowEvaluationSharingReducer>;
 export type SetBlockAccessRuleParams = __Infer<typeof SetBlockAccessRuleReducer>;
 export type SetConversationVisibilityParams = __Infer<typeof SetConversationVisibilityReducer>;

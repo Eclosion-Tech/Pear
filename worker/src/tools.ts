@@ -16,6 +16,39 @@ export interface ConnLike {
   reducers: any;
 }
 
+/** Per-request secrets for built-in tools (from env + `ai_user_config.tool_secrets_json`). */
+export type ToolCallContext = { serperApiKey?: string };
+
+function readOptionStringFromRow(v: unknown): string | null {
+  if (v == null) return null;
+  if (typeof v === "string" && v.length > 0) return v;
+  if (typeof v === "object" && v !== null && "tag" in v) {
+    const o = v as { tag: string; value?: string };
+    if (o.tag === "none") return null;
+    if (o.tag === "some" && o.value != null && o.value !== "") return o.value;
+  }
+  return null;
+}
+
+/** Build tool context for `executeTool` from a subscribed `ai_user_config` row. */
+export function toolContextFromAiUserConfigRow(
+  row: { toolSecretsJson?: unknown } | null | undefined,
+): ToolCallContext {
+  const raw = readOptionStringFromRow(row?.toolSecretsJson);
+  if (!raw?.trim()) return {};
+  try {
+    const o = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof o.serperApiKey === "string" && o.serperApiKey.trim()) {
+      return { serperApiKey: o.serperApiKey.trim() };
+    }
+    const nested = o.webSearch as { serperApiKey?: string } | undefined;
+    if (nested && typeof nested.serperApiKey === "string" && nested.serperApiKey.trim()) {
+      return { serperApiKey: nested.serperApiKey.trim() };
+    }
+  } catch { /* invalid JSON */ }
+  return {};
+}
+
 type SharedContextRow = { jobId: bigint; key: string; value: string };
 
 // ── Tool definitions (sent to Claude) ─────────────────────────────────────────
@@ -67,7 +100,8 @@ const WEB_TOOLS: Anthropic.Messages.Tool[] = [
     name: "web_search",
     description:
       "Search the web for information. Returns top results with titles, URLs, and snippets. " +
-      "Use when you need current information, facts, or want to find relevant pages before fetching them.",
+      "Uses Serper when a Serper API key is configured (per AI user in settings, or SERPER_API_KEY on the worker), " +
+      "otherwise DuckDuckGo. Use when you need current information, facts, or to find pages before fetch_url.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -159,10 +193,54 @@ function htmlToText(html: string): string {
 }
 
 /**
+ * Serper Google search API — used when `SERPER_API_KEY` or per–AI-user
+ * `serperApiKey` in `tool_secrets_json` is set.
+ */
+async function serperWebSearch(query: string, apiKey: string): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const res = await fetch("https://google.serper.dev/search", {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-KEY": apiKey,
+      },
+      body: JSON.stringify({ q: query, num: 8 }),
+    });
+    const body = await res.text();
+    if (!res.ok) {
+      return JSON.stringify({ ok: false, error: `Serper HTTP ${res.status}: ${body.slice(0, 200)}` });
+    }
+    const data = JSON.parse(body) as {
+      organic?: { title?: string; link?: string; snippet?: string }[];
+    };
+    const organic = data.organic ?? [];
+    const results = organic.slice(0, 8).map((r) => ({
+      title: r.title ?? "",
+      url: r.link ?? "",
+      snippet: r.snippet ?? "",
+    }));
+    if (results.length === 0) {
+      return JSON.stringify({ ok: true, results: [], note: "No results from Serper." });
+    }
+    return JSON.stringify({ ok: true, results, source: "serper" });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      return JSON.stringify({ ok: false, error: "Serper request timed out" });
+    }
+    return JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
  * Search the web using DuckDuckGo's HTML lite endpoint.
  * Returns parsed search results with titles, URLs, and snippets.
  */
-async function webSearch(query: string): Promise<string> {
+async function webSearchDuckDuckGo(query: string): Promise<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10_000);
 
@@ -218,6 +296,65 @@ async function webSearch(query: string): Promise<string> {
     return JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) });
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+function resolveSerperApiKey(ctx: ToolCallContext | undefined): string | undefined {
+  const fromUser = ctx?.serperApiKey?.trim();
+  if (fromUser) return fromUser;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const env = (typeof process !== "undefined" && (process as any).env?.SERPER_API_KEY) as
+    | string
+    | undefined;
+  return env?.trim() || undefined;
+}
+
+async function webSearchWithContext(
+  query: string,
+  ctx: ToolCallContext | undefined,
+): Promise<string> {
+  const serper = resolveSerperApiKey(ctx);
+  if (serper) return serperWebSearch(query, serper);
+  return webSearchDuckDuckGo(query);
+}
+
+function buildTaggedPropertyValue(
+  valueType: string,
+  rawValue: unknown,
+): { ok: true; value: unknown } | { ok: false; error: string } {
+  switch (valueType) {
+    case "Text":
+      return { ok: true, value: { tag: "Text", value: String(rawValue) } };
+    case "Url":
+      return { ok: true, value: { tag: "Url", value: String(rawValue) } };
+    case "Select":
+      return { ok: true, value: { tag: "Select", value: String(rawValue) } };
+    case "Number":
+      return { ok: true, value: { tag: "Number", value: Number(rawValue) } };
+    case "Date":
+      return { ok: true, value: { tag: "Date", value: BigInt(Math.round(Number(rawValue))) } };
+    case "Checkbox":
+      return { ok: true, value: { tag: "Checkbox", value: Boolean(rawValue) } };
+    case "MultiSelect":
+      return {
+        ok: true,
+        value: { tag: "MultiSelect", value: Array.isArray(rawValue) ? rawValue.map(String) : [String(rawValue)] },
+      };
+    case "Relation":
+      return {
+        ok: true,
+        value: {
+          tag: "Relation",
+          value: Array.isArray(rawValue) ? rawValue.map((v: unknown) => BigInt(Math.round(Number(v)))) : [BigInt(Math.round(Number(rawValue)))],
+        },
+      };
+    case "Person":
+      return {
+        ok: true,
+        value: { tag: "Person", value: Array.isArray(rawValue) ? rawValue.map(String) : [String(rawValue)] },
+      };
+    default:
+      return { ok: false, error: `Unknown value_type: ${valueType}` };
   }
 }
 
@@ -310,7 +447,8 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
   {
     name: "set_property_value",
     description:
-      "Set a column value on a database row (child page). " +
+      "Set a single column on a database row. Prefer set_property_values when setting several columns " +
+      "on the same row in one turn (fewer round-trips). " +
       "Use list_properties first to get the property_definition_id for each column. " +
       "value_type must match the column type: Text→string, Number→number, Date→unix_ms number, " +
       "Select→string (one option), MultiSelect→array of strings, Relation→array of page_id numbers, " +
@@ -329,6 +467,35 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
         },
       },
       required: ["page_id", "property_definition_id", "value_type", "value"],
+    },
+  },
+  {
+    name: "set_property_values",
+    description:
+      "Set many columns on one database row in a single tool call. Prefer this over many set_property_value " +
+      "calls. Same value rules as set_property_value; pass one entry per property_definition_id.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        page_id: { type: "number", description: "The row's page_id (from create_row)." },
+        values: {
+          type: "array" as const,
+          description: "List of { property_definition_id, value_type, value } for each cell to set.",
+          items: {
+            type: "object" as const,
+            properties: {
+              property_definition_id: { type: "number" },
+              value_type: {
+                type: "string",
+                enum: ["Text", "Number", "Date", "Select", "MultiSelect", "Relation", "Checkbox", "Url", "Person"],
+              },
+              value: { description: "Cell value, same as set_property_value for that type." },
+            },
+            required: ["property_definition_id", "value_type", "value"],
+          },
+        },
+      },
+      required: ["page_id", "values"],
     },
   },
   {
@@ -713,7 +880,8 @@ export async function executeTool(
   conn: ConnLike,
   toolName: string,
   input: Record<string, unknown>,
-  jobId: bigint
+  jobId: bigint,
+  toolContext: ToolCallContext = {},
 ): Promise<string> {
   console.log(`[tools] Executing ${toolName} — input: ${JSON.stringify(input)}`);
   try {
@@ -952,27 +1120,9 @@ export async function executeTool(
         const valueType = input.value_type as string;
         const rawValue = input.value;
 
-        // Build the tagged PropertyValue union.
-        let value: unknown;
-        switch (valueType) {
-          case "Text":   value = { tag: "Text",        value: String(rawValue) }; break;
-          case "Url":    value = { tag: "Url",         value: String(rawValue) }; break;
-          case "Select": value = { tag: "Select",      value: String(rawValue) }; break;
-          case "Number": value = { tag: "Number",      value: Number(rawValue) }; break;
-          case "Date":   value = { tag: "Date",        value: BigInt(Math.round(Number(rawValue))) }; break;
-          case "Checkbox": value = { tag: "Checkbox",  value: Boolean(rawValue) }; break;
-          case "MultiSelect":
-            value = { tag: "MultiSelect", value: Array.isArray(rawValue) ? rawValue.map(String) : [String(rawValue)] };
-            break;
-          case "Relation":
-            value = { tag: "Relation", value: Array.isArray(rawValue) ? rawValue.map((v: unknown) => BigInt(Math.round(Number(v)))) : [BigInt(Math.round(Number(rawValue)))] };
-            break;
-          case "Person":
-            value = { tag: "Person", value: Array.isArray(rawValue) ? rawValue.map(String) : [String(rawValue)] };
-            break;
-          default:
-            return JSON.stringify({ ok: false, error: `Unknown value_type: ${valueType}` });
-        }
+        const built = buildTaggedPropertyValue(valueType, rawValue);
+        if (!built.ok) return JSON.stringify({ ok: false, error: built.error });
+        const value = built.value;
 
         console.log(`[tools] set_property_value: page=${pageId} prop=${propDefId} type=${valueType} value=${JSON.stringify(rawValue)}`);
         await conn.reducers.setPropertyValue({
@@ -981,6 +1131,46 @@ export async function executeTool(
           value,
         });
         return JSON.stringify({ ok: true, page_id: Number(pageId), property_definition_id: Number(propDefId) });
+      }
+
+      case "set_property_values": {
+        const pageId = BigInt(input.page_id as number);
+        const entries = input.values as Array<{
+          property_definition_id: number;
+          value_type: string;
+          value: unknown;
+        }>;
+        if (!Array.isArray(entries) || entries.length === 0) {
+          return JSON.stringify({ ok: false, error: "values must be a non-empty array" });
+        }
+        const applied: { property_definition_id: number }[] = [];
+        for (const e of entries) {
+          const propDefId = BigInt(e.property_definition_id);
+          const built = buildTaggedPropertyValue(e.value_type, e.value);
+          if (!built.ok) {
+            return JSON.stringify({
+              ok: false,
+              error: built.error,
+              partial: applied,
+              failed_at: { property_definition_id: Number(propDefId), value_type: e.value_type },
+            });
+          }
+          console.log(
+            `[tools] set_property_values: page=${pageId} prop=${propDefId} type=${e.value_type}`,
+          );
+          await conn.reducers.setPropertyValue({
+            pageId,
+            propertyDefinitionId: propDefId,
+            value: built.value,
+          });
+          applied.push({ property_definition_id: Number(propDefId) });
+        }
+        return JSON.stringify({
+          ok: true,
+          page_id: Number(pageId),
+          count: applied.length,
+          property_definition_ids: applied.map((a) => a.property_definition_id),
+        });
       }
 
       case "search_pages": {
@@ -1048,8 +1238,9 @@ export async function executeTool(
 
       case "web_search": {
         const query = input.query as string;
-        console.log(`[tools] web_search: "${query}"`);
-        return await webSearch(query);
+        const via = resolveSerperApiKey(toolContext) ? "serper" : "duckduckgo";
+        console.log(`[tools] web_search: "${query}" (via ${via})`);
+        return await webSearchWithContext(query, toolContext);
       }
 
       case "fetch_url": {

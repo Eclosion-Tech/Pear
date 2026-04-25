@@ -35,7 +35,11 @@ import {
   getProviderForAiUser,
 } from "./providers.js";
 import { buildPageContext } from "./llm.js";
-import { getConversationTools, executeTool } from "./tools.js";
+import {
+  getConversationTools,
+  executeTool,
+  toolContextFromAiUserConfigRow,
+} from "./tools.js";
 import { SystemPromptBuilder } from "./prompt-builder.js";
 import {
   discoverInstructionPages,
@@ -201,6 +205,33 @@ function findOwnProfile(
     if (identityHex(row.identity) === selfHex) return row;
   }
   return null;
+}
+
+/**
+ * If the model returns no final text but every tool result parsed as `{ ok: true }`,
+ * we still mark the turn successful with a short confirmation so the user does not
+ * see a spurious "No response generated" after a long tool chain.
+ */
+function toolResultStringsIndicateFullSuccess(log: string[]): boolean {
+  if (log.length === 0) return false;
+  for (const s of log) {
+    try {
+      if (JSON.parse(s).ok !== true) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+function fallbackTextWhenNoAssistantMessage(toolResultLog: string[]): string {
+  if (toolResultLog.length === 0) {
+    return "(No response generated)";
+  }
+  if (toolResultStringsIndicateFullSuccess(toolResultLog)) {
+    return "Done. I used tools in your workspace as requested. Ask if you want a detailed summary of the changes.";
+  }
+  return "I ran some tools, but at least one step did not return success, or a tool returned non-JSON. Check the tool trace above for details.";
 }
 
 /**
@@ -376,8 +407,16 @@ async function handleConversationMessage(
       maxTokens,
     } = getProviderForAiUser(conn, aiProfile.aiUserId);
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const aiCfg = (conn.db as any).ai_user_config?.id?.find(
+      aiProfile.aiUserId,
+    ) as { toolSecretsJson?: unknown } | undefined;
+    const toolContext = toolContextFromAiUserConfigRow(aiCfg);
+
     const tools: ToolDef[] = getConversationTools() as ToolDef[];
     const allToolCalls: ToolCallInfo[] = [];
+    /** All raw tool result strings this turn — for assessing success when the model omits a text reply. */
+    const toolResultLog: string[] = [];
     let thinkingText = "";
     let responseText = "";
     let iterations = 0;
@@ -483,8 +522,10 @@ async function handleConversationMessage(
             block.name,
             block.input,
             BigInt(0),
+            toolContext,
           );
           console.log(`${logTag} tool result [${block.name}]: ${result.slice(0, 200)}`);
+          toolResultLog.push(result);
 
           if (idx >= 0) {
             allToolCalls[idx].status = "done";
@@ -538,6 +579,8 @@ async function handleConversationMessage(
           content: string;
         }[] = [];
         for (const block of toolCalls) {
+          allToolCalls.push({ name: block.name, status: "executing" });
+          const tcIdx = allToolCalls.length - 1;
           console.log(
             `${logTag} tool call [${block.name}]: ${JSON.stringify(block.input).slice(0, 200)}`,
           );
@@ -546,8 +589,15 @@ async function handleConversationMessage(
             block.name,
             block.input,
             BigInt(0),
+            toolContext,
           );
           console.log(`${logTag} tool result [${block.name}]: ${result.slice(0, 200)}`);
+          toolResultLog.push(result);
+          allToolCalls[tcIdx] = {
+            name: block.name,
+            status: "done",
+            result: result.slice(0, 200),
+          };
           toolResults.push({
             type: "tool_result",
             tool_use_id: block.id,
@@ -559,19 +609,38 @@ async function handleConversationMessage(
       }
     }
 
-    if (!responseText) {
+    const hadAssistantText = Boolean(responseText?.trim());
+    if (!hadAssistantText) {
+      responseText = fallbackTextWhenNoAssistantMessage(toolResultLog);
+    } else {
+      responseText = responseText.trim();
+    }
+
+    if (responseText === "(No response generated)") {
       console.warn(
-        `${logTag} no text response generated for conversation ${conv.id}`,
+        `${logTag} no text response and no tool results to assess for conversation ${conv.id}`,
       );
       await flushMessage(
         conn,
         aiMsgId,
-        "(No response generated)",
+        responseText,
         "Error",
         thinkingText,
         allToolCalls,
       );
       return;
+    }
+
+    if (!hadAssistantText) {
+      if (toolResultLog.length > 0 && !toolResultStringsIndicateFullSuccess(toolResultLog)) {
+        console.warn(
+          `${logTag} no assistant text; at least one tool result was not ok for conversation ${conv.id}`,
+        );
+      } else {
+        console.warn(
+          `${logTag} no assistant text; using tool-outcome message for conversation ${conv.id} (${toolResultLog.length} tool result(s))`,
+        );
+      }
     }
 
     await flushMessage(

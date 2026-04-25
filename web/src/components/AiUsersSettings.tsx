@@ -8,10 +8,13 @@ import {
   useDisableAiUserMemory,
   usePatchAiUserProfileSettings,
   useProvisionAiUserMemory,
+  useSetAiUserSerperApiKey,
   useUpdateAiUserSystemPrompt,
   type AiUserProfileRow,
 } from "@/src/hooks/useAiUsers";
+import { isAiUserHostDelegated } from "@/src/lib/aiUserApi";
 import { optionStringFromRow } from "@/src/lib/spacetime";
+import type { SetAiUserSerperApiKeyParams } from "@/src/module_bindings/types/reducers";
 
 function AiUserRowEditor({
   profile,
@@ -26,17 +29,49 @@ function AiUserRowEditor({
 }) {
   const patchProfile = usePatchAiUserProfileSettings();
   const updateSystemPrompt = useUpdateAiUserSystemPrompt();
+  const setSerperApiKey = useSetAiUserSerperApiKey();
   const [displayName, setDisplayName] = useState(profile.displayName);
   const [systemPrompt, setSystemPrompt] = useState(() =>
     optionStringFromRow(profile.systemPrompt)
   );
+  const [serperKeyDraft, setSerperKeyDraft] = useState("");
+  const [serperBusy, setSerperBusy] = useState(false);
+  const [serperMsg, setSerperMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [localErr, setLocalErr] = useState<string | null>(null);
+  const hostDelegated = isAiUserHostDelegated();
 
   useEffect(() => {
     setDisplayName(profile.displayName);
     setSystemPrompt(optionStringFromRow(profile.systemPrompt));
   }, [profile.displayName, profile.systemPrompt, profile.aiUserId]);
+
+  const onSaveSerper = async () => {
+    if (hostDelegated) return;
+    setSerperMsg(null);
+    setLocalErr(null);
+    const trimmed = serperKeyDraft.trim();
+    setSerperBusy(true);
+    try {
+      const params: SetAiUserSerperApiKeyParams = {
+        aiUserId: profile.aiUserId,
+        serperApiKey: trimmed
+          ? { tag: "some", value: trimmed }
+          : { tag: "none" },
+      };
+      await setSerperApiKey(params);
+      setSerperKeyDraft("");
+      setSerperMsg(
+        trimmed
+          ? "Serper key saved. Web search will use the Serper API for this AI user."
+          : "Cleared: web search will use DuckDuckGo (or a deployment-wide SERPER_API_KEY on the worker).",
+      );
+    } catch (e) {
+      setLocalErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSerperBusy(false);
+    }
+  };
 
   const onSave = async () => {
     const name = displayName.trim();
@@ -70,7 +105,7 @@ function AiUserRowEditor({
     }
   };
 
-  const rowBusy = busy || memoryBusy;
+  const rowBusy = busy || memoryBusy || serperBusy;
 
   return (
     <li className="py-3 border-b border-neutral-200 dark:border-neutral-800 last:border-0">
@@ -111,6 +146,64 @@ function AiUserRowEditor({
             rows={5}
             className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-neutral-900 dark:text-white disabled:opacity-50 font-mono"
           />
+        </div>
+
+        <div>
+          <label
+            htmlFor={`ai-user-serper-${profile.aiUserId.toString()}`}
+            className="block text-sm font-medium text-neutral-800 dark:text-neutral-200"
+          >
+            Web search (optional Serper API key)
+          </label>
+          <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5 mb-1.5 max-w-lg">
+            When set, the built-in <code className="text-xs">web_search</code> tool uses{" "}
+            <a
+              className="underline"
+              href="https://serper.dev"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Serper
+            </a>{" "}
+            instead of the default DuckDuckGo fetch. The key is stored like the
+            model API key (only the AI user identity and operators can read it). Leave
+            the field empty and save to clear. Self-hosted workers can also set{" "}
+            <code className="text-xs">SERPER_API_KEY</code> for all users.
+          </p>
+          {hostDelegated ? (
+            <p className="text-xs text-amber-700 dark:text-amber-300">
+              Web search keys are not editable here when AI users are managed by the host
+              app.
+            </p>
+          ) : (
+            <>
+              <div className="flex flex-col sm:flex-row sm:items-end gap-2 sm:gap-3">
+                <input
+                  id={`ai-user-serper-${profile.aiUserId.toString()}`}
+                  type="password"
+                  autoComplete="off"
+                  value={serperKeyDraft}
+                  onChange={(e) => setSerperKeyDraft(e.target.value)}
+                  disabled={rowBusy}
+                  placeholder="sk-… (paste new key, or clear and save to remove)"
+                  className="mt-0.5 flex-1 min-w-0 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-neutral-900 dark:text-white disabled:opacity-50 font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={() => void onSaveSerper()}
+                  disabled={rowBusy}
+                  className="shrink-0 rounded-md border border-neutral-300 dark:border-neutral-600 bg-neutral-100 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-900 dark:text-white hover:opacity-90 disabled:opacity-50"
+                >
+                  Save key
+                </button>
+              </div>
+              {serperMsg ? (
+                <p className="text-xs text-green-700 dark:text-green-300 mt-1.5" role="status">
+                  {serperMsg}
+                </p>
+              ) : null}
+            </>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-3">

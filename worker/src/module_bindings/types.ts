@@ -75,6 +75,7 @@ export const AiUserConfig = __t.object("AiUserConfig", {
   },
   harnessTemplateId: __t.option(__t.u64()),
   allowEvaluationSharing: __t.bool(),
+  toolSecretsJson: __t.option(__t.string()),
 });
 export type AiUserConfig = __Infer<typeof AiUserConfig>;
 
@@ -484,6 +485,12 @@ export const MigrationState = __t.object("MigrationState", {
   moduleVersion: __t.string(),
 });
 export type MigrationState = __Infer<typeof MigrationState>;
+
+export const ModuleInstallMeta = __t.object("ModuleInstallMeta", {
+  id: __t.u8(),
+  publisherIdentity: __t.identity(),
+});
+export type ModuleInstallMeta = __Infer<typeof ModuleInstallMeta>;
 
 export const OrchaAgent = __t.object("OrchaAgent", {
   id: __t.string(),

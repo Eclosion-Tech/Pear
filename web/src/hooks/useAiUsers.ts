@@ -75,6 +75,11 @@ export function useSetAiUserApiKey() {
   return useReducer(reducers.setAiUserApiKey);
 }
 
+/** Set or clear the optional Serper API key for this AI user's `web_search` tool. */
+export function useSetAiUserSerperApiKey() {
+  return useReducer(reducers.setAiUserSerperApiKey);
+}
+
 export function useDeleteAiUser() {
   return useReducer(reducers.deleteAiUser);
 }
