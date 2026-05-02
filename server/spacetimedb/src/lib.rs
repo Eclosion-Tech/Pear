@@ -13,19 +13,19 @@ mod access_control;
 mod ai;
 mod api_endpoints;
 mod auth;
+mod automations;
 mod conversations;
 mod extensions;
 mod harness;
 mod id_counters;
+mod import;
 mod migrations;
 mod module_install;
 mod orcha;
 mod pages;
-mod import;
 mod sensors;
 mod stable_ids;
 mod types;
-
 
 // Re-exports kept at the crate root so the import modules (and other
 // historical call sites that addressed everything as `crate::*`) keep
@@ -43,11 +43,22 @@ pub use crate::api_endpoints::{
     ApiCallLog, ApiEndpoint, ApiEndpointKey, ApiEndpointKeyLookupRow, ApiFieldMapping,
     DatabaseRowMarker, HttpMethod, PropertyValueInput,
 };
-pub use crate::auth::{user, user_credential, user_preference, User, UserCredential, UserPreference};
+pub use crate::auth::{
+    user, user_credential, user_preference, User, UserCredential, UserPreference,
+};
+pub use crate::automations::{
+    automation_action, automation_capability, automation_condition, automation_event_queue,
+    automation_primitive, automation_rule, automation_run_log, AutomationAction,
+    AutomationActionKind, AutomationCapability, AutomationCapabilityKind, AutomationCondition,
+    AutomationConditionKind, AutomationEventQueue, AutomationEventStatus, AutomationMode,
+    AutomationPrimitive, AutomationPrimitiveKind, AutomationRule, AutomationRunLog,
+    AutomationScheduleKind, AutomationTriggerKind,
+};
+pub use crate::conversations::ConversationVisibility;
 pub use crate::conversations::{
     conversation, conversation_message, conversation_participant, Conversation,
-    ConversationMessage, ConversationParticipant, ConversationStatus, MessageSender,
-    MessageStatus, ParticipantRole,
+    ConversationMessage, ConversationParticipant, ConversationStatus, MessageSender, MessageStatus,
+    ParticipantRole,
 };
 pub use crate::extensions::{
     extension_manifest, extension_mcp_server, extension_permission, installed_extension,
@@ -58,6 +69,9 @@ pub use crate::extensions::{
 pub use crate::harness::{
     auto_apply_binding, harness_template, review_agent_binding, review_annotation,
     AutoApplyBinding, HarnessTemplate, ReviewAgentBinding, ReviewAnnotation,
+};
+pub use crate::harness::{
+    AutoApplyContext, HarnessTemplateSource, ReviewMode, ReviewSeverity, ReviewSubject,
 };
 pub use crate::id_counters::{id_counter, IdCounter};
 pub use crate::migrations::{migration_state, MigrationState};
@@ -80,13 +94,10 @@ pub use crate::pages::{
 pub use crate::sensors::{
     sensor_registry, structural_sensor_finding, SensorRegistry, StructuralSensorFinding,
 };
-pub use crate::conversations::ConversationVisibility;
-pub use crate::harness::{
-    AutoApplyContext, HarnessTemplateSource, ReviewMode, ReviewSeverity, ReviewSubject,
-};
 pub use crate::types::{ActorType, Permission, Principal};
 
 use crate::auth::{extract_oidc_profile, workspace_has_no_admin};
+use crate::automations::seed_automation_primitives_inner;
 use crate::extensions::seed_builtin_extensions_inner;
 use crate::module_install::ensure_publisher_identity_recorded;
 use crate::sensors::seed_sensor_registry_inner;
@@ -100,6 +111,7 @@ pub fn init(ctx: &ReducerContext) {
     ensure_publisher_identity_recorded(ctx);
     seed_builtin_extensions_inner(ctx);
     seed_sensor_registry_inner(ctx);
+    seed_automation_primitives_inner(ctx);
 }
 
 /// Called by SpacetimeDB whenever a client connects.
@@ -119,8 +131,16 @@ pub fn client_connected(ctx: &ReducerContext) {
 
     if let Some(existing) = ctx.db.user().identity().find(identity) {
         ctx.db.user().identity().update(User {
-            email: if email.is_empty() { existing.email.clone() } else { email },
-            name: if name.is_empty() { existing.name.clone() } else { name },
+            email: if email.is_empty() {
+                existing.email.clone()
+            } else {
+                email
+            },
+            name: if name.is_empty() {
+                existing.name.clone()
+            } else {
+                name
+            },
             is_authenticated: existing.is_authenticated || via_oidc,
             is_admin: existing.is_admin || needs_bootstrap_admin,
             last_seen_at: ctx.timestamp,

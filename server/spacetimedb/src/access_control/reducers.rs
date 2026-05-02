@@ -97,9 +97,7 @@ pub fn set_block_access_rule(
         .block_access_rule()
         .page_id()
         .filter(&page_id)
-        .filter(|r| {
-            r.block_id == block_id && principal_matches_identity(&r.principal, principal)
-        })
+        .filter(|r| r.block_id == block_id && principal_matches_identity(&r.principal, principal))
         .collect();
     for rule in existing {
         ctx.db.block_access_rule().id().delete(rule.id);
@@ -131,9 +129,7 @@ pub fn clear_block_access_rule(
         .block_access_rule()
         .page_id()
         .filter(&page_id)
-        .filter(|r| {
-            r.block_id == block_id && principal_matches_identity(&r.principal, principal)
-        })
+        .filter(|r| r.block_id == block_id && principal_matches_identity(&r.principal, principal))
         .collect();
     for rule in to_delete {
         ctx.db.block_access_rule().id().delete(rule.id);

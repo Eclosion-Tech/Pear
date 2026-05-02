@@ -40,6 +40,11 @@ export function useSetUserAdmin() {
   return useReducer(reducers.setUserAdmin);
 }
 
+/** Admin-created native-login user for self-hosted/dev workspaces. */
+export function useCreateLocalUser() {
+  return useReducer(reducers.createLocalUser);
+}
+
 export type UserRow = ReturnType<typeof useUsers>["users"][number];
 
 /** Returns the current user's row from the User table, plus derived display helpers. */

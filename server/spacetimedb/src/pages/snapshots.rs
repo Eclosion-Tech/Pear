@@ -9,7 +9,12 @@ use crate::pages::{page, page_content, page_yjs_state, ActorType, Page, PageCont
 
 pub(crate) fn next_page_snapshot_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "page_snapshot", || {
-        ctx.db.page_snapshot().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .page_snapshot()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 #[derive(SpacetimeType, Clone, Debug, PartialEq)]
@@ -35,7 +40,6 @@ pub struct PageSnapshot {
     pub snapshot_type: SnapshotType,
 }
 
-
 // ============================================================
 // Snapshot Reducers
 // ============================================================
@@ -49,12 +53,7 @@ pub fn take_snapshot(
     page_id: u64,
     snapshot_type: SnapshotType,
 ) -> Result<(), String> {
-    let page = ctx
-        .db
-        .page()
-        .id()
-        .find(page_id)
-        .ok_or("Page not found")?;
+    let page = ctx.db.page().id().find(page_id).ok_or("Page not found")?;
     let content = ctx
         .db
         .page_content()
@@ -86,12 +85,7 @@ pub fn take_snapshot_with_content(
     snapshot_type: SnapshotType,
     content: String,
 ) -> Result<(), String> {
-    let page = ctx
-        .db
-        .page()
-        .id()
-        .find(page_id)
-        .ok_or("Page not found")?;
+    let page = ctx.db.page().id().find(page_id).ok_or("Page not found")?;
 
     // Keep PageContent in sync with actual editor state.
     if let Some(existing) = ctx.db.page_content().page_id().find(page_id) {
@@ -133,12 +127,7 @@ pub fn restore_page_to_snapshot(
     let restored_title = snapshot.title.clone();
     let restored_content = snapshot.content.clone();
 
-    let page = ctx
-        .db
-        .page()
-        .id()
-        .find(page_id)
-        .ok_or("Page not found")?;
+    let page = ctx.db.page().id().find(page_id).ok_or("Page not found")?;
     ctx.db.page().id().update(Page {
         title: restored_title,
         updated_at: ctx.timestamp,
@@ -161,4 +150,3 @@ pub fn restore_page_to_snapshot(
 
     Ok(())
 }
-

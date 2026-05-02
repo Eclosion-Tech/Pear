@@ -16,13 +16,23 @@ use crate::pages::schemas::{
 
 pub(crate) fn next_sensor_registry_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "sensor_registry", || {
-        ctx.db.sensor_registry().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .sensor_registry()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
 pub(crate) fn next_structural_sensor_finding_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "structural_sensor_finding", || {
-        ctx.db.structural_sensor_finding().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .structural_sensor_finding()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 /// Registry of valid structural-sensor `(sensor_kind, code)` pairs. This
@@ -134,22 +144,16 @@ fn upsert_finding(
     details_json: String,
 ) {
     if !sensor_registry_contains(ctx, sensor_kind, code) {
-        log::warn!(
-            "upsert_finding: ({sensor_kind}, {code}) not in SensorRegistry; skipping"
-        );
+        log::warn!("upsert_finding: ({sensor_kind}, {code}) not in SensorRegistry; skipping");
         return;
     }
-    let existing = ctx
-        .db
-        .structural_sensor_finding()
-        .iter()
-        .find(|f| {
-            f.sensor_kind == sensor_kind
-                && f.code == code
-                && f.target_kind == target_kind
-                && f.target_id == target_id
-                && f.resolved_at.is_none()
-        });
+    let existing = ctx.db.structural_sensor_finding().iter().find(|f| {
+        f.sensor_kind == sensor_kind
+            && f.code == code
+            && f.target_kind == target_kind
+            && f.target_id == target_id
+            && f.resolved_at.is_none()
+    });
     if let Some(prior) = existing {
         ctx.db
             .structural_sensor_finding()
@@ -183,11 +187,7 @@ fn upsert_finding(
 /// Mark all live findings for `sensor_kind` whose `last_seen_at` is older
 /// than this run as resolved (they didn't reproduce). Call once at the end
 /// of every sensor run, with `run_started_at` captured before the upserts.
-fn auto_resolve_stale_findings(
-    ctx: &ReducerContext,
-    sensor_kind: &str,
-    run_started_at: Timestamp,
-) {
+fn auto_resolve_stale_findings(ctx: &ReducerContext, sensor_kind: &str, run_started_at: Timestamp) {
     let stale: Vec<_> = ctx
         .db
         .structural_sensor_finding()
@@ -243,10 +243,7 @@ pub fn run_orphan_detector(ctx: &ReducerContext) -> Result<(), String> {
                         "Page #{} ({}) references missing parent #{}",
                         page.id, page.title, parent_id
                     ),
-                    format!(
-                        "{{\"page_id\":{},\"parent_id\":{}}}",
-                        page.id, parent_id
-                    ),
+                    format!("{{\"page_id\":{},\"parent_id\":{}}}", page.id, parent_id),
                 );
             }
         }
@@ -413,8 +410,7 @@ pub fn run_convention_sensor(ctx: &ReducerContext) -> Result<(), String> {
         }
     }
 
-    let mut counts: std::collections::HashMap<u64, u32> =
-        std::collections::HashMap::new();
+    let mut counts: std::collections::HashMap<u64, u32> = std::collections::HashMap::new();
     for def in ctx.db.property_definition().iter() {
         *counts.entry(def.schema_id).or_insert(0) += 1;
     }
@@ -461,13 +457,9 @@ pub fn run_denied_tool_calls_sensor(ctx: &ReducerContext) -> Result<(), String> 
             continue;
         }
         let key = (entry.agent_id.clone(), entry.tool_name.clone());
-        let slot = counts
-            .entry(key)
-            .or_insert((0u64, entry.called_at));
+        let slot = counts.entry(key).or_insert((0u64, entry.called_at));
         slot.0 += 1;
-        if entry.called_at.to_micros_since_unix_epoch()
-            > slot.1.to_micros_since_unix_epoch()
-        {
+        if entry.called_at.to_micros_since_unix_epoch() > slot.1.to_micros_since_unix_epoch() {
             slot.1 = entry.called_at;
         }
     }

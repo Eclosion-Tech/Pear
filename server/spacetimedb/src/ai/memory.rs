@@ -11,20 +11,29 @@ use crate::access_control::helpers::{require_creator_or_admin, workspace_member}
 use crate::access_control::{next_page_access_rule_id, page_access_rule, PageAccessRule};
 use crate::ai::{ai_user_config, ai_user_profile};
 use crate::id_counters::alloc_id;
-use crate::types::Permission;
 use crate::pages::{
     next_page_id, next_sort_order, page, page_content, ActorType, Page, PageContent, PageType,
 };
+use crate::types::Permission;
 
 pub(crate) fn next_ai_user_memory_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "ai_user_memory", || {
-        ctx.db.ai_user_memory().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .ai_user_memory()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
 /// Restricts `page_id` so only `ai_identity` has access (write implies read). Used for
 /// AI-user memory pages so workspace members do not inherit the default open model.
-pub(crate) fn grant_ai_memory_page_access(ctx: &ReducerContext, page_id: u64, ai_identity: Identity) {
+pub(crate) fn grant_ai_memory_page_access(
+    ctx: &ReducerContext,
+    page_id: u64,
+    ai_identity: Identity,
+) {
     ctx.db.page_access_rule().insert(PageAccessRule {
         id: next_page_access_rule_id(ctx),
         page_id,

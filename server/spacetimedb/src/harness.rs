@@ -2,7 +2,7 @@
 //! review annotations. Templates package "an AI user with a job to do";
 //! review/auto-apply bindings hang governance off `AiUserConfig`.
 
-use spacetimedb::{reducer, table, Identity, SpacetimeType, Table, ReducerContext, Timestamp};
+use spacetimedb::{reducer, table, Identity, ReducerContext, SpacetimeType, Table, Timestamp};
 
 use crate::access_control::helpers::require_creator_or_admin;
 use crate::ai::{ai_user_config, AiUserRole, InferenceProvider};
@@ -13,25 +13,45 @@ use crate::stable_ids::generate_external_id;
 
 pub(crate) fn next_harness_template_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "harness_template", || {
-        ctx.db.harness_template().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .harness_template()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
 pub(crate) fn next_review_agent_binding_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "review_agent_binding", || {
-        ctx.db.review_agent_binding().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .review_agent_binding()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
 pub(crate) fn next_review_annotation_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "review_annotation", || {
-        ctx.db.review_annotation().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .review_annotation()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
 pub(crate) fn next_auto_apply_binding_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "auto_apply_binding", || {
-        ctx.db.auto_apply_binding().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .auto_apply_binding()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 

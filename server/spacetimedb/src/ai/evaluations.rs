@@ -16,7 +16,12 @@ use crate::pages::ActorType;
 
 pub(crate) fn next_ai_evaluation_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "ai_evaluation", || {
-        ctx.db.ai_evaluation().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .ai_evaluation()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 /// Cached evaluation of an AI primitive over a specific row. The cache key
@@ -114,10 +119,10 @@ pub fn record_ai_evaluation(
         .filter(|r| r.page_id == page_id && !r.is_stale)
         .collect();
     for row in prior {
-        ctx.db
-            .ai_evaluation()
-            .id()
-            .update(AiEvaluation { is_stale: true, ..row });
+        ctx.db.ai_evaluation().id().update(AiEvaluation {
+            is_stale: true,
+            ..row
+        });
     }
 
     let row = ctx.db.ai_evaluation().insert(AiEvaluation {
@@ -231,11 +236,10 @@ pub fn invalidate_ai_evaluations_for_row(
         .filter(|r| r.page_id == page_id && !r.is_stale)
         .collect();
     for row in live {
-        ctx.db
-            .ai_evaluation()
-            .id()
-            .update(AiEvaluation { is_stale: true, ..row });
+        ctx.db.ai_evaluation().id().update(AiEvaluation {
+            is_stale: true,
+            ..row
+        });
     }
     Ok(())
 }
-

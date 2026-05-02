@@ -16,31 +16,56 @@ pub(crate) mod reducers;
 
 pub(crate) fn next_api_endpoint_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "api_endpoint", || {
-        ctx.db.api_endpoint().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .api_endpoint()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
 pub(crate) fn next_api_field_mapping_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "api_field_mapping", || {
-        ctx.db.api_field_mapping().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .api_field_mapping()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
 pub(crate) fn next_api_endpoint_key_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "api_endpoint_key", || {
-        ctx.db.api_endpoint_key().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .api_endpoint_key()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
 pub(crate) fn next_api_call_log_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "api_call_log", || {
-        ctx.db.api_call_log().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .api_call_log()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
 pub(crate) fn next_database_row_marker_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "database_row_marker", || {
-        ctx.db.database_row_marker().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .database_row_marker()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 // ============================================================
@@ -194,9 +219,8 @@ pub struct ApiEndpointKeyLookupRow {
 /// every workspace on the pool — that's how this filter was forced into
 /// its own 0.5.3 release in the first place.
 #[client_visibility_filter]
-const API_ENDPOINT_KEY_FILTER: Filter = Filter::Sql(
-    "SELECT * FROM api_endpoint_key WHERE created_by = :sender",
-);
+const API_ENDPOINT_KEY_FILTER: Filter =
+    Filter::Sql("SELECT * FROM api_endpoint_key WHERE created_by = :sender");
 
 #[view(accessor = api_endpoint_key_lookup, public)]
 fn api_endpoint_key_lookup(ctx: &AnonymousViewContext) -> Vec<ApiEndpointKeyLookupRow> {
@@ -260,15 +284,26 @@ pub struct DatabaseRowMarker {
     pub created_at: Timestamp,
 }
 
-
 /// Slugs that would collide with system routes the HTTP handler reserves
 /// (`/_schema`, `/_health`, `/_meta`) or with namespace conventions an
 /// operator might add later. The leading-underscore variants are belt-and-
 /// braces — the slug regex below already rejects underscores.
 const RESERVED_API_SLUGS: &[&str] = &[
-    "_schema", "_health", "_meta", "_admin", "_internal",
-    "schema", "health", "meta", "admin", "internal", "system",
-    "api", "auth", "openapi", "docs",
+    "_schema",
+    "_health",
+    "_meta",
+    "_admin",
+    "_internal",
+    "schema",
+    "health",
+    "meta",
+    "admin",
+    "internal",
+    "system",
+    "api",
+    "auth",
+    "openapi",
+    "docs",
 ];
 
 /// Validate a slug: lowercase, alphanumeric + hyphens, 1-64 chars, no leading/trailing hyphens.

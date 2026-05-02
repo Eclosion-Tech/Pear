@@ -3,12 +3,12 @@
 
 use spacetimedb::{reducer, Identity, ReducerContext, Table};
 
+use crate::ai::{ai_user_config, ai_user_profile};
 use crate::extensions::manifest::{
     all_requested_permissions, create_extension_ai_user, create_extension_mcp_server,
     create_extension_permissions, has_credential_fields, has_sensitive_request,
     has_wildcard_domains, ManifestDoc, ManifestPermission,
 };
-use crate::ai::{ai_user_config, ai_user_profile};
 use crate::extensions::{
     extension_manifest, extension_mcp_server, extension_permission, installed_extension,
     next_extension_manifest_id, next_extension_permission_id, next_installed_extension_id,
@@ -43,8 +43,8 @@ pub fn publish_extension(
             "manifest_json must not contain credential fields (api_key, secret, password, private_key)".to_string(),
         );
     }
-    let manifest: ManifestDoc = serde_json::from_str(&manifest_json)
-        .map_err(|e| format!("Invalid manifest JSON: {e}"))?;
+    let manifest: ManifestDoc =
+        serde_json::from_str(&manifest_json).map_err(|e| format!("Invalid manifest JSON: {e}"))?;
     // Builtin extensions declare the worker's own outbound capabilities — wildcards are
     // permitted because the static tools (web_search, fetch_url) call arbitrary URLs.
     if !matches!(extension_type, ExtensionType::Builtin) {
@@ -156,9 +156,8 @@ pub fn install_extension(
             .config_bundle
             .as_ref()
             .ok_or("config_bundle required for ConfigBundle/Hybrid extension")?;
-        let ident = ai_user_identity.ok_or(
-            "ai_user_identity is required for ConfigBundle/Hybrid extensions",
-        )?;
+        let ident = ai_user_identity
+            .ok_or("ai_user_identity is required for ConfigBundle/Hybrid extensions")?;
         ai_user_id = Some(create_extension_ai_user(
             ctx,
             ctx.sender(),
@@ -267,9 +266,8 @@ pub fn confirm_extension_install(
             .config_bundle
             .as_ref()
             .ok_or("config_bundle required for ConfigBundle/Hybrid extension")?;
-        let ident = ai_user_identity.ok_or(
-            "ai_user_identity is required for ConfigBundle/Hybrid extensions",
-        )?;
+        let ident = ai_user_identity
+            .ok_or("ai_user_identity is required for ConfigBundle/Hybrid extensions")?;
         ai_user_id = Some(create_extension_ai_user(
             ctx,
             ctx.sender(),
@@ -303,14 +301,17 @@ pub fn confirm_extension_install(
         )?);
     }
 
-    ctx.db.installed_extension().id().update(InstalledExtension {
-        install_status: InstallStatus::Active,
-        ai_user_id,
-        mcp_server_id,
-        enabled: true,
-        confirmed_at: Some(ctx.timestamp),
-        ..installed
-    });
+    ctx.db
+        .installed_extension()
+        .id()
+        .update(InstalledExtension {
+            install_status: InstallStatus::Active,
+            ai_user_id,
+            mcp_server_id,
+            enabled: true,
+            confirmed_at: Some(ctx.timestamp),
+            ..installed
+        });
 
     create_extension_permissions(ctx, installed_extension_id, ctx.sender(), &confirmed_perms)?;
 
@@ -417,7 +418,10 @@ pub fn set_extension_enabled(
     ctx.db
         .installed_extension()
         .id()
-        .update(InstalledExtension { enabled, ..installed });
+        .update(InstalledExtension {
+            enabled,
+            ..installed
+        });
 
     // Mirror enabled state on the MCP server row
     if let Some(server_id) = installed.mcp_server_id {
@@ -480,10 +484,7 @@ pub fn grant_extension_permission(
 
 /// Revoke a specific permission grant.
 #[reducer]
-pub fn revoke_extension_permission(
-    ctx: &ReducerContext,
-    permission_id: u64,
-) -> Result<(), String> {
+pub fn revoke_extension_permission(ctx: &ReducerContext, permission_id: u64) -> Result<(), String> {
     let perm = ctx
         .db
         .extension_permission()
@@ -651,15 +652,21 @@ pub fn update_extension(
     } else {
         installed.install_status.clone()
     };
-    let enabled = if needs_reconfirm { false } else { installed.enabled };
+    let enabled = if needs_reconfirm {
+        false
+    } else {
+        installed.enabled
+    };
 
-    ctx.db.installed_extension().id().update(InstalledExtension {
-        manifest_id: new_manifest_id,
-        install_status: new_status,
-        enabled,
-        ..installed
-    });
+    ctx.db
+        .installed_extension()
+        .id()
+        .update(InstalledExtension {
+            manifest_id: new_manifest_id,
+            install_status: new_status,
+            enabled,
+            ..installed
+        });
 
     Ok(())
 }
-

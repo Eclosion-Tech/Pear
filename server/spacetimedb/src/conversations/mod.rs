@@ -10,19 +10,34 @@ use crate::pages::page;
 
 pub(crate) fn next_conversation_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "conversation", || {
-        ctx.db.conversation().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .conversation()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
 pub(crate) fn next_conversation_message_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "conversation_message", || {
-        ctx.db.conversation_message().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .conversation_message()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
 pub(crate) fn next_conversation_participant_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "conversation_participant", || {
-        ctx.db.conversation_participant().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .conversation_participant()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
@@ -226,30 +241,34 @@ pub fn create_conversation(
 
     let mut seen: Vec<Identity> = Vec::new();
     let initiator = ctx.sender();
-    ctx.db.conversation_participant().insert(ConversationParticipant {
-        id: next_conversation_participant_id(ctx),
-        conversation_id: conv.id,
-        identity: initiator,
-        role: ParticipantRole::Initiator,
-        joined_at: ctx.timestamp,
-        last_viewed_message_id: None,
-        left_at: None,
-    });
+    ctx.db
+        .conversation_participant()
+        .insert(ConversationParticipant {
+            id: next_conversation_participant_id(ctx),
+            conversation_id: conv.id,
+            identity: initiator,
+            role: ParticipantRole::Initiator,
+            joined_at: ctx.timestamp,
+            last_viewed_message_id: None,
+            left_at: None,
+        });
     seen.push(initiator);
 
     for ident in participant_identities {
         if seen.contains(&ident) {
             continue;
         }
-        ctx.db.conversation_participant().insert(ConversationParticipant {
-            id: next_conversation_participant_id(ctx),
-            conversation_id: conv.id,
-            identity: ident,
-            role: ParticipantRole::Member,
-            joined_at: ctx.timestamp,
-            last_viewed_message_id: None,
-            left_at: None,
-        });
+        ctx.db
+            .conversation_participant()
+            .insert(ConversationParticipant {
+                id: next_conversation_participant_id(ctx),
+                conversation_id: conv.id,
+                identity: ident,
+                role: ParticipantRole::Member,
+                joined_at: ctx.timestamp,
+                last_viewed_message_id: None,
+                left_at: None,
+            });
         seen.push(ident);
     }
 
@@ -366,18 +385,21 @@ pub fn update_message(
         return Err("Conversation is closed".to_string());
     }
 
-    ctx.db.conversation_message().id().update(ConversationMessage {
-        content,
-        status,
-        thinking,
-        tool_calls_json,
-        input_tokens: input_tokens.unwrap_or(msg.input_tokens),
-        output_tokens: output_tokens.unwrap_or(msg.output_tokens),
-        cache_creation_input_tokens: cache_creation_input_tokens
-            .unwrap_or(msg.cache_creation_input_tokens),
-        cache_read_input_tokens: cache_read_input_tokens.unwrap_or(msg.cache_read_input_tokens),
-        ..msg
-    });
+    ctx.db
+        .conversation_message()
+        .id()
+        .update(ConversationMessage {
+            content,
+            status,
+            thinking,
+            tool_calls_json,
+            input_tokens: input_tokens.unwrap_or(msg.input_tokens),
+            output_tokens: output_tokens.unwrap_or(msg.output_tokens),
+            cache_creation_input_tokens: cache_creation_input_tokens
+                .unwrap_or(msg.cache_creation_input_tokens),
+            cache_read_input_tokens: cache_read_input_tokens.unwrap_or(msg.cache_read_input_tokens),
+            ..msg
+        });
 
     ctx.db.conversation().id().update(Conversation {
         updated_at: ctx.timestamp,
@@ -389,10 +411,7 @@ pub fn update_message(
 
 /// Close a conversation. No further messages can be added.
 #[reducer]
-pub fn close_conversation(
-    ctx: &ReducerContext,
-    conversation_id: u64,
-) -> Result<(), String> {
+pub fn close_conversation(ctx: &ReducerContext, conversation_id: u64) -> Result<(), String> {
     let conv = ctx
         .db
         .conversation()
@@ -449,4 +468,3 @@ pub fn record_compaction(
     });
     Ok(())
 }
-

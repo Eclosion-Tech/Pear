@@ -8,7 +8,12 @@ use crate::pages::{page, ActorType};
 
 pub(crate) fn next_database_view_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "database_view", || {
-        ctx.db.database_view().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .database_view()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 #[derive(SpacetimeType, Clone, Debug, PartialEq)]
@@ -40,7 +45,6 @@ pub struct DatabaseView {
     pub updated_at: Timestamp,
 }
 
-
 // ============================================================
 // View Reducers
 // ============================================================
@@ -54,11 +58,7 @@ pub fn create_view(
     view_type: ViewType,
     owner_identity: Option<String>,
 ) -> Result<(), String> {
-    ctx.db
-        .page()
-        .id()
-        .find(page_id)
-        .ok_or("Page not found")?;
+    ctx.db.page().id().find(page_id).ok_or("Page not found")?;
     let is_default = ctx
         .db
         .database_view()
@@ -82,7 +82,11 @@ pub fn create_view(
 }
 
 #[reducer]
-pub fn update_view_config(ctx: &ReducerContext, view_id: u64, config: String) -> Result<(), String> {
+pub fn update_view_config(
+    ctx: &ReducerContext,
+    view_id: u64,
+    config: String,
+) -> Result<(), String> {
     let view = ctx
         .db
         .database_view()
@@ -154,4 +158,3 @@ pub fn delete_view(ctx: &ReducerContext, view_id: u64) -> Result<(), String> {
     ctx.db.database_view().id().delete(view_id);
     Ok(())
 }
-

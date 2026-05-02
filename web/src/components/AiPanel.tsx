@@ -10,6 +10,7 @@ import {
   type OrchaJobRow,
 } from "@/src/hooks/useOrcha";
 import {
+  useConversations,
   useConversationsForPage,
   useMessagesForConversation,
   useSendMessage,
@@ -695,6 +696,7 @@ interface AiPanelProps {
 
 export function AiPanel({ pageId, onClose, openConversationId }: AiPanelProps) {
   const { identity } = useSpacetimeDB();
+  const { conversations: allConversations } = useConversations();
   const { conversations } = useConversationsForPage(pageId);
   const { jobs } = useOrchaJobsForPage(pageId);
   const createJob = useCreateJob();
@@ -707,8 +709,14 @@ export function AiPanel({ pageId, onClose, openConversationId }: AiPanelProps) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (openConversationId == null) return;
+    setTab("conversations");
+    setSelectedConvId(openConversationId);
+  }, [openConversationId]);
+
   const selectedConv = selectedConvId
-    ? conversations.find((c) => c.id === selectedConvId)
+    ? allConversations.find((c) => c.id === selectedConvId)
     : null;
 
   const hasActiveJob = jobs.some((j) => j.status === "executing");

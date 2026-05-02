@@ -156,7 +156,10 @@ pub(crate) fn all_requested_permissions(manifest: &ManifestDoc) -> Vec<ManifestP
 /// Returns true if any capability or workspace-write permission requires PendingConfirmation.
 pub(crate) fn has_sensitive_request(manifest: &ManifestDoc) -> bool {
     let caps = all_requested_capabilities(manifest);
-    if caps.iter().any(|c| SENSITIVE_CAPABILITIES.contains(&c.as_str())) {
+    if caps
+        .iter()
+        .any(|c| SENSITIVE_CAPABILITIES.contains(&c.as_str()))
+    {
         return true;
     }
     let perms = all_requested_permissions(manifest);
@@ -183,9 +186,14 @@ pub(crate) fn has_sensitive_request(manifest: &ManifestDoc) -> bool {
 /// Check that a manifest JSON string does not contain credential-like keys.
 pub(crate) fn has_credential_fields(json: &str) -> bool {
     // Check for credential keys as JSON object keys (key followed by colon)
-    ["\"api_key\":", "\"secret\":", "\"password\":", "\"private_key\":"]
-        .iter()
-        .any(|pattern| json.contains(pattern))
+    [
+        "\"api_key\":",
+        "\"secret\":",
+        "\"password\":",
+        "\"private_key\":",
+    ]
+    .iter()
+    .any(|pattern| json.contains(pattern))
 }
 
 /// Check that no permission in the list uses a wildcard domain for HttpOutbound.
@@ -212,12 +220,11 @@ pub(crate) fn create_extension_permissions(
         let allowed_domains = if matches!(action, PermissionAction::HttpOutbound) {
             let domains = perm.allowed_domains.as_deref().unwrap_or(&[]);
             if domains.is_empty() {
-                return Err("HttpOutbound permission requires at least one allowed_domain".to_string());
+                return Err(
+                    "HttpOutbound permission requires at least one allowed_domain".to_string(),
+                );
             }
-            Some(
-                serde_json::to_string(domains)
-                    .unwrap_or_else(|_| "[]".to_string()),
-            )
+            Some(serde_json::to_string(domains).unwrap_or_else(|_| "[]".to_string()))
         } else {
             None
         };
@@ -278,7 +285,11 @@ pub(crate) fn create_extension_ai_user(
             .as_deref()
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string()),
-        max_tokens: if cb.max_tokens == 0 { 8192 } else { cb.max_tokens },
+        max_tokens: if cb.max_tokens == 0 {
+            8192
+        } else {
+            cb.max_tokens
+        },
         created_at: ctx.timestamp,
         updated_at: ctx.timestamp,
         monthly_token_cap: None,
@@ -333,4 +344,3 @@ pub(crate) fn create_extension_mcp_server(
     });
     Ok(server_row.id)
 }
-

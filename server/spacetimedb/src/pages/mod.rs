@@ -7,9 +7,10 @@ use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table, Timestam
 
 use crate::access_control::helpers::{can_write_page, page_has_any_rule, require_page_write};
 use crate::access_control::{next_page_access_rule_id, page_access_rule, PageAccessRule};
+use crate::automations::{enqueue_page_created, enqueue_page_deleted, enqueue_page_updated};
 use crate::id_counters::alloc_id;
 use crate::pages::schemas::{
-    page_property_value, page_property_value_history, property_definition, database_schema,
+    database_schema, page_property_value, page_property_value_history, property_definition,
 };
 use crate::pages::snapshots::page_snapshot;
 use crate::pages::views::database_view;
@@ -101,7 +102,6 @@ pub struct PageYjsState {
     pub updated_at: Timestamp,
 }
 
-
 /// File upload metadata. Blob lives in S3/MinIO at storage_key; this row is the source of truth for "what's attached to this page".
 #[table(accessor = attachment, public)]
 pub struct Attachment {
@@ -117,7 +117,6 @@ pub struct Attachment {
     pub size_bytes: u64,
     pub created_at: Timestamp,
 }
-
 
 // ============================================================
 // Page Reducers
@@ -210,6 +209,7 @@ pub fn create_page(
     if let Some(pid) = parent_id {
         copy_page_access_rules_from_parent(ctx, pid, page.id);
     }
+    enqueue_page_created(ctx, page.id);
     Ok(())
 }
 
@@ -230,12 +230,7 @@ pub fn move_page(
     if let Some(pid) = new_parent_id {
         require_page_write(ctx, pid)?;
     }
-    let page = ctx
-        .db
-        .page()
-        .id()
-        .find(page_id)
-        .ok_or("Page not found")?;
+    let page = ctx.db.page().id().find(page_id).ok_or("Page not found")?;
 
     // Collect and sort active siblings of the new parent (excluding the moving page).
     let mut siblings: Vec<Page> = ctx
@@ -249,13 +244,11 @@ pub fn move_page(
     // Find the insertion index.
     let insert_after = match after_page_id {
         None => 0, // place first
-        Some(after_id) => {
-            siblings
-                .iter()
-                .position(|p| p.id == after_id)
-                .map(|i| i + 1)
-                .unwrap_or(siblings.len())
-        }
+        Some(after_id) => siblings
+            .iter()
+            .position(|p| p.id == after_id)
+            .map(|i| i + 1)
+            .unwrap_or(siblings.len()),
     };
 
     // Splice the moving page into the sorted list (move, no Clone needed).
@@ -289,17 +282,13 @@ pub fn update_page_title(ctx: &ReducerContext, page_id: u64, title: String) -> R
         return Err("Title cannot be empty".to_string());
     }
     require_page_write(ctx, page_id)?;
-    let page = ctx
-        .db
-        .page()
-        .id()
-        .find(page_id)
-        .ok_or("Page not found")?;
+    let page = ctx.db.page().id().find(page_id).ok_or("Page not found")?;
     ctx.db.page().id().update(Page {
         title,
         updated_at: ctx.timestamp,
         ..page
     });
+    enqueue_page_updated(ctx, page_id);
     Ok(())
 }
 
@@ -307,12 +296,7 @@ pub fn update_page_title(ctx: &ReducerContext, page_id: u64, title: String) -> R
 #[reducer]
 pub fn update_page_icon(ctx: &ReducerContext, page_id: u64, icon: String) -> Result<(), String> {
     require_page_write(ctx, page_id)?;
-    let page = ctx
-        .db
-        .page()
-        .id()
-        .find(page_id)
-        .ok_or("Page not found")?;
+    let page = ctx.db.page().id().find(page_id).ok_or("Page not found")?;
     let new_icon = if icon.trim().is_empty() {
         None
     } else {
@@ -343,12 +327,7 @@ pub fn set_page_embedding(
             embedding.len()
         ));
     }
-    let page = ctx
-        .db
-        .page()
-        .id()
-        .find(page_id)
-        .ok_or("Page not found")?;
+    let page = ctx.db.page().id().find(page_id).ok_or("Page not found")?;
     ctx.db.page().id().update(Page {
         embedding: Some(embedding),
         updated_at: ctx.timestamp,
@@ -382,6 +361,7 @@ pub fn update_page_content(
             ..page
         });
     }
+    enqueue_page_updated(ctx, page_id);
     Ok(())
 }
 
@@ -390,11 +370,7 @@ pub fn update_page_content(
 /// Upserts the single PageYjsState row for the page so row count stays O(1).
 /// Also touches the page's updated_at so the sidebar reflects recent activity.
 #[reducer]
-pub fn save_yjs_state(
-    ctx: &ReducerContext,
-    page_id: u64,
-    data: Vec<u8>,
-) -> Result<(), String> {
+pub fn save_yjs_state(ctx: &ReducerContext, page_id: u64, data: Vec<u8>) -> Result<(), String> {
     require_page_write(ctx, page_id)?;
     ctx.db.page().id().find(page_id).ok_or("Page not found")?;
 
@@ -425,34 +401,26 @@ pub fn save_yjs_state(
 #[reducer]
 pub fn delete_page(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
     require_page_write(ctx, page_id)?;
-    let page = ctx
-        .db
-        .page()
-        .id()
-        .find(page_id)
-        .ok_or("Page not found")?;
+    let page = ctx.db.page().id().find(page_id).ok_or("Page not found")?;
     ctx.db.page().id().update(Page {
         deleted_at: Some(ctx.timestamp),
         updated_at: ctx.timestamp,
         ..page
     });
+    enqueue_page_deleted(ctx, page_id);
     Ok(())
 }
 
 #[reducer]
 pub fn restore_page(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
     require_page_write(ctx, page_id)?;
-    let page = ctx
-        .db
-        .page()
-        .id()
-        .find(page_id)
-        .ok_or("Page not found")?;
+    let page = ctx.db.page().id().find(page_id).ok_or("Page not found")?;
     ctx.db.page().id().update(Page {
         deleted_at: None,
         updated_at: ctx.timestamp,
         ..page
     });
+    enqueue_page_updated(ctx, page_id);
     Ok(())
 }
 
@@ -501,12 +469,7 @@ pub fn delete_attachment(ctx: &ReducerContext, attachment_id: u64) -> Result<(),
 #[reducer]
 pub fn purge_page(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
     require_page_write(ctx, page_id)?;
-    let page = ctx
-        .db
-        .page()
-        .id()
-        .find(page_id)
-        .ok_or("Page not found")?;
+    let page = ctx.db.page().id().find(page_id).ok_or("Page not found")?;
     if page.deleted_at.is_none() {
         return Err("Page is not in trash. Move to trash first.".to_string());
     }
@@ -540,7 +503,13 @@ fn purge_page_inner(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
     // Delete the Yjs state blob (single row, primary key = page_id).
     ctx.db.page_yjs_state().page_id().delete(page_id);
 
-    let snapshot_ids: Vec<u64> = ctx.db.page_snapshot().page_id().filter(&page_id).map(|s| s.id).collect();
+    let snapshot_ids: Vec<u64> = ctx
+        .db
+        .page_snapshot()
+        .page_id()
+        .filter(&page_id)
+        .map(|s| s.id)
+        .collect();
     for sid in snapshot_ids {
         ctx.db.page_snapshot().id().delete(sid);
     }
@@ -604,15 +573,10 @@ fn purge_page_inner(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
     Ok(())
 }
 
-
 /// Toggles the sidebar/search visibility hint on a page (used to host
 /// AI-user memory subtrees, etc.). Requires write access.
 #[reducer]
-pub fn set_page_hidden(
-    ctx: &ReducerContext,
-    page_id: u64,
-    hidden: bool,
-) -> Result<(), String> {
+pub fn set_page_hidden(ctx: &ReducerContext, page_id: u64, hidden: bool) -> Result<(), String> {
     require_page_write(ctx, page_id)?;
     let page = ctx.db.page().id().find(page_id).ok_or("Page not found")?;
     ctx.db.page().id().update(Page {

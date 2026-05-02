@@ -305,22 +305,27 @@ export function AiUsersSettings() {
         <p className="text-sm text-neutral-600 dark:text-neutral-400">
           Connect to the workspace to manage AI users.
         </p>
-      ) : profiles.length === 0 ? (
-        <p className="text-sm text-neutral-600 dark:text-neutral-400">
-          No AI users in this workspace yet.
-        </p>
       ) : (
-        <ul className="space-y-6">
-          {profiles.map((p) => (
-            <AiUserRowEditor
-              key={p.aiUserId.toString()}
-              profile={p}
-              hasMemory={memoryRowFor(p.aiUserId) !== undefined}
-              memoryBusy={busyId === p.aiUserId}
-              onToggleMemory={() => void onToggleMemory(p.aiUserId, !memoryRowFor(p.aiUserId))}
-            />
-          ))}
-        </ul>
+        <>
+          {profiles.length === 0 ? (
+            <p className="text-sm text-neutral-600 dark:text-neutral-400">
+              No AI users in this workspace yet. Use Members → Add user and
+              turn on AI user to create one.
+            </p>
+          ) : (
+            <ul className="space-y-6">
+              {profiles.map((p) => (
+                <AiUserRowEditor
+                  key={p.aiUserId.toString()}
+                  profile={p}
+                  hasMemory={memoryRowFor(p.aiUserId) !== undefined}
+                  memoryBusy={busyId === p.aiUserId}
+                  onToggleMemory={() => void onToggleMemory(p.aiUserId, !memoryRowFor(p.aiUserId))}
+                />
+              ))}
+            </ul>
+          )}
+        </>
       )}
 
       {err ? (

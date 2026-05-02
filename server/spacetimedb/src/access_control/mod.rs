@@ -12,13 +12,23 @@ pub(crate) mod reducers;
 
 pub(crate) fn next_page_access_rule_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "page_access_rule", || {
-        ctx.db.page_access_rule().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .page_access_rule()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
 pub(crate) fn next_block_access_rule_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "block_access_rule", || {
-        ctx.db.block_access_rule().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .block_access_rule()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
