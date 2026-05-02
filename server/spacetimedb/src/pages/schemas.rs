@@ -5,30 +5,51 @@
 use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table, Timestamp};
 
 use crate::access_control::helpers::require_page_write;
+use crate::automations::enqueue_property_changed;
 use crate::id_counters::alloc_id;
 use crate::pages::{page, ActorType};
 
 pub(crate) fn next_database_schema_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "database_schema", || {
-        ctx.db.database_schema().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .database_schema()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
 pub(crate) fn next_property_definition_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "property_definition", || {
-        ctx.db.property_definition().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .property_definition()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
 pub(crate) fn next_page_property_value_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "page_property_value", || {
-        ctx.db.page_property_value().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .page_property_value()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
 pub(crate) fn next_page_property_value_history_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "page_property_value_history", || {
-        ctx.db.page_property_value_history().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .page_property_value_history()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 #[derive(SpacetimeType, Clone, Debug, PartialEq)]
@@ -49,6 +70,12 @@ pub enum PropertyType {
     /// any other column. Evaluation history (cache + cost) lives in
     /// `AiEvaluation`.
     Ai,
+    /// Expression stored in PropertyDefinition.config as { "expression": "..." }.
+    /// Evaluated client-side in real time against sibling property values.
+    Formula,
+    /// Aggregation over related rows. Config: { "relationPropertyId": u64, "rollupPropertyId": u64, "function": "sum"|"count"|... }
+    /// Evaluated client-side from subscribed related row data.
+    Rollup,
 }
 
 #[derive(SpacetimeType, Clone, Debug, PartialEq)]
@@ -168,7 +195,6 @@ pub struct PagePropertyValueHistory {
     pub changed_by: ActorType,
 }
 
-
 // ============================================================
 // Schema Reducers
 // ============================================================
@@ -179,11 +205,7 @@ pub fn create_database_schema(
     page_id: u64,
     name: String,
 ) -> Result<(), String> {
-    ctx.db
-        .page()
-        .id()
-        .find(page_id)
-        .ok_or("Page not found")?;
+    ctx.db.page().id().find(page_id).ok_or("Page not found")?;
     ctx.db.database_schema().insert(DatabaseSchema {
         id: next_database_schema_id(ctx),
         page_id,
@@ -339,10 +361,7 @@ pub fn update_property_type(
 /// Called for new schemas or as a one-time migration for pre-existing workspaces.
 /// Workers call discover_instruction_pages gracefully if this property is absent.
 #[reducer]
-pub fn seed_agent_instruction_property(
-    ctx: &ReducerContext,
-    schema_id: u64,
-) -> Result<(), String> {
+pub fn seed_agent_instruction_property(ctx: &ReducerContext, schema_id: u64) -> Result<(), String> {
     ctx.db
         .database_schema()
         .id()
@@ -371,7 +390,6 @@ pub fn seed_agent_instruction_property(
 
     Ok(())
 }
-
 
 // ============================================================
 // Property Value Reducers
@@ -443,6 +461,7 @@ pub fn set_property_value(
         }
     }
 
+    enqueue_property_changed(ctx, page_id, property_definition_id);
     Ok(())
 }
 
@@ -462,7 +481,7 @@ pub fn clear_property_value(
 
     if let Some(row) = existing {
         ctx.db.page_property_value().id().delete(row.id);
+        enqueue_property_changed(ctx, page_id, property_definition_id);
     }
     Ok(())
 }
-

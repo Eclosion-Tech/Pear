@@ -7,4 +7,5 @@
 //! envelopes (e.g. `__pear`-tagged values vs. Notion's UUID strings)
 //! barely overlap.
 
+pub(crate) mod notion_v1;
 pub(crate) mod pear_v1;

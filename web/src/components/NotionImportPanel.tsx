@@ -1,0 +1,254 @@
+"use client";
+
+/**
+ * NotionImportPanel — Settings panel for importing content from Notion.
+ *
+ * Flow:
+ *   1. User clicks "Connect Notion" → OAuth popup opens at /auth/notion
+ *   2. After popup closes, panel polls /api/workspaces/[slug]/notion/status
+ *   3. User clicks "Import from Notion" → calls the import API (fetch + S3 + transform)
+ *      then passes the payload to the SpacetimeDB `import_notion` reducer.
+ *   4. Import status is shown (running / done / error).
+ *
+ * Note: The import reducer requires an empty workspace (v1 limitation).
+ */
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useSpacetimeDB, useReducer } from "spacetimedb/react";
+import { usePearWorkspaceSlug } from "@/src/lib/blobUpload";
+import { reducers } from "@/src/module_bindings";
+
+type NotionStatus = {
+  connected: boolean;
+  notionWorkspaceName: string | null;
+  importStatus: string | null;
+  importError: string | null;
+};
+
+const CLOUD_BASE = process.env.NEXT_PUBLIC_CLOUD_BASE_URL ?? "";
+
+export function NotionImportPanel() {
+  const slug = usePearWorkspaceSlug();
+  const { identity } = useSpacetimeDB();
+
+  // The import_notion reducer is available after module bindings are regenerated.
+  // Wrap in a try so the panel degrades gracefully if bindings are stale.
+  let importNotion: ((args: { snapshotJson: string }) => Promise<void>) | null = null;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks, @typescript-eslint/no-explicit-any
+    importNotion = useReducer((reducers as any).importNotion);
+  } catch {
+    // Bindings not yet regenerated — show a notice below
+  }
+
+  const [status, setStatus] = useState<NotionStatus | null>(null);
+  const [loadingStatus, setLoadingStatus] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const popupRef = useRef<Window | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const fetchStatus = useCallback(async () => {
+    if (!slug) return;
+    setLoadingStatus(true);
+    try {
+      const res = await fetch(`/api/workspaces/${encodeURIComponent(slug)}/notion/status`);
+      if (res.ok) setStatus(await res.json());
+    } catch {
+      // Network error — ignore
+    } finally {
+      setLoadingStatus(false);
+    }
+  }, [slug]);
+
+  useEffect(() => {
+    fetchStatus();
+  }, [fetchStatus]);
+
+  // ── OAuth popup ─────────────────────────────────────────────────────────────
+
+  function handleConnect() {
+    if (!slug) return;
+    const returnTo = encodeURIComponent(window.location.href);
+    const authUrl = `${CLOUD_BASE}/auth/notion?workspace_slug=${encodeURIComponent(slug)}&return_to=${returnTo}`;
+    const popup = window.open(authUrl, "notion_oauth", "width=640,height=740,popup=1");
+    popupRef.current = popup;
+
+    // Poll until the popup closes, then refresh status
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(() => {
+      if (popupRef.current?.closed) {
+        if (pollRef.current) clearInterval(pollRef.current);
+        fetchStatus();
+      }
+    }, 500);
+  }
+
+  // ── Disconnect ───────────────────────────────────────────────────────────────
+
+  async function handleDisconnect() {
+    if (!slug || !confirm("Disconnect Notion? You can reconnect at any time.")) return;
+    setBusy(true);
+    try {
+      const res = await fetch(
+        `/api/workspaces/${encodeURIComponent(slug)}/notion/disconnect`,
+        { method: "DELETE" }
+      );
+      if (res.ok) {
+        setStatus(null);
+        setMsg(null);
+        await fetchStatus();
+      } else {
+        const { error } = await res.json().catch(() => ({ error: "Request failed" }));
+        setMsg(error);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // ── Import ───────────────────────────────────────────────────────────────────
+
+  async function handleImport() {
+    if (!slug || !identity) {
+      setMsg("Not connected to workspace.");
+      return;
+    }
+    if (!importNotion) {
+      setMsg(
+        "The import_notion reducer is not yet available in module bindings. " +
+          "Publish the updated SpacetimeDB module and run `spacetime generate` first."
+      );
+      return;
+    }
+
+    setBusy(true);
+    setMsg(null);
+
+    try {
+      // Step 1: Orchestration — fetch Notion, upload attachments, transform
+      const res = await fetch(
+        `/api/workspaces/${encodeURIComponent(slug)}/notion/import`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ callerIdentityHex: identity.toHexString() }),
+        }
+      );
+
+      const data = await res.json().catch(() => ({ error: "Failed to parse response" }));
+
+      if (!res.ok || data.error) {
+        setMsg(`Import failed: ${data.error ?? "Unknown error"}`);
+        await fetchStatus();
+        return;
+      }
+
+      // Step 2: Write to SpacetimeDB via reducer (uses the authenticated STDB connection)
+      setMsg("Uploading to workspace…");
+      await importNotion({ snapshotJson: data.payload });
+
+      setMsg("Import complete! Your Notion pages are now in Pear.");
+      await fetchStatus();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setMsg(`Import failed: ${message}`);
+      await fetchStatus();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // ── Render ───────────────────────────────────────────────────────────────────
+
+  const importStatus = status?.importStatus;
+  const isRunning = busy || importStatus === "running";
+  const isDone = importStatus === "done";
+  const isError = importStatus === "error";
+
+  return (
+    <section className="mb-10">
+      <h2 className="text-sm font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-4">
+        Import from Notion
+      </h2>
+
+      <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-4">
+        Connect your Notion account to import pages, databases, attachments, and comments into this
+        workspace. Import is one-time and requires an empty workspace (no existing pages).
+      </p>
+
+      {loadingStatus && !status ? (
+        <p className="text-sm text-neutral-500">Checking connection…</p>
+      ) : status?.connected ? (
+        <div className="space-y-4">
+          {/* Connected state */}
+          <div className="flex items-center gap-3 px-3 py-2 rounded border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900">
+            <span className="text-green-600 dark:text-green-400 text-sm">●</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-neutral-900 dark:text-white">
+                {status.notionWorkspaceName ?? "Notion workspace"}
+              </p>
+              <p className="text-xs text-neutral-500">Connected</p>
+            </div>
+            <button
+              type="button"
+              onClick={handleDisconnect}
+              disabled={isRunning}
+              className="text-xs text-neutral-500 hover:text-red-600 dark:hover:text-red-400 disabled:opacity-40"
+            >
+              Disconnect
+            </button>
+          </div>
+
+          {/* Import status badges */}
+          {isDone && (
+            <div className="px-3 py-2 rounded border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950/30 text-sm text-green-700 dark:text-green-300">
+              ✓ Import complete — your Notion content is in Pear.
+            </div>
+          )}
+          {isError && (
+            <div className="px-3 py-2 rounded border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/30 text-sm text-red-700 dark:text-red-400">
+              Import failed: {status.importError ?? "Unknown error"}
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="flex flex-wrap gap-2">
+            {!isDone && (
+              <button
+                type="button"
+                onClick={handleImport}
+                disabled={isRunning || !importNotion}
+                className="px-3 py-1.5 rounded text-sm font-medium bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:opacity-90 disabled:opacity-40"
+              >
+                {isRunning ? "Importing…" : isError ? "Retry import" : "Import from Notion"}
+              </button>
+            )}
+          </div>
+
+          {msg && (
+            <p className="text-sm text-neutral-600 dark:text-neutral-400">{msg}</p>
+          )}
+
+          {isRunning && !msg && (
+            <p className="text-sm text-neutral-500 dark:text-neutral-400 animate-pulse">
+              Fetching your Notion content… This may take a minute for large workspaces.
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <button
+            type="button"
+            onClick={handleConnect}
+            disabled={busy}
+            className="px-3 py-1.5 rounded text-sm font-medium bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:opacity-90 disabled:opacity-40"
+          >
+            Connect Notion
+          </button>
+          {msg && <p className="text-sm text-neutral-600 dark:text-neutral-400">{msg}</p>}
+        </div>
+      )}
+    </section>
+  );
+}

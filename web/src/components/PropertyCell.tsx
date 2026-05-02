@@ -19,6 +19,7 @@ import {
   isOptionValid,
   getOptionColorClass,
 } from "@/src/lib/formulaEval";
+import { evaluateFormula } from "@/src/lib/formulaEvaluator";
 
 type PropertyValue = NonNullable<PagePropertyValueRow>["value"];
 
@@ -172,6 +173,33 @@ export function PropertyCell({
           }
         />
       );
+
+    case "Formula" as string: {
+      let config: { expression?: string } = {};
+      try { config = JSON.parse(definition.config || "{}"); } catch { /* */ }
+      const expression = config.expression ?? "";
+      if (!expression) return <span className="text-xs text-neutral-400 dark:text-neutral-500 px-3 py-1.5 block">No formula</span>;
+
+      // Build props map from siblingValues (string values) plus any raw values
+      const result = evaluateFormula(expression, siblingValues);
+      const display = result === null ? "" : String(result);
+      return (
+        <span className="text-sm text-neutral-700 dark:text-neutral-300 px-3 py-1.5 block select-none">
+          {display || <span className="text-neutral-400 dark:text-neutral-500">—</span>}
+        </span>
+      );
+    }
+
+    case "Rollup" as string: {
+      // Rollup aggregation is computed from related rows — show config summary for now
+      let config: { function?: string; relationPropertyId?: string; rollupPropertyId?: string } = {};
+      try { config = JSON.parse(definition.config || "{}"); } catch { /* */ }
+      return (
+        <span className="text-sm text-neutral-400 dark:text-neutral-500 px-3 py-1.5 block select-none italic">
+          {config.function ?? "rollup"}
+        </span>
+      );
+    }
 
     default:
       return (
