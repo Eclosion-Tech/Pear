@@ -33,4 +33,5 @@ export default __t.row({
   outputTokens: __t.u32().name("output_tokens"),
   cacheCreationInputTokens: __t.u32().name("cache_creation_input_tokens"),
   cacheReadInputTokens: __t.u32().name("cache_read_input_tokens"),
+  linkedConversationId: __t.option(__t.u64()).name("linked_conversation_id"),
 });

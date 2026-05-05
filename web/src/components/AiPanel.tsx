@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { useSpacetimeDB } from "spacetimedb/react";
 import Markdown from "react-markdown";
 import {
@@ -11,7 +12,12 @@ import {
 } from "@/src/hooks/useOrcha";
 import {
   useConversations,
-  useConversationsForPage,
+  useInboxConversations,
+  useCreateConversation,
+  useFindOrCreateAiDm,
+  useFindOrCreateDm,
+  useDmConversation,
+  useAddConversationParticipant,
   useMessagesForConversation,
   useSendMessage,
   useCloseConversation,
@@ -20,6 +26,7 @@ import {
   type ConversationRow,
   type ConversationMessageRow,
 } from "@/src/hooks/useConversations";
+import { useUsers } from "@/src/hooks/useUser";
 import {
   useAiUserProfiles,
   useAiUserProfileByIdentity,
@@ -276,15 +283,40 @@ function AiMessageContent({ msg, aiName }: { msg: ConversationMessageRow; aiName
   );
 }
 
+// ── Linked conversation card ─────────────────────────────────────────────────
+
+function LinkedConversationCard({ linkedConversationId }: { linkedConversationId: bigint }) {
+  const router = useRouter();
+  const { conversations } = useConversations();
+  const conv = conversations.find((c) => c.id === linkedConversationId);
+  const aiUser = useAiUserInConversation(linkedConversationId);
+  if (!conv) return null;
+  return (
+    <button
+      onClick={() => router.push(`/workspace/${conv.pageId}?conversation=${conv.id}`)}
+      className="mt-1.5 flex items-center gap-2 w-full text-left px-2.5 py-1.5 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/50 hover:bg-neutral-100 dark:hover:bg-neutral-700/60 transition-colors"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-neutral-400 shrink-0">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+      </svg>
+      <span className="text-[11px] text-neutral-500 dark:text-neutral-400 truncate">
+        Thread: {aiUser?.displayName ?? "Context thread"} → Open
+      </span>
+    </button>
+  );
+}
+
 // ── Conversation thread ──────────────────────────────────────────────────────
 
-function ConversationThread({ conversation, onBack }: { conversation: ConversationRow; onBack: () => void }) {
+function ConversationThread({ conversation, onBack, activePageId }: { conversation: ConversationRow; onBack: () => void; activePageId?: bigint }) {
   const aiUser = useAiUserInConversation(conversation.id);
   const messages = useMessagesForConversation(conversation.id);
   const { profiles: allAiProfiles } = useAiUserProfiles();
   const aiIdentityHexes = new Set(allAiProfiles.map((p) => p.identity.toHexString()));
   const sendMessage = useSendMessage();
   const closeConversation = useCloseConversation();
+  const createConversation = useCreateConversation();
+  const router = useRouter();
   const { identity } = useSpacetimeDB();
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -328,12 +360,27 @@ function ConversationThread({ conversation, onBack }: { conversation: Conversati
         outputTokens: undefined,
         cacheCreationInputTokens: undefined,
         cacheReadInputTokens: undefined,
+        linkedConversationId: undefined,
       });
       setInput("");
     } catch (err) {
       console.error("[AiPanel] Failed to send message", err);
     } finally {
       setSending(false);
+    }
+  }
+
+  async function handleFork() {
+    if (!activePageId || !aiUser) return;
+    try {
+      await createConversation({
+        pageId: activePageId,
+        participantIdentities: [aiUser.identity],
+      });
+      router.push(`/workspace/${activePageId}`);
+      onBack();
+    } catch (err) {
+      console.error("[AiPanel] Fork failed", err);
     }
   }
 
@@ -409,6 +456,9 @@ function ConversationThread({ conversation, onBack }: { conversation: Conversati
                 )}
                 {msg.jobId != null && <InlineJobStatus jobId={msg.jobId} />}
               </div>
+              {msg.linkedConversationId != null && (
+                <LinkedConversationCard linkedConversationId={msg.linkedConversationId} />
+              )}
             </div>
           );
         })}
@@ -416,7 +466,12 @@ function ConversationThread({ conversation, onBack }: { conversation: Conversati
 
       {/* Context bar — shows what the AI user can see for this turn. */}
       {aiUser && conversation.pageId !== undefined && (
-        <ContextBar pageId={conversation.pageId} aiUserIdentity={aiUser.identity} />
+        <ContextBar
+          pageId={conversation.pageId}
+          aiUserIdentity={aiUser.identity}
+          activePageId={activePageId}
+          onFork={() => void handleFork()}
+        />
       )}
 
       {/* Input */}
@@ -450,18 +505,269 @@ function ConversationThread({ conversation, onBack }: { conversation: Conversati
           </div>
           <div className="flex items-center justify-between mt-2">
             <span className="text-xs text-neutral-400">↵ send · ⇧↵ newline</span>
-            <button
-              onClick={() => closeConversation({ conversationId: conversation.id })}
-              className="text-xs text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors"
-            >
-              Close conversation
-            </button>
+            <div className="flex items-center gap-3">
+              <HandoffPanel
+                conversation={conversation}
+                activePageId={activePageId}
+                messages={messages}
+                aiName={aiName}
+                onNewConversation={(id) => { /* navigated externally via onBack + inbox */ void id; }}
+              />
+              <button
+                onClick={() => closeConversation({ conversationId: conversation.id })}
+                className="text-xs text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       ) : (
         <div className="flex-shrink-0 border-t border-neutral-200 dark:border-neutral-800 px-4 py-3">
           <p className="text-xs text-neutral-400 text-center">This conversation is closed</p>
         </div>
+      )}
+    </div>
+  );
+}
+
+// ── Handoff panel ────────────────────────────────────────────────────────────
+
+type HandoffMode = "dm" | "invite" | "branch";
+
+function HandoffPanel({
+  conversation,
+  activePageId,
+  messages,
+  aiName,
+  onNewConversation,
+}: {
+  conversation: ConversationRow;
+  activePageId?: bigint;
+  messages: ConversationMessageRow[];
+  aiName: string;
+  onNewConversation: (id: bigint) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<HandoffMode | null>(null);
+  const [search, setSearch] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [inviteWarning, setInviteWarning] = useState(false);
+
+  const { users } = useUsers();
+  const { identity: myIdentity } = useSpacetimeDB();
+  const { conversations: allConversations } = useConversations();
+  const participants = useParticipantsForConversation(conversation.id);
+  const findOrCreateDm = useFindOrCreateDm();
+  const sendMessage = useSendMessage();
+  const addParticipant = useAddConversationParticipant();
+  const createConversation = useCreateConversation();
+
+  const alreadyInThread = new Set(participants.map((p) => p.identity.toHexString()));
+  const candidates = users.filter(
+    (u) =>
+      (!myIdentity || u.identity.toHexString() !== myIdentity.toHexString()) &&
+      (u.name?.toLowerCase().includes(search.toLowerCase()) ||
+        u.email?.toLowerCase().includes(search.toLowerCase()) ||
+        !search),
+  );
+
+  function dmKey(a: string, b: string) {
+    return a < b ? `${a}-${b}` : `${b}-${a}`;
+  }
+
+  function findExistingDm(otherIdentity: string) {
+    if (!myIdentity) return undefined;
+    const key = dmKey(myIdentity.toHexString(), otherIdentity);
+    return allConversations.find((c) => c.canonicalKey === key);
+  }
+
+  async function handleSendToDm(user: (typeof users)[number]) {
+    if (!myIdentity) return;
+    setBusy(true);
+    try {
+      const lastAiMsg = [...messages].reverse().find(
+        (m) => m.sender.tag === "User" && m.sender.value.toHexString() !== myIdentity.toHexString(),
+      );
+      const summary = lastAiMsg?.content ?? `Shared from conversation with ${aiName}`;
+      const truncated = summary.length > 500 ? summary.slice(0, 497) + "…" : summary;
+      const body = `From conversation with ${aiName}:\n\n${truncated}`;
+
+      let dm = findExistingDm(user.identity.toHexString());
+      if (!dm) {
+        await findOrCreateDm({ otherIdentity: user.identity });
+        // Wait for the DM to appear in subscription
+        let tries = 0;
+        while (!dm && tries < 20) {
+          await new Promise((r) => setTimeout(r, 150));
+          dm = findExistingDm(user.identity.toHexString());
+          tries++;
+        }
+      }
+      if (!dm) throw new Error("DM not found after creation");
+
+      await sendMessage({
+        conversationId: dm.id,
+        content: body,
+        jobId: undefined,
+        status: undefined,
+        thinking: undefined,
+        toolCallsJson: undefined,
+        inputTokens: undefined,
+        outputTokens: undefined,
+        cacheCreationInputTokens: undefined,
+        cacheReadInputTokens: undefined,
+        linkedConversationId: conversation.id,
+      });
+      setOpen(false);
+      setMode(null);
+    } catch (err) {
+      console.error("[HandoffPanel] Send to DM failed", err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleInvite(user: (typeof users)[number]) {
+    if (!inviteWarning) { setInviteWarning(true); return; }
+    setBusy(true);
+    try {
+      await addParticipant({
+        conversationId: conversation.id,
+        identity: user.identity,
+      });
+      setOpen(false);
+      setMode(null);
+      setInviteWarning(false);
+    } catch (err) {
+      console.error("[HandoffPanel] Invite failed", err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleBranch(user: (typeof users)[number]) {
+    const pageId = activePageId ?? conversation.pageId;
+    if (!pageId) return;
+    setBusy(true);
+    try {
+      await createConversation({
+        pageId,
+        participantIdentities: [user.identity],
+      });
+      setOpen(false);
+      setMode(null);
+    } catch (err) {
+      console.error("[HandoffPanel] Branch failed", err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="text-xs text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 transition-colors"
+      >
+        Share →
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2 p-3 bg-neutral-50 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded-lg">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+          {mode === "dm" && "Send summary to…"}
+          {mode === "invite" && "Invite to this thread…"}
+          {mode === "branch" && "Start new thread with…"}
+          {!mode && "Share with a person"}
+        </span>
+        <button
+          onClick={() => { setOpen(false); setMode(null); setInviteWarning(false); }}
+          className="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300"
+        >
+          ×
+        </button>
+      </div>
+
+      {!mode && (
+        <div className="flex flex-col gap-1">
+          <button
+            onClick={() => setMode("dm")}
+            className="text-left text-xs px-2 py-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300"
+          >
+            <span className="font-medium">→ Send summary to DM</span>
+            <span className="block text-neutral-400 text-[10px]">Shares the last AI reply as a message</span>
+          </button>
+          <button
+            onClick={() => setMode("invite")}
+            className="text-left text-xs px-2 py-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300"
+          >
+            <span className="font-medium">+ Invite to this thread</span>
+            <span className="block text-neutral-400 text-[10px]">They'll see all prior messages</span>
+          </button>
+          <button
+            onClick={() => setMode("branch")}
+            className="text-left text-xs px-2 py-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300"
+          >
+            <span className="font-medium">↗ New thread with…</span>
+            <span className="block text-neutral-400 text-[10px]">Fresh conversation on this page</span>
+          </button>
+        </div>
+      )}
+
+      {mode && (
+        <>
+          {mode === "invite" && inviteWarning && (
+            <p className="text-[10px] text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded px-2 py-1.5">
+              This person will see all prior messages in this thread.
+            </p>
+          )}
+          <input
+            autoFocus
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); setInviteWarning(false); }}
+            placeholder="Search members…"
+            className="text-xs bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded px-2 py-1.5 outline-none focus:ring-1 focus:ring-neutral-400 dark:focus:ring-neutral-600 text-neutral-800 dark:text-neutral-200 placeholder:text-neutral-400"
+          />
+          <div className="flex flex-col gap-0.5 max-h-36 overflow-y-auto">
+            {candidates.length === 0 && (
+              <p className="text-xs text-neutral-400 py-2 text-center">No members found</p>
+            )}
+            {candidates.map((user) => {
+              const displayName = user.name || user.email || user.identity.toHexString().slice(0, 8);
+              const alreadyIn = alreadyInThread.has(user.identity.toHexString());
+              return (
+                <button
+                  key={user.identity.toHexString()}
+                  disabled={busy || (mode === "invite" && alreadyIn)}
+                  onClick={() => {
+                    if (mode === "dm") void handleSendToDm(user);
+                    else if (mode === "invite") void handleInvite(user);
+                    else if (mode === "branch") void handleBranch(user);
+                  }}
+                  className="text-left text-xs px-2 py-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-40 text-neutral-700 dark:text-neutral-300 flex items-center justify-between"
+                >
+                  <span className="truncate">{displayName}</span>
+                  {mode === "invite" && alreadyIn && (
+                    <span className="text-[10px] text-neutral-400 shrink-0 ml-2">already here</span>
+                  )}
+                  {mode === "invite" && !alreadyIn && inviteWarning && (
+                    <span className="text-[10px] text-amber-600 shrink-0 ml-2">confirm ↵</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            onClick={() => { setMode(null); setInviteWarning(false); }}
+            className="text-[10px] text-neutral-400 hover:text-neutral-600 text-left"
+          >
+            ← back
+          </button>
+        </>
       )}
     </div>
   );
@@ -497,6 +803,14 @@ function ConversationListItem({
           <span className="text-sm font-medium text-neutral-800 dark:text-neutral-200 truncate">
             {aiUser?.displayName ?? "AI User"}
           </span>
+          {conversation.kind.tag !== "ContextThread" && (
+            <span className="text-[9px] font-semibold uppercase px-1 py-px rounded bg-neutral-200 dark:bg-neutral-700 text-neutral-500 dark:text-neutral-400 shrink-0">
+              {conversation.kind.tag === "Dm" ? "DM"
+                : conversation.kind.tag === "AiDm" ? "AI DM"
+                : conversation.kind.tag === "GroupDm" ? "Group DM"
+                : "Shared"}
+            </span>
+          )}
           {isActive && <span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />}
         </div>
         {lastMessage && (
@@ -539,28 +853,131 @@ type PanelTab = "conversations" | "jobs" | "members";
  * review surface, auto-apply scope picker, and harness template selector
  * land here in subsequent phases.
  */
-function MembersTab() {
+function MembersTab({ onOpenConversation }: { onOpenConversation: (id: bigint) => void }) {
   const { profiles } = useAiUserProfiles();
-  if (profiles.length === 0) {
-    return (
-      <div className="text-center py-10">
-        <p className="text-sm text-neutral-400 dark:text-neutral-500">No AI users yet</p>
-        <p className="text-xs text-neutral-300 dark:text-neutral-600 mt-1">
-          Create one in Settings → AI Users
-        </p>
-      </div>
-    );
-  }
+  const { users } = useUsers();
+  const { identity: myIdentity } = useSpacetimeDB();
+  const otherHumans = users.filter(
+    (u) => !myIdentity || u.identity.toHexString() !== myIdentity.toHexString(),
+  );
+
   return (
     <div className="px-2 py-2 space-y-1">
-      {profiles.map((profile) => (
-        <MemberRow key={profile.identity.toHexString()} profile={profile} />
-      ))}
+      {otherHumans.length > 0 && (
+        <>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400 dark:text-neutral-500 px-2 py-1">
+            People
+          </p>
+          {otherHumans.map((user) => (
+            <HumanMemberRow
+              key={user.identity.toHexString()}
+              user={user}
+              onOpenConversation={onOpenConversation}
+            />
+          ))}
+        </>
+      )}
+      {profiles.length > 0 && (
+        <>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400 dark:text-neutral-500 px-2 py-1 mt-2">
+            AI Users
+          </p>
+          {profiles.map((profile) => (
+            <AiMemberRow
+              key={profile.identity.toHexString()}
+              profile={profile}
+              onOpenConversation={onOpenConversation}
+            />
+          ))}
+        </>
+      )}
+      {profiles.length === 0 && otherHumans.length === 0 && (
+        <div className="text-center py-10">
+          <p className="text-sm text-neutral-400 dark:text-neutral-500">No members yet</p>
+          <p className="text-xs text-neutral-300 dark:text-neutral-600 mt-1">
+            Create AI users in Settings → AI Users
+          </p>
+        </div>
+      )}
     </div>
   );
 }
 
-function MemberRow({ profile }: { profile: AiUserProfileRow }) {
+function HumanMemberRow({
+  user,
+  onOpenConversation,
+}: {
+  user: ReturnType<typeof useUsers>["users"][number];
+  onOpenConversation: (id: bigint) => void;
+}) {
+  const { identity: myIdentity } = useSpacetimeDB();
+  const findOrCreate = useFindOrCreateDm();
+  const dm = useDmConversation(myIdentity, user.identity);
+  const [pending, setPending] = useState(false);
+  const displayName = user.name || user.email || user.identity.toHexString().slice(0, 8);
+
+  useEffect(() => {
+    if (pending && dm) {
+      onOpenConversation(dm.id);
+      setPending(false);
+    }
+  }, [pending, dm, onOpenConversation]);
+
+  async function handleDm() {
+    if (dm) { onOpenConversation(dm.id); return; }
+    setPending(true);
+    await findOrCreate({ otherIdentity: user.identity });
+  }
+
+  return (
+    <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-800/50">
+      <div className="w-8 h-8 rounded-full bg-neutral-300 dark:bg-neutral-600 flex items-center justify-center text-neutral-700 dark:text-neutral-200 text-xs font-bold shrink-0">
+        {displayName[0]?.toUpperCase() ?? "?"}
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-neutral-800 dark:text-neutral-200 truncate">
+          {displayName}
+        </p>
+        {user.email && user.name && (
+          <p className="text-xs text-neutral-400 truncate">{user.email}</p>
+        )}
+      </div>
+      <button
+        onClick={() => void handleDm()}
+        disabled={pending}
+        className="shrink-0 text-xs px-2 py-1 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-700 disabled:opacity-40 transition-colors"
+      >
+        {pending ? "…" : "Message"}
+      </button>
+    </div>
+  );
+}
+
+function AiMemberRow({
+  profile,
+  onOpenConversation,
+}: {
+  profile: AiUserProfileRow;
+  onOpenConversation: (id: bigint) => void;
+}) {
+  const { identity: myIdentity } = useSpacetimeDB();
+  const findOrCreate = useFindOrCreateAiDm();
+  const dm = useDmConversation(myIdentity, profile.identity);
+  const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    if (pending && dm) {
+      onOpenConversation(dm.id);
+      setPending(false);
+    }
+  }, [pending, dm, onOpenConversation]);
+
+  async function handleDm() {
+    if (dm) { onOpenConversation(dm.id); return; }
+    setPending(true);
+    await findOrCreate({ aiIdentity: profile.identity });
+  }
+
   return (
     <div className="flex flex-col gap-1 p-2 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-800/50">
       <div className="flex items-start gap-3">
@@ -575,7 +992,16 @@ function MemberRow({ profile }: { profile: AiUserProfileRow }) {
             {profile.providerName} · {profile.modelName}
           </p>
         </div>
-        <CostBadge aiUserId={profile.aiUserId} />
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => void handleDm()}
+            disabled={pending}
+            className="shrink-0 text-xs px-2 py-1 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-700 disabled:opacity-40 transition-colors"
+          >
+            {pending ? "…" : "Message"}
+          </button>
+          <CostBadge aiUserId={profile.aiUserId} />
+        </div>
       </div>
       <RetrospectiveRow aiUserIdentity={profile.identity} />
     </div>
@@ -697,7 +1123,7 @@ interface AiPanelProps {
 export function AiPanel({ pageId, onClose, openConversationId }: AiPanelProps) {
   const { identity } = useSpacetimeDB();
   const { conversations: allConversations } = useConversations();
-  const { conversations } = useConversationsForPage(pageId);
+  const conversations = useInboxConversations(identity ?? undefined);
   const { jobs } = useOrchaJobsForPage(pageId);
   const createJob = useCreateJob();
 
@@ -756,6 +1182,7 @@ export function AiPanel({ pageId, onClose, openConversationId }: AiPanelProps) {
         <ConversationThread
           conversation={selectedConv}
           onBack={() => setSelectedConvId(null)}
+          activePageId={pageId}
         />
       </div>
     );
@@ -854,7 +1281,7 @@ export function AiPanel({ pageId, onClose, openConversationId }: AiPanelProps) {
           </div>
         )}
 
-        {tab === "members" && <MembersTab />}
+        {tab === "members" && <MembersTab onOpenConversation={(id) => { setTab("conversations"); setSelectedConvId(id); }} />}
       </div>
 
       {/* Job prompt — only on jobs tab */}

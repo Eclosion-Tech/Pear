@@ -168,6 +168,13 @@ function InboxRow({
   const unread = useUnreadCountForConversation(conversation.id, identity);
   const last = messages[messages.length - 1];
   const isActive = conversation.status.tag === "Active";
+  const kindLabel =
+    conversation.kind.tag === "Dm" ? "DM"
+    : conversation.kind.tag === "AiDm" ? "AI DM"
+    : conversation.kind.tag === "GroupDm" ? "Group DM"
+    : conversation.kind.tag === "SharedThread" ? "Shared"
+    : null;
+
   return (
     <button
       onClick={onClick}
@@ -179,6 +186,11 @@ function InboxRow({
           <span className="truncate text-xs font-medium">
             {aiUser?.displayName ?? "Conversation"}
           </span>
+          {kindLabel && (
+            <span className="text-[9px] font-semibold uppercase px-1 py-px rounded bg-neutral-200 dark:bg-neutral-700 text-neutral-500 dark:text-neutral-400 shrink-0">
+              {kindLabel}
+            </span>
+          )}
           {isActive && (
             <span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />
           )}

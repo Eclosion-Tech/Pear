@@ -67,6 +67,23 @@ pub enum ConversationStatus {
     Closed,
 }
 
+/// What kind of conversation this is. Determines routing, canonical-key
+/// semantics, and which participants are allowed.
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum ConversationKind {
+    /// Page/block/row/database-originated thread (current default behavior).
+    ContextThread,
+    /// Stable human-human 1:1 DM. Identified by a canonical key derived from
+    /// the sorted pair of participant identity hex strings.
+    Dm,
+    /// Stable human-AI 1:1 DM. Same canonical-key scheme as `Dm`.
+    AiDm,
+    /// Direct group conversation (multiple humans, no page origin).
+    GroupDm,
+    /// AI or project conversation explicitly shared with other humans.
+    SharedThread,
+}
+
 /// Sender of a conversation message. After the AI-user-identity refactor, both
 /// humans and AI users are represented by `User(Identity)`; clients tell them
 /// apart by joining against `ai_user_profile.identity`. `System(...)` is reserved
@@ -123,6 +140,14 @@ pub struct Conversation {
     /// at the end of a struct).
     #[default(ConversationVisibility::Private)]
     pub visibility: ConversationVisibility,
+    /// What kind of conversation this is. Existing rows default to
+    /// `ContextThread` (the historic page-attached behaviour).
+    #[default(ConversationKind::ContextThread)]
+    pub kind: ConversationKind,
+    /// Stable key for DM and AiDm conversations: sorted hex pair joined by
+    /// `-`. `None` for ContextThread and SharedThread.
+    #[default(None::<String>)]
+    pub canonical_key: Option<String>,
 }
 
 /// Membership join between conversations and identities. The worker
@@ -197,6 +222,11 @@ pub struct ConversationMessage {
     /// Tokens read from the prompt cache during this turn.
     #[default(0u32)]
     pub cache_read_input_tokens: u32,
+    /// Optional back-link to a source conversation (e.g. when a summary is
+    /// forwarded to a DM via the handoff panel). Rendered as a navigable card
+    /// in the thread view.
+    #[default(None::<u64>)]
+    pub linked_conversation_id: Option<u64>,
 }
 
 // ============================================================
@@ -237,6 +267,8 @@ pub fn create_conversation(
         // Default to Private even on public pages — most conversations are
         // thinking, not conclusions. Initiator can expand later.
         visibility: ConversationVisibility::Private,
+        kind: ConversationKind::ContextThread,
+        canonical_key: None,
     });
 
     let mut seen: Vec<Identity> = Vec::new();
@@ -300,6 +332,7 @@ pub fn send_message(
     output_tokens: Option<u32>,
     cache_creation_input_tokens: Option<u32>,
     cache_read_input_tokens: Option<u32>,
+    linked_conversation_id: Option<u64>,
 ) -> Result<(), String> {
     let conv = ctx
         .db
@@ -325,6 +358,7 @@ pub fn send_message(
         output_tokens: output_tokens.unwrap_or(0),
         cache_creation_input_tokens: cache_creation_input_tokens.unwrap_or(0),
         cache_read_input_tokens: cache_read_input_tokens.unwrap_or(0),
+        linked_conversation_id,
     });
 
     ctx.db.conversation().id().update(Conversation {
@@ -461,10 +495,132 @@ pub fn record_compaction(
         output_tokens: 0,
         cache_creation_input_tokens: 0,
         cache_read_input_tokens: 0,
+        linked_conversation_id: None,
     });
     ctx.db.conversation().id().update(Conversation {
         updated_at: ctx.timestamp,
         ..conv
     });
+    Ok(())
+}
+
+// ── DM helpers ───────────────────────────────────────────────────────────────
+
+/// Canonical key for a DM between two identities: alphabetically sorted hex
+/// strings joined by `-`. Deterministic regardless of call order.
+fn canonical_dm_key(a: Identity, b: Identity) -> String {
+    let a_hex = a.to_hex().to_string();
+    let b_hex = b.to_hex().to_string();
+    if a_hex < b_hex {
+        format!("{}-{}", a_hex, b_hex)
+    } else {
+        format!("{}-{}", b_hex, a_hex)
+    }
+}
+
+fn insert_dm_participants(
+    ctx: &ReducerContext,
+    conversation_id: u64,
+    initiator: Identity,
+    other: Identity,
+) {
+    for (identity, role) in [
+        (initiator, ParticipantRole::Initiator),
+        (other, ParticipantRole::Member),
+    ] {
+        ctx.db.conversation_participant().insert(ConversationParticipant {
+            id: next_conversation_participant_id(ctx),
+            conversation_id,
+            identity,
+            role,
+            joined_at: ctx.timestamp,
+            last_viewed_message_id: None,
+            left_at: None,
+        });
+    }
+}
+
+/// Find or create the canonical human-human DM between the caller and
+/// `other_identity`. Idempotent — safe to call on every navigation.
+/// The client discovers the conversation via its existing subscription.
+#[reducer]
+pub fn find_or_create_dm(
+    ctx: &ReducerContext,
+    other_identity: Identity,
+) -> Result<(), String> {
+    let me = ctx.sender();
+    if other_identity == Identity::ZERO {
+        return Err("other_identity must not be zero".to_string());
+    }
+    if me == other_identity {
+        return Err("Cannot DM yourself".to_string());
+    }
+
+    let key = canonical_dm_key(me, other_identity);
+    if ctx
+        .db
+        .conversation()
+        .iter()
+        .any(|c| c.canonical_key.as_deref() == Some(key.as_str()))
+    {
+        return Ok(());
+    }
+
+    let conv = ctx.db.conversation().insert(Conversation {
+        id: next_conversation_id(ctx),
+        page_id: None,
+        initiated_by: me,
+        status: ConversationStatus::Active,
+        created_at: ctx.timestamp,
+        updated_at: ctx.timestamp,
+        visibility: ConversationVisibility::Participants,
+        kind: ConversationKind::Dm,
+        canonical_key: Some(key),
+    });
+
+    insert_dm_participants(ctx, conv.id, me, other_identity);
+    Ok(())
+}
+
+/// Find or create the canonical human-AI DM between the caller and
+/// `ai_identity`. Idempotent — safe to call on every navigation.
+#[reducer]
+pub fn find_or_create_ai_dm(
+    ctx: &ReducerContext,
+    ai_identity: Identity,
+) -> Result<(), String> {
+    let me = ctx.sender();
+    if ai_identity == Identity::ZERO {
+        return Err("ai_identity must not be zero".to_string());
+    }
+    ctx.db
+        .ai_user_profile()
+        .identity()
+        .find(ai_identity)
+        .ok_or("Target identity is not an AI user")?;
+
+    let key = canonical_dm_key(me, ai_identity);
+    if ctx
+        .db
+        .conversation()
+        .iter()
+        .any(|c| c.canonical_key.as_deref() == Some(key.as_str()))
+    {
+        return Ok(());
+    }
+
+    let conv = ctx.db.conversation().insert(Conversation {
+        id: next_conversation_id(ctx),
+        page_id: None,
+        initiated_by: me,
+        status: ConversationStatus::Active,
+        created_at: ctx.timestamp,
+        updated_at: ctx.timestamp,
+        visibility: ConversationVisibility::Private,
+        kind: ConversationKind::AiDm,
+        canonical_key: Some(key),
+    });
+
+    insert_dm_participants(ctx, conv.id, me, ai_identity);
     Ok(())
 }

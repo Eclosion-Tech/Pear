@@ -12,6 +12,7 @@ import {
 import {
   ConversationStatus,
   ConversationVisibility,
+  ConversationKind,
 } from "./types";
 
 
@@ -27,4 +28,8 @@ export default __t.row({
   get visibility() {
     return ConversationVisibility;
   },
+  get kind() {
+    return ConversationKind;
+  },
+  canonicalKey: __t.option(__t.string()).name("canonical_key"),
 });

@@ -21,9 +21,13 @@ import { useAiUserProfileByIdentity } from "@/src/hooks/useAiUsers";
 export function ContextBar({
   pageId,
   aiUserIdentity,
+  activePageId,
+  onFork,
 }: {
   pageId: bigint;
   aiUserIdentity: Identity;
+  activePageId?: bigint;
+  onFork?: () => void;
 }) {
   const [pageRules] = useTable(tables.page_access_rule);
   const [pages] = useTable(tables.page);
@@ -32,6 +36,7 @@ export function ContextBar({
   const { identity: meIdentity } = useSpacetimeDB();
   const aiProfile = useAiUserProfileByIdentity(aiUserIdentity);
   const [adding, setAdding] = useState(false);
+  const [replacing, setReplacing] = useState(false);
 
   const aiHex = aiUserIdentity.toHexString();
   const grants = pageRules.filter(
@@ -67,6 +72,40 @@ export function ContextBar({
   const allChips = hostChip
     ? [hostChip, ...grantChips.filter((c) => c.pageId !== pageId)]
     : grantChips;
+
+  const activePage =
+    activePageId != null && activePageId !== pageId
+      ? pages.find((p) => p.id === activePageId)
+      : null;
+  const activeAlreadyGranted =
+    activePage != null && allChips.some((c) => c.pageId === activePageId);
+  const showActivePage = activePage != null && !activeAlreadyGranted;
+
+  async function handleAddActivePage() {
+    if (!activePageId) return;
+    await setRule({
+      pageId: activePageId,
+      principal: aiUserIdentity,
+      permission: { tag: "Read" } as never,
+    });
+  }
+
+  async function handleReplaceContext() {
+    if (!activePageId || replacing) return;
+    setReplacing(true);
+    try {
+      for (const chip of grantChips) {
+        await clearRule({ pageId: chip.pageId, principal: aiUserIdentity });
+      }
+      await setRule({
+        pageId: activePageId,
+        principal: aiUserIdentity,
+        permission: { tag: "Read" } as never,
+      });
+    } finally {
+      setReplacing(false);
+    }
+  }
 
   return (
     <div className="flex items-center gap-1.5 flex-wrap px-3 py-2 border-t border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900/50">
@@ -125,6 +164,38 @@ export function ContextBar({
           }}
           onCancel={() => setAdding(false)}
         />
+      )}
+      {showActivePage && (
+        <div className="flex items-center gap-1 w-full pt-1.5 mt-0.5 border-t border-neutral-200 dark:border-neutral-700">
+          <span className="text-[10px] text-neutral-400 shrink-0">Viewing:</span>
+          <span className="text-[11px] text-neutral-600 dark:text-neutral-300 font-medium truncate max-w-[100px]">
+            {activePage.title || "Untitled"}
+          </span>
+          <button
+            onClick={() => void handleAddActivePage()}
+            className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-200 dark:hover:bg-emerald-900/60 transition-colors"
+            title="Add this page to AI context"
+          >
+            Add
+          </button>
+          <button
+            onClick={() => void handleReplaceContext()}
+            disabled={replacing}
+            className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-900/60 disabled:opacity-40 transition-colors"
+            title="Replace all context with this page"
+          >
+            Replace
+          </button>
+          {onFork && (
+            <button
+              onClick={onFork}
+              className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300 hover:bg-violet-200 dark:hover:bg-violet-900/60 transition-colors"
+              title="Start a new conversation on this page"
+            >
+              Fork
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

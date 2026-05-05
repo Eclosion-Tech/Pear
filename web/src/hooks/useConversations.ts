@@ -101,8 +101,33 @@ export function useCreateConversation() {
   return useReducer(reducers.createConversation);
 }
 
+export function useFindOrCreateDm() {
+  return useReducer(reducers.findOrCreateDm);
+}
+
+export function useFindOrCreateAiDm() {
+  return useReducer(reducers.findOrCreateAiDm);
+}
+
+/** Returns the canonical DM conversation between the current user and another identity, if it exists. */
+export function useDmConversation(
+  myIdentity: Identity | null | undefined,
+  otherIdentity: Identity | undefined,
+): ConversationRow | undefined {
+  const { conversations } = useConversations();
+  if (!myIdentity || !otherIdentity) return undefined;
+  const a = myIdentity.toHexString();
+  const b = otherIdentity.toHexString();
+  const key = a < b ? `${a}-${b}` : `${b}-${a}`;
+  return conversations.find((c) => c.canonicalKey === key);
+}
+
 export function useSendMessage() {
   return useReducer(reducers.sendMessage);
+}
+
+export function useAddConversationParticipant() {
+  return useReducer(reducers.addConversationParticipant);
 }
 
 export function useCloseConversation() {

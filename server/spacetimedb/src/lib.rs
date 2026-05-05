@@ -57,8 +57,8 @@ pub use crate::automations::{
 pub use crate::conversations::ConversationVisibility;
 pub use crate::conversations::{
     conversation, conversation_message, conversation_participant, Conversation,
-    ConversationMessage, ConversationParticipant, ConversationStatus, MessageSender, MessageStatus,
-    ParticipantRole,
+    ConversationKind, ConversationMessage, ConversationParticipant, ConversationStatus,
+    MessageSender, MessageStatus, ParticipantRole,
 };
 pub use crate::extensions::{
     extension_manifest, extension_mcp_server, extension_permission, installed_extension,

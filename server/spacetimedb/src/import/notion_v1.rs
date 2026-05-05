@@ -14,7 +14,7 @@ use crate::{
     database_view, page, page_content, page_property_value, property_definition, user,
 };
 use crate::{
-    ActorType, Attachment, Conversation, ConversationMessage, ConversationParticipant,
+    ActorType, Attachment, Conversation, ConversationKind, ConversationMessage, ConversationParticipant,
     ConversationStatus, ConversationVisibility, DatabaseSchema, DatabaseView, MessageSender,
     MessageStatus, Page, PageContent, PagePropertyValue, PageType, ParticipantRole,
     PropertyDefinition, PropertyType, PropertyValue, ViewType,
@@ -581,6 +581,8 @@ fn decode_conversation(v: &Value) -> Result<Conversation, String> {
         created_at: decode_timestamp(m.get("createdAt").ok_or("createdAt")?)?,
         updated_at: decode_timestamp(m.get("updatedAt").ok_or("updatedAt")?)?,
         visibility: ConversationVisibility::Private,
+        kind: ConversationKind::ContextThread,
+        canonical_key: None,
     })
 }
 
@@ -630,6 +632,7 @@ fn decode_conversation_message(v: &Value) -> Result<ConversationMessage, String>
         output_tokens: u64_at(m, "outputTokens")? as u32,
         cache_creation_input_tokens: u64_at(m, "cacheCreationInputTokens")? as u32,
         cache_read_input_tokens: u64_at(m, "cacheReadInputTokens")? as u32,
+        linked_conversation_id: opt_u64_at(m, "linkedConversationId")?,
     })
 }
 

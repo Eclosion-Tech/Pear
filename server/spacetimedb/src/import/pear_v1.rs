@@ -12,7 +12,7 @@ use crate::{
 use crate::{
     ActorType, AiUserConfig, AiUserMemory, AiUserProfile, AiUserRole, ApiEndpoint, ApiEndpointKey,
     ApiFieldMapping, Attachment, AutoApplyBinding, AutoApplyContext, BlockAccessRule, Conversation,
-    ConversationMessage, ConversationParticipant, ConversationStatus, ConversationVisibility,
+    ConversationKind, ConversationMessage, ConversationParticipant, ConversationStatus, ConversationVisibility,
     DatabaseSchema, DatabaseView, ExtensionManifest, HarnessTemplate, HarnessTemplateSource,
     HttpMethod, InferenceProvider, InstalledExtension, MessageSender, MessageStatus, OrchaAgent,
     OrchaJob, OrchaSharedContext, OrchaTask, Page, PageAccessRule, PageContent, PagePropertyValue,
@@ -940,6 +940,8 @@ fn decode_conversation(v: &Value) -> Result<Conversation, String> {
         // Older snapshots predate visibility — default Private (most
         // restrictive safe default; expansion is reversible by the owner).
         visibility: ConversationVisibility::Private,
+        kind: ConversationKind::ContextThread,
+        canonical_key: None,
     })
 }
 
@@ -994,6 +996,7 @@ fn decode_conversation_message(v: &Value) -> Result<ConversationMessage, String>
         output_tokens: u64_at(m, "outputTokens")? as u32,
         cache_creation_input_tokens: u64_at(m, "cacheCreationInputTokens")? as u32,
         cache_read_input_tokens: u64_at(m, "cacheReadInputTokens")? as u32,
+        linked_conversation_id: opt_u64_at(m, "linkedConversationId")?,
     })
 }
 
