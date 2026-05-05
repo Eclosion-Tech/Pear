@@ -49,6 +49,8 @@ import DisableAiUserMemoryReducer from "../disable_ai_user_memory_reducer";
 import DisableAutomationReducer from "../disable_automation_reducer";
 import EnableAutomationReducer from "../enable_automation_reducer";
 import FailTaskReducer from "../fail_task_reducer";
+import FindOrCreateAiDmReducer from "../find_or_create_ai_dm_reducer";
+import FindOrCreateDmReducer from "../find_or_create_dm_reducer";
 import GrantAutoApplyReducer from "../grant_auto_apply_reducer";
 import GrantExtensionPermissionReducer from "../grant_extension_permission_reducer";
 import ImportNotionReducer from "../import_notion_reducer";
@@ -181,6 +183,8 @@ export type DisableAiUserMemoryParams = __Infer<typeof DisableAiUserMemoryReduce
 export type DisableAutomationParams = __Infer<typeof DisableAutomationReducer>;
 export type EnableAutomationParams = __Infer<typeof EnableAutomationReducer>;
 export type FailTaskParams = __Infer<typeof FailTaskReducer>;
+export type FindOrCreateAiDmParams = __Infer<typeof FindOrCreateAiDmReducer>;
+export type FindOrCreateDmParams = __Infer<typeof FindOrCreateDmReducer>;
 export type GrantAutoApplyParams = __Infer<typeof GrantAutoApplyReducer>;
 export type GrantExtensionPermissionParams = __Infer<typeof GrantExtensionPermissionReducer>;
 export type ImportNotionParams = __Infer<typeof ImportNotionReducer>;

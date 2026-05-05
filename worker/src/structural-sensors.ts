@@ -122,10 +122,19 @@ export class StructuralSensorsScheduler {
         `[sensors:${this.opts.label}] ${name} ok (${Date.now() - start}ms)`,
       );
     } catch (err) {
-      console.warn(
-        `[sensors:${this.opts.label}] ${name} failed:`,
-        err instanceof Error ? err.message : String(err),
-      );
+      const msg = err instanceof Error ? err.message : String(err);
+      const isAuthError =
+        msg.includes("admin required") ||
+        msg.includes("module publisher required") ||
+        msg.includes("admin or module publisher required");
+      if (isAuthError) {
+        console.info(
+          `[sensors:${this.opts.label}] Not authorized to run sensors — disabling (${msg})`,
+        );
+        this.stop();
+        return;
+      }
+      console.warn(`[sensors:${this.opts.label}] ${name} failed:`, msg);
     }
   }
 }

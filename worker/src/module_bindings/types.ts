@@ -434,8 +434,22 @@ export const Conversation = __t.object("Conversation", {
   get visibility() {
     return ConversationVisibility;
   },
+  get kind() {
+    return ConversationKind;
+  },
+  canonicalKey: __t.option(__t.string()),
 });
 export type Conversation = __Infer<typeof Conversation>;
+
+// The tagged union or sum type for the algebraic type `ConversationKind`.
+export const ConversationKind = __t.enum("ConversationKind", {
+  ContextThread: __t.unit(),
+  Dm: __t.unit(),
+  AiDm: __t.unit(),
+  GroupDm: __t.unit(),
+  SharedThread: __t.unit(),
+});
+export type ConversationKind = __Infer<typeof ConversationKind>;
 
 export const ConversationMessage = __t.object("ConversationMessage", {
   id: __t.u64(),
@@ -455,6 +469,7 @@ export const ConversationMessage = __t.object("ConversationMessage", {
   outputTokens: __t.u32(),
   cacheCreationInputTokens: __t.u32(),
   cacheReadInputTokens: __t.u32(),
+  linkedConversationId: __t.option(__t.u64()),
 });
 export type ConversationMessage = __Infer<typeof ConversationMessage>;
 

@@ -77,6 +77,8 @@ import DisableAiUserMemoryReducer from "./disable_ai_user_memory_reducer";
 import DisableAutomationReducer from "./disable_automation_reducer";
 import EnableAutomationReducer from "./enable_automation_reducer";
 import FailTaskReducer from "./fail_task_reducer";
+import FindOrCreateAiDmReducer from "./find_or_create_ai_dm_reducer";
+import FindOrCreateDmReducer from "./find_or_create_dm_reducer";
 import GrantAutoApplyReducer from "./grant_auto_apply_reducer";
 import GrantExtensionPermissionReducer from "./grant_extension_permission_reducer";
 import ImportNotionReducer from "./import_notion_reducer";
@@ -970,6 +972,8 @@ const reducersSchema = __reducers(
   __reducerSchema("disable_automation", DisableAutomationReducer),
   __reducerSchema("enable_automation", EnableAutomationReducer),
   __reducerSchema("fail_task", FailTaskReducer),
+  __reducerSchema("find_or_create_ai_dm", FindOrCreateAiDmReducer),
+  __reducerSchema("find_or_create_dm", FindOrCreateDmReducer),
   __reducerSchema("grant_auto_apply", GrantAutoApplyReducer),
   __reducerSchema("grant_extension_permission", GrantExtensionPermissionReducer),
   __reducerSchema("import_notion", ImportNotionReducer),
