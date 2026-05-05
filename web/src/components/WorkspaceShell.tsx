@@ -28,12 +28,20 @@ const WorkspaceAiPanelContext =
 export function useWorkspaceAiPanel() {
   const value = useContext(WorkspaceAiPanelContext);
   if (!value) {
-    throw new Error("useWorkspaceAiPanel must be used inside WorkspaceShell");
+    throw new Error(
+      "useWorkspaceAiPanel must be used inside WorkspaceAiPanelLayout (or WorkspaceShell)",
+    );
   }
   return value;
 }
 
-export function WorkspaceShell({ children }: { children: ReactNode }) {
+/**
+ * Provides AI panel context + optional slide-over {@link AiPanel}. Pass the same
+ * `Sidebar` + `main` row you would render without the panel (see {@link WorkspaceShell}).
+ * Pear-cloud CloudWorkspaceShell uses this so doc/database pages can call
+ * {@link useWorkspaceAiPanel} without duplicating the pear standalone layout.
+ */
+export function WorkspaceAiPanelLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const conversationParam = searchParams.get("conversation");
@@ -132,8 +140,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   return (
     <WorkspaceAiPanelContext.Provider value={contextValue}>
       <div className="flex h-screen bg-white dark:bg-neutral-950 text-neutral-900 dark:text-neutral-200 overflow-hidden">
-        <Sidebar />
-        <main className="flex-1 overflow-hidden">{children}</main>
+        {children}
         {isOpen && activePageId != null && (
           <aside
             className="shrink-0 relative flex border-l border-neutral-200 dark:border-neutral-800"
@@ -171,13 +178,34 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   );
 }
 
+export function WorkspaceShell({ children }: { children: ReactNode }) {
+  return (
+    <WorkspaceAiPanelLayout>
+      <Sidebar />
+      <main className="flex-1 overflow-hidden">{children}</main>
+    </WorkspaceAiPanelLayout>
+  );
+}
+
 function pageIdFromPathname(pathname: string | null): bigint | null {
   if (!pathname) return null;
-  const match = /^\/workspace\/([^/?#]+)/.exec(pathname);
-  if (!match) return null;
+  const parts = pathname.split("/").filter(Boolean);
+  if (parts.length < 2 || parts[0] !== "workspace") return null;
 
+  // Standalone pear: /workspace/<pageId>
+  if (parts.length === 2) {
+    try {
+      return BigInt(decodeURIComponent(parts[1]));
+    } catch {
+      return null;
+    }
+  }
+
+  // Pear-cloud: /workspace/<slug>/<pageId> (ignore /settings, /trash, etc.)
+  const last = parts[parts.length - 1];
+  if (!/^\d+$/.test(last)) return null;
   try {
-    return BigInt(decodeURIComponent(match[1]));
+    return BigInt(last);
   } catch {
     return null;
   }
