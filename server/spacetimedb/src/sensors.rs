@@ -7,6 +7,7 @@
 use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 
 use crate::auth::sender_is_admin;
+use crate::module_install::sender_is_module_publisher;
 use crate::extensions::tool_call_audit_log;
 use crate::id_counters::alloc_id;
 use crate::pages::page;
@@ -133,6 +134,13 @@ pub struct StructuralSensorFinding {
 // findings for that `sensor_kind`, then re-insert the current snapshot.
 // This keeps the table size proportional to live findings, not to runs.
 
+/// Human admins **or** the module publisher (pool Orcha connects with credentials
+/// that map to the publisher identity) may run structural sensors and resolve
+/// findings. Publisher is already trusted to ship this module.
+fn sender_may_run_structural_sensors(ctx: &ReducerContext) -> bool {
+    sender_is_admin(ctx) || sender_is_module_publisher(ctx)
+}
+
 fn upsert_finding(
     ctx: &ReducerContext,
     sensor_kind: &str,
@@ -215,8 +223,8 @@ fn auto_resolve_stale_findings(ctx: &ReducerContext, sensor_kind: &str, run_star
 /// orphans — they are roots.)
 #[reducer]
 pub fn run_orphan_detector(ctx: &ReducerContext) -> Result<(), String> {
-    if !sender_is_admin(ctx) {
-        return Err("admin required to run orphan detector".to_string());
+    if !sender_may_run_structural_sensors(ctx) {
+        return Err("admin or module publisher required to run orphan detector".to_string());
     }
     let run_started_at = ctx.timestamp;
     let kind = "orphan_detector";
@@ -257,8 +265,10 @@ pub fn run_orphan_detector(ctx: &ReducerContext) -> Result<(), String> {
 /// that point to deleted or missing pages.
 #[reducer]
 pub fn run_relational_integrity_sensor(ctx: &ReducerContext) -> Result<(), String> {
-    if !sender_is_admin(ctx) {
-        return Err("admin required to run relational integrity sensor".to_string());
+    if !sender_may_run_structural_sensors(ctx) {
+        return Err(
+            "admin or module publisher required to run relational integrity sensor".to_string(),
+        );
     }
     let run_started_at = ctx.timestamp;
     let kind = "relational_integrity";
@@ -310,8 +320,10 @@ pub fn run_relational_integrity_sensor(ctx: &ReducerContext) -> Result<(), Strin
 /// rows after a column type change.
 #[reducer]
 pub fn run_schema_consistency_sensor(ctx: &ReducerContext) -> Result<(), String> {
-    if !sender_is_admin(ctx) {
-        return Err("admin required to run schema consistency sensor".to_string());
+    if !sender_may_run_structural_sensors(ctx) {
+        return Err(
+            "admin or module publisher required to run schema consistency sensor".to_string(),
+        );
     }
     let run_started_at = ctx.timestamp;
     let kind = "schema_consistency";
@@ -386,8 +398,8 @@ pub fn run_schema_consistency_sensor(ctx: &ReducerContext) -> Result<(), String>
 /// have zero columns. Operators can extend this to enforce custom conventions.
 #[reducer]
 pub fn run_convention_sensor(ctx: &ReducerContext) -> Result<(), String> {
-    if !sender_is_admin(ctx) {
-        return Err("admin required to run convention sensor".to_string());
+    if !sender_may_run_structural_sensors(ctx) {
+        return Err("admin or module publisher required to run convention sensor".to_string());
     }
     let run_started_at = ctx.timestamp;
     let kind = "convention";
@@ -444,8 +456,10 @@ pub fn run_convention_sensor(ctx: &ReducerContext) -> Result<(), String> {
 /// directly.
 #[reducer]
 pub fn run_denied_tool_calls_sensor(ctx: &ReducerContext) -> Result<(), String> {
-    if !sender_is_admin(ctx) {
-        return Err("admin required to run denied tool calls sensor".to_string());
+    if !sender_may_run_structural_sensors(ctx) {
+        return Err(
+            "admin or module publisher required to run denied tool calls sensor".to_string(),
+        );
     }
     let run_started_at = ctx.timestamp;
     let kind = "denied_tool_calls";
@@ -504,8 +518,10 @@ fn stable_hash_pair(a: &str, b: &str) -> u64 {
 /// underlying issue and wants to clear the inbox entry).
 #[reducer]
 pub fn resolve_structural_finding(ctx: &ReducerContext, finding_id: u64) -> Result<(), String> {
-    if !sender_is_admin(ctx) {
-        return Err("admin required to resolve structural finding".to_string());
+    if !sender_may_run_structural_sensors(ctx) {
+        return Err(
+            "admin or module publisher required to resolve structural finding".to_string(),
+        );
     }
     let f = ctx
         .db
