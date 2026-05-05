@@ -10,7 +10,9 @@ export type PropertyTypeTag =
   | "Checkbox"
   | "Url"
   | "Person"
-  | "Ai";
+  | "Ai"
+  | "Formula"
+  | "Rollup";
 
 const PROPERTY_TYPES: { tag: PropertyTypeTag; icon: string; label: string }[] =
   [
@@ -24,6 +26,8 @@ const PROPERTY_TYPES: { tag: PropertyTypeTag; icon: string; label: string }[] =
     { tag: "Url", icon: "🔗", label: "URL" },
     { tag: "Person", icon: "👤", label: "Person" },
     { tag: "Ai", icon: "✨", label: "AI" },
+    { tag: "Formula", icon: "⨍", label: "Formula" },
+    { tag: "Rollup",  icon: "∑", label: "Rollup" },
   ];
 
 interface PropertyTypePickerProps {

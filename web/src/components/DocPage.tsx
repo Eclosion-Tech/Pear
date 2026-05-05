@@ -10,13 +10,13 @@ import { EmojiPicker } from "./EmojiPicker";
 import { PearEditor } from "./PearEditor";
 import { PageMoreMenu } from "./PageMoreMenu";
 import { PageHistoryPanel } from "./PageHistoryPanel";
-import { AiPanel } from "./AiPanel";
 import { PagePropertiesPanel } from "./PagePropertiesPanel";
 import { Breadcrumb } from "./Breadcrumb";
 import { useDatabaseSchema, usePropertyDefinitions } from "@/src/hooks/useDatabase";
 import { clearIdbCache, clearIdbCacheForPage } from "@/src/lib/spacetime";
 import { useWorkspace } from "@/src/providers/WorkspaceProvider";
 import { usePageAncestors } from "@/src/hooks/usePages";
+import { useWorkspaceAiPanel } from "@/src/components/WorkspaceShell";
 
 interface DocPageProps {
   page: PageRow;
@@ -24,6 +24,7 @@ interface DocPageProps {
 
 export function DocPage({ page }: DocPageProps) {
   const { idbNamespace } = useWorkspace();
+  const aiPanel = useWorkspaceAiPanel();
   const router = useRouter();
   const updateTitle = useUpdatePageTitle();
   const updatePageIcon = useUpdatePageIcon();
@@ -46,9 +47,6 @@ export function DocPage({ page }: DocPageProps) {
   const ancestors = usePageAncestors(page.id);
   const [title, setTitle] = useState(page.title);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [aiOpen, setAiOpen] = useState(false);
-  const [aiPanelWidth, setAiPanelWidth] = useState(320);
-  const aiResizing = useRef(false);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track whether the title input is focused so we can ignore server echoes
   // that would overwrite characters the user is still typing.
@@ -59,27 +57,6 @@ export function DocPage({ page }: DocPageProps) {
       setTitle(page.title);
     }
   }, [page.title]);
-
-  useEffect(() => {
-    function onMouseMove(e: MouseEvent) {
-      if (!aiResizing.current) return;
-      const newWidth = window.innerWidth - e.clientX;
-      setAiPanelWidth(Math.max(260, Math.min(newWidth, 700)));
-    }
-    function onMouseUp() {
-      if (aiResizing.current) {
-        aiResizing.current = false;
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-      }
-    }
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    };
-  }, []);
 
   async function handleTitleChange(value: string) {
     setTitle(value);
@@ -126,11 +103,11 @@ export function DocPage({ page }: DocPageProps) {
             placeholder="Untitled"
           />
           <button
-            onClick={() => setAiOpen((o) => !o)}
+            onClick={() => aiPanel.togglePanelForPage(page.id)}
             title="AI jobs"
             aria-label="AI jobs"
             className={`shrink-0 p-1.5 rounded transition-colors ${
-              aiOpen
+              aiPanel.isOpen && aiPanel.activePageId === page.id
                 ? "text-neutral-900 dark:text-white bg-neutral-200 dark:bg-neutral-700"
                 : "text-neutral-400 dark:text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800"
             }`}
@@ -191,35 +168,10 @@ export function DocPage({ page }: DocPageProps) {
           pageId={page.id}
           initialContent={content?.content ?? ""}
           childPages={children}
-          onMentionAiUser={() => setAiOpen(true)}
+          onMentionAiUser={() => aiPanel.openPanel({ pageId: page.id })}
         />
       </div>
       </div>
-      {aiOpen && (
-        <div className="shrink-0 relative flex" style={{ width: aiPanelWidth }}>
-          <div
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize AI panel"
-            title="Drag to resize panel"
-            className="absolute left-0 top-0 bottom-0 w-3 -translate-x-1/2 z-10 flex items-center justify-center cursor-col-resize hover:bg-violet-400/20 active:bg-violet-400/35 transition-colors select-none"
-            onMouseDown={(e) => {
-              e.preventDefault();
-              aiResizing.current = true;
-              document.body.style.cursor = "col-resize";
-              document.body.style.userSelect = "none";
-            }}
-          >
-            <span
-              className="w-1 h-12 rounded-full bg-neutral-300/80 dark:bg-neutral-600/80 pointer-events-none shadow-sm"
-              aria-hidden
-            />
-          </div>
-          <div className="flex-1 border-l border-neutral-200 dark:border-neutral-800 min-w-0">
-            <AiPanel pageId={page.id} onClose={() => setAiOpen(false)} />
-          </div>
-        </div>
-      )}
       {historyOpen && (
         <div className="w-72 shrink-0 border-l border-neutral-200 dark:border-neutral-800">
           <PageHistoryPanel

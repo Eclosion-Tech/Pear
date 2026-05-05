@@ -48,6 +48,7 @@ import {
   resolveDefault,
 } from "@/src/lib/propertyDefaults";
 import { RowDetailModal } from "./RowDetailModal";
+import { BoardView } from "./BoardView";
 import {
   PropertyTypePicker,
   type PropertyTypeTag,
@@ -295,6 +296,7 @@ const MIN_COL_WIDTH      = 60;
 
 interface ViewConfig {
   columnWidths?: Record<string, number>;
+  boardGroupByPropertyId?: string; // property definition id as string (bigint serialization)
 }
 function parseViewConfig(raw: string): ViewConfig {
   try { return JSON.parse(raw) as ViewConfig; } catch { return {}; }
@@ -641,7 +643,7 @@ export function GridView({ page }: GridViewProps) {
   // ────────────────────────────────────────────────────────────────────────────
 
   // ── View mode (grid / list) ──────────────────────────────────────────────────
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [viewMode, setViewMode] = useState<"grid" | "list" | "kanban">("grid");
 
   // ── Row multi-select ────────────────────────────────────────────────────────
   const [selectedRowIds, setSelectedRowIds] = useState<Set<bigint>>(new Set());
@@ -1048,7 +1050,8 @@ export function GridView({ page }: GridViewProps) {
     await addProperty({
       schemaId: schema.id,
       name,
-      propertyType: { tag: pendingType },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      propertyType: { tag: pendingType } as any,
       config: JSON.stringify(configObj),
     });
     setAddStep("idle");
@@ -1131,6 +1134,17 @@ export function GridView({ page }: GridViewProps) {
               <path d="M1 3h12M1 7h12M1 11h12" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
             </svg>
           </button>
+          <button
+            onClick={() => setViewMode("kanban")}
+            title="Board view"
+            className={`p-1 rounded transition-colors ${viewMode === "kanban" ? "bg-white dark:bg-neutral-700 shadow-sm text-neutral-700 dark:text-neutral-200" : "text-neutral-400 dark:text-neutral-500 hover:text-neutral-600 dark:hover:text-neutral-300"}`}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <rect x="1" y="1" width="3" height="12" rx="0.5" stroke="currentColor" strokeWidth="1.3"/>
+              <rect x="5.5" y="1" width="3" height="9" rx="0.5" stroke="currentColor" strokeWidth="1.3"/>
+              <rect x="10" y="1" width="3" height="11" rx="0.5" stroke="currentColor" strokeWidth="1.3"/>
+            </svg>
+          </button>
         </div>
       </div>
 
@@ -1210,7 +1224,23 @@ export function GridView({ page }: GridViewProps) {
           onOpenRow={(r) => { clearRowSelection(); setSelectedRow(r); }}
         />
       )}
-      <div className={`overflow-x-auto${viewMode === "list" ? " hidden" : ""}${isResizing || draggingColKey ? " select-none" : ""}${isResizing ? " cursor-col-resize" : ""}${draggingColKey ? " cursor-grabbing" : ""}`}>
+      {viewMode === "kanban" && (
+        <BoardView
+          page={page}
+          schema={schema ?? null}
+          properties={properties}
+          rows={sortedRows}
+          groupByPropertyId={view ? parseViewConfig(view.config).boardGroupByPropertyId ?? null : null}
+          onSetGroupByPropertyId={(id) => {
+            if (!view) return;
+            const cfg = parseViewConfig(view.config);
+            cfg.boardGroupByPropertyId = id ?? undefined;
+            updateViewConfig({ viewId: view.id, config: serializeViewConfig(cfg) });
+          }}
+          onOpenRow={(row) => { clearRowSelection(); setSelectedRow(row); }}
+        />
+      )}
+      <div className={`overflow-x-auto${viewMode === "list" || viewMode === "kanban" ? " hidden" : ""}${isResizing || draggingColKey ? " select-none" : ""}${isResizing ? " cursor-col-resize" : ""}${draggingColKey ? " cursor-grabbing" : ""}`}>
         <table
           ref={tableRef}
           className={`border-collapse text-sm${fillSource ? " cursor-nwse-resize select-none" : ""}`}
@@ -1675,7 +1705,8 @@ function ColumnHeader({
     }
     await updatePropertyType({
       propertyDefinitionId: prop.id,
-      propertyType: { tag },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      propertyType: { tag } as any,
     });
     closeMenu();
   }

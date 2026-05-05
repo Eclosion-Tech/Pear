@@ -7,12 +7,12 @@ import type { PageRow } from "@/src/hooks/usePages";
 import { GridView } from "./GridView";
 import { PageMoreMenu } from "./PageMoreMenu";
 import { PageHistoryPanel } from "./PageHistoryPanel";
-import { AiPanel } from "./AiPanel";
 import { Breadcrumb } from "./Breadcrumb";
 import { EmojiPicker } from "./EmojiPicker";
 import { usePageAncestors } from "@/src/hooks/usePages";
 import { clearIdbCache, clearIdbCacheForPage } from "@/src/lib/spacetime";
 import { useWorkspace } from "@/src/providers/WorkspaceProvider";
+import { useWorkspaceAiPanel } from "@/src/components/WorkspaceShell";
 
 interface DatabasePageProps {
   page: PageRow;
@@ -20,6 +20,7 @@ interface DatabasePageProps {
 
 export function DatabasePage({ page }: DatabasePageProps) {
   const { idbNamespace } = useWorkspace();
+  const aiPanel = useWorkspaceAiPanel();
   const router = useRouter();
   const updateTitle = useUpdatePageTitle();
   const updatePageIcon = useUpdatePageIcon();
@@ -30,7 +31,6 @@ export function DatabasePage({ page }: DatabasePageProps) {
   const [title, setTitle] = useState(page.title);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [aiOpen, setAiOpen] = useState(false);
 
   useEffect(() => {
     setTitle(page.title);
@@ -73,11 +73,11 @@ export function DatabasePage({ page }: DatabasePageProps) {
             placeholder="Untitled Database"
           />
           <button
-            onClick={() => setAiOpen((o) => !o)}
+            onClick={() => aiPanel.togglePanelForPage(page.id)}
             title="AI jobs"
             aria-label="AI jobs"
             className={`shrink-0 p-1.5 rounded transition-colors ${
-              aiOpen
+              aiPanel.isOpen && aiPanel.activePageId === page.id
                 ? "text-neutral-900 dark:text-white bg-neutral-200 dark:bg-neutral-700"
                 : "text-neutral-400 dark:text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800"
             }`}
@@ -133,13 +133,6 @@ export function DatabasePage({ page }: DatabasePageProps) {
       <div className="flex-1 min-h-0 overflow-auto px-4 pb-8">
         <GridView page={page} />
       </div>
-
-      {/* AI panel */}
-      {aiOpen && (
-        <div className="absolute top-0 right-0 h-full w-80 border-l border-neutral-200 dark:border-neutral-800 shadow-xl z-20">
-          <AiPanel pageId={page.id} onClose={() => setAiOpen(false)} />
-        </div>
-      )}
 
       {/* History panel — fixed overlay so it doesn't shrink the grid */}
       {historyOpen && (

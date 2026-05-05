@@ -12,6 +12,9 @@ use crate::api_endpoints::{
     validate_field_name, validate_slug, ApiCallLog, ApiEndpoint, ApiEndpointKey, ApiFieldMapping,
     DatabaseRowMarker, HttpMethod, PropertyValueInput,
 };
+use crate::automations::{
+    enqueue_page_created, enqueue_page_deleted, enqueue_page_updated, enqueue_property_changed,
+};
 use crate::pages::schemas::{
     database_schema, next_page_property_value_history_id, next_page_property_value_id,
     page_property_value, page_property_value_history, property_definition, PagePropertyValue,
@@ -64,12 +67,7 @@ pub fn create_api_endpoint(
 
     // Check slug uniqueness (the #[unique] attribute enforces this at the DB level,
     // but a clear error message is better than a raw constraint violation).
-    let slug_taken = ctx
-        .db
-        .api_endpoint()
-        .slug()
-        .find(&slug)
-        .is_some();
+    let slug_taken = ctx.db.api_endpoint().slug().find(&slug).is_some();
     if slug_taken {
         return Err(format!("Slug '{}' is already in use", slug));
     }
@@ -160,10 +158,9 @@ pub fn update_api_endpoint(
     }
 
     // If slug changed, check uniqueness
-    if slug != endpoint.slug
-        && ctx.db.api_endpoint().slug().find(&slug).is_some() {
-            return Err(format!("Slug '{}' is already in use", slug));
-        }
+    if slug != endpoint.slug && ctx.db.api_endpoint().slug().find(&slug).is_some() {
+        return Err(format!("Slug '{}' is already in use", slug));
+    }
 
     ctx.db.api_endpoint().id().update(ApiEndpoint {
         slug,
@@ -520,6 +517,7 @@ pub fn create_database_row(
         updated_at: ctx.timestamp,
     });
 
+    let mut changed_properties: Vec<u64> = Vec::new();
     for PropertyValueInput {
         property_definition_id,
         value,
@@ -542,6 +540,7 @@ pub fn create_database_row(
             property_definition_id,
             value,
         });
+        changed_properties.push(property_definition_id);
     }
 
     ctx.db.database_row_marker().insert(DatabaseRowMarker {
@@ -550,6 +549,11 @@ pub fn create_database_row(
         page_id: row.id,
         created_at: ctx.timestamp,
     });
+
+    enqueue_page_created(ctx, row.id);
+    for property_definition_id in changed_properties {
+        enqueue_property_changed(ctx, row.id, property_definition_id);
+    }
 
     Ok(())
 }
@@ -568,12 +572,7 @@ pub fn update_database_row(
     set_values: Vec<PropertyValueInput>,
     clear_values: Vec<u64>,
 ) -> Result<(), String> {
-    let row = ctx
-        .db
-        .page()
-        .id()
-        .find(page_id)
-        .ok_or("Page not found")?;
+    let row = ctx.db.page().id().find(page_id).ok_or("Page not found")?;
     if row.page_type != PageType::Database {
         return Err("Target page must be a database row".to_string());
     }
@@ -591,12 +590,14 @@ pub fn update_database_row(
         None => row.title.clone(),
     };
 
+    let title_changed = new_title != row.title;
     ctx.db.page().id().update(Page {
         title: new_title,
         updated_at: ctx.timestamp,
         ..row
     });
 
+    let mut changed_properties: Vec<u64> = Vec::new();
     for PropertyValueInput {
         property_definition_id,
         value,
@@ -652,6 +653,7 @@ pub fn update_database_row(
                 });
             }
         }
+        changed_properties.push(property_definition_id);
     }
 
     for property_definition_id in clear_values {
@@ -663,7 +665,15 @@ pub fn update_database_row(
             .find(|v| v.property_definition_id == property_definition_id);
         if let Some(pv) = existing {
             ctx.db.page_property_value().id().delete(pv.id);
+            changed_properties.push(property_definition_id);
         }
+    }
+
+    if title_changed {
+        enqueue_page_updated(ctx, page_id);
+    }
+    for property_definition_id in changed_properties {
+        enqueue_property_changed(ctx, page_id, property_definition_id);
     }
 
     Ok(())
@@ -673,12 +683,7 @@ pub fn update_database_row(
 /// Idempotent — already-deleted rows succeed without modification.
 #[reducer]
 pub fn delete_database_row(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
-    let row = ctx
-        .db
-        .page()
-        .id()
-        .find(page_id)
-        .ok_or("Page not found")?;
+    let row = ctx.db.page().id().find(page_id).ok_or("Page not found")?;
     if row.page_type != PageType::Database {
         return Err("Target page must be a database row".to_string());
     }
@@ -690,6 +695,7 @@ pub fn delete_database_row(ctx: &ReducerContext, page_id: u64) -> Result<(), Str
         updated_at: ctx.timestamp,
         ..row
     });
+    enqueue_page_deleted(ctx, page_id);
     Ok(())
 }
 

@@ -34,6 +34,9 @@ import {
 } from "spacetimedb";
 
 // Import all reducer arg schemas
+import AddAutomationActionReducer from "./add_automation_action_reducer";
+import AddAutomationCapabilityReducer from "./add_automation_capability_reducer";
+import AddAutomationConditionReducer from "./add_automation_condition_reducer";
 import AddConversationParticipantReducer from "./add_conversation_participant_reducer";
 import AddPropertyReducer from "./add_property_reducer";
 import AddTasksToJobReducer from "./add_tasks_to_job_reducer";
@@ -49,10 +52,12 @@ import CreateApiEndpointReducer from "./create_api_endpoint_reducer";
 import CreateApiEndpointKeyReducer from "./create_api_endpoint_key_reducer";
 import CreateApiFieldMappingReducer from "./create_api_field_mapping_reducer";
 import CreateAttachmentReducer from "./create_attachment_reducer";
+import CreateAutomationDraftReducer from "./create_automation_draft_reducer";
 import CreateConversationReducer from "./create_conversation_reducer";
 import CreateDatabaseRowReducer from "./create_database_row_reducer";
 import CreateDatabaseSchemaReducer from "./create_database_schema_reducer";
 import CreateJobReducer from "./create_job_reducer";
+import CreateLocalUserReducer from "./create_local_user_reducer";
 import CreatePageReducer from "./create_page_reducer";
 import CreateReviewAgentBindingReducer from "./create_review_agent_binding_reducer";
 import CreateViewReducer from "./create_view_reducer";
@@ -60,6 +65,8 @@ import DeleteAiUserReducer from "./delete_ai_user_reducer";
 import DeleteApiEndpointReducer from "./delete_api_endpoint_reducer";
 import DeleteApiFieldMappingReducer from "./delete_api_field_mapping_reducer";
 import DeleteAttachmentReducer from "./delete_attachment_reducer";
+import DeleteAutomationReducer from "./delete_automation_reducer";
+import DeleteAutomationActionReducer from "./delete_automation_action_reducer";
 import DeleteDatabaseRowReducer from "./delete_database_row_reducer";
 import DeleteHarnessTemplateReducer from "./delete_harness_template_reducer";
 import DeletePageReducer from "./delete_page_reducer";
@@ -67,9 +74,12 @@ import DeletePropertyReducer from "./delete_property_reducer";
 import DeleteReviewAgentBindingReducer from "./delete_review_agent_binding_reducer";
 import DeleteViewReducer from "./delete_view_reducer";
 import DisableAiUserMemoryReducer from "./disable_ai_user_memory_reducer";
+import DisableAutomationReducer from "./disable_automation_reducer";
+import EnableAutomationReducer from "./enable_automation_reducer";
 import FailTaskReducer from "./fail_task_reducer";
 import GrantAutoApplyReducer from "./grant_auto_apply_reducer";
 import GrantExtensionPermissionReducer from "./grant_extension_permission_reducer";
+import ImportNotionReducer from "./import_notion_reducer";
 import ImportPearSnapshotV1Reducer from "./import_pear_snapshot_v_1_reducer";
 import InstallExtensionReducer from "./install_extension_reducer";
 import InvalidateAiEvaluationsForRowReducer from "./invalidate_ai_evaluations_for_row_reducer";
@@ -78,6 +88,8 @@ import LoginReducer from "./login_reducer";
 import LogoutReducer from "./logout_reducer";
 import MarkConversationReadReducer from "./mark_conversation_read_reducer";
 import MovePageReducer from "./move_page_reducer";
+import ProcessAutomationEventReducer from "./process_automation_event_reducer";
+import ProcessPendingAutomationEventsReducer from "./process_pending_automation_events_reducer";
 import PromoteToInstructionReducer from "./promote_to_instruction_reducer";
 import ProvisionAiUserMemoryReducer from "./provision_ai_user_memory_reducer";
 import PublishExtensionReducer from "./publish_extension_reducer";
@@ -114,6 +126,8 @@ import SetAiUserApiKeyReducer from "./set_ai_user_api_key_reducer";
 import SetAiUserSerperApiKeyReducer from "./set_ai_user_serper_api_key_reducer";
 import SetAiUserToolSecretsJsonReducer from "./set_ai_user_tool_secrets_json_reducer";
 import SetAllowEvaluationSharingReducer from "./set_allow_evaluation_sharing_reducer";
+import SetAutomationLimitsReducer from "./set_automation_limits_reducer";
+import SetAutomationModeReducer from "./set_automation_mode_reducer";
 import SetBlockAccessRuleReducer from "./set_block_access_rule_reducer";
 import SetConversationVisibilityReducer from "./set_conversation_visibility_reducer";
 import SetDefaultViewReducer from "./set_default_view_reducer";
@@ -137,6 +151,8 @@ import UpdateAiUserProfileReducer from "./update_ai_user_profile_reducer";
 import UpdateAiUserSystemPromptReducer from "./update_ai_user_system_prompt_reducer";
 import UpdateApiEndpointReducer from "./update_api_endpoint_reducer";
 import UpdateApiFieldMappingReducer from "./update_api_field_mapping_reducer";
+import UpdateAutomationActionReducer from "./update_automation_action_reducer";
+import UpdateAutomationRuleReducer from "./update_automation_rule_reducer";
 import UpdateDatabaseRowReducer from "./update_database_row_reducer";
 import UpdateDatabaseSchemaConfigReducer from "./update_database_schema_config_reducer";
 import UpdateExtensionReducer from "./update_extension_reducer";
@@ -148,6 +164,7 @@ import UpdatePropertyConfigReducer from "./update_property_config_reducer";
 import UpdatePropertyTypeReducer from "./update_property_type_reducer";
 import UpdateViewConfigReducer from "./update_view_config_reducer";
 import UpsertHarnessTemplateReducer from "./upsert_harness_template_reducer";
+import ValidateAutomationReducer from "./validate_automation_reducer";
 
 // Import all procedure arg schemas
 
@@ -163,6 +180,13 @@ import ApiEndpointKeyLookupRow from "./api_endpoint_key_lookup_table";
 import ApiFieldMappingRow from "./api_field_mapping_table";
 import AttachmentRow from "./attachment_table";
 import AutoApplyBindingRow from "./auto_apply_binding_table";
+import AutomationActionRow from "./automation_action_table";
+import AutomationCapabilityRow from "./automation_capability_table";
+import AutomationConditionRow from "./automation_condition_table";
+import AutomationEventQueueRow from "./automation_event_queue_table";
+import AutomationPrimitiveRow from "./automation_primitive_table";
+import AutomationRuleRow from "./automation_rule_table";
+import AutomationRunLogRow from "./automation_run_log_table";
 import BlockAccessRuleRow from "./block_access_rule_table";
 import ConversationRow from "./conversation_table";
 import ConversationMessageRow from "./conversation_message_table";
@@ -357,6 +381,98 @@ const tablesSchema = __schema({
       { name: 'auto_apply_binding_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, AutoApplyBindingRow),
+  automation_action: __table({
+    name: 'automation_action',
+    indexes: [
+      { name: 'by_rule', algorithm: 'btree', columns: [
+        'automationId',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'automation_action_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, AutomationActionRow),
+  automation_capability: __table({
+    name: 'automation_capability',
+    indexes: [
+      { name: 'by_rule', algorithm: 'btree', columns: [
+        'automationId',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'automation_capability_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, AutomationCapabilityRow),
+  automation_condition: __table({
+    name: 'automation_condition',
+    indexes: [
+      { name: 'by_rule', algorithm: 'btree', columns: [
+        'automationId',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'automation_condition_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, AutomationConditionRow),
+  automation_event_queue: __table({
+    name: 'automation_event_queue',
+    indexes: [
+      { name: 'by_rule', algorithm: 'btree', columns: [
+        'automationId',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'automation_event_queue_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, AutomationEventQueueRow),
+  automation_primitive: __table({
+    name: 'automation_primitive',
+    indexes: [
+      { name: 'name', algorithm: 'btree', columns: [
+        'name',
+      ] },
+    ],
+    constraints: [
+      { name: 'automation_primitive_name_key', constraint: 'unique', columns: ['name'] },
+    ],
+  }, AutomationPrimitiveRow),
+  automation_rule: __table({
+    name: 'automation_rule',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'automation_rule_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, AutomationRuleRow),
+  automation_run_log: __table({
+    name: 'automation_run_log',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'by_queue', algorithm: 'btree', columns: [
+        'queueId',
+      ] },
+    ],
+    constraints: [
+      { name: 'automation_run_log_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, AutomationRunLogRow),
   block_access_rule: __table({
     name: 'block_access_rule',
     indexes: [
@@ -811,6 +927,9 @@ const tablesSchema = __schema({
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
+  __reducerSchema("add_automation_action", AddAutomationActionReducer),
+  __reducerSchema("add_automation_capability", AddAutomationCapabilityReducer),
+  __reducerSchema("add_automation_condition", AddAutomationConditionReducer),
   __reducerSchema("add_conversation_participant", AddConversationParticipantReducer),
   __reducerSchema("add_property", AddPropertyReducer),
   __reducerSchema("add_tasks_to_job", AddTasksToJobReducer),
@@ -826,10 +945,12 @@ const reducersSchema = __reducers(
   __reducerSchema("create_api_endpoint_key", CreateApiEndpointKeyReducer),
   __reducerSchema("create_api_field_mapping", CreateApiFieldMappingReducer),
   __reducerSchema("create_attachment", CreateAttachmentReducer),
+  __reducerSchema("create_automation_draft", CreateAutomationDraftReducer),
   __reducerSchema("create_conversation", CreateConversationReducer),
   __reducerSchema("create_database_row", CreateDatabaseRowReducer),
   __reducerSchema("create_database_schema", CreateDatabaseSchemaReducer),
   __reducerSchema("create_job", CreateJobReducer),
+  __reducerSchema("create_local_user", CreateLocalUserReducer),
   __reducerSchema("create_page", CreatePageReducer),
   __reducerSchema("create_review_agent_binding", CreateReviewAgentBindingReducer),
   __reducerSchema("create_view", CreateViewReducer),
@@ -837,6 +958,8 @@ const reducersSchema = __reducers(
   __reducerSchema("delete_api_endpoint", DeleteApiEndpointReducer),
   __reducerSchema("delete_api_field_mapping", DeleteApiFieldMappingReducer),
   __reducerSchema("delete_attachment", DeleteAttachmentReducer),
+  __reducerSchema("delete_automation", DeleteAutomationReducer),
+  __reducerSchema("delete_automation_action", DeleteAutomationActionReducer),
   __reducerSchema("delete_database_row", DeleteDatabaseRowReducer),
   __reducerSchema("delete_harness_template", DeleteHarnessTemplateReducer),
   __reducerSchema("delete_page", DeletePageReducer),
@@ -844,9 +967,12 @@ const reducersSchema = __reducers(
   __reducerSchema("delete_review_agent_binding", DeleteReviewAgentBindingReducer),
   __reducerSchema("delete_view", DeleteViewReducer),
   __reducerSchema("disable_ai_user_memory", DisableAiUserMemoryReducer),
+  __reducerSchema("disable_automation", DisableAutomationReducer),
+  __reducerSchema("enable_automation", EnableAutomationReducer),
   __reducerSchema("fail_task", FailTaskReducer),
   __reducerSchema("grant_auto_apply", GrantAutoApplyReducer),
   __reducerSchema("grant_extension_permission", GrantExtensionPermissionReducer),
+  __reducerSchema("import_notion", ImportNotionReducer),
   __reducerSchema("import_pear_snapshot_v_1", ImportPearSnapshotV1Reducer),
   __reducerSchema("install_extension", InstallExtensionReducer),
   __reducerSchema("invalidate_ai_evaluations_for_row", InvalidateAiEvaluationsForRowReducer),
@@ -855,6 +981,8 @@ const reducersSchema = __reducers(
   __reducerSchema("logout", LogoutReducer),
   __reducerSchema("mark_conversation_read", MarkConversationReadReducer),
   __reducerSchema("move_page", MovePageReducer),
+  __reducerSchema("process_automation_event", ProcessAutomationEventReducer),
+  __reducerSchema("process_pending_automation_events", ProcessPendingAutomationEventsReducer),
   __reducerSchema("promote_to_instruction", PromoteToInstructionReducer),
   __reducerSchema("provision_ai_user_memory", ProvisionAiUserMemoryReducer),
   __reducerSchema("publish_extension", PublishExtensionReducer),
@@ -891,6 +1019,8 @@ const reducersSchema = __reducers(
   __reducerSchema("set_ai_user_serper_api_key", SetAiUserSerperApiKeyReducer),
   __reducerSchema("set_ai_user_tool_secrets_json", SetAiUserToolSecretsJsonReducer),
   __reducerSchema("set_allow_evaluation_sharing", SetAllowEvaluationSharingReducer),
+  __reducerSchema("set_automation_limits", SetAutomationLimitsReducer),
+  __reducerSchema("set_automation_mode", SetAutomationModeReducer),
   __reducerSchema("set_block_access_rule", SetBlockAccessRuleReducer),
   __reducerSchema("set_conversation_visibility", SetConversationVisibilityReducer),
   __reducerSchema("set_default_view", SetDefaultViewReducer),
@@ -914,6 +1044,8 @@ const reducersSchema = __reducers(
   __reducerSchema("update_ai_user_system_prompt", UpdateAiUserSystemPromptReducer),
   __reducerSchema("update_api_endpoint", UpdateApiEndpointReducer),
   __reducerSchema("update_api_field_mapping", UpdateApiFieldMappingReducer),
+  __reducerSchema("update_automation_action", UpdateAutomationActionReducer),
+  __reducerSchema("update_automation_rule", UpdateAutomationRuleReducer),
   __reducerSchema("update_database_row", UpdateDatabaseRowReducer),
   __reducerSchema("update_database_schema_config", UpdateDatabaseSchemaConfigReducer),
   __reducerSchema("update_extension", UpdateExtensionReducer),
@@ -925,6 +1057,7 @@ const reducersSchema = __reducers(
   __reducerSchema("update_property_type", UpdatePropertyTypeReducer),
   __reducerSchema("update_view_config", UpdateViewConfigReducer),
   __reducerSchema("upsert_harness_template", UpsertHarnessTemplateReducer),
+  __reducerSchema("validate_automation", ValidateAutomationReducer),
 );
 
 /** The schema information for all procedures in this module. This is defined the same way as the procedures would have been defined in the server. */

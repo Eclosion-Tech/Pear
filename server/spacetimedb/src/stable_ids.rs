@@ -15,11 +15,7 @@ pub(crate) fn generate_external_id(ctx: &ReducerContext, kind: &str, extra: &str
     let mut hasher = Sha256::new();
     hasher.update(format!("{:?}", ctx.sender()).as_bytes());
     hasher.update(b"\x00");
-    hasher.update(
-        ctx.timestamp
-            .to_micros_since_unix_epoch()
-            .to_le_bytes(),
-    );
+    hasher.update(ctx.timestamp.to_micros_since_unix_epoch().to_le_bytes());
     hasher.update(b"\x00");
     hasher.update(kind.as_bytes());
     hasher.update(b"\x00");

@@ -121,15 +121,17 @@ pub fn add_conversation_participant(
         return Ok(());
     }
 
-    ctx.db.conversation_participant().insert(ConversationParticipant {
-        id: next_conversation_participant_id(ctx),
-        conversation_id,
-        identity,
-        role: ParticipantRole::Member,
-        joined_at: ctx.timestamp,
-        last_viewed_message_id: None,
-        left_at: None,
-    });
+    ctx.db
+        .conversation_participant()
+        .insert(ConversationParticipant {
+            id: next_conversation_participant_id(ctx),
+            conversation_id,
+            identity,
+            role: ParticipantRole::Member,
+            joined_at: ctx.timestamp,
+            last_viewed_message_id: None,
+            left_at: None,
+        });
 
     if visibility_rank(&conv.visibility) < visibility_rank(&ConversationVisibility::Participants) {
         ctx.db.conversation().id().update(Conversation {
@@ -157,7 +159,9 @@ pub fn remove_conversation_participant(
         .ok_or("Conversation not found")?;
     let is_self = identity == ctx.sender();
     if !is_self && conv.initiated_by != ctx.sender() && !sender_is_admin(ctx) {
-        return Err("Only the initiator, admin, or the participant themselves can remove".to_string());
+        return Err(
+            "Only the initiator, admin, or the participant themselves can remove".to_string(),
+        );
     }
     let participant = ctx
         .db
@@ -166,9 +170,12 @@ pub fn remove_conversation_participant(
         .filter(&conversation_id)
         .find(|p| p.identity == identity && p.left_at.is_none())
         .ok_or("Active participant not found")?;
-    ctx.db.conversation_participant().id().update(ConversationParticipant {
-        left_at: Some(ctx.timestamp),
-        ..participant
-    });
+    ctx.db
+        .conversation_participant()
+        .id()
+        .update(ConversationParticipant {
+            left_at: Some(ctx.timestamp),
+            ..participant
+        });
     Ok(())
 }

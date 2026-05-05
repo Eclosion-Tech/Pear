@@ -9,13 +9,18 @@
 
 use spacetimedb::{Identity, ReducerContext};
 
-use crate::access_control::{BlockAccessRule, block_access_rule, page_access_rule};
+use crate::access_control::{block_access_rule, page_access_rule, BlockAccessRule};
 use crate::auth::{sender_is_admin, user};
 use crate::module_install::sender_is_module_publisher;
 use crate::types::{Permission, Principal};
 
 pub(crate) fn page_has_any_rule(ctx: &ReducerContext, page_id: u64) -> bool {
-    ctx.db.page_access_rule().page_id().filter(&page_id).next().is_some()
+    ctx.db
+        .page_access_rule()
+        .page_id()
+        .filter(&page_id)
+        .next()
+        .is_some()
 }
 
 fn principal_has_page_permission(

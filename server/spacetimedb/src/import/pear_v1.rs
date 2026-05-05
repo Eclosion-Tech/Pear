@@ -171,7 +171,9 @@ fn import_database_schema(ctx: &ReducerContext, tables: &Value) -> Result<(), St
         return Ok(());
     };
     for row in arr {
-        ctx.db.database_schema().insert(decode_database_schema(row)?);
+        ctx.db
+            .database_schema()
+            .insert(decode_database_schema(row)?);
     }
     Ok(())
 }
@@ -181,7 +183,9 @@ fn import_property_definition(ctx: &ReducerContext, tables: &Value) -> Result<()
         return Ok(());
     };
     for row in arr {
-        ctx.db.property_definition().insert(decode_property_definition(row)?);
+        ctx.db
+            .property_definition()
+            .insert(decode_property_definition(row)?);
     }
     Ok(())
 }
@@ -201,7 +205,9 @@ fn import_page_property_value(ctx: &ReducerContext, tables: &Value) -> Result<()
         return Ok(());
     };
     for row in arr {
-        ctx.db.page_property_value().insert(decode_page_property_value(row)?);
+        ctx.db
+            .page_property_value()
+            .insert(decode_page_property_value(row)?);
     }
     Ok(())
 }
@@ -304,7 +310,10 @@ fn import_conversation_participant(ctx: &ReducerContext, tables: &Value) -> Resu
 }
 
 fn import_conversation_message(ctx: &ReducerContext, tables: &Value) -> Result<(), String> {
-    let Some(arr) = tables.get("conversation_message").and_then(|v| v.as_array()) else {
+    let Some(arr) = tables
+        .get("conversation_message")
+        .and_then(|v| v.as_array())
+    else {
         return Ok(());
     };
     for row in arr {
@@ -320,7 +329,9 @@ fn import_extension_manifest(ctx: &ReducerContext, tables: &Value) -> Result<(),
         return Ok(());
     };
     for row in arr {
-        ctx.db.extension_manifest().insert(decode_extension_manifest(row)?);
+        ctx.db
+            .extension_manifest()
+            .insert(decode_extension_manifest(row)?);
     }
     Ok(())
 }
@@ -330,7 +341,9 @@ fn import_installed_extension(ctx: &ReducerContext, tables: &Value) -> Result<()
         return Ok(());
     };
     for row in arr {
-        ctx.db.installed_extension().insert(decode_installed_extension(row)?);
+        ctx.db
+            .installed_extension()
+            .insert(decode_installed_extension(row)?);
     }
     Ok(())
 }
@@ -366,11 +379,16 @@ fn import_orcha_task(ctx: &ReducerContext, tables: &Value) -> Result<(), String>
 }
 
 fn import_orcha_shared_context(ctx: &ReducerContext, tables: &Value) -> Result<(), String> {
-    let Some(arr) = tables.get("orcha_shared_context").and_then(|v| v.as_array()) else {
+    let Some(arr) = tables
+        .get("orcha_shared_context")
+        .and_then(|v| v.as_array())
+    else {
         return Ok(());
     };
     for row in arr {
-        ctx.db.orcha_shared_context().insert(decode_orcha_shared_context(row)?);
+        ctx.db
+            .orcha_shared_context()
+            .insert(decode_orcha_shared_context(row)?);
     }
     Ok(())
 }
@@ -380,7 +398,9 @@ fn import_user_preference(ctx: &ReducerContext, tables: &Value) -> Result<(), St
         return Ok(());
     };
     for row in arr {
-        ctx.db.user_preference().insert(decode_user_preference(row)?);
+        ctx.db
+            .user_preference()
+            .insert(decode_user_preference(row)?);
     }
     Ok(())
 }
@@ -390,7 +410,9 @@ fn import_page_access_rule(ctx: &ReducerContext, tables: &Value) -> Result<(), S
         return Ok(());
     };
     for row in arr {
-        ctx.db.page_access_rule().insert(decode_page_access_rule(row)?);
+        ctx.db
+            .page_access_rule()
+            .insert(decode_page_access_rule(row)?);
     }
     Ok(())
 }
@@ -400,7 +422,9 @@ fn import_block_access_rule(ctx: &ReducerContext, tables: &Value) -> Result<(), 
         return Ok(());
     };
     for row in arr {
-        ctx.db.block_access_rule().insert(decode_block_access_rule(row)?);
+        ctx.db
+            .block_access_rule()
+            .insert(decode_block_access_rule(row)?);
     }
     Ok(())
 }
@@ -433,7 +457,10 @@ fn import_harness_template(ctx: &ReducerContext, tables: &Value) -> Result<(), S
 }
 
 fn import_review_agent_binding(ctx: &ReducerContext, tables: &Value) -> Result<(), String> {
-    let Some(arr) = tables.get("review_agent_binding").and_then(|v| v.as_array()) else {
+    let Some(arr) = tables
+        .get("review_agent_binding")
+        .and_then(|v| v.as_array())
+    else {
         return Ok(());
     };
     for row in arr {
@@ -556,10 +583,7 @@ fn decode_u64(v: &Value) -> Result<u64, String> {
     }
     if let Some(o) = v.as_object() {
         if o.get("__pear").and_then(|x| x.as_str()) == Some("bigint") {
-            let s = o
-                .get("v")
-                .and_then(|x| x.as_str())
-                .ok_or("bigint.v")?;
+            let s = o.get("v").and_then(|x| x.as_str()).ok_or("bigint.v")?;
             return s.parse().map_err(|e| format!("bigint: {e}"));
         }
     }
@@ -597,9 +621,7 @@ fn decode_identity(v: &Value) -> Result<Identity, String> {
 
 fn identity_from_hex(hex_str: &str) -> Result<Identity, String> {
     let bytes = hex::decode(hex_str.trim()).map_err(|e| format!("identity hex: {e}"))?;
-    let arr: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_| "identity must be 32 bytes")?;
+    let arr: [u8; 32] = bytes.try_into().map_err(|_| "identity must be 32 bytes")?;
     Ok(Identity::from_byte_array(arr))
 }
 
@@ -655,7 +677,10 @@ fn decode_user(v: &Value) -> Result<User, String> {
         // Optional in older snapshots — defaults to non-admin so an import
         // never silently grants admin rights. Workspace owner can promote
         // post-import via `set_user_admin`.
-        is_admin: m.get("isAdmin").and_then(|_| bool_at(m, "isAdmin").ok()).unwrap_or(false),
+        is_admin: m
+            .get("isAdmin")
+            .and_then(|_| bool_at(m, "isAdmin").ok())
+            .unwrap_or(false),
     })
 }
 
@@ -686,11 +711,7 @@ fn decode_opt_f32_vec(v: Option<&Value>) -> Result<Option<Vec<f32>>, String> {
         Some(Value::Array(a)) => {
             let mut out = Vec::with_capacity(a.len());
             for x in a {
-                out.push(
-                    x.as_f64()
-                        .ok_or("f32")?
-                        as f32,
-                );
+                out.push(x.as_f64().ok_or("f32")? as f32);
             }
             Ok(Some(out))
         }
@@ -896,7 +917,10 @@ fn decode_ai_user_profile(v: &Value) -> Result<AiUserProfile, String> {
         // hasApiKey is informational only — fall back to false when absent so
         // older snapshots can still decode (the operator must reconfigure keys
         // post-import anyway).
-        has_api_key: m.get("hasApiKey").and_then(|v| v.as_bool()).unwrap_or(false),
+        has_api_key: m
+            .get("hasApiKey")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         created_by: decode_identity(m.get("createdBy").ok_or("createdBy")?)?,
         created_at: decode_timestamp(m.get("createdAt").ok_or("createdAt")?)?,
         updated_at: decode_timestamp(m.get("updatedAt").ok_or("updatedAt")?)?,
@@ -1146,11 +1170,7 @@ fn decode_orcha_shared_context(v: &Value) -> Result<OrchaSharedContext, String> 
     })
 }
 
-fn decode_enum_tag2<T: Clone>(
-    v: &Value,
-    variants: &[(&str, T)],
-    _name: &str,
-) -> Result<T, String> {
+fn decode_enum_tag2<T: Clone>(v: &Value, variants: &[(&str, T)], _name: &str) -> Result<T, String> {
     if let Some(s) = v.as_str() {
         for (k, t) in variants {
             if *k == s {
@@ -1180,14 +1200,15 @@ fn decode_property_value(v: &Value) -> Result<PropertyValue, String> {
     match tag {
         "Text" => Ok(PropertyValue::Text(string_at(o, "value")?)),
         "Number" => Ok(PropertyValue::Number(
-            o.get("value")
-                .and_then(|x| x.as_f64())
-                .ok_or("Number")?,
+            o.get("value").and_then(|x| x.as_f64()).ok_or("Number")?,
         )),
         "Date" => Ok(PropertyValue::Date(u64_at(o, "value")?)),
         "Select" => Ok(PropertyValue::Select(string_at(o, "value")?)),
         "MultiSelect" => {
-            let arr = o.get("value").and_then(|v| v.as_array()).ok_or("MultiSelect")?;
+            let arr = o
+                .get("value")
+                .and_then(|v| v.as_array())
+                .ok_or("MultiSelect")?;
             let mut xs = Vec::new();
             for x in arr {
                 xs.push(x.as_str().ok_or("ms")?.to_string());
@@ -1195,7 +1216,10 @@ fn decode_property_value(v: &Value) -> Result<PropertyValue, String> {
             Ok(PropertyValue::MultiSelect(xs))
         }
         "Relation" => {
-            let arr = o.get("value").and_then(|v| v.as_array()).ok_or("Relation")?;
+            let arr = o
+                .get("value")
+                .and_then(|v| v.as_array())
+                .ok_or("Relation")?;
             let mut xs = Vec::new();
             for x in arr {
                 xs.push(decode_u64(x)?);
@@ -1482,9 +1506,7 @@ fn decode_api_endpoint(v: &Value) -> Result<ApiEndpoint, String> {
         slug: string_at(m, "slug")?,
         display_name: string_at(m, "displayName")?,
         description: string_at(m, "description")?,
-        allowed_methods: decode_http_method_vec(
-            m.get("allowedMethods").ok_or("allowedMethods")?,
-        )?,
+        allowed_methods: decode_http_method_vec(m.get("allowedMethods").ok_or("allowedMethods")?)?,
         require_auth: bool_at(m, "requireAuth")?,
         created_by: decode_identity(m.get("createdBy").ok_or("createdBy")?)?,
         created_at: decode_timestamp(m.get("createdAt").ok_or("createdAt")?)?,
@@ -1513,9 +1535,7 @@ fn decode_api_endpoint_key(v: &Value) -> Result<ApiEndpointKey, String> {
         endpoint_id: u64_at(m, "endpointId")?,
         key_hash: string_at(m, "keyHash")?,
         label: string_at(m, "label")?,
-        allowed_methods: decode_http_method_vec(
-            m.get("allowedMethods").ok_or("allowedMethods")?,
-        )?,
+        allowed_methods: decode_http_method_vec(m.get("allowedMethods").ok_or("allowedMethods")?)?,
         created_by: decode_identity(m.get("createdBy").ok_or("createdBy")?)?,
         created_at: decode_timestamp(m.get("createdAt").ok_or("createdAt")?)?,
         last_used_at: opt_timestamp_at(m, "lastUsedAt")?,

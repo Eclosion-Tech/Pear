@@ -220,6 +220,193 @@ export const AutoApplyContext = __t.enum("AutoApplyContext", {
 });
 export type AutoApplyContext = __Infer<typeof AutoApplyContext>;
 
+export const AutomationAction = __t.object("AutomationAction", {
+  id: __t.u64(),
+  automationId: __t.u64(),
+  order: __t.u32(),
+  get actionKind() {
+    return AutomationActionKind;
+  },
+  config: __t.string(),
+});
+export type AutomationAction = __Infer<typeof AutomationAction>;
+
+// The tagged union or sum type for the algebraic type `AutomationActionKind`.
+export const AutomationActionKind = __t.enum("AutomationActionKind", {
+  HttpRequest: __t.unit(),
+  SendEmail: __t.unit(),
+  CreatePage: __t.unit(),
+  UpdateProperty: __t.unit(),
+  OrchaJob: __t.unit(),
+});
+export type AutomationActionKind = __Infer<typeof AutomationActionKind>;
+
+export const AutomationCapability = __t.object("AutomationCapability", {
+  id: __t.u64(),
+  automationId: __t.u64(),
+  get capabilityKind() {
+    return AutomationCapabilityKind;
+  },
+  scopeConfig: __t.string(),
+});
+export type AutomationCapability = __Infer<typeof AutomationCapability>;
+
+// The tagged union or sum type for the algebraic type `AutomationCapabilityKind`.
+export const AutomationCapabilityKind = __t.enum("AutomationCapabilityKind", {
+  ReadPage: __t.unit(),
+  WritePage: __t.unit(),
+  HttpOutbound: __t.unit(),
+  SendEmail: __t.unit(),
+  SpendAiTokens: __t.unit(),
+  SpawnOrchaJob: __t.unit(),
+});
+export type AutomationCapabilityKind = __Infer<typeof AutomationCapabilityKind>;
+
+export const AutomationCondition = __t.object("AutomationCondition", {
+  id: __t.u64(),
+  automationId: __t.u64(),
+  order: __t.u32(),
+  get conditionKind() {
+    return AutomationConditionKind;
+  },
+  config: __t.string(),
+});
+export type AutomationCondition = __Infer<typeof AutomationCondition>;
+
+// The tagged union or sum type for the algebraic type `AutomationConditionKind`.
+export const AutomationConditionKind = __t.enum("AutomationConditionKind", {
+  PayloadFieldEquals: __t.unit(),
+});
+export type AutomationConditionKind = __Infer<typeof AutomationConditionKind>;
+
+export const AutomationCronTick = __t.object("AutomationCronTick", {
+  scheduledId: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+});
+export type AutomationCronTick = __Infer<typeof AutomationCronTick>;
+
+export const AutomationEventQueue = __t.object("AutomationEventQueue", {
+  id: __t.u64(),
+  automationId: __t.u64(),
+  get triggerKind() {
+    return AutomationTriggerKind;
+  },
+  triggerPayload: __t.string(),
+  get status() {
+    return AutomationEventStatus;
+  },
+  attempts: __t.u32(),
+  claimedBy: __t.option(__t.string()),
+  error: __t.option(__t.string()),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+});
+export type AutomationEventQueue = __Infer<typeof AutomationEventQueue>;
+
+// The tagged union or sum type for the algebraic type `AutomationEventStatus`.
+export const AutomationEventStatus = __t.enum("AutomationEventStatus", {
+  Pending: __t.unit(),
+  Running: __t.unit(),
+  Completed: __t.unit(),
+  Failed: __t.unit(),
+  Skipped: __t.unit(),
+});
+export type AutomationEventStatus = __Infer<typeof AutomationEventStatus>;
+
+// The tagged union or sum type for the algebraic type `AutomationMode`.
+export const AutomationMode = __t.enum("AutomationMode", {
+  DryRun: __t.unit(),
+  Live: __t.unit(),
+});
+export type AutomationMode = __Infer<typeof AutomationMode>;
+
+export const AutomationPrimitive = __t.object("AutomationPrimitive", {
+  name: __t.string(),
+  get primitiveKind() {
+    return AutomationPrimitiveKind;
+  },
+  title: __t.string(),
+  description: __t.string(),
+  configSchemaJson: __t.string(),
+});
+export type AutomationPrimitive = __Infer<typeof AutomationPrimitive>;
+
+// The tagged union or sum type for the algebraic type `AutomationPrimitiveKind`.
+export const AutomationPrimitiveKind = __t.enum("AutomationPrimitiveKind", {
+  Trigger: __t.unit(),
+  Action: __t.unit(),
+  Condition: __t.unit(),
+  Capability: __t.unit(),
+});
+export type AutomationPrimitiveKind = __Infer<typeof AutomationPrimitiveKind>;
+
+export const AutomationRule = __t.object("AutomationRule", {
+  id: __t.u64(),
+  name: __t.string(),
+  enabled: __t.bool(),
+  get mode() {
+    return AutomationMode;
+  },
+  get triggerKind() {
+    return AutomationTriggerKind;
+  },
+  triggerConfig: __t.string(),
+  get scheduleKind() {
+    return AutomationScheduleKind;
+  },
+  scheduleConfig: __t.string(),
+  timezone: __t.string(),
+  nextRunAt: __t.option(__t.timestamp()),
+  lastRunAt: __t.option(__t.timestamp()),
+  maxTicks: __t.option(__t.u64()),
+  tickCount: __t.u64(),
+  expiresAt: __t.option(__t.timestamp()),
+  runAs: __t.identity(),
+  createdBy: __t.identity(),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+  canonicalDescription: __t.string(),
+});
+export type AutomationRule = __Infer<typeof AutomationRule>;
+
+export const AutomationRunLog = __t.object("AutomationRunLog", {
+  id: __t.u64(),
+  queueId: __t.u64(),
+  actionId: __t.option(__t.u64()),
+  success: __t.bool(),
+  dryRun: __t.bool(),
+  message: __t.string(),
+  resultJson: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type AutomationRunLog = __Infer<typeof AutomationRunLog>;
+
+export const AutomationScheduleJob = __t.object("AutomationScheduleJob", {
+  scheduledId: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+  automationId: __t.u64(),
+});
+export type AutomationScheduleJob = __Infer<typeof AutomationScheduleJob>;
+
+// The tagged union or sum type for the algebraic type `AutomationScheduleKind`.
+export const AutomationScheduleKind = __t.enum("AutomationScheduleKind", {
+  None: __t.unit(),
+  Interval: __t.unit(),
+  OneShot: __t.unit(),
+  Cron: __t.unit(),
+});
+export type AutomationScheduleKind = __Infer<typeof AutomationScheduleKind>;
+
+// The tagged union or sum type for the algebraic type `AutomationTriggerKind`.
+export const AutomationTriggerKind = __t.enum("AutomationTriggerKind", {
+  PageCreated: __t.unit(),
+  PageUpdated: __t.unit(),
+  PageDeleted: __t.unit(),
+  PropertyChanged: __t.unit(),
+  Scheduled: __t.unit(),
+});
+export type AutomationTriggerKind = __Infer<typeof AutomationTriggerKind>;
+
 export const BlockAccessRule = __t.object("BlockAccessRule", {
   id: __t.u64(),
   pageId: __t.u64(),
@@ -706,6 +893,8 @@ export const PropertyType = __t.enum("PropertyType", {
   Url: __t.unit(),
   Person: __t.unit(),
   Ai: __t.unit(),
+  Formula: __t.unit(),
+  Rollup: __t.unit(),
 });
 export type PropertyType = __Infer<typeof PropertyType>;
 

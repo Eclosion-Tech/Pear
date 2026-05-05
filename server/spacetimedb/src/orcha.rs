@@ -22,13 +22,23 @@ pub(crate) fn next_orcha_task_id(ctx: &ReducerContext) -> u64 {
 
 pub(crate) fn next_orcha_shared_context_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "orcha_shared_context", || {
-        ctx.db.orcha_shared_context().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .orcha_shared_context()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
 pub(crate) fn next_orcha_usage_event_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "orcha_usage_event", || {
-        ctx.db.orcha_usage_event().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .orcha_usage_event()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 // ============================================================
@@ -146,7 +156,9 @@ fn check_orcha_job_completion(ctx: &ReducerContext, job_id: u64) {
     if tasks.is_empty() {
         return;
     }
-    let all_terminal = tasks.iter().all(|t| t.status == "done" || t.status == "failed");
+    let all_terminal = tasks
+        .iter()
+        .all(|t| t.status == "done" || t.status == "failed");
     if !all_terminal {
         return;
     }
@@ -226,7 +238,11 @@ pub fn create_job(
         }
     }
 
-    log::info!("Orcha: created job {} with {} tasks", job_id, task_ids.len());
+    log::info!(
+        "Orcha: created job {} with {} tasks",
+        job_id,
+        task_ids.len()
+    );
     Ok(())
 }
 
@@ -539,4 +555,3 @@ fn month_to_date_tokens(ctx: &ReducerContext, ai_user_id: u64) -> u64 {
         .map(|e| e.tokens_in + e.tokens_out)
         .sum()
 }
-

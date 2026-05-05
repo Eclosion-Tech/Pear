@@ -10,7 +10,12 @@ use crate::id_counters::alloc_id;
 
 pub(crate) fn next_user_preference_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "user_preference", || {
-        ctx.db.user_preference().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .user_preference()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
@@ -126,6 +131,46 @@ pub fn register(
     Ok(())
 }
 
+/// Admin-created native-login account for self-hosted/dev workspaces.
+///
+/// This intentionally creates only a `UserCredential` row. The human's actual
+/// `User` row is tied to the SpacetimeDB identity they connect with, so it is
+/// created/authenticated when they first log in with this credential.
+#[reducer]
+pub fn create_local_user(
+    ctx: &ReducerContext,
+    email: String,
+    name: String,
+    password: String,
+) -> Result<(), String> {
+    if !sender_is_admin(ctx) {
+        return Err("Only workspace admins can add local users".to_string());
+    }
+
+    let email = email.trim().to_lowercase();
+    if email.is_empty() {
+        return Err("Email is required".to_string());
+    }
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("Name is required".to_string());
+    }
+    if password.len() < 6 {
+        return Err("Password must be at least 6 characters".to_string());
+    }
+    if ctx.db.user_credential().email().find(&email).is_some() {
+        return Err("Email already registered".to_string());
+    }
+
+    ctx.db.user_credential().insert(UserCredential {
+        email: email.clone(),
+        name,
+        password_hash: hash_password(&email, &password),
+        created_at: ctx.timestamp,
+    });
+    Ok(())
+}
+
 /// Verifies credentials and marks the current identity as authenticated.
 #[reducer]
 pub fn login(ctx: &ReducerContext, email: String, password: String) -> Result<(), String> {
@@ -190,16 +235,11 @@ pub fn set_user_admin(
             .filter(|u| u.identity != target_identity && u.is_admin && u.is_authenticated)
             .count();
         if other_admins == 0 {
-            return Err(
-                "Cannot demote the last admin — promote another user first".to_string(),
-            );
+            return Err("Cannot demote the last admin — promote another user first".to_string());
         }
     }
 
-    ctx.db.user().identity().update(User {
-        is_admin,
-        ..target
-    });
+    ctx.db.user().identity().update(User { is_admin, ..target });
     Ok(())
 }
 
@@ -255,7 +295,10 @@ pub(crate) fn sender_is_admin(ctx: &ReducerContext) -> bool {
 /// Drives the bootstrap rule: the first user to authenticate on a fresh
 /// database is auto-promoted, so a workspace can never be admin-less.
 pub(crate) fn workspace_has_no_admin(ctx: &ReducerContext) -> bool {
-    !ctx.db.user().iter().any(|u| u.is_admin && u.is_authenticated)
+    !ctx.db
+        .user()
+        .iter()
+        .any(|u| u.is_admin && u.is_authenticated)
 }
 
 /// Parses OIDC `email` and `name`/`preferred_username` claims from the sender's JWT.

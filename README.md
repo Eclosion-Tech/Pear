@@ -20,7 +20,7 @@ Pages and database rows are the same entity — a page viewed in a grid is a row
 | Layer | Technology |
 |---|---|
 | Backend / sync | [SpacetimeDB](https://spacetimedb.com) (Rust module) |
-| Frontend | Next.js 15 · React 19 · Tailwind CSS v4 |
+| Frontend | Next.js · React 19 · Tailwind CSS 3 |
 | Editor | [BlockNote](https://blocknotejs.org) + Yjs (local-first; full state snapshot to SpacetimeDB) |
 | Worker | Node (optional) — AI conversations, Orcha task execution, tool runtime |
 | Auth | Native SpacetimeDB email/password (default) · Any OIDC provider (optional) |
@@ -87,6 +87,10 @@ Pear/
 
 ---
 
+**Standalone OSS:** this repository is self-contained. Install dependencies with `pnpm` from the repo root (see [below](#development-without-docker)). It does not rely on the Pear Cloud app’s `node_modules` or any package from a parent monorepo.
+
+---
+
 ## Getting started
 
 ### Prerequisites
@@ -149,11 +153,14 @@ spacetime publish -s local pear-dev
 
 ### Frontend
 
+From the **repository root** (pnpm workspace — installs `web/`, `worker/`, `desktop/`, etc.):
+
 ```bash
 pnpm install
-cd web
-pnpm dev        # starts Next.js on http://localhost:3001
+pnpm --filter @pear/web dev   # or: cd web && pnpm dev  →  http://localhost:3001
 ```
+
+Do not symlink another project’s `node_modules` into `web/`; the lockfile in this repo is the source of truth.
 
 Set the SpacetimeDB URI in `web/.env.local` if it differs from the default:
 

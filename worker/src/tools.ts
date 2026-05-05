@@ -358,9 +358,192 @@ function buildTaggedPropertyValue(
   }
 }
 
+function safeJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function ensureJsonObjectString(
+  raw: string,
+  label: string,
+): { ok: true } | { ok: false; error: string } {
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { ok: false, error: `${label} must be a JSON object string` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      error: `${label} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 // ── Pear workspace tools ──────────────────────────────────────────────────────
 
 const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
+  {
+    name: "list_automation_primitives",
+    description:
+      "List the automation triggers, actions, conditions, and capability declarations Pear supports. " +
+      "Use this before drafting an automation.",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+    },
+  },
+  {
+    name: "create_automation_draft",
+    description:
+      "Create a disabled dry-run automation draft from structured fields. " +
+      "Automations should be drafted, validated, and dry-run before being enabled. " +
+      "For non-scheduled triggers use schedule_kind='None' and schedule_config='{}'. " +
+      "For scheduled routines use trigger_kind='Scheduled' plus schedule_kind Interval, OneShot, or Cron.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string" },
+        trigger_kind: {
+          type: "string",
+          enum: ["PageCreated", "PageUpdated", "PageDeleted", "PropertyChanged", "Scheduled"],
+        },
+        trigger_config: {
+          type: "string",
+          description:
+            "JSON object. Examples: '{\"parent_id\":12}', '{\"property_definition_id\":42}', or '{}' for scheduled.",
+        },
+        schedule_kind: {
+          type: "string",
+          enum: ["None", "Interval", "OneShot", "Cron"],
+        },
+        schedule_config: {
+          type: "string",
+          description:
+            "JSON object. Interval: '{\"interval_seconds\":3600}'. OneShot: '{\"run_at_micros\":1770000000000000}'. Cron: '{\"expression\":\"0 9 * * 1\"}'. Use '{}' when schedule_kind is None.",
+        },
+        timezone: {
+          type: "string",
+          description: "Timezone label for review. Cron v0 evaluates in UTC; use 'UTC' unless the user explicitly asks otherwise.",
+        },
+        canonical_description: {
+          type: "string",
+          description:
+            "Human-readable sentence explaining exactly when this automation runs and what it will do.",
+        },
+      },
+      required: [
+        "name",
+        "trigger_kind",
+        "trigger_config",
+        "schedule_kind",
+        "schedule_config",
+        "canonical_description",
+      ],
+    },
+  },
+  {
+    name: "add_automation_action",
+    description:
+      "Add an ordered action to an automation draft. v0 actions run as dry-run logs only; live side effects are intentionally disabled.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        automation_id: { type: "number" },
+        order: { type: "number" },
+        action_kind: {
+          type: "string",
+          enum: ["HttpRequest", "SendEmail", "CreatePage", "UpdateProperty", "OrchaJob"],
+        },
+        config: {
+          type: "string",
+          description: "JSON object containing action-specific config/templates.",
+        },
+      },
+      required: ["automation_id", "order", "action_kind", "config"],
+    },
+  },
+  {
+    name: "add_automation_condition",
+    description:
+      "Add a condition to an automation draft. v0 supports top-level trigger payload equality checks.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        automation_id: { type: "number" },
+        order: { type: "number" },
+        condition_kind: {
+          type: "string",
+          enum: ["PayloadFieldEquals"],
+        },
+        config: {
+          type: "string",
+          description: "JSON object, e.g. '{\"field\":\"page_id\",\"equals\":\"123\"}'.",
+        },
+      },
+      required: ["automation_id", "order", "condition_kind", "config"],
+    },
+  },
+  {
+    name: "add_automation_capability",
+    description:
+      "Declare a capability an automation needs. This is part of the review/trust surface even while v0 is dry-run only.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        automation_id: { type: "number" },
+        capability_kind: {
+          type: "string",
+          enum: ["ReadPage", "WritePage", "HttpOutbound", "SendEmail", "SpendAiTokens", "SpawnOrchaJob"],
+        },
+        scope_config: {
+          type: "string",
+          description: "JSON object describing the scope, e.g. '{\"page_id\":12}' or '{\"monthly_tokens\":10000}'.",
+        },
+      },
+      required: ["automation_id", "capability_kind", "scope_config"],
+    },
+  },
+  {
+    name: "validate_automation",
+    description:
+      "Validate an automation draft. Use this after adding actions/conditions/capabilities and before enabling.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        automation_id: { type: "number" },
+      },
+      required: ["automation_id"],
+    },
+  },
+  {
+    name: "enable_automation_dry_run",
+    description:
+      "Enable a validated automation in dry-run mode. It will enqueue and log what it would do, without live side effects.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        automation_id: { type: "number" },
+      },
+      required: ["automation_id"],
+    },
+  },
+  {
+    name: "process_pending_automation_events",
+    description:
+      "Process pending automation events into dry-run logs. Usually not needed for newly triggered dry-run automations, but useful after enabling existing queued events.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        limit: { type: "number", description: "Maximum events to process, 1-100." },
+      },
+      required: ["limit"],
+    },
+  },
   {
     name: "create_page",
     description:
@@ -973,6 +1156,144 @@ export async function executeTool(
         }
 
         return JSON.stringify(result);
+      }
+
+      case "list_automation_primitives": {
+        type PrimitiveRow = {
+          name: string;
+          primitiveKind: { tag: string };
+          title: string;
+          description: string;
+          configSchemaJson: string;
+        };
+        const rows = [...(conn.db.automation_primitive.iter() as Iterable<PrimitiveRow>)]
+          .map((p) => ({
+            name: p.name,
+            kind: p.primitiveKind.tag,
+            title: p.title,
+            description: p.description,
+            config_schema: safeJson(p.configSchemaJson),
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        return JSON.stringify({ ok: true, primitives: rows });
+      }
+
+      case "create_automation_draft": {
+        const name = input.name as string;
+        const triggerKind = input.trigger_kind as string;
+        const triggerConfig = (input.trigger_config as string | undefined) ?? "{}";
+        const scheduleKind = (input.schedule_kind as string | undefined) ?? "None";
+        const scheduleConfig = (input.schedule_config as string | undefined) ?? "{}";
+        const timezone = (input.timezone as string | undefined) ?? "UTC";
+        const canonicalDescription = input.canonical_description as string;
+
+        const triggerParsed = ensureJsonObjectString(triggerConfig, "trigger_config");
+        if (!triggerParsed.ok) return JSON.stringify(triggerParsed);
+        const scheduleParsed = ensureJsonObjectString(scheduleConfig, "schedule_config");
+        if (!scheduleParsed.ok) return JSON.stringify(scheduleParsed);
+
+        const existingIds = new Set(
+          [...(conn.db.automation_rule.iter() as Iterable<AnyRow>)].map((r) => r.id as bigint),
+        );
+        await conn.reducers.createAutomationDraft({
+          name,
+          triggerKind: { tag: triggerKind },
+          triggerConfig,
+          scheduleKind: { tag: scheduleKind },
+          scheduleConfig,
+          timezone,
+          canonicalDescription,
+        });
+        const newRule = await waitFor(() =>
+          [...(conn.db.automation_rule.iter() as Iterable<AnyRow>)].find(
+            (r) => !existingIds.has(r.id as bigint) && r.name === name,
+          ),
+        );
+        if (!newRule) {
+          return JSON.stringify({ ok: false, error: "Automation draft created but could not read back ID" });
+        }
+        return JSON.stringify({
+          ok: true,
+          automation_id: Number(newRule.id as bigint),
+          name,
+          enabled: false,
+          mode: "DryRun",
+          next_step: "Add at least one action, optionally add conditions/capabilities, then call validate_automation.",
+        });
+      }
+
+      case "add_automation_action": {
+        const automationId = BigInt(input.automation_id as number);
+        const order = Number(input.order ?? 0);
+        const actionKind = input.action_kind as string;
+        const config = (input.config as string | undefined) ?? "{}";
+        const parsed = ensureJsonObjectString(config, "config");
+        if (!parsed.ok) return JSON.stringify(parsed);
+        await conn.reducers.addAutomationAction({
+          automationId,
+          order,
+          actionKind: { tag: actionKind },
+          config,
+        });
+        return JSON.stringify({ ok: true, automation_id: Number(automationId), action_kind: actionKind });
+      }
+
+      case "add_automation_condition": {
+        const automationId = BigInt(input.automation_id as number);
+        const order = Number(input.order ?? 0);
+        const conditionKind = input.condition_kind as string;
+        const config = (input.config as string | undefined) ?? "{}";
+        const parsed = ensureJsonObjectString(config, "config");
+        if (!parsed.ok) return JSON.stringify(parsed);
+        await conn.reducers.addAutomationCondition({
+          automationId,
+          order,
+          conditionKind: { tag: conditionKind },
+          config,
+        });
+        return JSON.stringify({ ok: true, automation_id: Number(automationId), condition_kind: conditionKind });
+      }
+
+      case "add_automation_capability": {
+        const automationId = BigInt(input.automation_id as number);
+        const capabilityKind = input.capability_kind as string;
+        const scopeConfig = (input.scope_config as string | undefined) ?? "{}";
+        const parsed = ensureJsonObjectString(scopeConfig, "scope_config");
+        if (!parsed.ok) return JSON.stringify(parsed);
+        await conn.reducers.addAutomationCapability({
+          automationId,
+          capabilityKind: { tag: capabilityKind },
+          scopeConfig,
+        });
+        return JSON.stringify({ ok: true, automation_id: Number(automationId), capability_kind: capabilityKind });
+      }
+
+      case "validate_automation": {
+        const automationId = BigInt(input.automation_id as number);
+        await conn.reducers.validateAutomation({ automationId });
+        return JSON.stringify({ ok: true, automation_id: Number(automationId), valid: true });
+      }
+
+      case "enable_automation_dry_run": {
+        const automationId = BigInt(input.automation_id as number);
+        await conn.reducers.setAutomationMode({
+          automationId,
+          mode: { tag: "DryRun" },
+        });
+        await conn.reducers.validateAutomation({ automationId });
+        await conn.reducers.enableAutomation({ automationId });
+        return JSON.stringify({
+          ok: true,
+          automation_id: Number(automationId),
+          enabled: true,
+          mode: "DryRun",
+        });
+      }
+
+      case "process_pending_automation_events": {
+        const limit = Math.max(1, Math.min(100, Number(input.limit ?? 25)));
+        await conn.reducers.processPendingAutomationEvents({ limit });
+        return JSON.stringify({ ok: true, processed_up_to: limit });
       }
 
       case "add_property": {

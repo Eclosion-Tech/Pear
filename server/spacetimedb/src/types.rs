@@ -30,4 +30,3 @@ pub enum Principal {
     WorkspaceMember(Identity),
     // Future: EndUser(u64), ApiKey(u64), ServiceAccount(u64), ...
 }
-

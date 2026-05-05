@@ -64,7 +64,10 @@ pub(crate) fn alloc_id<F: FnOnce() -> u64>(
         ),
     };
     let next = counter.value + 1;
-    let updated = IdCounter { value: next, ..counter };
+    let updated = IdCounter {
+        value: next,
+        ..counter
+    };
     if present {
         ctx.db.id_counter().name().update(updated);
     } else {

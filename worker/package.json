@@ -5,7 +5,7 @@
   "description": "Pear LLM worker — Orcha agent that claims tasks from SpacetimeDB and executes them via Anthropic Claude",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch --env-file=../.env src/index.ts",
+    "dev": "tsx watch src/index.ts",
     "start": "node --import tsx/esm src/index.ts",
     "generate": "spacetime generate --lang typescript --out-dir src/module_bindings --module-path ../server/spacetimedb"
   },

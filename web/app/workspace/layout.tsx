@@ -1,4 +1,5 @@
-import { Sidebar } from "@/src/components/Sidebar";
+import { Suspense } from "react";
+import { WorkspaceShell } from "@/src/components/WorkspaceShell";
 
 export default function WorkspaceLayout({
   children,
@@ -6,9 +7,12 @@ export default function WorkspaceLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex h-screen bg-white dark:bg-neutral-950 text-neutral-900 dark:text-neutral-200 overflow-hidden">
-      <Sidebar />
-      <main className="flex-1 overflow-hidden">{children}</main>
-    </div>
+    <Suspense
+      fallback={
+        <div className="h-screen bg-white dark:bg-neutral-950 text-neutral-900 dark:text-neutral-200 overflow-hidden" />
+      }
+    >
+      <WorkspaceShell>{children}</WorkspaceShell>
+    </Suspense>
   );
 }

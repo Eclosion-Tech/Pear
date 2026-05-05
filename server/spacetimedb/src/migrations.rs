@@ -6,12 +6,13 @@ use sha2::{Digest, Sha256};
 use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 
 use crate::access_control::helpers::page_has_any_rule;
+use crate::ai::ai_user_config;
 use crate::ai::memory::{
     ai_user_memory, collect_live_subtree_page_ids, grant_ai_memory_page_access,
 };
-use crate::ai::ai_user_config;
-use crate::module_install::ensure_publisher_identity_recorded;
+use crate::automations::seed_automation_primitives_inner;
 use crate::harness::{harness_template, HarnessTemplate};
+use crate::module_install::ensure_publisher_identity_recorded;
 use crate::pages::{page, Page};
 use crate::sensors::seed_sensor_registry_inner;
 /// Records which one-shot data migrations have already run on this database.
@@ -34,7 +35,6 @@ pub struct MigrationState {
     /// this migration. Stored for forensics — not used for dispatch.
     pub module_version: String,
 }
-
 
 // ----------------------------------------------------------------------
 // Migrations: standardised post-upgrade hook
@@ -73,7 +73,13 @@ pub fn run_pending_migrations(ctx: &ReducerContext) -> Result<(), String> {
     macro_rules! run_step {
         ($ctx:expr, $key:expr, $body:expr) => {{
             let key: &str = $key;
-            if $ctx.db.migration_state().key().find(&key.to_string()).is_none() {
+            if $ctx
+                .db
+                .migration_state()
+                .key()
+                .find(&key.to_string())
+                .is_none()
+            {
                 $body($ctx)?;
                 $ctx.db.migration_state().insert(MigrationState {
                     key: key.to_string(),
@@ -85,11 +91,23 @@ pub fn run_pending_migrations(ctx: &ReducerContext) -> Result<(), String> {
         }};
     }
 
-    run_step!(ctx, "page_parent_pk_backfill_v1", backfill_page_parent_pk_inner);
+    run_step!(
+        ctx,
+        "page_parent_pk_backfill_v1",
+        backfill_page_parent_pk_inner
+    );
     run_step!(ctx, "sensor_registry_seed_v1", |ctx: &ReducerContext| {
         seed_sensor_registry_inner(ctx);
         Ok::<(), String>(())
     });
+    run_step!(
+        ctx,
+        "automation_primitive_registry_seed_v1",
+        |ctx: &ReducerContext| {
+            seed_automation_primitives_inner(ctx);
+            Ok::<(), String>(())
+        }
+    );
     run_step!(
         ctx,
         "harness_template_external_id_backfill_v1",
@@ -100,10 +118,14 @@ pub fn run_pending_migrations(ctx: &ReducerContext) -> Result<(), String> {
         "ai_user_memory_private_access_v1",
         backfill_ai_user_memory_private_access_inner
     );
-    run_step!(ctx, "module_install_meta_publisher_v1", |ctx: &ReducerContext| {
-        ensure_publisher_identity_recorded(ctx);
-        Ok::<(), String>(())
-    });
+    run_step!(
+        ctx,
+        "module_install_meta_publisher_v1",
+        |ctx: &ReducerContext| {
+            ensure_publisher_identity_recorded(ctx);
+            Ok::<(), String>(())
+        }
+    );
     Ok(())
 }
 
@@ -138,9 +160,7 @@ fn backfill_ai_user_memory_private_access_inner(ctx: &ReducerContext) -> Result<
 /// Backfill `HarnessTemplate.external_id` for rows that predate the field.
 /// Empty strings are replaced with a deterministic hash over the template's
 /// `(source, name, created_at)` so re-running is a no-op.
-fn backfill_harness_template_external_id_inner(
-    ctx: &ReducerContext,
-) -> Result<(), String> {
+fn backfill_harness_template_external_id_inner(ctx: &ReducerContext) -> Result<(), String> {
     let stale: Vec<HarnessTemplate> = ctx
         .db
         .harness_template()
@@ -154,11 +174,7 @@ fn backfill_harness_template_external_id_inner(
         hasher.update(b"\x00");
         hasher.update(tmpl.name.as_bytes());
         hasher.update(b"\x00");
-        hasher.update(
-            tmpl.created_at
-                .to_micros_since_unix_epoch()
-                .to_le_bytes(),
-        );
+        hasher.update(tmpl.created_at.to_micros_since_unix_epoch().to_le_bytes());
         let external_id = hex::encode(hasher.finalize());
         ctx.db.harness_template().id().update(HarnessTemplate {
             external_id,

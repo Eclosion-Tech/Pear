@@ -1,7 +1,8 @@
-@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-/* Enable class-based dark mode for next-themes (.dark on <html>) */
-@custom-variant dark (&:is(.dark *));
+/* next-themes: `class` strategy — dark: variants with `.dark` on <html> (see tailwind.config) */
 
 :root {
   color-scheme: light;

@@ -14,7 +14,12 @@ use serde_json::Value;
 
 pub(crate) fn next_ai_user_config_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "ai_user_config", || {
-        ctx.db.ai_user_config().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .ai_user_config()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
@@ -118,9 +123,8 @@ pub enum AiUserRole {
 /// Row-level visibility filter for `ai_user_config`. Each AI user sees only
 /// its own row; the module publisher bypasses this filter.
 #[client_visibility_filter]
-const AI_USER_CONFIG_FILTER: Filter = Filter::Sql(
-    "SELECT * FROM ai_user_config WHERE identity = :sender",
-);
+const AI_USER_CONFIG_FILTER: Filter =
+    Filter::Sql("SELECT * FROM ai_user_config WHERE identity = :sender");
 
 /// Public projection of an AI user — display info only, no credentials.
 /// Clients subscribe to this table for @mention autocomplete, avatars, etc.
@@ -150,7 +154,6 @@ pub struct AiUserProfile {
     #[default(None::<String>)]
     pub system_prompt: Option<String>,
 }
-
 
 // ============================================================
 // AI User Reducers
@@ -192,8 +195,10 @@ pub fn create_ai_user(
     if model.trim().is_empty() {
         return Err("Model is required".to_string());
     }
-    if matches!(provider, InferenceProvider::Ollama | InferenceProvider::OpenAICompatible)
-        && endpoint.as_ref().is_none_or(|e| e.trim().is_empty())
+    if matches!(
+        provider,
+        InferenceProvider::Ollama | InferenceProvider::OpenAICompatible
+    ) && endpoint.as_ref().is_none_or(|e| e.trim().is_empty())
     {
         return Err("Endpoint is required for Ollama and OpenAI Compatible providers".to_string());
     }
@@ -328,8 +333,10 @@ pub fn update_ai_user_config(
     if model.trim().is_empty() {
         return Err("Model is required".to_string());
     }
-    if matches!(provider, InferenceProvider::Ollama | InferenceProvider::OpenAICompatible)
-        && endpoint.as_ref().is_none_or(|e| e.trim().is_empty())
+    if matches!(
+        provider,
+        InferenceProvider::Ollama | InferenceProvider::OpenAICompatible
+    ) && endpoint.as_ref().is_none_or(|e| e.trim().is_empty())
     {
         return Err("Endpoint is required for Ollama and OpenAI Compatible providers".to_string());
     }
@@ -507,4 +514,3 @@ pub fn set_allow_evaluation_sharing(
     });
     Ok(())
 }
-

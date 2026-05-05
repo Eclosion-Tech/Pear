@@ -11,31 +11,56 @@ pub(crate) mod reducers;
 
 pub(crate) fn next_extension_manifest_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "extension_manifest", || {
-        ctx.db.extension_manifest().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .extension_manifest()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
 pub(crate) fn next_installed_extension_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "installed_extension", || {
-        ctx.db.installed_extension().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .installed_extension()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
 pub(crate) fn next_extension_mcp_server_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "extension_mcp_server", || {
-        ctx.db.extension_mcp_server().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .extension_mcp_server()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
 pub(crate) fn next_extension_permission_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "extension_permission", || {
-        ctx.db.extension_permission().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .extension_permission()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
 pub(crate) fn next_tool_call_audit_log_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "tool_call_audit_log", || {
-        ctx.db.tool_call_audit_log().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .tool_call_audit_log()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 // ============================================================
@@ -211,7 +236,6 @@ pub struct ToolCallAuditLog {
     pub called_at: Timestamp,
 }
 
-
 const PEAR_WORKSPACE_TOOLS_MANIFEST: &str = r#"{
   "builtin": {
     "tools": [
@@ -270,9 +294,21 @@ pub(crate) fn seed_builtin_extensions_inner(ctx: &ReducerContext) {
     let permissions = [
         (PermissionScope::Workspace, PermissionAction::Read, None),
         (PermissionScope::Workspace, PermissionAction::Write, None),
-        (PermissionScope::Workspace, PermissionAction::PropertyRead, None),
-        (PermissionScope::Workspace, PermissionAction::PropertyWrite, None),
-        (PermissionScope::Workspace, PermissionAction::HttpOutbound, Some("[\"*\"]".to_string())),
+        (
+            PermissionScope::Workspace,
+            PermissionAction::PropertyRead,
+            None,
+        ),
+        (
+            PermissionScope::Workspace,
+            PermissionAction::PropertyWrite,
+            None,
+        ),
+        (
+            PermissionScope::Workspace,
+            PermissionAction::HttpOutbound,
+            Some("[\"*\"]".to_string()),
+        ),
     ];
     for (scope, action, allowed_domains) in permissions {
         ctx.db.extension_permission().insert(ExtensionPermission {
