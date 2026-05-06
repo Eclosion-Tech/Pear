@@ -121,7 +121,8 @@ function SpacetimeConnector({ children }: { children: React.ReactNode }) {
     prevWorkspaceKeyRef.current !== workspaceKey
   ) {
     if (activeWorkspace && uriCheck.ok) {
-      connectionBuilderRef.current = buildConnectionBuilder(oidcToken, activeWorkspace);
+      const onOidcExpired = auth ? () => auth.signinSilent() : undefined;
+      connectionBuilderRef.current = buildConnectionBuilder(oidcToken, activeWorkspace, onOidcExpired);
       prevWorkspaceKeyRef.current = workspaceKey;
     } else {
       connectionBuilderRef.current = null;

@@ -129,10 +129,16 @@ export function clearSavedToken(connectionId?: string) {
  * Pass an OIDC id_token to authenticate via OIDC; omit for native/anonymous auth
  * (falls back to the locally-persisted SpacetimeDB identity token for that workspace).
  * Returns `null` if the address is invalid or the client cannot construct a connection (never throws).
+ *
+ * @param onOidcExpired - Called when the connection is rejected due to an expired/invalid OIDC
+ *   token. In OIDC deployments, pass `() => auth.signinSilent()` so the library fetches a fresh
+ *   id_token; the resulting state update will re-trigger this builder with the new token. Falls
+ *   back to clearing the saved token + full page reload when omitted or when silent renew fails.
  */
 export function buildConnectionBuilder(
   oidcToken: string | undefined,
-  workspace: WorkspaceConnection
+  workspace: WorkspaceConnection,
+  onOidcExpired?: () => Promise<unknown> | void,
 ): ReturnType<typeof DbConnection.builder> | null {
   const spacetimeUri = resolveWorkspaceWsUri(workspace.wsUri);
   const v = validateResolvedSpacetimeUri(spacetimeUri);
@@ -145,6 +151,22 @@ export function buildConnectionBuilder(
     typeof window !== "undefined" ? (localStorage.getItem(tokenKey) ?? undefined) : undefined;
 
   const token = oidcToken ?? savedToken;
+
+  const handleAuthError = () => {
+    if (typeof window === "undefined") return;
+    if (onOidcExpired) {
+      console.info("[SpacetimeDB] Token rejected — attempting OIDC silent renew");
+      Promise.resolve(onOidcExpired()).catch(() => {
+        console.warn("[SpacetimeDB] Silent renew failed — clearing token and reloading");
+        clearSavedToken(workspace.id);
+        window.location.reload();
+      });
+    } else {
+      console.warn("[SpacetimeDB] Stale token rejected — clearing and reloading");
+      clearSavedToken(workspace.id);
+      window.location.reload();
+    }
+  };
 
   try {
     return DbConnection.builder()
@@ -161,13 +183,8 @@ export function buildConnectionBuilder(
       .onConnectError((_ctx, error) => {
         console.error("[SpacetimeDB] Connection error:", error);
         const msg = error instanceof Error ? error.message : String(error);
-        if (
-          typeof window !== "undefined" &&
-          (msg.includes("Failed to verify token") || msg.includes("Unauthorized"))
-        ) {
-          console.warn("[SpacetimeDB] Stale token rejected — clearing and reloading");
-          clearSavedToken(workspace.id);
-          window.location.reload();
+        if (msg.includes("Failed to verify token") || msg.includes("Unauthorized")) {
+          handleAuthError();
         }
       })
       .onDisconnect((_ctx, error) => {
