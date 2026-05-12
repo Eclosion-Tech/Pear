@@ -469,6 +469,7 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
         <ContextBar
           pageId={conversation.pageId}
           aiUserIdentity={aiUser.identity}
+          conversationId={conversation.id}
           activePageId={activePageId}
           onFork={() => void handleFork()}
         />

@@ -10,6 +10,14 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
+// The tagged union or sum type for the algebraic type `AccessRequestStatus`.
+export const AccessRequestStatus = __t.enum("AccessRequestStatus", {
+  Pending: __t.unit(),
+  Approved: __t.unit(),
+  Denied: __t.unit(),
+});
+export type AccessRequestStatus = __Infer<typeof AccessRequestStatus>;
+
 // The tagged union or sum type for the algebraic type `ActorType`.
 export const ActorType = __t.enum("ActorType", {
   Human: __t.unit(),
@@ -766,6 +774,27 @@ export const Page = __t.object("Page", {
   isHidden: __t.bool(),
 });
 export type Page = __Infer<typeof Page>;
+
+export const PageAccessRequest = __t.object("PageAccessRequest", {
+  id: __t.u64(),
+  conversationId: __t.u64(),
+  pageId: __t.u64(),
+  get principal() {
+    return Principal;
+  },
+  get permission() {
+    return Permission;
+  },
+  requestedBy: __t.identity(),
+  reason: __t.string(),
+  get status() {
+    return AccessRequestStatus;
+  },
+  requestedAt: __t.timestamp(),
+  resolvedBy: __t.option(__t.identity()),
+  resolvedAt: __t.option(__t.timestamp()),
+});
+export type PageAccessRequest = __Infer<typeof PageAccessRequest>;
 
 export const PageAccessRule = __t.object("PageAccessRule", {
   id: __t.u64(),

@@ -31,7 +31,8 @@ mod types;
 // historical call sites that addressed everything as `crate::*`) keep
 // compiling unchanged.
 pub use crate::access_control::{
-    block_access_rule, page_access_rule, BlockAccessRule, PageAccessRule,
+    block_access_rule, page_access_request, page_access_rule, AccessRequestStatus, BlockAccessRule,
+    PageAccessRequest, PageAccessRule,
 };
 pub use crate::ai::evaluations::{ai_evaluation, AiEvaluation};
 pub use crate::ai::memory::{ai_user_memory, AiUserMemory};

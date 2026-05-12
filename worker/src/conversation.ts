@@ -234,6 +234,14 @@ function fallbackTextWhenNoAssistantMessage(toolResultLog: string[]): string {
   return "I ran some tools, but at least one step did not return success, or a tool returned non-JSON. Check the tool trace above for details.";
 }
 
+function toolResultWasOk(result: string): boolean {
+  try {
+    return JSON.parse(result).ok !== false;
+  } catch {
+    return true;
+  }
+}
+
 /**
  * Confirm the AI user is a participant in `conversationId`. Cheap defensive
  * check on top of visibility filters.
@@ -411,7 +419,11 @@ async function handleConversationMessage(
     const aiCfg = (conn.db as any).ai_user_config?.id?.find(
       aiProfile.aiUserId,
     ) as { toolSecretsJson?: unknown } | undefined;
-    const toolContext = toolContextFromAiUserConfigRow(aiCfg);
+    const toolContext = {
+      ...toolContextFromAiUserConfigRow(aiCfg),
+      conversationId: conv.id,
+      currentPageId: conv.pageId,
+    };
 
     const tools: ToolDef[] = getConversationTools() as ToolDef[];
     const allToolCalls: ToolCallInfo[] = [];
@@ -528,7 +540,7 @@ async function handleConversationMessage(
           toolResultLog.push(result);
 
           if (idx >= 0) {
-            allToolCalls[idx].status = "done";
+            allToolCalls[idx].status = toolResultWasOk(result) ? "done" : "error";
             allToolCalls[idx].result = result.slice(0, 200);
           }
           toolResults.push({
@@ -595,7 +607,7 @@ async function handleConversationMessage(
           toolResultLog.push(result);
           allToolCalls[tcIdx] = {
             name: block.name,
-            status: "done",
+            status: toolResultWasOk(result) ? "done" : "error",
             result: result.slice(0, 200),
           };
           toolResults.push({

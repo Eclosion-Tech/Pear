@@ -107,6 +107,8 @@ import RemoveConversationParticipantReducer from "./remove_conversation_particip
 import RenamePropertyReducer from "./rename_property_reducer";
 import RenameViewReducer from "./rename_view_reducer";
 import ReorderPropertyReducer from "./reorder_property_reducer";
+import RequestPageAccessReducer from "./request_page_access_reducer";
+import ResolvePageAccessRequestReducer from "./resolve_page_access_request_reducer";
 import ResolveStructuralFindingReducer from "./resolve_structural_finding_reducer";
 import RestorePageReducer from "./restore_page_reducer";
 import RestorePageToSnapshotReducer from "./restore_page_to_snapshot_reducer";
@@ -208,6 +210,7 @@ import OrchaSharedContextRow from "./orcha_shared_context_table";
 import OrchaTaskRow from "./orcha_task_table";
 import OrchaUsageEventRow from "./orcha_usage_event_table";
 import PageRow from "./page_table";
+import PageAccessRequestRow from "./page_access_request_table";
 import PageAccessRuleRow from "./page_access_rule_table";
 import PageContentRow from "./page_content_table";
 import PagePropertyValueRow from "./page_property_value_table";
@@ -730,6 +733,23 @@ const tablesSchema = __schema({
       { name: 'page_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, PageRow),
+  page_access_request: __table({
+    name: 'page_access_request',
+    indexes: [
+      { name: 'conversation_id', algorithm: 'btree', columns: [
+        'conversationId',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'page_id', algorithm: 'btree', columns: [
+        'pageId',
+      ] },
+    ],
+    constraints: [
+      { name: 'page_access_request_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, PageAccessRequestRow),
   page_access_rule: __table({
     name: 'page_access_rule',
     indexes: [
@@ -1002,6 +1022,8 @@ const reducersSchema = __reducers(
   __reducerSchema("rename_property", RenamePropertyReducer),
   __reducerSchema("rename_view", RenameViewReducer),
   __reducerSchema("reorder_property", ReorderPropertyReducer),
+  __reducerSchema("request_page_access", RequestPageAccessReducer),
+  __reducerSchema("resolve_page_access_request", ResolvePageAccessRequestReducer),
   __reducerSchema("resolve_structural_finding", ResolveStructuralFindingReducer),
   __reducerSchema("restore_page", RestorePageReducer),
   __reducerSchema("restore_page_to_snapshot", RestorePageToSnapshotReducer),

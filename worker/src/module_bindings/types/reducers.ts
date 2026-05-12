@@ -79,6 +79,8 @@ import RemoveConversationParticipantReducer from "../remove_conversation_partici
 import RenamePropertyReducer from "../rename_property_reducer";
 import RenameViewReducer from "../rename_view_reducer";
 import ReorderPropertyReducer from "../reorder_property_reducer";
+import RequestPageAccessReducer from "../request_page_access_reducer";
+import ResolvePageAccessRequestReducer from "../resolve_page_access_request_reducer";
 import ResolveStructuralFindingReducer from "../resolve_structural_finding_reducer";
 import RestorePageReducer from "../restore_page_reducer";
 import RestorePageToSnapshotReducer from "../restore_page_to_snapshot_reducer";
@@ -213,6 +215,8 @@ export type RemoveConversationParticipantParams = __Infer<typeof RemoveConversat
 export type RenamePropertyParams = __Infer<typeof RenamePropertyReducer>;
 export type RenameViewParams = __Infer<typeof RenameViewReducer>;
 export type ReorderPropertyParams = __Infer<typeof ReorderPropertyReducer>;
+export type RequestPageAccessParams = __Infer<typeof RequestPageAccessReducer>;
+export type ResolvePageAccessRequestParams = __Infer<typeof ResolvePageAccessRequestReducer>;
 export type ResolveStructuralFindingParams = __Infer<typeof ResolveStructuralFindingReducer>;
 export type RestorePageParams = __Infer<typeof RestorePageReducer>;
 export type RestorePageToSnapshotParams = __Infer<typeof RestorePageToSnapshotReducer>;

@@ -2,7 +2,7 @@
 // Access Control Tables
 // ============================================================
 
-use spacetimedb::{table, Identity, ReducerContext, Table, Timestamp};
+use spacetimedb::{table, Identity, ReducerContext, SpacetimeType, Table, Timestamp};
 
 use crate::id_counters::alloc_id;
 use crate::types::{Permission, Principal};
@@ -25,6 +25,17 @@ pub(crate) fn next_block_access_rule_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "block_access_rule", || {
         ctx.db
             .block_access_rule()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
+    })
+}
+
+pub(crate) fn next_page_access_request_id(ctx: &ReducerContext) -> u64 {
+    alloc_id(ctx, "page_access_request", || {
+        ctx.db
+            .page_access_request()
             .iter()
             .map(|r| r.id)
             .max()
@@ -82,4 +93,33 @@ pub struct BlockAccessRule {
     pub permission: Permission,
     pub granted_by: Identity,
     pub granted_at: Timestamp,
+}
+
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum AccessRequestStatus {
+    Pending,
+    Approved,
+    Denied,
+}
+
+/// A chat-originated request for a human to grant page access to the
+/// requesting principal. The eventual grant is still a normal
+/// `PageAccessRule`; this row is only the conversation/approval workflow.
+#[table(accessor = page_access_request, public)]
+pub struct PageAccessRequest {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub conversation_id: u64,
+    #[index(btree)]
+    pub page_id: u64,
+    pub principal: Principal,
+    pub permission: Permission,
+    pub requested_by: Identity,
+    pub reason: String,
+    pub status: AccessRequestStatus,
+    pub requested_at: Timestamp,
+    pub resolved_by: Option<Identity>,
+    pub resolved_at: Option<Timestamp>,
 }

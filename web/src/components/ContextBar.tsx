@@ -21,18 +21,22 @@ import { useAiUserProfileByIdentity } from "@/src/hooks/useAiUsers";
 export function ContextBar({
   pageId,
   aiUserIdentity,
+  conversationId,
   activePageId,
   onFork,
 }: {
   pageId: bigint;
   aiUserIdentity: Identity;
+  conversationId: bigint;
   activePageId?: bigint;
   onFork?: () => void;
 }) {
   const [pageRules] = useTable(tables.page_access_rule);
+  const [accessRequests] = useTable(tables.page_access_request);
   const [pages] = useTable(tables.page);
   const setRule = useReducer(reducers.setPageAccessRule);
   const clearRule = useReducer(reducers.clearPageAccessRule);
+  const resolveAccessRequest = useReducer(reducers.resolvePageAccessRequest);
   const { identity: meIdentity } = useSpacetimeDB();
   const aiProfile = useAiUserProfileByIdentity(aiUserIdentity);
   const [adding, setAdding] = useState(false);
@@ -73,6 +77,14 @@ export function ContextBar({
     ? [hostChip, ...grantChips.filter((c) => c.pageId !== pageId)]
     : grantChips;
 
+  const pendingRequests = accessRequests.filter(
+    (r) =>
+      r.conversationId === conversationId &&
+      r.status.tag === "Pending" &&
+      r.principal.tag === "WorkspaceMember" &&
+      r.principal.value.toHexString() === aiHex,
+  );
+
   const activePage =
     activePageId != null && activePageId !== pageId
       ? pages.find((p) => p.id === activePageId)
@@ -81,12 +93,12 @@ export function ContextBar({
     activePage != null && allChips.some((c) => c.pageId === activePageId);
   const showActivePage = activePage != null && !activeAlreadyGranted;
 
-  async function handleAddActivePage() {
+  async function handleAddActivePage(permission: "Read" | "Write") {
     if (!activePageId) return;
     await setRule({
       pageId: activePageId,
       principal: aiUserIdentity,
-      permission: { tag: "Read" } as never,
+      permission: { tag: permission } as never,
     });
   }
 
@@ -141,6 +153,39 @@ export function ContextBar({
           )}
         </button>
       ))}
+      {pendingRequests.map((request) => {
+        const p = pages.find((pp) => pp.id === request.pageId);
+        const title = p?.title || `#${request.pageId}`;
+        const perm = request.permission.tag;
+        return (
+          <div
+            key={request.id.toString()}
+            className="inline-flex items-center gap-1 rounded border border-amber-200 dark:border-amber-800/70 bg-amber-50 dark:bg-amber-950/30 px-2 py-1 text-[11px]"
+          >
+            <span className="text-amber-700 dark:text-amber-300 truncate max-w-[180px]">
+              Grant {perm.toLowerCase()} to {title}?
+            </span>
+            <button
+              onClick={() =>
+                void resolveAccessRequest({ requestId: request.id, approve: true })
+              }
+              className="rounded bg-amber-600 px-1.5 py-0.5 font-medium text-white hover:bg-amber-700"
+              title={request.reason || `Grant ${perm} access`}
+            >
+              Approve
+            </button>
+            <button
+              onClick={() =>
+                void resolveAccessRequest({ requestId: request.id, approve: false })
+              }
+              className="rounded px-1.5 py-0.5 text-amber-700 hover:bg-amber-100 dark:text-amber-300 dark:hover:bg-amber-900/50"
+              title="Deny this request"
+            >
+              Deny
+            </button>
+          </div>
+        );
+      })}
       {!adding && (
         <button
           onClick={() => setAdding(true)}
@@ -172,11 +217,18 @@ export function ContextBar({
             {activePage.title || "Untitled"}
           </span>
           <button
-            onClick={() => void handleAddActivePage()}
+            onClick={() => void handleAddActivePage("Read")}
             className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-200 dark:hover:bg-emerald-900/60 transition-colors"
-            title="Add this page to AI context"
+            title="Grant read access on this page"
           >
-            Add
+            Read
+          </button>
+          <button
+            onClick={() => void handleAddActivePage("Write")}
+            className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-900/60 transition-colors"
+            title="Grant write access on this page"
+          >
+            Write
           </button>
           <button
             onClick={() => void handleReplaceContext()}
@@ -238,14 +290,25 @@ function PageGrantPicker({
       {candidates.length > 0 && (
         <div className="flex items-center gap-1">
           {candidates.slice(0, 3).map((p) => (
-            <button
+            <div
               key={p.id.toString()}
-              className="text-[11px] px-1.5 py-0.5 rounded bg-neutral-100 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-600"
-              onClick={() => onPick(p.id, "Read")}
-              title="Grant Read"
+              className="inline-flex overflow-hidden rounded bg-neutral-100 dark:bg-neutral-700"
             >
-              {p.title || "Untitled"}
-            </button>
+              <button
+                className="max-w-[90px] truncate px-1.5 py-0.5 text-[11px] text-neutral-700 hover:bg-emerald-100 dark:text-neutral-300 dark:hover:bg-emerald-900/40"
+                onClick={() => onPick(p.id, "Read")}
+                title="Grant Read"
+              >
+                {p.title || "Untitled"}
+              </button>
+              <button
+                className="border-l border-neutral-200 px-1 py-0.5 text-[10px] font-semibold text-blue-700 hover:bg-blue-100 dark:border-neutral-600 dark:text-blue-300 dark:hover:bg-blue-900/40"
+                onClick={() => onPick(p.id, "Write")}
+                title="Grant Write"
+              >
+                W
+              </button>
+            </div>
           ))}
         </div>
       )}

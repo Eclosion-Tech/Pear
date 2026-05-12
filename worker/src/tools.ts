@@ -16,8 +16,14 @@ export interface ConnLike {
   reducers: any;
 }
 
-/** Per-request secrets for built-in tools (from env + `ai_user_config.tool_secrets_json`). */
-export type ToolCallContext = { serperApiKey?: string };
+/** Per-request secrets/runtime metadata for built-in tools. */
+export type ToolCallContext = {
+  serperApiKey?: string;
+  /** Present for chat turns; lets tools file inline permission requests. */
+  conversationId?: bigint;
+  /** The page the current chat is attached to, if any. */
+  currentPageId?: bigint;
+};
 
 function readOptionStringFromRow(v: unknown): string | null {
   if (v == null) return null;
@@ -712,6 +718,25 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
     },
   },
   {
+    name: "request_page_access",
+    description:
+      "Ask the human in this chat to grant you read or write access to a page. " +
+      "Use this when a page write is denied or when you know you need access before continuing. " +
+      "After requesting access, stop and wait for the user to approve instead of retrying the denied tool call.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        page_id: { type: "number", description: "The page you need access to." },
+        permission: { type: "string", enum: ["Read", "Write"] },
+        reason: {
+          type: "string",
+          description: "Short explanation shown to the human in the approval prompt.",
+        },
+      },
+      required: ["page_id", "permission", "reason"],
+    },
+  },
+  {
     name: "search_pages",
     description:
       "Search the workspace for pages by title (case-insensitive substring match). " +
@@ -1059,6 +1084,92 @@ function titleToContextKey(title: string): string {
   return title.toLowerCase().replace(/\s+/g, "_") + "_page_id";
 }
 
+function numericInputToBigInt(v: unknown): bigint | undefined {
+  if (typeof v === "bigint") return v;
+  if (typeof v === "number" && Number.isFinite(v) && v > 0) {
+    return BigInt(Math.trunc(v));
+  }
+  if (typeof v === "string" && /^\d+$/.test(v) && v !== "0") {
+    return BigInt(v);
+  }
+  return undefined;
+}
+
+function schemaPageId(conn: ConnLike, schemaId: bigint): bigint | undefined {
+  const schema = [...(conn.db.database_schema.iter() as Iterable<AnyRow>)].find(
+    (s) => String(s.id) === String(schemaId),
+  );
+  return numericInputToBigInt(schema?.pageId);
+}
+
+function targetPageForAccessRequest(
+  conn: ConnLike,
+  toolName: string,
+  input: Record<string, unknown>,
+  ctx: ToolCallContext,
+): bigint | undefined {
+  if (toolName === "create_page") {
+    return numericInputToBigInt(input.parent_id);
+  }
+  if (toolName === "create_row") {
+    return numericInputToBigInt(input.database_page_id);
+  }
+  if (toolName === "add_property") {
+    const sid = numericInputToBigInt(input.schema_id);
+    return sid ? schemaPageId(conn, sid) : undefined;
+  }
+  return (
+    numericInputToBigInt(input.page_id) ??
+    numericInputToBigInt(input.pageId) ??
+    ctx.currentPageId
+  );
+}
+
+function isPageWriteTool(toolName: string): boolean {
+  return [
+    "create_page",
+    "add_property",
+    "create_row",
+    "set_property_value",
+    "set_property_values",
+    "update_page_content",
+    "update_page_title",
+  ].includes(toolName);
+}
+
+async function maybeRequestWriteAccessAfterDenied(
+  conn: ConnLike,
+  toolName: string,
+  input: Record<string, unknown>,
+  ctx: ToolCallContext,
+  errorMessage: string,
+): Promise<{ page_id: number; permission: "Write" } | undefined> {
+  if (!ctx.conversationId) return undefined;
+  if (!isPageWriteTool(toolName)) return undefined;
+  if (!/lacks write access/i.test(errorMessage)) return undefined;
+
+  const pageId = targetPageForAccessRequest(conn, toolName, input, ctx);
+  if (!pageId) return undefined;
+
+  const reason = `Needed to run ${toolName.replace(/_/g, " ")} from this chat.`;
+  try {
+    await conn.reducers.requestPageAccess({
+      conversationId: ctx.conversationId,
+      pageId,
+      permission: { tag: "Write" },
+      reason,
+    });
+    return { page_id: Number(pageId), permission: "Write" };
+  } catch (err) {
+    console.warn(
+      `[tools] request_page_access after ${toolName} denial failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    return undefined;
+  }
+}
+
 export async function executeTool(
   conn: ConnLike,
   toolName: string,
@@ -1365,6 +1476,32 @@ export async function executeTool(
         return JSON.stringify({ ok: true, page_id: Number(pageId), title });
       }
 
+      case "request_page_access": {
+        const conversationId = toolContext.conversationId;
+        if (!conversationId) {
+          return JSON.stringify({
+            ok: false,
+            error: "request_page_access is only available inside a chat conversation",
+          });
+        }
+        const pageId = BigInt(input.page_id as number);
+        const permission = input.permission === "Write" ? "Write" : "Read";
+        const reason = String(input.reason ?? "").slice(0, 500);
+        await conn.reducers.requestPageAccess({
+          conversationId,
+          pageId,
+          permission: { tag: permission },
+          reason,
+        });
+        return JSON.stringify({
+          ok: true,
+          requested: true,
+          page_id: Number(pageId),
+          permission,
+          next_step: "A permission prompt is now visible to the human in this chat. Wait for approval before retrying.",
+        });
+      }
+
       case "list_properties": {
         const schemaId = BigInt(input.schema_id as number);
         type PropRow = { id: bigint; schemaId: bigint; name: string; propertyType: { tag: string }; order: number };
@@ -1579,7 +1716,21 @@ export async function executeTool(
     const stack = err instanceof Error ? err.stack : "";
     console.error(`[tools] ${toolName} FAILED: ${message}`);
     if (stack) console.error(`[tools] ${toolName} stack: ${stack}`);
-    return JSON.stringify({ ok: false, error: message });
+    const accessRequest = await maybeRequestWriteAccessAfterDenied(
+      conn,
+      toolName,
+      input,
+      toolContext,
+      message,
+    );
+    return JSON.stringify({
+      ok: false,
+      error: message,
+      access_request: accessRequest,
+      next_step: accessRequest
+        ? "A write-access prompt is now visible to the human in this chat. Do not retry the write until it is approved."
+        : undefined,
+    });
   }
 }
 

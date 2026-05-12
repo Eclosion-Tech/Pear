@@ -1,6 +1,6 @@
 {
   "name": "@pear/worker",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "Pear LLM worker — Orcha agent that claims tasks from SpacetimeDB and executes them via Anthropic Claude",
   "type": "module",
