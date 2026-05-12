@@ -4,14 +4,18 @@
 //
 // Semantics: rules *restrict* rather than grant. If zero rules exist for a
 // page, the open model applies and any authenticated principal can read or
-// write. Once any rule exists for a page, only principals with an explicit
-// matching rule (or admins) may act. `Write` implies `Read`.
+// write. Once any rule exists for a page or one of its ancestors, only
+// principals with a matching rule on that page/ancestor (or admins) may act.
+// `Write` implies `Read`.
+
+use std::collections::HashSet;
 
 use spacetimedb::{Identity, ReducerContext};
 
 use crate::access_control::{block_access_rule, page_access_rule, BlockAccessRule};
 use crate::auth::{sender_is_admin, user};
 use crate::module_install::sender_is_module_publisher;
+use crate::pages::page;
 use crate::types::{Permission, Principal};
 
 pub(crate) fn page_has_any_rule(ctx: &ReducerContext, page_id: u64) -> bool {
@@ -23,21 +27,45 @@ pub(crate) fn page_has_any_rule(ctx: &ReducerContext, page_id: u64) -> bool {
         .is_some()
 }
 
-fn principal_has_page_permission(
+fn page_and_ancestor_ids(ctx: &ReducerContext, page_id: u64) -> Vec<u64> {
+    let mut ids = Vec::new();
+    let mut seen = HashSet::new();
+    let mut current = Some(page_id);
+
+    while let Some(id) = current {
+        if !seen.insert(id) {
+            break;
+        }
+        ids.push(id);
+        current = ctx.db.page().id().find(id).and_then(|p| p.parent_id);
+    }
+
+    ids
+}
+
+pub(crate) fn page_or_ancestor_has_any_rule(ctx: &ReducerContext, page_id: u64) -> bool {
+    page_and_ancestor_ids(ctx, page_id)
+        .into_iter()
+        .any(|id| page_has_any_rule(ctx, id))
+}
+
+pub(crate) fn explicit_page_access_rule_allows(
     ctx: &ReducerContext,
     page_id: u64,
     principal: Identity,
     needed: &Permission,
 ) -> bool {
-    for rule in ctx.db.page_access_rule().page_id().filter(&page_id) {
-        if !principal_matches_identity(&rule.principal, principal) {
-            continue;
-        }
-        match (&rule.permission, needed) {
-            // Write implies Read.
-            (Permission::Write, _) => return true,
-            (Permission::Read, Permission::Read) => return true,
-            _ => continue,
+    for id in page_and_ancestor_ids(ctx, page_id) {
+        for rule in ctx.db.page_access_rule().page_id().filter(&id) {
+            if !principal_matches_identity(&rule.principal, principal) {
+                continue;
+            }
+            match (&rule.permission, needed) {
+                // Write implies Read.
+                (Permission::Write, _) => return true,
+                (Permission::Read, Permission::Read) => return true,
+                _ => continue,
+            }
         }
     }
     false
@@ -45,7 +73,7 @@ fn principal_has_page_permission(
 
 /// True iff `identity` may read `page_id`. Open-by-default.
 pub fn can_read_page(ctx: &ReducerContext, page_id: u64, identity: Identity) -> bool {
-    if !page_has_any_rule(ctx, page_id) {
+    if !page_or_ancestor_has_any_rule(ctx, page_id) {
         return true;
     }
     if let Some(u) = ctx.db.user().identity().find(identity) {
@@ -53,12 +81,12 @@ pub fn can_read_page(ctx: &ReducerContext, page_id: u64, identity: Identity) -> 
             return true;
         }
     }
-    principal_has_page_permission(ctx, page_id, identity, &Permission::Read)
+    explicit_page_access_rule_allows(ctx, page_id, identity, &Permission::Read)
 }
 
 /// True iff `identity` may write `page_id`. Open-by-default.
 pub fn can_write_page(ctx: &ReducerContext, page_id: u64, identity: Identity) -> bool {
-    if !page_has_any_rule(ctx, page_id) {
+    if !page_or_ancestor_has_any_rule(ctx, page_id) {
         return true;
     }
     if let Some(u) = ctx.db.user().identity().find(identity) {
@@ -66,7 +94,7 @@ pub fn can_write_page(ctx: &ReducerContext, page_id: u64, identity: Identity) ->
             return true;
         }
     }
-    principal_has_page_permission(ctx, page_id, identity, &Permission::Write)
+    explicit_page_access_rule_allows(ctx, page_id, identity, &Permission::Write)
 }
 
 /// Reducer guard: ensures the caller may write the page or returns the
@@ -164,7 +192,7 @@ pub(crate) fn require_creator_or_admin(
 }
 
 pub(crate) fn require_rule_authority(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
-    if !page_has_any_rule(ctx, page_id) {
+    if !page_or_ancestor_has_any_rule(ctx, page_id) {
         return Ok(());
     }
     require_page_write(ctx, page_id)

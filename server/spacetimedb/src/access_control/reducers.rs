@@ -10,7 +10,8 @@
 use spacetimedb::{reducer, Identity, ReducerContext, Table};
 
 use crate::access_control::helpers::{
-    principal_matches_identity, require_rule_authority, workspace_member,
+    explicit_page_access_rule_allows, principal_matches_identity, require_rule_authority,
+    workspace_member,
 };
 use crate::access_control::{
     block_access_rule, next_block_access_rule_id, next_page_access_request_id,
@@ -67,26 +68,6 @@ fn upsert_page_access_rule(
         granted_by: ctx.sender(),
         granted_at: ctx.timestamp,
     });
-}
-
-fn explicit_page_access_rule_allows(
-    ctx: &ReducerContext,
-    page_id: u64,
-    principal: Identity,
-    needed: &Permission,
-) -> bool {
-    ctx.db
-        .page_access_rule()
-        .page_id()
-        .filter(&page_id)
-        .any(|rule| {
-            principal_matches_identity(&rule.principal, principal)
-                && match (&rule.permission, needed) {
-                    (Permission::Write, _) => true,
-                    (Permission::Read, Permission::Read) => true,
-                    _ => false,
-                }
-        })
 }
 
 fn insert_access_request_resolution_message(

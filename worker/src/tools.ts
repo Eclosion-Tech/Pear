@@ -1147,17 +1147,48 @@ function principalIdentityHex(principal: unknown): string | undefined {
   return typeof value?.toHexString === "function" ? value.toHexString() : undefined;
 }
 
-function hasChatWriteGrant(conn: ConnLike, pageId: bigint, ctx: ToolCallContext): boolean {
+function pageAndAncestorIds(conn: ConnLike, pageId: bigint): bigint[] {
+  const ids: bigint[] = [];
+  const seen = new Set<string>();
+  let current: bigint | undefined = pageId;
+  while (current != null) {
+    const key = String(current);
+    if (seen.has(key)) break;
+    seen.add(key);
+    ids.push(current);
+    const page = conn.db.page?.id?.find?.(current) as
+      | { parentId?: bigint }
+      | undefined;
+    current = page?.parentId;
+  }
+  return ids;
+}
+
+function permissionAllows(have: string | undefined, needed: "Read" | "Write"): boolean {
+  return have === "Write" || (have === "Read" && needed === "Read");
+}
+
+function hasChatPageGrant(
+  conn: ConnLike,
+  pageId: bigint,
+  needed: "Read" | "Write",
+  ctx: ToolCallContext,
+): boolean {
   if (!ctx.conversationId || !ctx.aiIdentityHex) return true;
   const rows = conn.db.page_access_rule?.iter?.() as Iterable<AnyRow> | undefined;
   if (!rows) return false;
+  const allowedPageIds = new Set(pageAndAncestorIds(conn, pageId).map(String));
   for (const row of rows) {
-    if (String(row.pageId) !== String(pageId)) continue;
+    if (!allowedPageIds.has(String(row.pageId))) continue;
     if (principalIdentityHex(row.principal) !== ctx.aiIdentityHex) continue;
     const permission = row.permission as { tag?: string } | undefined;
-    if (permission?.tag === "Write") return true;
+    if (permissionAllows(permission?.tag, needed)) return true;
   }
   return false;
+}
+
+function hasChatWriteGrant(conn: ConnLike, pageId: bigint, ctx: ToolCallContext): boolean {
+  return hasChatPageGrant(conn, pageId, "Write", ctx);
 }
 
 function requireChatWriteGrant(
@@ -1526,6 +1557,19 @@ export async function executeTool(
         const pageId = BigInt(input.page_id as number);
         const permission = input.permission === "Write" ? "Write" : "Read";
         const reason = String(input.reason ?? "").slice(0, 500);
+        if (
+          toolContext.aiIdentityHex &&
+          hasChatPageGrant(conn, pageId, permission, toolContext)
+        ) {
+          return JSON.stringify({
+            ok: true,
+            requested: false,
+            already_granted: true,
+            page_id: Number(pageId),
+            permission,
+            next_step: "Access is already covered by an existing grant, possibly on an ancestor page. Continue without asking the human.",
+          });
+        }
         await conn.reducers.requestPageAccess({
           conversationId,
           pageId,

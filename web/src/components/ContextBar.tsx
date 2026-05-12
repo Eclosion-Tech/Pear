@@ -1,19 +1,35 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTable, useReducer, useSpacetimeDB } from "spacetimedb/react";
 import type { Identity } from "spacetimedb";
 import { tables, reducers } from "@/src/module_bindings";
 import { useAiUserProfileByIdentity } from "@/src/hooks/useAiUsers";
 
+type PermissionTag = "Read" | "Write";
+type ContextChip = {
+  id: bigint;
+  pageId: bigint;
+  permission: { tag: PermissionTag };
+  implicit: boolean;
+  title: string;
+};
+
+function permissionRank(permission: PermissionTag) {
+  return permission === "Write" ? 2 : 1;
+}
+
+function permissionCovers(have: PermissionTag, needed: PermissionTag) {
+  return permissionRank(have) >= permissionRank(needed);
+}
+
 /**
  * Context bar (Phase A) — visualises and edits what an AI user can see for
  * the current conversation turn.
  *
- * Chips are derived from `page_access_rule` (and one day `block_access_rule`)
- * scoped to the AI user's identity. Each chip shows the page title and the
- * permission level. Clicking removes the rule (revoke); the "+" surface lets
- * a participant grant a fresh page.
+ * Chips show the page context for this conversation. The underlying access
+ * rules are global grants, so the UI deliberately filters them down to memory,
+ * the host page, and grants that originated in this conversation.
  *
  * Pending access requests (the "ai user asked for X" pattern) will render as
  * Accept/Deny chips here in a follow-up — the data path isn't wired yet.
@@ -34,6 +50,7 @@ export function ContextBar({
   const [pageRules] = useTable(tables.page_access_rule);
   const [accessRequests] = useTable(tables.page_access_request);
   const [pages] = useTable(tables.page);
+  const [aiUserMemories] = useTable(tables.ai_user_memory);
   const setRule = useReducer(reducers.setPageAccessRule);
   const clearRule = useReducer(reducers.clearPageAccessRule);
   const resolveAccessRequest = useReducer(reducers.resolvePageAccessRequest);
@@ -41,18 +58,81 @@ export function ContextBar({
   const aiProfile = useAiUserProfileByIdentity(aiUserIdentity);
   const [adding, setAdding] = useState(false);
   const [replacing, setReplacing] = useState(false);
+  const [manualContextPageIds, setManualContextPageIds] = useState<Set<bigint>>(
+    () => new Set(),
+  );
+
+  useEffect(() => {
+    setAdding(false);
+    setReplacing(false);
+    setManualContextPageIds(new Set());
+  }, [conversationId]);
 
   const aiHex = aiUserIdentity.toHexString();
+  const memory = aiProfile
+    ? aiUserMemories.find((m) => m.aiUserId === aiProfile.aiUserId)
+    : undefined;
+  const memoryPageIds = new Set<bigint>();
+  if (memory) {
+    memoryPageIds.add(memory.rootPageId);
+    if (memory.workingPageId != null) memoryPageIds.add(memory.workingPageId);
+    if (memory.longTermPageId != null) memoryPageIds.add(memory.longTermPageId);
+  }
+
+  const conversationGrantedPageIds = new Set(
+    accessRequests
+      .filter(
+        (r) =>
+          r.conversationId === conversationId &&
+          r.status.tag === "Approved" &&
+          r.principal.tag === "WorkspaceMember" &&
+          r.principal.value.toHexString() === aiHex,
+      )
+      .map((r) => r.pageId),
+  );
+
+  const visibleGrantPageIds = new Set<bigint>([
+    pageId,
+    ...memoryPageIds,
+    ...conversationGrantedPageIds,
+    ...manualContextPageIds,
+  ]);
+
   const grants = pageRules.filter(
     (r) =>
       r.principal.tag === "WorkspaceMember" &&
-      r.principal.value.toHexString() === aiHex,
+      r.principal.value.toHexString() === aiHex &&
+      visibleGrantPageIds.has(r.pageId),
   );
+
+  function pageAndAncestorIds(pid: bigint): bigint[] {
+    const ids: bigint[] = [];
+    const seen = new Set<string>();
+    let current: bigint | undefined = pid;
+    while (current != null) {
+      const key = current.toString();
+      if (seen.has(key)) break;
+      seen.add(key);
+      ids.push(current);
+      current = pages.find((p) => p.id === current)?.parentId;
+    }
+    return ids;
+  }
+
+  function ancestorGrantCovers(chip: ContextChip, candidates: ContextChip[]) {
+    const ancestors = new Set(pageAndAncestorIds(chip.pageId).slice(1).map(String));
+    return candidates.some(
+      (candidate) =>
+        candidate.pageId !== chip.pageId &&
+        ancestors.has(candidate.pageId.toString()) &&
+        permissionCovers(candidate.permission.tag, chip.permission.tag),
+    );
+  }
 
   // Always include the host page implicitly so the chip set isn't empty
   // on first load — the AI user can always see the page they're talking on.
   const hostPage = pages.find((p) => p.id === pageId);
-  const hostChip = hostPage
+  const hostChip: ContextChip | null = hostPage
     ? {
         id: -1n,
         pageId,
@@ -62,7 +142,7 @@ export function ContextBar({
       }
     : null;
 
-  const grantChips = grants.map((r) => {
+  const rawGrantChips = grants.map((r) => {
     const p = pages.find((pp) => pp.id === r.pageId);
     return {
       id: r.id,
@@ -72,6 +152,18 @@ export function ContextBar({
       title: p?.title || `#${r.pageId}`,
     };
   });
+  const grantChipsByPage = new Map<string, ContextChip>();
+  for (const chip of rawGrantChips) {
+    const key = chip.pageId.toString();
+    const existing = grantChipsByPage.get(key);
+    if (!existing || permissionRank(chip.permission.tag) > permissionRank(existing.permission.tag)) {
+      grantChipsByPage.set(key, chip);
+    }
+  }
+  const dedupedGrantChips = [...grantChipsByPage.values()];
+  const grantChips = dedupedGrantChips.filter(
+    (chip) => chip.pageId === pageId || !ancestorGrantCovers(chip, dedupedGrantChips),
+  );
 
   const explicitHostGrant = grantChips.find((c) => c.pageId === pageId);
   const allChips = explicitHostGrant
@@ -103,6 +195,7 @@ export function ContextBar({
       principal: aiUserIdentity,
       permission: { tag: permission } as never,
     });
+    setManualContextPageIds((prev) => new Set(prev).add(activePageId));
   }
 
   async function handleReplaceContext() {
@@ -110,6 +203,7 @@ export function ContextBar({
     setReplacing(true);
     try {
       for (const chip of grantChips) {
+        if (memoryPageIds.has(chip.pageId)) continue;
         await clearRule({ pageId: chip.pageId, principal: aiUserIdentity });
       }
       await setRule({
@@ -117,6 +211,7 @@ export function ContextBar({
         principal: aiUserIdentity,
         permission: { tag: "Read" } as never,
       });
+      setManualContextPageIds(new Set([activePageId]));
     } finally {
       setReplacing(false);
     }
@@ -208,6 +303,7 @@ export function ContextBar({
               principal: aiUserIdentity,
               permission: { tag: perm } as never,
             });
+            setManualContextPageIds((prev) => new Set(prev).add(pid));
             setAdding(false);
           }}
           onCancel={() => setAdding(false)}
