@@ -20,6 +20,7 @@ import { callLlm, planTasks, buildPageContext } from "./llm.js";
 import { AiUserWorker } from "./ai-user-worker.js";
 import { handleAiPrimitiveTask } from "./ai-primitive-task.js";
 import { StructuralSensorsScheduler } from "./structural-sensors.js";
+import { subscribeToAvailableTables } from "./subscriptions.js";
 
 const SANDBOX_BACKEND = process.env.PEAR_SANDBOX_BACKEND ?? "";
 const TOOL_BASH_ENABLED = SANDBOX_BACKEND !== "";
@@ -56,12 +57,6 @@ type TaskRow = {
   requiredCapabilities: string[];
   assignedTo: string | undefined;
   result: string | undefined;
-};
-
-type SubscriptionBuilderLike = {
-  onApplied(cb: () => void): SubscriptionBuilderLike;
-  onError(cb: (_ctx: unknown, err: unknown) => void): SubscriptionBuilderLike;
-  subscribeToAllTables(): void;
 };
 
 export interface DatabaseWorkerOptions {
@@ -293,32 +288,24 @@ export class DatabaseWorker {
       },
     );
 
-    (conn.subscriptionBuilder() as unknown as SubscriptionBuilderLike)
-      .onApplied(() => {
-        console.log(`[worker:${this.dbName}] Subscription ready`);
+    subscribeToAvailableTables(conn, `[worker:${this.dbName}]`, () => {
+      console.log(`[worker:${this.dbName}] Subscription ready`);
 
-        void conn.reducers
-          .registerAgent({ agentId: this.agentId, capabilities: CAPABILITIES })
-          .then(() =>
-            console.log(
-              `[worker:${this.dbName}] Registered — capabilities: ${CAPABILITIES.join(", ")}`,
-            ),
-          )
-          .catch((e: unknown) =>
-            console.warn(`[worker:${this.dbName}] register_agent:`, e),
-          );
-
-        for (const task of conn.db.orcha_task.iter() as Iterable<TaskRow>) {
-          this.checkAndClaim(conn, task);
-        }
-      })
-      .onError((_ctx: unknown, err: unknown) => {
-        console.error(
-          `[worker:${this.dbName}] Subscription error:`,
-          err instanceof Error ? err.message : err,
+      void conn.reducers
+        .registerAgent({ agentId: this.agentId, capabilities: CAPABILITIES })
+        .then(() =>
+          console.log(
+            `[worker:${this.dbName}] Registered — capabilities: ${CAPABILITIES.join(", ")}`,
+          ),
+        )
+        .catch((e: unknown) =>
+          console.warn(`[worker:${this.dbName}] register_agent:`, e),
         );
-      })
-      .subscribeToAllTables();
+
+      for (const task of conn.db.orcha_task.iter() as Iterable<TaskRow>) {
+        this.checkAndClaim(conn, task);
+      }
+    });
   }
 
   private isClaimable(task: TaskRow, conn: DbConnection): boolean {

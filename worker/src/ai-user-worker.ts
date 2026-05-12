@@ -26,16 +26,11 @@ import {
   clearProviderCache,
   invalidateProviderCache,
 } from "./providers.js";
+import { subscribeToAvailableTables } from "./subscriptions.js";
 import type { ConnLike } from "./tools.js";
 
 const RECONNECT_CAP_MS = 30_000;
 const RECONNECT_BASE_MS = 1_500;
-
-type SubscriptionBuilderLike = {
-  onApplied(cb: () => void): SubscriptionBuilderLike;
-  onError(cb: (_ctx: unknown, err: unknown) => void): SubscriptionBuilderLike;
-  subscribeToAllTables(): void;
-};
 
 export interface AiUserWorkerOptions {
   /** SpacetimeDB WebSocket URI. */
@@ -178,24 +173,16 @@ export class AiUserWorker {
 
     registerConversationHandlers(connLike, identity, this.logTag);
 
-    (conn.subscriptionBuilder() as unknown as SubscriptionBuilderLike)
-      .onApplied(() => {
-        console.log(`${this.logTag} subscription ready`);
-        void processRecentConversationMessages(connLike, identity, this.logTag).catch(
-          (err: unknown) => {
-            console.error(
-              `${this.logTag} recent message check failed:`,
-              err instanceof Error ? err.message : err,
-            );
-          },
-        );
-      })
-      .onError((_ctx: unknown, err: unknown) => {
-        console.error(
-          `${this.logTag} subscription error:`,
-          err instanceof Error ? err.message : err,
-        );
-      })
-      .subscribeToAllTables();
+    subscribeToAvailableTables(conn, this.logTag, () => {
+      console.log(`${this.logTag} subscription ready`);
+      void processRecentConversationMessages(connLike, identity, this.logTag).catch(
+        (err: unknown) => {
+          console.error(
+            `${this.logTag} recent message check failed:`,
+            err instanceof Error ? err.message : err,
+          );
+        },
+      );
+    });
   }
 }
