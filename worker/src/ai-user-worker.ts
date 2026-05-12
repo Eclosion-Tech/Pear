@@ -18,14 +18,24 @@ import {
   DbConnection,
   type EventContext,
 } from "./module_bindings/index.js";
-import { registerConversationHandlers } from "./conversation.js";
+import {
+  processRecentConversationMessages,
+  registerConversationHandlers,
+} from "./conversation.js";
 import {
   clearProviderCache,
   invalidateProviderCache,
 } from "./providers.js";
+import type { ConnLike } from "./tools.js";
 
 const RECONNECT_CAP_MS = 30_000;
 const RECONNECT_BASE_MS = 1_500;
+
+type SubscriptionBuilderLike = {
+  onApplied(cb: () => void): SubscriptionBuilderLike;
+  onError(cb: (_ctx: unknown, err: unknown) => void): SubscriptionBuilderLike;
+  subscribeToAllTables(): void;
+};
 
 export interface AiUserWorkerOptions {
   /** SpacetimeDB WebSocket URI. */
@@ -149,10 +159,12 @@ export class AiUserWorker {
   }
 
   private registerHandlers(conn: DbConnection, identity: Identity): void {
+    const connLike = conn as unknown as ConnLike;
+
     // Invalidate provider cache when our own ai_user_config row changes
     // (covers API key rotations, model changes, etc.).
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const configTable = (conn.db as any).ai_user_config;
+    const configTable = (connLike.db as any).ai_user_config;
     if (configTable) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       configTable.onUpdate?.((_ctx: any, _old: any, row: any) => {
@@ -164,12 +176,25 @@ export class AiUserWorker {
       });
     }
 
-    registerConversationHandlers(conn, identity, this.logTag);
+    registerConversationHandlers(connLike, identity, this.logTag);
 
-    conn
-      .subscriptionBuilder()
+    (conn.subscriptionBuilder() as unknown as SubscriptionBuilderLike)
       .onApplied(() => {
         console.log(`${this.logTag} subscription ready`);
+        void processRecentConversationMessages(connLike, identity, this.logTag).catch(
+          (err: unknown) => {
+            console.error(
+              `${this.logTag} recent message check failed:`,
+              err instanceof Error ? err.message : err,
+            );
+          },
+        );
+      })
+      .onError((_ctx: unknown, err: unknown) => {
+        console.error(
+          `${this.logTag} subscription error:`,
+          err instanceof Error ? err.message : err,
+        );
       })
       .subscribeToAllTables();
   }

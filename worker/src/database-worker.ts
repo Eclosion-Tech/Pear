@@ -58,6 +58,12 @@ type TaskRow = {
   result: string | undefined;
 };
 
+type SubscriptionBuilderLike = {
+  onApplied(cb: () => void): SubscriptionBuilderLike;
+  onError(cb: (_ctx: unknown, err: unknown) => void): SubscriptionBuilderLike;
+  subscribeToAllTables(): void;
+};
+
 export interface DatabaseWorkerOptions {
   uri: string;
   dbName: string;
@@ -287,8 +293,7 @@ export class DatabaseWorker {
       },
     );
 
-    conn
-      .subscriptionBuilder()
+    (conn.subscriptionBuilder() as unknown as SubscriptionBuilderLike)
       .onApplied(() => {
         console.log(`[worker:${this.dbName}] Subscription ready`);
 
@@ -306,6 +311,12 @@ export class DatabaseWorker {
         for (const task of conn.db.orcha_task.iter() as Iterable<TaskRow>) {
           this.checkAndClaim(conn, task);
         }
+      })
+      .onError((_ctx: unknown, err: unknown) => {
+        console.error(
+          `[worker:${this.dbName}] Subscription error:`,
+          err instanceof Error ? err.message : err,
+        );
       })
       .subscribeToAllTables();
   }

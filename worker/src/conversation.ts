@@ -101,9 +101,17 @@ const processing = new Set<string>();
 const FLUSH_INTERVAL_MS = 300;
 const THINKING_BUDGET = 5_000;
 const MAX_TOOL_ITERATIONS = 15;
+const RECENT_MESSAGE_MAX_AGE_MS = 5 * 60_000;
 
 function messageKey(convId: bigint, msgId: bigint): string {
   return `${convId}:${msgId}`;
+}
+
+function messageAgeMs(msg: ConversationMessageRow): number {
+  return (
+    Number(BigInt(Date.now()) * 1000n - msg.createdAt.microsSinceUnixEpoch) /
+    1000
+  );
 }
 
 function identityHex(id: { toHexString(): string } | unknown): string {
@@ -276,10 +284,7 @@ async function handleConversationMessage(
   processing.add(key);
 
   try {
-    const ageMs =
-      Number(BigInt(Date.now()) * 1000n - msg.createdAt.microsSinceUnixEpoch) /
-      1000;
-    if (ageMs > 30_000) return;
+    if (messageAgeMs(msg) > RECENT_MESSAGE_MAX_AGE_MS) return;
 
     const conv = conn.db.conversation.id.find(msg.conversationId) as
       | ConversationRow
@@ -700,4 +705,34 @@ export function registerConversationHandlers(
   );
 
   console.log(`${logTag} handlers registered (self=${selfHex.slice(0, 12)}…)`);
+}
+
+export async function processRecentConversationMessages(
+  conn: ConnLike,
+  selfIdentity: Identity,
+  logTag = "[conversation]",
+): Promise<void> {
+  const selfHex = selfIdentity.toHexString();
+  const messages = [
+    ...(conn.db.conversation_message.iter() as Iterable<ConversationMessageRow>),
+  ]
+    .filter(
+      (msg) =>
+        isFromOtherUser(msg, selfHex) &&
+        messageAgeMs(msg) <= RECENT_MESSAGE_MAX_AGE_MS,
+    )
+    .sort((a, b) =>
+      a.createdAt.microsSinceUnixEpoch < b.createdAt.microsSinceUnixEpoch
+        ? -1
+        : a.createdAt.microsSinceUnixEpoch > b.createdAt.microsSinceUnixEpoch
+          ? 1
+          : 0,
+    );
+
+  if (messages.length === 0) return;
+
+  console.log(`${logTag} checking ${messages.length} recent visible user message(s)`);
+  for (const msg of messages) {
+    await handleConversationMessage(conn, msg, selfHex, logTag);
+  }
 }
