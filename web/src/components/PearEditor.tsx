@@ -84,13 +84,20 @@ interface PearEditorProps {
   /** Legacy BlockNote JSON — used only on first open if IndexedDB is empty and
    *  SpacetimeDB has no Yjs state yet. */
   initialContent: string;
+  initialContentUpdatedAt?: bigint;
   /** Child pages to auto-insert as moveable page-link blocks on first load. */
   childPages?: PageRow[];
   /** Called when the user @mentions an AI user, so the parent can open the AI panel. */
   onMentionAiUser?: () => void;
 }
 
-export function PearEditor({ pageId, initialContent, childPages, onMentionAiUser }: PearEditorProps) {
+export function PearEditor({
+  pageId,
+  initialContent,
+  initialContentUpdatedAt,
+  childPages,
+  onMentionAiUser,
+}: PearEditorProps) {
   const { resolvedTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
@@ -156,6 +163,7 @@ export function PearEditor({ pageId, initialContent, childPages, onMentionAiUser
   const migratedRef = useRef(false);
   // Tracks last content saved as a snapshot (to skip unchanged periodic saves).
   const lastSnapshotContentRef = useRef<string | null>(null);
+  const lastAppliedContentAtRef = useRef<bigint | undefined>(initialContentUpdatedAt);
   /** FNV-1a hash of last successfully indexed text (title + markdown) for semantic search. */
   const lastEmbedHashRef = useRef<string>("");
   // Tracks which child page IDs we've already auto-inserted as pageLink blocks.
@@ -263,8 +271,9 @@ export function PearEditor({ pageId, initialContent, childPages, onMentionAiUser
 
       const contentIsNewerThanYjs =
         contentRow?.updatedAt &&
-        stateRow?.updatedAt &&
-        contentRow.updatedAt.microsSinceUnixEpoch > stateRow.updatedAt.microsSinceUnixEpoch;
+        (!stateRow?.updatedAt ||
+          contentRow.updatedAt.microsSinceUnixEpoch >
+            stateRow.updatedAt.microsSinceUnixEpoch);
 
       if (contentIsNewerThanYjs) {
         if (!docIsEmpty) {
@@ -292,6 +301,32 @@ export function PearEditor({ pageId, initialContent, childPages, onMentionAiUser
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive, pageId]);
+
+  useEffect(() => {
+    if (!isActive || initialContentUpdatedAt === undefined) return;
+    const previous = lastAppliedContentAtRef.current;
+    if (previous !== undefined && initialContentUpdatedAt <= previous) return;
+    lastAppliedContentAtRef.current = initialContentUpdatedAt;
+
+    const conn = spacetime.getConnection();
+    if (!conn) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = conn.db as any;
+    const stateRow: { updatedAt?: { microsSinceUnixEpoch: bigint } } | undefined =
+      db.page_yjs_state?.pageId?.find(pageId);
+    if (
+      stateRow?.updatedAt &&
+      stateRow.updatedAt.microsSinceUnixEpoch >= initialContentUpdatedAt
+    ) {
+      return;
+    }
+
+    const blocks = safeParseBlocks(initialContent);
+    if (!blocks?.length) return;
+    idbRef.current?.clearData().catch(() => {});
+    migratedRef.current = true;
+    editor.replaceBlocks(editor.document, blocks);
+  }, [editor, initialContent, initialContentUpdatedAt, isActive, pageId, spacetime]);
 
   // ── Periodic Yjs state save to SpacetimeDB ────────────────────────────────
   //

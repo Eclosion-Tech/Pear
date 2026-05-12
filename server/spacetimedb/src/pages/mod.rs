@@ -355,6 +355,9 @@ pub fn update_page_content(
         updated_at: ctx.timestamp,
         ..existing
     });
+    if ctx.db.page_yjs_state().page_id().find(page_id).is_some() {
+        ctx.db.page_yjs_state().page_id().delete(page_id);
+    }
     if let Some(page) = ctx.db.page().id().find(page_id) {
         ctx.db.page().id().update(Page {
             updated_at: ctx.timestamp,

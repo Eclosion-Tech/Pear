@@ -428,6 +428,7 @@ async function handleConversationMessage(
       ...toolContextFromAiUserConfigRow(aiCfg),
       conversationId: conv.id,
       currentPageId: conv.pageId,
+      aiIdentityHex: selfHex,
     };
 
     const tools: ToolDef[] = getConversationTools() as ToolDef[];

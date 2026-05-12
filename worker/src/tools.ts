@@ -23,6 +23,8 @@ export type ToolCallContext = {
   conversationId?: bigint;
   /** The page the current chat is attached to, if any. */
   currentPageId?: bigint;
+  /** Identity hex of the AI user executing this chat turn. */
+  aiIdentityHex?: string;
 };
 
 function readOptionStringFromRow(v: unknown): string | null {
@@ -1137,6 +1139,42 @@ function isPageWriteTool(toolName: string): boolean {
   ].includes(toolName);
 }
 
+function principalIdentityHex(principal: unknown): string | undefined {
+  if (!principal || typeof principal !== "object") return undefined;
+  const p = principal as { tag?: string; value?: unknown };
+  if (p.tag !== "WorkspaceMember") return undefined;
+  const value = p.value as { toHexString?: () => string } | undefined;
+  return typeof value?.toHexString === "function" ? value.toHexString() : undefined;
+}
+
+function hasChatWriteGrant(conn: ConnLike, pageId: bigint, ctx: ToolCallContext): boolean {
+  if (!ctx.conversationId || !ctx.aiIdentityHex) return true;
+  const rows = conn.db.page_access_rule?.iter?.() as Iterable<AnyRow> | undefined;
+  if (!rows) return false;
+  for (const row of rows) {
+    if (String(row.pageId) !== String(pageId)) continue;
+    if (principalIdentityHex(row.principal) !== ctx.aiIdentityHex) continue;
+    const permission = row.permission as { tag?: string } | undefined;
+    if (permission?.tag === "Write") return true;
+  }
+  return false;
+}
+
+function requireChatWriteGrant(
+  conn: ConnLike,
+  toolName: string,
+  input: Record<string, unknown>,
+  ctx: ToolCallContext,
+): void {
+  if (!ctx.conversationId || !ctx.aiIdentityHex) return;
+  if (!isPageWriteTool(toolName)) return;
+  const pageId = targetPageForAccessRequest(conn, toolName, input, ctx);
+  if (!pageId) return;
+  if (!hasChatWriteGrant(conn, pageId, ctx)) {
+    throw new Error("Caller lacks write access on this page");
+  }
+}
+
 async function maybeRequestWriteAccessAfterDenied(
   conn: ConnLike,
   toolName: string,
@@ -1179,6 +1217,7 @@ export async function executeTool(
 ): Promise<string> {
   console.log(`[tools] Executing ${toolName} — input: ${JSON.stringify(input)}`);
   try {
+    requireChatWriteGrant(conn, toolName, input, toolContext);
     switch (toolName) {
       case "create_page": {
         // parent_id=0 means root (no parent). Map to undefined so the SDK

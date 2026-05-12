@@ -73,9 +73,12 @@ export function ContextBar({
     };
   });
 
-  const allChips = hostChip
-    ? [hostChip, ...grantChips.filter((c) => c.pageId !== pageId)]
-    : grantChips;
+  const explicitHostGrant = grantChips.find((c) => c.pageId === pageId);
+  const allChips = explicitHostGrant
+    ? [explicitHostGrant, ...grantChips.filter((c) => c.pageId !== pageId)]
+    : hostChip
+      ? [hostChip, ...grantChips]
+      : grantChips;
 
   const pendingRequests = accessRequests.filter(
     (r) =>

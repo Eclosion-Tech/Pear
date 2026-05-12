@@ -164,9 +164,10 @@ export function DocPage({ page }: DocPageProps) {
           </div>
         )}
         <PearEditor
-          key={`${page.id}-${content?.updatedAt?.microsSinceUnixEpoch ?? 0}`}
+          key={String(page.id)}
           pageId={page.id}
           initialContent={content?.content ?? ""}
+          initialContentUpdatedAt={content?.updatedAt?.microsSinceUnixEpoch}
           childPages={children}
           onMentionAiUser={() => aiPanel.openPanel({ pageId: page.id })}
         />
