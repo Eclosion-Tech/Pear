@@ -11,23 +11,23 @@ import {
 } from "spacetimedb";
 import {
   ActorType,
-  ViewType,
 } from "./types";
 
 
 export default __t.row({
   id: __t.u64().primaryKey(),
-  pageId: __t.u64().name("page_id"),
-  name: __t.string(),
-  get viewType() {
-    return ViewType.name("view_type");
-  },
-  config: __t.string(),
-  isDefault: __t.bool().name("is_default"),
-  ownerIdentity: __t.option(__t.string()).name("owner_identity"),
+  surfaceId: __t.u64().name("surface_id"),
+  parentId: __t.option(__t.u64()).name("parent_id"),
+  componentType: __t.string().name("component_type"),
+  props: __t.string(),
+  order: __t.u32(),
   get createdBy() {
     return ActorType.name("created_by");
   },
+  get updatedBy() {
+    return ActorType.name("updated_by");
+  },
   createdAt: __t.timestamp().name("created_at"),
   updatedAt: __t.timestamp().name("updated_at"),
+  deletedAt: __t.option(__t.timestamp()).name("deleted_at"),
 });

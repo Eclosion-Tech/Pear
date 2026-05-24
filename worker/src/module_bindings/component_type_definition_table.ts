@@ -10,24 +10,22 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 import {
-  ActorType,
-  ViewType,
+  ComponentCapability,
 } from "./types";
 
 
 export default __t.row({
   id: __t.u64().primaryKey(),
-  pageId: __t.u64().name("page_id"),
-  name: __t.string(),
-  get viewType() {
-    return ViewType.name("view_type");
+  componentType: __t.string().name("component_type"),
+  displayName: __t.string().name("display_name"),
+  description: __t.string(),
+  propSchema: __t.string().name("prop_schema"),
+  get capabilities() {
+    return __t.array(ComponentCapability);
   },
-  config: __t.string(),
-  isDefault: __t.bool().name("is_default"),
-  ownerIdentity: __t.option(__t.string()).name("owner_identity"),
-  get createdBy() {
-    return ActorType.name("created_by");
-  },
+  hasYjsState: __t.bool().name("has_yjs_state"),
+  acceptsChildren: __t.bool().name("accepts_children"),
+  isBuiltin: __t.bool().name("is_builtin"),
+  registeredBy: __t.identity().name("registered_by"),
   createdAt: __t.timestamp().name("created_at"),
-  updatedAt: __t.timestamp().name("updated_at"),
 });

@@ -21,7 +21,8 @@ use crate::pages::schemas::{
     PagePropertyValueHistory, PropertyDefinition,
 };
 use crate::pages::{
-    next_page_id, next_sort_order, page, page_content, Page, PageContent, PageType,
+    next_page_id, next_sort_order, page, page_content, Page, PageContent, PageContentFormat,
+    PageType,
 };
 use crate::types::ActorType;
 
@@ -510,6 +511,7 @@ pub fn create_database_row(
         deleted_at: None,
         parent_pk: database_page_id,
         is_hidden: false,
+        content_format: PageContentFormat::BlockNote,
     });
     ctx.db.page_content().insert(PageContent {
         page_id: row.id,

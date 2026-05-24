@@ -10,8 +10,9 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 import {
-  PageType,
   ActorType,
+  PageType,
+  PageContentFormat,
 } from "./types";
 
 
@@ -33,4 +34,7 @@ export default __t.row({
   icon: __t.option(__t.string()),
   parentPk: __t.u64().name("parent_pk"),
   isHidden: __t.bool().name("is_hidden"),
+  get contentFormat() {
+    return PageContentFormat.name("content_format");
+  },
 });

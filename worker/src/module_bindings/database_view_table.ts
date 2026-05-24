@@ -10,8 +10,8 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 import {
-  ViewType,
   ActorType,
+  ViewType,
 } from "./types";
 
 

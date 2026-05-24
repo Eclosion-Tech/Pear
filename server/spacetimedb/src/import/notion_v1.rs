@@ -16,8 +16,8 @@ use crate::{
 use crate::{
     ActorType, Attachment, Conversation, ConversationKind, ConversationMessage, ConversationParticipant,
     ConversationStatus, ConversationVisibility, DatabaseSchema, DatabaseView, MessageSender,
-    MessageStatus, Page, PageContent, PagePropertyValue, PageType, ParticipantRole,
-    PropertyDefinition, PropertyType, PropertyValue, ViewType,
+    MessageStatus, Page, PageContent, PageContentFormat, PagePropertyValue, PageType,
+    ParticipantRole, PropertyDefinition, PropertyType, PropertyValue, ViewType,
 };
 use serde_json::Value;
 use spacetimedb::{reducer, Identity, ReducerContext, Table, Timestamp};
@@ -380,6 +380,9 @@ fn decode_page(v: &Value) -> Result<Page, String> {
         icon: opt_string_at(m, "icon")?,
         parent_pk: parent_id.unwrap_or(0),
         is_hidden: bool_at_or(m, "isHidden", false),
+        // Notion imports always produce BlockNote-format content (the
+        // converter writes BlockNote JSON to PageContent.content).
+        content_format: PageContentFormat::BlockNote,
     })
 }
 

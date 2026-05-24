@@ -15,11 +15,11 @@ use crate::{
     ConversationKind, ConversationMessage, ConversationParticipant, ConversationStatus, ConversationVisibility,
     DatabaseSchema, DatabaseView, ExtensionManifest, HarnessTemplate, HarnessTemplateSource,
     HttpMethod, InferenceProvider, InstalledExtension, MessageSender, MessageStatus, OrchaAgent,
-    OrchaJob, OrchaSharedContext, OrchaTask, Page, PageAccessRule, PageContent, PagePropertyValue,
-    PagePropertyValueHistory, PageSnapshot, PageType, PageYjsState, ParticipantRole, Permission,
-    Principal, PropertyDefinition, PropertyType, PropertyValue, ReviewAgentBinding,
-    ReviewAnnotation, ReviewMode, ReviewSeverity, ReviewSubject, SnapshotType, User,
-    UserPreference, ViewType,
+    OrchaJob, OrchaSharedContext, OrchaTask, Page, PageAccessRule, PageContent, PageContentFormat,
+    PagePropertyValue, PagePropertyValueHistory, PageSnapshot, PageType, PageYjsState,
+    ParticipantRole, Permission, Principal, PropertyDefinition, PropertyType, PropertyValue,
+    ReviewAgentBinding, ReviewAnnotation, ReviewMode, ReviewSeverity, ReviewSubject, SnapshotType,
+    User, UserPreference, ViewType,
 };
 use serde_json::Value;
 use spacetimedb::{reducer, Identity, ReducerContext, Table, Timestamp};
@@ -702,6 +702,10 @@ fn decode_page(v: &Value) -> Result<Page, String> {
         parent_pk: parent_id.unwrap_or(0),
         // Older snapshots predate the field; default visible.
         is_hidden: bool_at_or(m, "isHidden", false),
+        // Pre-migration snapshots have no contentFormat. Default to BlockNote
+        // because the snapshot's content is BlockNote JSON in PageContent.
+        // Snapshot-field-reading lands with the migration tool's ADR.
+        content_format: PageContentFormat::BlockNote,
     })
 }
 

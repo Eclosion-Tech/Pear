@@ -15,10 +15,12 @@ use crate::pages::schemas::{
 use crate::pages::snapshots::page_snapshot;
 use crate::pages::views::database_view;
 
+pub(crate) mod components;
 pub(crate) mod schemas;
 pub(crate) mod snapshots;
 pub(crate) mod views;
 
+pub(crate) use crate::pages::components::PageContentFormat;
 pub(crate) use crate::types::ActorType;
 #[derive(SpacetimeType, Clone, Debug, PartialEq)]
 pub enum PageType {
@@ -71,11 +73,18 @@ pub struct Page {
     /// subtrees and other "infrastructure" pages users don't need to see.
     /// Access rules still apply normally — this is a visibility hint, not
     /// a permission.
+    #[default(false)]
+    pub is_hidden: bool,
+    /// Discriminates how this page's content is stored during the BlockNote →
+    /// component-tree migration window. `BlockNote` reads from `PageContent`
+    /// + `PageYjsState`; `ComponentTree` reads from `ComponentNode` +
+    /// `ComponentYjsState`. See `docs/PEAR_COMPONENT_NODE_SCHEMA.md` §
+    /// Migration boundary. Becomes vestigial once the migration completes.
     ///
     /// Must be last for schema migration (STDB only allows additive changes
     /// at the end of a struct).
-    #[default(false)]
-    pub is_hidden: bool,
+    #[default(PageContentFormat::BlockNote)]
+    pub content_format: PageContentFormat,
 }
 
 /// Separated from Page so listing/filtering never loads content blobs.
@@ -200,6 +209,7 @@ pub fn create_page(
         deleted_at: None,
         parent_pk: parent_id.unwrap_or(0),
         is_hidden: false,
+        content_format: PageContentFormat::BlockNote,
     });
     ctx.db.page_content().insert(PageContent {
         page_id: page.id,
@@ -634,6 +644,7 @@ pub fn promote_to_instruction(
         deleted_at: None,
         parent_pk: parent_page_id,
         is_hidden: false,
+        content_format: PageContentFormat::BlockNote,
     });
     ctx.db.page_content().insert(PageContent {
         page_id: new_page.id,

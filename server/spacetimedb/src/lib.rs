@@ -81,6 +81,10 @@ pub use crate::orcha::{
     orcha_agent, orcha_job, orcha_shared_context, orcha_task, orcha_usage_event, OrchaAgent,
     OrchaJob, OrchaSharedContext, OrchaTask, OrchaUsageEvent,
 };
+pub use crate::pages::components::{
+    component_node, component_type_definition, component_yjs_state, ComponentCapability,
+    ComponentNode, ComponentTypeDefinition, ComponentYjsState, PageContentFormat,
+};
 pub use crate::pages::schemas::{
     database_schema, page_property_value, page_property_value_history, property_definition,
     AiPrimitive, AiPropertyValue, DatabaseSchema, InvalidationPolicy, PagePropertyValue,
@@ -101,6 +105,7 @@ use crate::auth::{extract_oidc_profile, workspace_has_no_admin};
 use crate::automations::seed_automation_primitives_inner;
 use crate::extensions::seed_builtin_extensions_inner;
 use crate::module_install::ensure_publisher_identity_recorded;
+use crate::pages::components::seed_builtin_component_types;
 use crate::sensors::seed_sensor_registry_inner;
 
 // ============================================================
@@ -113,6 +118,7 @@ pub fn init(ctx: &ReducerContext) {
     seed_builtin_extensions_inner(ctx);
     seed_sensor_registry_inner(ctx);
     seed_automation_primitives_inner(ctx);
+    seed_builtin_component_types(ctx);
 }
 
 /// Called by SpacetimeDB whenever a client connects.

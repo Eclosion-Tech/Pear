@@ -192,6 +192,9 @@ import AutomationPrimitiveRow from "./automation_primitive_table";
 import AutomationRuleRow from "./automation_rule_table";
 import AutomationRunLogRow from "./automation_run_log_table";
 import BlockAccessRuleRow from "./block_access_rule_table";
+import ComponentNodeRow from "./component_node_table";
+import ComponentTypeDefinitionRow from "./component_type_definition_table";
+import ComponentYjsStateRow from "./component_yjs_state_table";
 import ConversationRow from "./conversation_table";
 import ConversationMessageRow from "./conversation_message_table";
 import ConversationParticipantRow from "./conversation_participant_table";
@@ -492,6 +495,53 @@ const tablesSchema = __schema({
       { name: 'block_access_rule_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, BlockAccessRuleRow),
+  component_node: __table({
+    name: 'component_node',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'parent_id', algorithm: 'btree', columns: [
+        'parentId',
+      ] },
+      { name: 'surface_id', algorithm: 'btree', columns: [
+        'surfaceId',
+      ] },
+      { name: 'component_node_by_surface_parent', algorithm: 'btree', columns: [
+        'surfaceId',
+        'parentId',
+      ] },
+    ],
+    constraints: [
+      { name: 'component_node_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, ComponentNodeRow),
+  component_type_definition: __table({
+    name: 'component_type_definition',
+    indexes: [
+      { name: 'component_type', algorithm: 'btree', columns: [
+        'componentType',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'component_type_definition_component_type_key', constraint: 'unique', columns: ['componentType'] },
+      { name: 'component_type_definition_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, ComponentTypeDefinitionRow),
+  component_yjs_state: __table({
+    name: 'component_yjs_state',
+    indexes: [
+      { name: 'component_node_id', algorithm: 'btree', columns: [
+        'componentNodeId',
+      ] },
+    ],
+    constraints: [
+      { name: 'component_yjs_state_component_node_id_key', constraint: 'unique', columns: ['componentNodeId'] },
+    ],
+  }, ComponentYjsStateRow),
   conversation: __table({
     name: 'conversation',
     indexes: [

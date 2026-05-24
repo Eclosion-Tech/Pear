@@ -12,7 +12,8 @@ use crate::access_control::{next_page_access_rule_id, page_access_rule, PageAcce
 use crate::ai::{ai_user_config, ai_user_profile};
 use crate::id_counters::alloc_id;
 use crate::pages::{
-    next_page_id, next_sort_order, page, page_content, ActorType, Page, PageContent, PageType,
+    next_page_id, next_sort_order, page, page_content, ActorType, Page, PageContent,
+    PageContentFormat, PageType,
 };
 use crate::types::Permission;
 
@@ -109,6 +110,7 @@ pub fn provision_ai_user_memory(ctx: &ReducerContext, ai_user_id: u64) -> Result
         deleted_at: None,
         parent_pk: 0,
         is_hidden: true,
+        content_format: PageContentFormat::BlockNote,
     });
     ctx.db.page_content().insert(PageContent {
         page_id: root.id,

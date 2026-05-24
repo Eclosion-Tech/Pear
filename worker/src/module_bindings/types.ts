@@ -430,6 +430,62 @@ export const BlockAccessRule = __t.object("BlockAccessRule", {
 });
 export type BlockAccessRule = __Infer<typeof BlockAccessRule>;
 
+// The tagged union or sum type for the algebraic type `ComponentCapability`.
+export const ComponentCapability = __t.enum("ComponentCapability", {
+  ReadsDatabase: __t.unit(),
+  ReadsProperty: __t.unit(),
+  WritesDatabase: __t.unit(),
+  WritesProperty: __t.unit(),
+  DeletesRow: __t.unit(),
+  NavigatesToPage: __t.unit(),
+  OpensExternalUrl: __t.unit(),
+  TriggersAutomation: __t.unit(),
+});
+export type ComponentCapability = __Infer<typeof ComponentCapability>;
+
+export const ComponentNode = __t.object("ComponentNode", {
+  id: __t.u64(),
+  surfaceId: __t.u64(),
+  parentId: __t.option(__t.u64()),
+  componentType: __t.string(),
+  props: __t.string(),
+  order: __t.u32(),
+  get createdBy() {
+    return ActorType;
+  },
+  get updatedBy() {
+    return ActorType;
+  },
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+  deletedAt: __t.option(__t.timestamp()),
+});
+export type ComponentNode = __Infer<typeof ComponentNode>;
+
+export const ComponentTypeDefinition = __t.object("ComponentTypeDefinition", {
+  id: __t.u64(),
+  componentType: __t.string(),
+  displayName: __t.string(),
+  description: __t.string(),
+  propSchema: __t.string(),
+  get capabilities() {
+    return __t.array(ComponentCapability);
+  },
+  hasYjsState: __t.bool(),
+  acceptsChildren: __t.bool(),
+  isBuiltin: __t.bool(),
+  registeredBy: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type ComponentTypeDefinition = __Infer<typeof ComponentTypeDefinition>;
+
+export const ComponentYjsState = __t.object("ComponentYjsState", {
+  componentNodeId: __t.u64(),
+  data: __t.byteArray(),
+  updatedAt: __t.timestamp(),
+});
+export type ComponentYjsState = __Infer<typeof ComponentYjsState>;
+
 export const Conversation = __t.object("Conversation", {
   id: __t.u64(),
   pageId: __t.option(__t.u64()),
@@ -772,6 +828,9 @@ export const Page = __t.object("Page", {
   icon: __t.option(__t.string()),
   parentPk: __t.u64(),
   isHidden: __t.bool(),
+  get contentFormat() {
+    return PageContentFormat;
+  },
 });
 export type Page = __Infer<typeof Page>;
 
@@ -816,6 +875,13 @@ export const PageContent = __t.object("PageContent", {
   updatedAt: __t.timestamp(),
 });
 export type PageContent = __Infer<typeof PageContent>;
+
+// The tagged union or sum type for the algebraic type `PageContentFormat`.
+export const PageContentFormat = __t.enum("PageContentFormat", {
+  BlockNote: __t.unit(),
+  ComponentTree: __t.unit(),
+});
+export type PageContentFormat = __Infer<typeof PageContentFormat>;
 
 export const PagePropertyValue = __t.object("PagePropertyValue", {
   id: __t.u64(),

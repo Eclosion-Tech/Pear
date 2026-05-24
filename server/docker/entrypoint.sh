@@ -29,10 +29,20 @@ fi
 
 if [ -f "$MODULE_WASM" ]; then
   echo "[pear] Publishing module from $MODULE_WASM as '$DB_NAME'..."
+  # --break-clients matches lifecycle's production migration policy (see
+  # lifecycle/src/provisioner.rs publish_module). Without it, additive
+  # schema changes like "new column with default value" are rejected by
+  # SpacetimeDB 2.0.3's default `Compatible` policy with HTTP 400
+  # ClientBreakingChangeDisallowed. Self-hosted dev environments rolling
+  # forward the module version need the same opt-in lifecycle gets via
+  # the 2-step pre-publish flow. Client bindings are regenerated separately
+  # before this image is built, so client-side compatibility is already
+  # handled by the time we publish.
   if spacetime publish \
     --bin-path "$MODULE_WASM" \
     "$DB_NAME" \
     --server http://localhost:3000 \
+    --break-clients \
     --yes; then
     echo "[pear] Module published."
   else
@@ -44,6 +54,7 @@ if [ -f "$MODULE_WASM" ]; then
       --bin-path "$MODULE_WASM" \
       "$DB_NAME" \
       --server http://localhost:3000 \
+      --break-clients \
       --yes; then
       echo "[pear] Module published on retry."
     else

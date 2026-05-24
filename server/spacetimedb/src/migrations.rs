@@ -13,6 +13,7 @@ use crate::ai::memory::{
 use crate::automations::seed_automation_primitives_inner;
 use crate::harness::{harness_template, HarnessTemplate};
 use crate::module_install::ensure_publisher_identity_recorded;
+use crate::pages::components::seed_builtin_component_types;
 use crate::pages::{page, Page};
 use crate::sensors::seed_sensor_registry_inner;
 /// Records which one-shot data migrations have already run on this database.
@@ -123,6 +124,14 @@ pub fn run_pending_migrations(ctx: &ReducerContext) -> Result<(), String> {
         "module_install_meta_publisher_v1",
         |ctx: &ReducerContext| {
             ensure_publisher_identity_recorded(ctx);
+            Ok::<(), String>(())
+        }
+    );
+    run_step!(
+        ctx,
+        "component_type_registry_seed_v1",
+        |ctx: &ReducerContext| {
+            seed_builtin_component_types(ctx);
             Ok::<(), String>(())
         }
     );
