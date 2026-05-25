@@ -635,9 +635,17 @@ fn ancestor_chain_contains(
     // Safety: hard cap on traversal depth to defend against an externally-
     // injected cycle in case the invariant was ever violated by a previous
     // bug. 10_000 is way above any plausible real tree depth.
+    //
+    // The two non-cyclic exits are:
+    //   - `target_id` found in the chain → `Ok(true)`
+    //   - chain walks all the way to a node with `parent_id = None` →
+    //     `Ok(false)` (we ran out of ancestors without finding the target)
+    // Hitting the loop's natural completion means we walked
+    // `max_steps` ancestors without exhausting the chain, which can
+    // only happen with a real cycle.
     let max_steps = 10_000usize;
     for _ in 0..max_steps {
-        let Some(id) = current else { break };
+        let Some(id) = current else { return Ok(false) };
         if id == target_id {
             return Ok(true);
         }

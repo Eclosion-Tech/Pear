@@ -22,8 +22,18 @@
  *
  * Usage:
  *   pnpm --filter web smoke <db-name> [<uri>]
- * Example:
- *   pnpm --filter web smoke pear-eclosion ws://localhost:3000
+ * Examples:
+ *   # Local dev — no auth, anonymous identity works because there are no
+ *   # access rules on the workspace.
+ *   pnpm --filter web smoke pear-dev ws://localhost:3000
+ *
+ *   # Remote env — the lifecycle proxy at cloud.pear.pro enforces OIDC
+ *   # bearer auth on every WebSocket upgrade. Grab a session token from
+ *   # the browser (DevTools → Application → Local Storage on the
+ *   # workspace, key `pear_spacetimedb_token__<workspace-id>`) and pass
+ *   # via env:
+ *   SPACETIMEDB_TOKEN=eyJhbGc... \
+ *     pnpm --filter web smoke eclosion wss://eclosion.cloud.pear.pro
  *
  * The script writes test data into the target database. Run against dev /
  * staging instances, not production. The cleanup step removes the test
@@ -45,11 +55,13 @@ import type {
 
 const dbName = process.argv[2];
 const uri = process.argv[3] ?? "ws://localhost:3000";
+const token = process.env.SPACETIMEDB_TOKEN?.trim() || undefined;
 
 if (!dbName) {
   console.error(
     "Usage: pnpm --filter web smoke <db-name> [<uri>]\n" +
-      "Example: pnpm --filter web smoke pear-eclosion ws://localhost:3000",
+      "  Local : pnpm --filter web smoke pear-dev ws://localhost:3000\n" +
+      "  Remote: SPACETIMEDB_TOKEN=eyJ... pnpm --filter web smoke <slug> wss://<slug>.cloud.pear.pro",
   );
   process.exit(1);
 }
@@ -127,12 +139,20 @@ function callReducer(
 
 // ============================================================
 // Connect + subscribe.
+//
+// The script body lives inside an async `main()` because tsx evaluates it
+// in CommonJS mode (pear/web/package.json is not "type": "module" — that
+// would break Next.js). CJS doesn't allow top-level await, so we wrap.
 // ============================================================
 
-console.log(`[smoke] Connecting to ${uri} / ${dbName}`);
+async function main(): Promise<void> {
+console.log(
+  `[smoke] Connecting to ${uri} / ${dbName} (${token ? "authenticated" : "anonymous"})`,
+);
 
 const conn: DbConnectionType = await new Promise((resolve, reject) => {
   const builder = DbConnection.builder().withUri(uri).withDatabaseName(dbName);
+  if (token) builder.withToken(token);
   builder
     .onConnect((c, identity) => {
       console.log(`[smoke] Connected as ${identity.toHexString()}`);
@@ -240,7 +260,7 @@ expect(
 // --- 3. update_component_props ---
 
 await callReducer(conn, "updateComponentProps", {
-  componentNodeId: headingNode.id,
+  componentId: headingNode.id,
   propsJson: JSON.stringify({ level: 2, text: "Updated heading" }),
 });
 await eventually("heading props update", () =>
@@ -253,7 +273,7 @@ pass("heading props mutated via update_component_props");
 // --- 4. move_component ---
 
 await callReducer(conn, "moveComponent", {
-  componentNodeId: headingNode.id,
+  componentId: headingNode.id,
   newParentId: rootNode.id,
   afterSiblingId: richTextNode.id,
 });
@@ -269,7 +289,7 @@ pass("heading reordered after RichText");
 
 const yjsBytes = new Uint8Array([0x01, 0x02, 0x03, 0x04, 0x05]);
 await callReducer(conn, "saveComponentYjsState", {
-  componentNodeId: richTextNode.id,
+  componentId: richTextNode.id,
   data: yjsBytes,
 });
 await eventually("ComponentYjsState row for RichText", () =>
@@ -284,7 +304,7 @@ pass("Yjs state persisted on RichText");
 let negativeRejected = false;
 try {
   await callReducer(conn, "saveComponentYjsState", {
-    componentNodeId: headingNode.id,
+    componentId: headingNode.id,
     data: yjsBytes,
   });
 } catch {
@@ -323,7 +343,7 @@ expect(
 
 // --- 7. delete_component + restore_component ---
 
-await callReducer(conn, "deleteComponent", { componentNodeId: headingNode.id });
+await callReducer(conn, "deleteComponent", { componentId: headingNode.id });
 await eventually("heading is soft-deleted", () =>
   rows<ComponentNode>(conn, "component_node").find(
     (n) => n.id === headingNode.id && n.deletedAt !== undefined,
@@ -332,7 +352,7 @@ await eventually("heading is soft-deleted", () =>
 pass("delete_component soft-deletes target");
 
 await callReducer(conn, "restoreComponent", {
-  componentNodeId: headingNode.id,
+  componentId: headingNode.id,
 });
 await eventually("heading is restored", () =>
   rows<ComponentNode>(conn, "component_node").find(
@@ -345,7 +365,7 @@ pass("restore_component undoes the soft-delete");
 
 // Mutate state so restore actually changes something.
 await callReducer(conn, "updateComponentProps", {
-  componentNodeId: headingNode.id,
+  componentId: headingNode.id,
   propsJson: JSON.stringify({ level: 3, text: "About to be reverted" }),
 });
 await eventually("pre-restore prop change visible", () =>
@@ -402,7 +422,7 @@ const customDef = await eventually(
 expect("custom def is_builtin == false", customDef.isBuiltin === false);
 
 await callReducer(conn, "updateComponentType", {
-  componentTypeDefinitionId: customDef.id,
+  typeId: customDef.id,
   displayName: "Smoke Custom (renamed)",
   description: null,
   propSchemaJson: null,
@@ -450,3 +470,9 @@ console.log(`[smoke] ${passCount} passed, ${failCount} failed`);
 
 conn.disconnect();
 process.exit(failCount === 0 ? 0 : 1);
+}
+
+main().catch((err) => {
+  console.error(`[smoke] FATAL: ${err instanceof Error ? err.message : err}`);
+  process.exit(2);
+});
