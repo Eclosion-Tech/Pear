@@ -20,7 +20,7 @@ export default __t.row({
   parentId: __t.option(__t.u64()).name("parent_id"),
   componentType: __t.string().name("component_type"),
   props: __t.string(),
-  order: __t.string(),
+  order: __t.u32(),
   get createdBy() {
     return ActorType.name("created_by");
   },
