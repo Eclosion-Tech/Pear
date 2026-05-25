@@ -106,6 +106,7 @@ import RecordToolCallAuditReducer from "./record_tool_call_audit_reducer";
 import RecordUsageEventReducer from "./record_usage_event_reducer";
 import RegisterReducer from "./register_reducer";
 import RegisterAgentReducer from "./register_agent_reducer";
+import RegisterComponentTypeReducer from "./register_component_type_reducer";
 import RemoveConversationParticipantReducer from "./remove_conversation_participant_reducer";
 import RenamePropertyReducer from "./rename_property_reducer";
 import RenameViewReducer from "./rename_view_reducer";
@@ -163,6 +164,7 @@ import UpdateApiFieldMappingReducer from "./update_api_field_mapping_reducer";
 import UpdateAutomationActionReducer from "./update_automation_action_reducer";
 import UpdateAutomationRuleReducer from "./update_automation_rule_reducer";
 import UpdateComponentPropsReducer from "./update_component_props_reducer";
+import UpdateComponentTypeReducer from "./update_component_type_reducer";
 import UpdateDatabaseRowReducer from "./update_database_row_reducer";
 import UpdateDatabaseSchemaConfigReducer from "./update_database_schema_config_reducer";
 import UpdateExtensionReducer from "./update_extension_reducer";
@@ -1077,6 +1079,7 @@ const reducersSchema = __reducers(
   __reducerSchema("record_usage_event", RecordUsageEventReducer),
   __reducerSchema("register", RegisterReducer),
   __reducerSchema("register_agent", RegisterAgentReducer),
+  __reducerSchema("register_component_type", RegisterComponentTypeReducer),
   __reducerSchema("remove_conversation_participant", RemoveConversationParticipantReducer),
   __reducerSchema("rename_property", RenamePropertyReducer),
   __reducerSchema("rename_view", RenameViewReducer),
@@ -1134,6 +1137,7 @@ const reducersSchema = __reducers(
   __reducerSchema("update_automation_action", UpdateAutomationActionReducer),
   __reducerSchema("update_automation_rule", UpdateAutomationRuleReducer),
   __reducerSchema("update_component_props", UpdateComponentPropsReducer),
+  __reducerSchema("update_component_type", UpdateComponentTypeReducer),
   __reducerSchema("update_database_row", UpdateDatabaseRowReducer),
   __reducerSchema("update_database_schema_config", UpdateDatabaseSchemaConfigReducer),
   __reducerSchema("update_extension", UpdateExtensionReducer),

@@ -15,17 +15,21 @@
 //!   init; extensible via [`register_component_type`] for tier-5 component
 //!   packs (post-v1).
 //!
-//! Sprint 1 shipped the schema, enums, and seed. Sprint 2 (current) ships
-//! the tree-mutation reducers — `insert_component`, `update_component_props`,
-//! `move_component`, `delete_component`, `restore_component`, and
-//! `save_component_yjs_state` — and the legacy-reducer guards in
+//! Sprint 1 shipped the schema, enums, and seed. Sprint 2 shipped the
+//! tree-mutation reducers (`insert_component`, `update_component_props`,
+//! `move_component`, `delete_component`, `restore_component`,
+//! `save_component_yjs_state`) and the legacy-reducer guards in
 //! `pages/mod.rs` that reject `ComponentTree`-format pages from the BlockNote
-//! reducers. Registry mutations (`register_component_type`,
-//! `update_component_type`) land in sprint 3.
+//! reducers. Sprint 3 (current) ships registry mutations
+//! (`register_component_type`, `update_component_type`), the
+//! `purge_component_tree` helper consumed by `purge_page_inner`, and the
+//! `serialize_component_tree` / `restore_component_tree` helpers consumed
+//! by the snapshot reducers in `pages/snapshots.rs`.
 
 use spacetimedb::{reducer, table, Identity, ReducerContext, SpacetimeType, Table, Timestamp};
 
 use crate::access_control::helpers::require_page_write;
+use crate::auth::user;
 use crate::automations::enqueue_page_updated;
 use crate::id_counters::alloc_id;
 use crate::module_install::module_install_meta;
@@ -997,5 +1001,330 @@ pub fn save_component_yjs_state(
     }
 
     touch_page(ctx, page);
+    Ok(())
+}
+
+// ============================================================
+// Reducers — registry
+// ============================================================
+
+/// Register a new (non-builtin) `ComponentTypeDefinition`. Used by tier-5
+/// extension packs that bundle their own component types. The registering
+/// `Identity` (the reducer caller) is recorded in `registered_by` so
+/// subsequent `update_component_type` calls can enforce ownership.
+///
+/// - `is_builtin` is forced to `false` regardless of caller. Built-in types
+///   are seeded once at `init` via `seed_builtin_component_types` and are
+///   immutable.
+/// - `component_type` must be globally unique. Returns an error if a type
+///   with this string already exists.
+/// - `prop_schema_json` is stored opaquely — server-side schema validation
+///   is post-v1 (see ADR § Prop-schema validation).
+#[reducer]
+pub fn register_component_type(
+    ctx: &ReducerContext,
+    component_type: String,
+    display_name: String,
+    description: String,
+    prop_schema_json: String,
+    capabilities: Vec<ComponentCapability>,
+    has_yjs_state: bool,
+    accepts_children: bool,
+) -> Result<(), String> {
+    if component_type.trim().is_empty() {
+        return Err("component_type cannot be empty".to_string());
+    }
+    if ctx
+        .db
+        .component_type_definition()
+        .component_type()
+        .find(component_type.clone())
+        .is_some()
+    {
+        return Err(format!("Component type {component_type:?} is already registered"));
+    }
+
+    ctx.db
+        .component_type_definition()
+        .insert(ComponentTypeDefinition {
+            id: next_component_type_definition_id(ctx),
+            component_type,
+            display_name,
+            description,
+            prop_schema: prop_schema_json,
+            capabilities,
+            has_yjs_state,
+            accepts_children,
+            is_builtin: false,
+            registered_by: ctx.sender(),
+            created_at: ctx.timestamp,
+        });
+    Ok(())
+}
+
+/// Update a previously-registered (non-builtin) `ComponentTypeDefinition`.
+///
+/// - Refuses to modify `is_builtin = true` rows.
+/// - Caller must be either the original `registered_by` identity or an
+///   admin (`User.is_admin && User.is_authenticated`).
+/// - `component_type`, `has_yjs_state`, `accepts_children`, and the
+///   ownership/builtin flags are immutable through this reducer — changing
+///   them would require migrating every `ComponentNode` row that points
+///   to this type, which is out of scope for a metadata update. Drop and
+///   re-register if you really need a different shape.
+#[reducer]
+pub fn update_component_type(
+    ctx: &ReducerContext,
+    type_id: u64,
+    display_name: Option<String>,
+    description: Option<String>,
+    prop_schema_json: Option<String>,
+    capabilities: Option<Vec<ComponentCapability>>,
+) -> Result<(), String> {
+    let existing = ctx
+        .db
+        .component_type_definition()
+        .id()
+        .find(type_id)
+        .ok_or("ComponentTypeDefinition not found")?;
+
+    if existing.is_builtin {
+        return Err("Cannot modify a built-in component type".to_string());
+    }
+
+    let sender = ctx.sender();
+    let is_admin = ctx
+        .db
+        .user()
+        .identity()
+        .find(sender)
+        .map(|u| u.is_admin && u.is_authenticated)
+        .unwrap_or(false);
+    if existing.registered_by != sender && !is_admin {
+        return Err(
+            "Only the registering identity or a workspace admin may update this component type"
+                .to_string(),
+        );
+    }
+
+    ctx.db.component_type_definition().id().update(ComponentTypeDefinition {
+        display_name: display_name.unwrap_or_else(|| existing.display_name.clone()),
+        description: description.unwrap_or_else(|| existing.description.clone()),
+        prop_schema: prop_schema_json.unwrap_or_else(|| existing.prop_schema.clone()),
+        capabilities: capabilities.unwrap_or_else(|| existing.capabilities.clone()),
+        ..existing
+    });
+    Ok(())
+}
+
+// ============================================================
+// Purge / snapshot helpers (consumed by pages/mod.rs + snapshots.rs)
+// ============================================================
+
+/// Hard-delete every `ComponentNode` and `ComponentYjsState` row associated
+/// with a surface. Called by `purge_page_inner` after a page exits its
+/// 30-day soft-delete grace window. Idempotent — safe to call on
+/// `BlockNote`-format pages too (no rows match; no-op).
+pub(crate) fn purge_component_tree(ctx: &ReducerContext, page_id: u64) {
+    let node_ids: Vec<u64> = ctx
+        .db
+        .component_node()
+        .iter()
+        .filter(|n| n.surface_id == page_id)
+        .map(|n| n.id)
+        .collect();
+    for nid in &node_ids {
+        ctx.db.component_yjs_state().component_node_id().delete(*nid);
+        ctx.db.component_node().id().delete(*nid);
+    }
+}
+
+/// Serialize the live `ComponentNode` tree for a surface to a JSON blob
+/// suitable for storage in `PageSnapshot.content`. Includes per-`RichText`
+/// Yjs bytes (base64) so the snapshot is round-trip restorable.
+///
+/// Nodes are emitted in BFS order from the root so `restore_component_tree`
+/// can walk linearly: every parent appears before any of its children, so
+/// the `parent_id` remap is always already populated by the time it's
+/// needed. Soft-deleted nodes are excluded — restoring a snapshot reflects
+/// "the page as it was when live."
+pub(crate) fn serialize_component_tree(
+    ctx: &ReducerContext,
+    page_id: u64,
+) -> Result<String, String> {
+    use base64::Engine;
+    use std::collections::{HashMap, VecDeque};
+
+    let live_nodes: Vec<ComponentNode> = ctx
+        .db
+        .component_node()
+        .iter()
+        .filter(|n| n.surface_id == page_id && n.deleted_at.is_none())
+        .collect();
+
+    // Index by id and group by parent so BFS is cheap.
+    let mut by_id: HashMap<u64, ComponentNode> = HashMap::with_capacity(live_nodes.len());
+    let mut children_of: HashMap<Option<u64>, Vec<u64>> = HashMap::new();
+    let mut node_order: HashMap<u64, u32> = HashMap::new();
+    let mut root_id: Option<u64> = None;
+    for n in live_nodes {
+        if n.parent_id.is_none() {
+            root_id = Some(n.id);
+        }
+        node_order.insert(n.id, n.order);
+        children_of.entry(n.parent_id).or_default().push(n.id);
+        by_id.insert(n.id, n);
+    }
+    for ids in children_of.values_mut() {
+        ids.sort_by_key(|id| node_order.get(id).copied().unwrap_or(0));
+    }
+
+    let mut ordered: Vec<ComponentNode> = Vec::with_capacity(by_id.len());
+    if let Some(rid) = root_id {
+        let mut queue: VecDeque<u64> = VecDeque::new();
+        queue.push_back(rid);
+        while let Some(id) = queue.pop_front() {
+            if let Some(n) = by_id.remove(&id) {
+                let children = children_of.remove(&Some(id)).unwrap_or_default();
+                ordered.push(n);
+                for cid in children {
+                    queue.push_back(cid);
+                }
+            }
+        }
+    }
+
+    let nodes_value: Vec<serde_json::Value> = ordered
+        .into_iter()
+        .map(|n| {
+            let yjs_b64 = ctx
+                .db
+                .component_yjs_state()
+                .component_node_id()
+                .find(n.id)
+                .map(|s| base64::engine::general_purpose::STANDARD.encode(&s.data));
+            serde_json::json!({
+                "id": n.id,
+                "parent_id": n.parent_id,
+                "component_type": n.component_type,
+                "props": n.props,
+                "order": n.order,
+                "yjs_b64": yjs_b64,
+            })
+        })
+        .collect();
+
+    let snapshot = serde_json::json!({
+        "v": "component_tree_v1",
+        "root_id": root_id,
+        "nodes": nodes_value,
+    });
+    Ok(snapshot.to_string())
+}
+
+/// Restore a surface's component tree from a JSON blob produced by
+/// `serialize_component_tree`. Wipes the surface's current
+/// `ComponentNode` + `ComponentYjsState` rows, then re-creates them from
+/// the snapshot, allocating fresh IDs and remapping `parent_id` references.
+///
+/// Errors if the JSON is missing fields, has an unknown format version,
+/// references an unknown `component_type`, or has any other shape problem.
+/// Atomicity: SpacetimeDB reducers commit-or-rollback as a unit, so a
+/// partial restore is impossible — any error rolls back the wipe too.
+pub(crate) fn restore_component_tree(
+    ctx: &ReducerContext,
+    page_id: u64,
+    snapshot_json: &str,
+) -> Result<(), String> {
+    use base64::Engine;
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(snapshot_json).map_err(|e| format!("snapshot json: {e}"))?;
+    let obj = parsed
+        .as_object()
+        .ok_or("snapshot root is not an object")?;
+    let version = obj
+        .get("v")
+        .and_then(|v| v.as_str())
+        .ok_or("snapshot missing 'v' field")?;
+    if version != "component_tree_v1" {
+        return Err(format!("Unknown snapshot format version: {version}"));
+    }
+    let nodes_arr = obj
+        .get("nodes")
+        .and_then(|v| v.as_array())
+        .ok_or("snapshot missing 'nodes' array")?;
+
+    purge_component_tree(ctx, page_id);
+
+    let mut id_map: std::collections::HashMap<u64, u64> =
+        std::collections::HashMap::with_capacity(nodes_arr.len());
+
+    for n in nodes_arr {
+        let m = n.as_object().ok_or("snapshot node is not an object")?;
+        let snap_id = m.get("id").and_then(|v| v.as_u64()).ok_or("node.id")?;
+        let snap_parent_id = m.get("parent_id").and_then(|v| {
+            if v.is_null() {
+                Some(None)
+            } else {
+                v.as_u64().map(Some)
+            }
+        });
+        let snap_parent_id = snap_parent_id.ok_or("node.parent_id (null or u64)")?;
+        let component_type = m
+            .get("component_type")
+            .and_then(|v| v.as_str())
+            .ok_or("node.component_type")?
+            .to_string();
+        let props = m
+            .get("props")
+            .and_then(|v| v.as_str())
+            .ok_or("node.props")?
+            .to_string();
+        let order = m
+            .get("order")
+            .and_then(|v| v.as_u64())
+            .ok_or("node.order")? as u32;
+        let yjs_b64 = m.get("yjs_b64").and_then(|v| v.as_str()).map(String::from);
+
+        // Verify type is registered.
+        require_type_def(ctx, &component_type)?;
+
+        // Map parent_id (None → None for root; Some(snap_p) must already be in id_map).
+        let new_parent_id = match snap_parent_id {
+            None => None,
+            Some(p) => Some(*id_map.get(&p).ok_or_else(|| {
+                format!("snapshot node {snap_id} references unknown parent {p}")
+            })?),
+        };
+
+        let new_id = next_component_node_id(ctx);
+        id_map.insert(snap_id, new_id);
+
+        ctx.db.component_node().insert(ComponentNode {
+            id: new_id,
+            surface_id: page_id,
+            parent_id: new_parent_id,
+            component_type,
+            props,
+            order,
+            created_by: ActorType::Human,
+            updated_by: ActorType::Human,
+            created_at: ctx.timestamp,
+            updated_at: ctx.timestamp,
+            deleted_at: None,
+        });
+
+        if let Some(b64) = yjs_b64 {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(b64.trim())
+                .map_err(|e| format!("yjs_b64 decode for snapshot node {snap_id}: {e}"))?;
+            ctx.db.component_yjs_state().insert(ComponentYjsState {
+                component_node_id: new_id,
+                data: bytes,
+                updated_at: ctx.timestamp,
+            });
+        }
+    }
     Ok(())
 }

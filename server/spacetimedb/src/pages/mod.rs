@@ -540,6 +540,11 @@ fn purge_page_inner(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
     // Delete the Yjs state blob (single row, primary key = page_id).
     ctx.db.page_yjs_state().page_id().delete(page_id);
 
+    // Cascade-purge the component tree (ComponentNode + ComponentYjsState
+    // rows) if this is a ComponentTree-format page. No-op on BlockNote
+    // pages where no rows match the surface_id.
+    crate::pages::components::purge_component_tree(ctx, page_id);
+
     let snapshot_ids: Vec<u64> = ctx
         .db
         .page_snapshot()
