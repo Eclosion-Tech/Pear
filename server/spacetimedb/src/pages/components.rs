@@ -15,15 +15,21 @@
 //!   init; extensible via [`register_component_type`] for tier-5 component
 //!   packs (post-v1).
 //!
-//! Sprint 1 (this file) ships the schema, enums, and seed. Mutation reducers
-//! (`insert_component`, `update_component_props`, `move_component`,
-//! `delete_component`, `restore_component`, `save_component_yjs_state`,
-//! `register_component_type`, `update_component_type`) land in sprint 2.
+//! Sprint 1 shipped the schema, enums, and seed. Sprint 2 (current) ships
+//! the tree-mutation reducers — `insert_component`, `update_component_props`,
+//! `move_component`, `delete_component`, `restore_component`, and
+//! `save_component_yjs_state` — and the legacy-reducer guards in
+//! `pages/mod.rs` that reject `ComponentTree`-format pages from the BlockNote
+//! reducers. Registry mutations (`register_component_type`,
+//! `update_component_type`) land in sprint 3.
 
-use spacetimedb::{table, Identity, ReducerContext, SpacetimeType, Table, Timestamp};
+use spacetimedb::{reducer, table, Identity, ReducerContext, SpacetimeType, Table, Timestamp};
 
+use crate::access_control::helpers::require_page_write;
+use crate::automations::enqueue_page_updated;
 use crate::id_counters::alloc_id;
 use crate::module_install::module_install_meta;
+use crate::pages::{page, Page};
 use crate::types::ActorType;
 
 // ============================================================
@@ -199,9 +205,7 @@ pub struct ComponentTypeDefinition {
 // Id allocators
 // ============================================================
 
-/// Allocator for `ComponentNode.id`. Unused in sprint 1 (schema only);
-/// called by `insert_component` when the mutation reducers land in sprint 2.
-#[allow(dead_code)]
+/// Allocator for `ComponentNode.id`.
 pub(crate) fn next_component_node_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "component_node", || {
         ctx.db.component_node().iter().map(|r| r.id).max().unwrap_or(0)
@@ -550,4 +554,448 @@ pub(crate) fn seed_builtin_component_types(ctx: &ReducerContext) {
             created_at: ctx.timestamp,
         });
     }
+}
+
+// ============================================================
+// Mutation helpers
+// ============================================================
+
+/// Load a `ComponentNode` by id and assert it's live (not soft-deleted).
+fn require_live_node(ctx: &ReducerContext, component_id: u64) -> Result<ComponentNode, String> {
+    let node = ctx
+        .db
+        .component_node()
+        .id()
+        .find(component_id)
+        .ok_or("ComponentNode not found")?;
+    if node.deleted_at.is_some() {
+        return Err("ComponentNode is soft-deleted".to_string());
+    }
+    Ok(node)
+}
+
+/// Load a `ComponentNode` by id without filtering on deleted_at. Used by
+/// `restore_component` which needs to operate on a deleted row.
+fn require_node(ctx: &ReducerContext, component_id: u64) -> Result<ComponentNode, String> {
+    ctx.db
+        .component_node()
+        .id()
+        .find(component_id)
+        .ok_or("ComponentNode not found".to_string())
+}
+
+/// Load the owning `Page` for a surface, assert it isn't deleted, and assert
+/// its content_format is `ComponentTree`. Returns the Page row so callers can
+/// reuse `updated_at` writes without a second lookup.
+fn require_component_tree_page(ctx: &ReducerContext, surface_id: u64) -> Result<Page, String> {
+    let page = ctx
+        .db
+        .page()
+        .id()
+        .find(surface_id)
+        .ok_or("Surface page not found")?;
+    if page.deleted_at.is_some() {
+        return Err("Surface page is deleted".to_string());
+    }
+    if !matches!(page.content_format, PageContentFormat::ComponentTree) {
+        return Err(
+            "Page is not in ComponentTree format — component mutations are rejected".to_string(),
+        );
+    }
+    Ok(page)
+}
+
+/// Registry lookup for the component type. Errors if the type isn't
+/// registered (invariant #4 — `component_type` is registered).
+fn require_type_def(
+    ctx: &ReducerContext,
+    component_type: &str,
+) -> Result<ComponentTypeDefinition, String> {
+    ctx.db
+        .component_type_definition()
+        .component_type()
+        .find(component_type.to_string())
+        .ok_or_else(|| format!("Unknown component type: {component_type}"))
+}
+
+/// Walk `parent_id` upward from `start_id`, returning `true` if `target_id`
+/// is reachable. Used by `move_component` to enforce invariant #3 (no cycles).
+/// Bounded by the current tree depth; with a tree depth bound of ~50 in
+/// practice, this is microseconds.
+fn ancestor_chain_contains(
+    ctx: &ReducerContext,
+    start_id: u64,
+    target_id: u64,
+) -> Result<bool, String> {
+    let mut current = Some(start_id);
+    // Safety: hard cap on traversal depth to defend against an externally-
+    // injected cycle in case the invariant was ever violated by a previous
+    // bug. 10_000 is way above any plausible real tree depth.
+    let max_steps = 10_000usize;
+    for _ in 0..max_steps {
+        let Some(id) = current else { break };
+        if id == target_id {
+            return Ok(true);
+        }
+        let node = ctx
+            .db
+            .component_node()
+            .id()
+            .find(id)
+            .ok_or("Encountered missing ancestor while walking parent chain")?;
+        current = node.parent_id;
+    }
+    Err("Parent chain exceeds safety cap — refusing to continue".to_string())
+}
+
+/// Collect live siblings of a parent within a surface, sorted by `order`.
+/// Optionally excludes a node id (used by `move_component` so the moving
+/// node isn't in its own destination sibling list).
+fn live_siblings_sorted(
+    ctx: &ReducerContext,
+    surface_id: u64,
+    parent_id: u64,
+    exclude_id: Option<u64>,
+) -> Vec<ComponentNode> {
+    let mut sibs: Vec<ComponentNode> = ctx
+        .db
+        .component_node()
+        .iter()
+        .filter(|n| {
+            n.surface_id == surface_id
+                && n.parent_id == Some(parent_id)
+                && n.deleted_at.is_none()
+                && exclude_id.map_or(true, |ex| n.id != ex)
+        })
+        .collect();
+    sibs.sort_by_key(|n| n.order);
+    sibs
+}
+
+/// Renumber a sibling list back to clean multiples of 1000 starting at 1000,
+/// writing only the rows whose `order` actually changes. Consumes `siblings`
+/// (which doesn't include the row the caller is about to insert/move).
+/// Returns the order the caller should assign to that row at `insert_index`.
+fn renumber_with_gap(
+    ctx: &ReducerContext,
+    siblings: Vec<ComponentNode>,
+    insert_index: usize,
+) -> u32 {
+    // The slot at `insert_index` is reserved for the caller's row.
+    // Siblings before it get orders 1000..(insert_index+1)*1000;
+    // siblings at or after it get bumped by one slot.
+    for (i, sibling) in siblings.into_iter().enumerate() {
+        let target_index = if i < insert_index { i } else { i + 1 };
+        let new_order = (target_index as u32 + 1) * 1000;
+        if sibling.order != new_order {
+            ctx.db.component_node().id().update(ComponentNode {
+                order: new_order,
+                ..sibling
+            });
+        }
+    }
+    (insert_index as u32 + 1) * 1000
+}
+
+/// Touch `Page.updated_at` and enqueue page-updated automation. Called by
+/// every mutation reducer so the sidebar reflects edits and downstream
+/// observers fire.
+fn touch_page(ctx: &ReducerContext, page: Page) {
+    let page_id = page.id;
+    ctx.db.page().id().update(Page {
+        updated_at: ctx.timestamp,
+        ..page
+    });
+    enqueue_page_updated(ctx, page_id);
+}
+
+// ============================================================
+// Reducers — tree mutations
+// ============================================================
+
+/// Insert a new `ComponentNode` into a surface's tree.
+///
+/// - `parent_id` is required (non-`Option`) — root creation is implicit at
+///   page-creation time, never via this reducer. Enforces invariant #2.
+/// - `after_sibling_id = None` places the node first under the parent.
+/// - The new node's `surface_id` is derived from the parent's `surface_id`.
+///
+/// Rejects if:
+/// - the parent doesn't exist or is deleted
+/// - the parent's page isn't in `ComponentTree` format
+/// - the parent's type doesn't accept children
+/// - `component_type` isn't registered
+/// - the caller lacks page write access
+#[reducer]
+pub fn insert_component(
+    ctx: &ReducerContext,
+    parent_id: u64,
+    component_type: String,
+    props_json: String,
+    after_sibling_id: Option<u64>,
+) -> Result<(), String> {
+    let parent = require_live_node(ctx, parent_id)?;
+    let surface_id = parent.surface_id;
+    let page = require_component_tree_page(ctx, surface_id)?;
+    require_page_write(ctx, surface_id)?;
+
+    let parent_type = require_type_def(ctx, &parent.component_type)?;
+    if !parent_type.accepts_children {
+        return Err(format!(
+            "Parent component type {:?} does not accept children",
+            parent.component_type
+        ));
+    }
+    require_type_def(ctx, &component_type)?;
+
+    let siblings = live_siblings_sorted(ctx, surface_id, parent_id, None);
+    let insert_index = match after_sibling_id {
+        None => 0,
+        Some(sib_id) => siblings
+            .iter()
+            .position(|n| n.id == sib_id)
+            .map(|i| i + 1)
+            .ok_or("after_sibling_id is not a sibling under this parent")?,
+    };
+    let new_order = renumber_with_gap(ctx, siblings, insert_index);
+
+    ctx.db.component_node().insert(ComponentNode {
+        id: next_component_node_id(ctx),
+        surface_id,
+        parent_id: Some(parent_id),
+        component_type,
+        props: props_json,
+        order: new_order,
+        created_by: ActorType::Human,
+        updated_by: ActorType::Human,
+        created_at: ctx.timestamp,
+        updated_at: ctx.timestamp,
+        deleted_at: None,
+    });
+
+    touch_page(ctx, page);
+    Ok(())
+}
+
+/// Replace the entire `props` blob on an existing component.
+///
+/// Partial updates aren't supported — the client merges and ships the full
+/// new props object. `component_type` is immutable via this reducer; types
+/// change only by replace-and-delete.
+#[reducer]
+pub fn update_component_props(
+    ctx: &ReducerContext,
+    component_id: u64,
+    props_json: String,
+) -> Result<(), String> {
+    let node = require_live_node(ctx, component_id)?;
+    let page = require_component_tree_page(ctx, node.surface_id)?;
+    require_page_write(ctx, node.surface_id)?;
+
+    ctx.db.component_node().id().update(ComponentNode {
+        props: props_json,
+        updated_by: ActorType::Human,
+        updated_at: ctx.timestamp,
+        ..node
+    });
+
+    touch_page(ctx, page);
+    Ok(())
+}
+
+/// Reparent and/or reorder a component within its own surface.
+///
+/// - `new_parent_id` must reference a live node in the same surface.
+/// - Refuses to move the surface's root (a node with `parent_id = None`).
+/// - Refuses moves that would form a cycle (walks `parent_id` from
+///   `new_parent_id` upward; rejects if `component_id` appears).
+/// - Refuses moves whose new parent's type doesn't accept children.
+#[reducer]
+pub fn move_component(
+    ctx: &ReducerContext,
+    component_id: u64,
+    new_parent_id: u64,
+    after_sibling_id: Option<u64>,
+) -> Result<(), String> {
+    if component_id == new_parent_id {
+        return Err("A component cannot be its own parent".to_string());
+    }
+
+    let node = require_live_node(ctx, component_id)?;
+    if node.parent_id.is_none() {
+        return Err("Root component cannot be moved".to_string());
+    }
+
+    let new_parent = require_live_node(ctx, new_parent_id)?;
+    if new_parent.surface_id != node.surface_id {
+        return Err("Cross-surface moves are not allowed".to_string());
+    }
+
+    let page = require_component_tree_page(ctx, node.surface_id)?;
+    require_page_write(ctx, node.surface_id)?;
+
+    let new_parent_type = require_type_def(ctx, &new_parent.component_type)?;
+    if !new_parent_type.accepts_children {
+        return Err(format!(
+            "Target parent component type {:?} does not accept children",
+            new_parent.component_type
+        ));
+    }
+
+    if ancestor_chain_contains(ctx, new_parent_id, component_id)? {
+        return Err(
+            "Move rejected: would create a cycle (new_parent is a descendant of the moving node)"
+                .to_string(),
+        );
+    }
+
+    let siblings = live_siblings_sorted(ctx, node.surface_id, new_parent_id, Some(component_id));
+    let insert_index = match after_sibling_id {
+        None => 0,
+        Some(sib_id) => siblings
+            .iter()
+            .position(|n| n.id == sib_id)
+            .map(|i| i + 1)
+            .ok_or("after_sibling_id is not a sibling under the new parent")?,
+    };
+    let new_order = renumber_with_gap(ctx, siblings, insert_index);
+
+    ctx.db.component_node().id().update(ComponentNode {
+        parent_id: Some(new_parent_id),
+        order: new_order,
+        updated_by: ActorType::Human,
+        updated_at: ctx.timestamp,
+        ..node
+    });
+
+    touch_page(ctx, page);
+    Ok(())
+}
+
+/// Soft-delete a component. Sets `deleted_at` on the target node only; does
+/// not cascade. The renderer hides any node whose ancestor chain contains a
+/// deleted node, so orphaned subtrees stop rendering even though their rows
+/// remain in the table (available for `restore_component` or for an
+/// "unwrap-and-keep-children" client UX).
+///
+/// Refuses to delete the surface's root node — once the root is gone the
+/// page has no rendered content, which should be done via page deletion,
+/// not component deletion.
+#[reducer]
+pub fn delete_component(ctx: &ReducerContext, component_id: u64) -> Result<(), String> {
+    let node = require_live_node(ctx, component_id)?;
+    if node.parent_id.is_none() {
+        return Err("Root component cannot be deleted — delete the page instead".to_string());
+    }
+    let page = require_component_tree_page(ctx, node.surface_id)?;
+    require_page_write(ctx, node.surface_id)?;
+
+    ctx.db.component_node().id().update(ComponentNode {
+        deleted_at: Some(ctx.timestamp),
+        updated_by: ActorType::Human,
+        updated_at: ctx.timestamp,
+        ..node
+    });
+
+    touch_page(ctx, page);
+    Ok(())
+}
+
+/// Undo a `delete_component`. Refuses if any ancestor on the parent chain is
+/// currently deleted — restoring an orphan whose parent is gone produces an
+/// invisible node, which we surface as an error rather than silently allow.
+///
+/// To restore a node under a deleted ancestor, restore the ancestors first
+/// (top-down) or move the node to a live parent before restoring.
+#[reducer]
+pub fn restore_component(ctx: &ReducerContext, component_id: u64) -> Result<(), String> {
+    let node = require_node(ctx, component_id)?;
+    if node.deleted_at.is_none() {
+        return Err("ComponentNode is not deleted".to_string());
+    }
+    let page = require_component_tree_page(ctx, node.surface_id)?;
+    require_page_write(ctx, node.surface_id)?;
+
+    let mut current = node.parent_id;
+    let max_steps = 10_000usize;
+    for _ in 0..max_steps {
+        let Some(id) = current else { break };
+        let ancestor = ctx
+            .db
+            .component_node()
+            .id()
+            .find(id)
+            .ok_or("Missing ancestor on parent chain")?;
+        if ancestor.deleted_at.is_some() {
+            return Err(
+                "Cannot restore: an ancestor is currently deleted. Restore ancestors first \
+                 (top-down), or move this node under a live parent before restoring."
+                    .to_string(),
+            );
+        }
+        current = ancestor.parent_id;
+    }
+
+    ctx.db.component_node().id().update(ComponentNode {
+        deleted_at: None,
+        updated_by: ActorType::Human,
+        updated_at: ctx.timestamp,
+        ..node
+    });
+
+    touch_page(ctx, page);
+    Ok(())
+}
+
+// ============================================================
+// Reducers — per-component Yjs state
+// ============================================================
+
+/// Upsert the Yjs blob for a Yjs-backed component (typically `RichText`).
+///
+/// Refuses to write for component types whose registry entry has
+/// `has_yjs_state = false` (integrity invariant #6) — non-Yjs components
+/// must never grow a `ComponentYjsState` row.
+///
+/// The client writes the whole encoded state on blur / unmount / a ~30s
+/// tick, same cadence as the legacy `save_yjs_state` for BlockNote pages.
+#[reducer]
+pub fn save_component_yjs_state(
+    ctx: &ReducerContext,
+    component_id: u64,
+    data: Vec<u8>,
+) -> Result<(), String> {
+    let node = require_live_node(ctx, component_id)?;
+    let page = require_component_tree_page(ctx, node.surface_id)?;
+    require_page_write(ctx, node.surface_id)?;
+
+    let type_def = require_type_def(ctx, &node.component_type)?;
+    if !type_def.has_yjs_state {
+        return Err(format!(
+            "Component type {:?} does not support Yjs state — refusing to upsert ComponentYjsState",
+            node.component_type
+        ));
+    }
+
+    if let Some(existing) = ctx
+        .db
+        .component_yjs_state()
+        .component_node_id()
+        .find(component_id)
+    {
+        ctx.db.component_yjs_state().component_node_id().update(ComponentYjsState {
+            data,
+            updated_at: ctx.timestamp,
+            ..existing
+        });
+    } else {
+        ctx.db.component_yjs_state().insert(ComponentYjsState {
+            component_node_id: component_id,
+            data,
+            updated_at: ctx.timestamp,
+        });
+    }
+
+    touch_page(ctx, page);
+    Ok(())
 }

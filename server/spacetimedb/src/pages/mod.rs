@@ -347,6 +347,13 @@ pub fn set_page_embedding(
 }
 
 /// Updates PageContent (not Page) — content is separate from metadata.
+///
+/// Refuses to run on `ComponentTree`-format pages. Once a page has migrated
+/// to the component-tree substrate, content mutations go through
+/// `insert_component` / `update_component_props` / `move_component` /
+/// `delete_component` / `save_component_yjs_state` instead. Returning a
+/// clear error here is safer than silently writing into a `PageContent` row
+/// the renderer no longer reads.
 #[reducer]
 pub fn update_page_content(
     ctx: &ReducerContext,
@@ -354,6 +361,14 @@ pub fn update_page_content(
     content: String,
 ) -> Result<(), String> {
     require_page_write(ctx, page_id)?;
+    let page = ctx.db.page().id().find(page_id).ok_or("Page not found")?;
+    if matches!(page.content_format, PageContentFormat::ComponentTree) {
+        return Err(
+            "Page is in ComponentTree format — use the component reducers \
+             (insert_component / update_component_props / save_component_yjs_state) instead"
+                .to_string(),
+        );
+    }
     let existing = ctx
         .db
         .page_content()
@@ -382,10 +397,19 @@ pub fn update_page_content(
 /// Called periodically by the client (on blur, on unmount, every ~30s).
 /// Upserts the single PageYjsState row for the page so row count stays O(1).
 /// Also touches the page's updated_at so the sidebar reflects recent activity.
+///
+/// Refuses to run on `ComponentTree`-format pages — those store Yjs state
+/// per-component in `ComponentYjsState`, written by `save_component_yjs_state`.
 #[reducer]
 pub fn save_yjs_state(ctx: &ReducerContext, page_id: u64, data: Vec<u8>) -> Result<(), String> {
     require_page_write(ctx, page_id)?;
-    ctx.db.page().id().find(page_id).ok_or("Page not found")?;
+    let page = ctx.db.page().id().find(page_id).ok_or("Page not found")?;
+    if matches!(page.content_format, PageContentFormat::ComponentTree) {
+        return Err(
+            "Page is in ComponentTree format — use save_component_yjs_state per RichText component"
+                .to_string(),
+        );
+    }
 
     if let Some(existing) = ctx.db.page_yjs_state().page_id().find(page_id) {
         ctx.db.page_yjs_state().page_id().update(PageYjsState {

@@ -67,6 +67,7 @@ import DeleteApiFieldMappingReducer from "./delete_api_field_mapping_reducer";
 import DeleteAttachmentReducer from "./delete_attachment_reducer";
 import DeleteAutomationReducer from "./delete_automation_reducer";
 import DeleteAutomationActionReducer from "./delete_automation_action_reducer";
+import DeleteComponentReducer from "./delete_component_reducer";
 import DeleteDatabaseRowReducer from "./delete_database_row_reducer";
 import DeleteHarnessTemplateReducer from "./delete_harness_template_reducer";
 import DeletePageReducer from "./delete_page_reducer";
@@ -83,12 +84,14 @@ import GrantAutoApplyReducer from "./grant_auto_apply_reducer";
 import GrantExtensionPermissionReducer from "./grant_extension_permission_reducer";
 import ImportNotionReducer from "./import_notion_reducer";
 import ImportPearSnapshotV1Reducer from "./import_pear_snapshot_v_1_reducer";
+import InsertComponentReducer from "./insert_component_reducer";
 import InstallExtensionReducer from "./install_extension_reducer";
 import InvalidateAiEvaluationsForRowReducer from "./invalidate_ai_evaluations_for_row_reducer";
 import LogApiCallReducer from "./log_api_call_reducer";
 import LoginReducer from "./login_reducer";
 import LogoutReducer from "./logout_reducer";
 import MarkConversationReadReducer from "./mark_conversation_read_reducer";
+import MoveComponentReducer from "./move_component_reducer";
 import MovePageReducer from "./move_page_reducer";
 import ProcessAutomationEventReducer from "./process_automation_event_reducer";
 import ProcessPendingAutomationEventsReducer from "./process_pending_automation_events_reducer";
@@ -110,6 +113,7 @@ import ReorderPropertyReducer from "./reorder_property_reducer";
 import RequestPageAccessReducer from "./request_page_access_reducer";
 import ResolvePageAccessRequestReducer from "./resolve_page_access_request_reducer";
 import ResolveStructuralFindingReducer from "./resolve_structural_finding_reducer";
+import RestoreComponentReducer from "./restore_component_reducer";
 import RestorePageReducer from "./restore_page_reducer";
 import RestorePageToSnapshotReducer from "./restore_page_to_snapshot_reducer";
 import RevokeApiEndpointKeyReducer from "./revoke_api_endpoint_key_reducer";
@@ -121,6 +125,7 @@ import RunOrphanDetectorReducer from "./run_orphan_detector_reducer";
 import RunPendingMigrationsReducer from "./run_pending_migrations_reducer";
 import RunRelationalIntegritySensorReducer from "./run_relational_integrity_sensor_reducer";
 import RunSchemaConsistencySensorReducer from "./run_schema_consistency_sensor_reducer";
+import SaveComponentYjsStateReducer from "./save_component_yjs_state_reducer";
 import SaveYjsStateReducer from "./save_yjs_state_reducer";
 import SeedAgentInstructionPropertyReducer from "./seed_agent_instruction_property_reducer";
 import SeedBuiltinExtensionsReducer from "./seed_builtin_extensions_reducer";
@@ -157,6 +162,7 @@ import UpdateApiEndpointReducer from "./update_api_endpoint_reducer";
 import UpdateApiFieldMappingReducer from "./update_api_field_mapping_reducer";
 import UpdateAutomationActionReducer from "./update_automation_action_reducer";
 import UpdateAutomationRuleReducer from "./update_automation_rule_reducer";
+import UpdateComponentPropsReducer from "./update_component_props_reducer";
 import UpdateDatabaseRowReducer from "./update_database_row_reducer";
 import UpdateDatabaseSchemaConfigReducer from "./update_database_schema_config_reducer";
 import UpdateExtensionReducer from "./update_extension_reducer";
@@ -1032,6 +1038,7 @@ const reducersSchema = __reducers(
   __reducerSchema("delete_attachment", DeleteAttachmentReducer),
   __reducerSchema("delete_automation", DeleteAutomationReducer),
   __reducerSchema("delete_automation_action", DeleteAutomationActionReducer),
+  __reducerSchema("delete_component", DeleteComponentReducer),
   __reducerSchema("delete_database_row", DeleteDatabaseRowReducer),
   __reducerSchema("delete_harness_template", DeleteHarnessTemplateReducer),
   __reducerSchema("delete_page", DeletePageReducer),
@@ -1048,12 +1055,14 @@ const reducersSchema = __reducers(
   __reducerSchema("grant_extension_permission", GrantExtensionPermissionReducer),
   __reducerSchema("import_notion", ImportNotionReducer),
   __reducerSchema("import_pear_snapshot_v_1", ImportPearSnapshotV1Reducer),
+  __reducerSchema("insert_component", InsertComponentReducer),
   __reducerSchema("install_extension", InstallExtensionReducer),
   __reducerSchema("invalidate_ai_evaluations_for_row", InvalidateAiEvaluationsForRowReducer),
   __reducerSchema("log_api_call", LogApiCallReducer),
   __reducerSchema("login", LoginReducer),
   __reducerSchema("logout", LogoutReducer),
   __reducerSchema("mark_conversation_read", MarkConversationReadReducer),
+  __reducerSchema("move_component", MoveComponentReducer),
   __reducerSchema("move_page", MovePageReducer),
   __reducerSchema("process_automation_event", ProcessAutomationEventReducer),
   __reducerSchema("process_pending_automation_events", ProcessPendingAutomationEventsReducer),
@@ -1075,6 +1084,7 @@ const reducersSchema = __reducers(
   __reducerSchema("request_page_access", RequestPageAccessReducer),
   __reducerSchema("resolve_page_access_request", ResolvePageAccessRequestReducer),
   __reducerSchema("resolve_structural_finding", ResolveStructuralFindingReducer),
+  __reducerSchema("restore_component", RestoreComponentReducer),
   __reducerSchema("restore_page", RestorePageReducer),
   __reducerSchema("restore_page_to_snapshot", RestorePageToSnapshotReducer),
   __reducerSchema("revoke_api_endpoint_key", RevokeApiEndpointKeyReducer),
@@ -1086,6 +1096,7 @@ const reducersSchema = __reducers(
   __reducerSchema("run_pending_migrations", RunPendingMigrationsReducer),
   __reducerSchema("run_relational_integrity_sensor", RunRelationalIntegritySensorReducer),
   __reducerSchema("run_schema_consistency_sensor", RunSchemaConsistencySensorReducer),
+  __reducerSchema("save_component_yjs_state", SaveComponentYjsStateReducer),
   __reducerSchema("save_yjs_state", SaveYjsStateReducer),
   __reducerSchema("seed_agent_instruction_property", SeedAgentInstructionPropertyReducer),
   __reducerSchema("seed_builtin_extensions", SeedBuiltinExtensionsReducer),
@@ -1122,6 +1133,7 @@ const reducersSchema = __reducers(
   __reducerSchema("update_api_field_mapping", UpdateApiFieldMappingReducer),
   __reducerSchema("update_automation_action", UpdateAutomationActionReducer),
   __reducerSchema("update_automation_rule", UpdateAutomationRuleReducer),
+  __reducerSchema("update_component_props", UpdateComponentPropsReducer),
   __reducerSchema("update_database_row", UpdateDatabaseRowReducer),
   __reducerSchema("update_database_schema_config", UpdateDatabaseSchemaConfigReducer),
   __reducerSchema("update_extension", UpdateExtensionReducer),
