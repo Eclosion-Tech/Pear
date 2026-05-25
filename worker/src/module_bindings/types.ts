@@ -449,7 +449,7 @@ export const ComponentNode = __t.object("ComponentNode", {
   parentId: __t.option(__t.u64()),
   componentType: __t.string(),
   props: __t.string(),
-  order: __t.u32(),
+  order: __t.string(),
   get createdBy() {
     return ActorType;
   },

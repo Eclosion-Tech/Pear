@@ -105,9 +105,20 @@ pub struct ComponentNode {
     /// for `RichText` — those live in [`ComponentYjsState`].
     pub props: String,
 
-    /// Sibling order under `parent_id`. Spaced by 1000 (same convention as
-    /// `Page.sort_order`) so insertions rarely need a renumber.
-    pub order: u32,
+    /// Sibling order under `parent_id`, as a fractional-indexing key.
+    ///
+    /// Compared lexicographically. Inserting between two siblings produces a
+    /// key that sorts strictly between their `order` strings (e.g.
+    /// `between("a0", "a5") = "a2"`). This means concurrent inserts at the
+    /// same position never collide and the table never needs a "renumber"
+    /// pass — the trade-off vs. the simpler `u32` + spacing scheme used by
+    /// `Page.sort_order`.
+    ///
+    /// Generated client-side (and by AI users / the soon-to-land reducers)
+    /// with a small helper that mirrors the standard fractional-indexing
+    /// algorithm. The substrate only validates that the key is a non-empty
+    /// ASCII string; ordering semantics live in the algorithm, not the DB.
+    pub order: String,
 
     pub created_by: ActorType,
     pub updated_by: ActorType,
