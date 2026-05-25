@@ -25,6 +25,7 @@ import CreateApiEndpointKeyReducer from "../create_api_endpoint_key_reducer";
 import CreateApiFieldMappingReducer from "../create_api_field_mapping_reducer";
 import CreateAttachmentReducer from "../create_attachment_reducer";
 import CreateAutomationDraftReducer from "../create_automation_draft_reducer";
+import CreateComponentTreePageReducer from "../create_component_tree_page_reducer";
 import CreateConversationReducer from "../create_conversation_reducer";
 import CreateDatabaseRowReducer from "../create_database_row_reducer";
 import CreateDatabaseSchemaReducer from "../create_database_schema_reducer";
@@ -169,6 +170,7 @@ export type CreateApiEndpointKeyParams = __Infer<typeof CreateApiEndpointKeyRedu
 export type CreateApiFieldMappingParams = __Infer<typeof CreateApiFieldMappingReducer>;
 export type CreateAttachmentParams = __Infer<typeof CreateAttachmentReducer>;
 export type CreateAutomationDraftParams = __Infer<typeof CreateAutomationDraftReducer>;
+export type CreateComponentTreePageParams = __Infer<typeof CreateComponentTreePageReducer>;
 export type CreateConversationParams = __Infer<typeof CreateConversationReducer>;
 export type CreateDatabaseRowParams = __Infer<typeof CreateDatabaseRowReducer>;
 export type CreateDatabaseSchemaParams = __Infer<typeof CreateDatabaseSchemaReducer>;

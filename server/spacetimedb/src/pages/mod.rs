@@ -9,6 +9,9 @@ use crate::access_control::helpers::{can_write_page, page_has_any_rule, require_
 use crate::access_control::{next_page_access_rule_id, page_access_rule, PageAccessRule};
 use crate::automations::{enqueue_page_created, enqueue_page_deleted, enqueue_page_updated};
 use crate::id_counters::alloc_id;
+use crate::pages::components::{
+    component_node, next_component_node_id, ComponentNode,
+};
 use crate::pages::schemas::{
     database_schema, page_property_value, page_property_value_history, property_definition,
 };
@@ -216,6 +219,82 @@ pub fn create_page(
         content: String::new(),
         updated_at: ctx.timestamp,
     });
+    if let Some(pid) = parent_id {
+        copy_page_access_rules_from_parent(ctx, pid, page.id);
+    }
+    enqueue_page_created(ctx, page.id);
+    Ok(())
+}
+
+/// Atomically create a `ComponentTree`-format Page with its initial root
+/// `ComponentNode`.
+///
+/// Unlike `create_page` (which creates `BlockNote` pages backed by
+/// `PageContent`), this reducer sets `content_format = ComponentTree` and
+/// inserts a single root `Container` node with `parent_id = None`. From
+/// that point forward the page is mutated exclusively through the
+/// component reducers (`insert_component`, `update_component_props`,
+/// `move_component`, `delete_component`, `restore_component`,
+/// `save_component_yjs_state`); the legacy `update_page_content` and
+/// `save_yjs_state` reducers reject it.
+///
+/// The root node is created as a `Container` because (a) it must be a
+/// type with `accepts_children = true`, and (b) `Container` is the
+/// most-permissive layout primitive in the built-in registry. Clients
+/// can `update_component_props` on the root id immediately if they want
+/// non-default layout settings.
+///
+/// `PageContent` is *not* created — `ComponentTree` pages don't use it.
+/// `PageYjsState` is *not* created — per-component Yjs state lives in
+/// `ComponentYjsState` written by `save_component_yjs_state`.
+#[reducer]
+pub fn create_component_tree_page(
+    ctx: &ReducerContext,
+    parent_id: Option<u64>,
+    page_type: PageType,
+    title: String,
+) -> Result<(), String> {
+    if title.trim().is_empty() {
+        return Err("Title cannot be empty".to_string());
+    }
+    if let Some(pid) = parent_id {
+        require_page_write(ctx, pid)?;
+    }
+    let sort_order = next_sort_order(ctx, parent_id);
+    let page = ctx.db.page().insert(Page {
+        id: next_page_id(ctx),
+        parent_id,
+        sort_order,
+        page_type,
+        title,
+        icon: None,
+        embedding: None,
+        created_by: ActorType::Human,
+        created_at: ctx.timestamp,
+        updated_at: ctx.timestamp,
+        deleted_at: None,
+        parent_pk: parent_id.unwrap_or(0),
+        is_hidden: false,
+        content_format: PageContentFormat::ComponentTree,
+    });
+
+    // Seed the root node. parent_id: None is the single-root-per-surface
+    // invariant from § Integrity model. Props are an empty Container —
+    // clients can update_component_props on this id to set layout.
+    ctx.db.component_node().insert(ComponentNode {
+        id: next_component_node_id(ctx),
+        surface_id: page.id,
+        parent_id: None,
+        component_type: "Container".to_string(),
+        props: r#"{"layout":"stack"}"#.to_string(),
+        order: 1000,
+        created_by: ActorType::Human,
+        updated_by: ActorType::Human,
+        created_at: ctx.timestamp,
+        updated_at: ctx.timestamp,
+        deleted_at: None,
+    });
+
     if let Some(pid) = parent_id {
         copy_page_access_rules_from_parent(ctx, pid, page.id);
     }

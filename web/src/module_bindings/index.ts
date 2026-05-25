@@ -53,6 +53,7 @@ import CreateApiEndpointKeyReducer from "./create_api_endpoint_key_reducer";
 import CreateApiFieldMappingReducer from "./create_api_field_mapping_reducer";
 import CreateAttachmentReducer from "./create_attachment_reducer";
 import CreateAutomationDraftReducer from "./create_automation_draft_reducer";
+import CreateComponentTreePageReducer from "./create_component_tree_page_reducer";
 import CreateConversationReducer from "./create_conversation_reducer";
 import CreateDatabaseRowReducer from "./create_database_row_reducer";
 import CreateDatabaseSchemaReducer from "./create_database_schema_reducer";
@@ -1026,6 +1027,7 @@ const reducersSchema = __reducers(
   __reducerSchema("create_api_field_mapping", CreateApiFieldMappingReducer),
   __reducerSchema("create_attachment", CreateAttachmentReducer),
   __reducerSchema("create_automation_draft", CreateAutomationDraftReducer),
+  __reducerSchema("create_component_tree_page", CreateComponentTreePageReducer),
   __reducerSchema("create_conversation", CreateConversationReducer),
   __reducerSchema("create_database_row", CreateDatabaseRowReducer),
   __reducerSchema("create_database_schema", CreateDatabaseSchemaReducer),
