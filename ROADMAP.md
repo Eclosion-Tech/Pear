@@ -234,6 +234,36 @@
 
 ---
 
+## Rendering substrate — `ComponentNode` tree
+
+*Cross-cutting infrastructure replacement. Replaces BlockNote as Pear's document model with a typed component tree owned by SpacetimeDB. See [`docs/PEAR_RENDERING_SUBSTRATE.md`](../docs/PEAR_RENDERING_SUBSTRATE.md) (parent ADR) and [`docs/PEAR_COMPONENT_NODE_SCHEMA.md`](../docs/PEAR_COMPONENT_NODE_SCHEMA.md) (substrate-layer implementation ADR).*
+
+### Substrate layer (shipped)
+
+- ✅ `ComponentNode`, `ComponentYjsState`, `ComponentTypeDefinition` tables (module v0.11.1)
+- ✅ Component-tree reducer surface — `create_component_tree_page`, `insert_component`, `update_component_props`, `move_component`, `delete_component`, `restore_component`, `save_component_yjs_state`, `register_component_type`, `update_component_type`
+- ✅ Initial registry — 11 idempotently-seeded built-ins: `Container`, `RichText`, `Heading`, `Image`, `Form`, `Input`, `Button`, `Select`, `Checkbox`, `Markdown`, `CodeRef`
+- ✅ Per-`RichText` Y.Doc storage via `ComponentYjsState` (legacy `PageYjsState` stays during migration)
+- ✅ `PageSnapshot` payload extension — `component_tree_v1` JSON shape carries node tree + base64-encoded Yjs blobs; restore reassigns IDs and remaps parent refs
+- ✅ Purge cascade — `purge_page_inner` cascades into `component_node` + `component_yjs_state`
+- ✅ Integrity model — server-side reducers enforce tree-shape invariants (parent existence, no cycles, registered types, `accepts_children`, `has_yjs_state` consistency, leaf-only soft-delete, restore requires live ancestor chain, access control)
+- ✅ Client-side prop-schema validator (`pear/web/src/lib/componentProps.ts`) — dependency-free JSON Schema subset covering every built-in
+- ✅ End-to-end smoke harness — `pnpm --filter web smoke`, 19/19 against local stack; caught a latent cycle-detection bug in `ancestor_chain_contains` (fixed in v0.11.1)
+- ✅ [`@eclosion-tech/react-native-yjs-text` v0.1](https://www.npmjs.com/package/@eclosion-tech/react-native-yjs-text) — native RN rich-text editor primitive, MIT (May 24 2026)
+
+### Downstream — queued, each gets its own ADR
+
+- 📋 **BlockNote → `ComponentNode` migration tool** — mechanical migration of every existing `Page` with `content_format = BlockNote`. Also the right moment to swap `order: u32` → fractional indexing (`String`), since both are breaking changes that need `--break-clients` together.
+- 🔨 **Web renderer ADR** — *draft landed* ([`docs/PEAR_WEB_RENDERER.md`](../docs/PEAR_WEB_RENDERER.md), May 26 2026). React renderer that walks the `ComponentNode` tree against the registry. Sprint 1 (read-only renderer + `DocPage` fork on `contentFormat`) queued next; sprints 2–4 cover `y-prosemirror` editor stack, block chrome, and porting existing PearEditor custom blocks. Resolves parent ADR Open Q #2.
+- 📋 **React Native renderer ADR** — first user-visible win. RN renderer over `ComponentNode` tree; uses `YTextRenderer` from `react-native-yjs-text` for read-only mobile out of the gate, edit path lands when on-device verification clears.
+- 📋 **AI authoring surface ADR** — `add_component`, `set_prop`, `move_component`, `remove_component` as agent tools against the registry; validates against `prop_schema`; snapshots before/after. Folds into the unified provider/capability work in `docs/PEAR_AI_INTEGRATION.md`.
+- 📋 **Custom-view runtime** — cursors, bindings, write-back. Scoped ADR.
+- 📋 **Multi-stage custom-view generation pipeline** — agentic generation per `PEAR_RENDERING_SUBSTRATE.md` § Custom views.
+- 📋 **Server-side prop-schema enforcement** — deferred post-v1. Client-side validation is the authority at v1; promote to a reducer-side gate once we have signal on `prop_schema` evolution patterns.
+- 📋 **Templates** — shareable custom views, type-based binding remap on install. Lower priority.
+
+---
+
 ## Deferred / Won't Do (v1)
 
 These are explicitly not being built until the core is solid:
@@ -249,4 +279,4 @@ These are explicitly not being built until the core is solid:
 
 ---
 
-*Last updated: April 2026 — Phase 2 semantic search shipped (MiniLM embeddings, ⌘K hybrid search, sharp pin + editor scheduling); agent runtime + Extensions/MCP (incl. built-in extension); Phase 6 plugin system ✅*
+*Last updated: May 25, 2026 — rendering substrate layer landed at module v0.11.1: `ComponentNode` tree + reducer surface + 11 built-in component types + per-`RichText` Yjs storage + smoke harness all live; downstream renderers / migration / AI authoring queued, each with its own ADR before code lands. Earlier — April 2026: Phase 2 semantic search shipped (MiniLM embeddings, ⌘K hybrid search, sharp pin + editor scheduling); agent runtime + Extensions/MCP (incl. built-in extension); Phase 6 plugin system ✅*

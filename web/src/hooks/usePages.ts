@@ -125,6 +125,15 @@ export function useSaveYjsState() {
   return useReducer(reducers.saveYjsState);
 }
 
+/**
+ * Per-`RichText`-component Yjs state save. Mirrors `useSaveYjsState`'s
+ * shape but targets `save_component_yjs_state(componentId, data)` — see
+ * `docs/PEAR_WEB_RENDERER.md` § Editor stack — Save cycle.
+ */
+export function useSaveComponentYjsState() {
+  return useReducer(reducers.saveComponentYjsState);
+}
+
 export function useCreateView() {
   return useReducer(reducers.createView);
 }

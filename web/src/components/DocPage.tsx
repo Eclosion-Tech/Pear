@@ -8,6 +8,7 @@ import { useUpdatePageTitle, useUpdatePageIcon, useDeletePage, useChildPages } f
 import type { PageRow } from "@/src/hooks/usePages";
 import { EmojiPicker } from "./EmojiPicker";
 import { PearEditor } from "./PearEditor";
+import { ComponentTreeRenderer } from "./component-renderers";
 import { PageMoreMenu } from "./PageMoreMenu";
 import { PageHistoryPanel } from "./PageHistoryPanel";
 import { PagePropertiesPanel } from "./PagePropertiesPanel";
@@ -163,14 +164,24 @@ export function DocPage({ page }: DocPageProps) {
             <PagePropertiesPanel pageId={page.id} properties={properties} />
           </div>
         )}
-        <PearEditor
-          key={String(page.id)}
-          pageId={page.id}
-          initialContent={content?.content ?? ""}
-          initialContentUpdatedAt={content?.updatedAt?.microsSinceUnixEpoch}
-          childPages={children}
-          onMentionAiUser={() => aiPanel.openPanel({ pageId: page.id })}
-        />
+        {/*
+          Fork on `page.contentFormat` per `docs/PEAR_WEB_RENDERER.md` §
+          Dual-format coexistence. The BlockNote branch is unchanged; the
+          ComponentTree branch mounts the new substrate-walking renderer.
+          No page is silently converted — conversion is migration-tool work.
+        */}
+        {page.contentFormat?.tag === "ComponentTree" ? (
+          <ComponentTreeRenderer surfaceId={page.id} />
+        ) : (
+          <PearEditor
+            key={String(page.id)}
+            pageId={page.id}
+            initialContent={content?.content ?? ""}
+            initialContentUpdatedAt={content?.updatedAt?.microsSinceUnixEpoch}
+            childPages={children}
+            onMentionAiUser={() => aiPanel.openPanel({ pageId: page.id })}
+          />
+        )}
       </div>
       </div>
       {historyOpen && (
