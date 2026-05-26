@@ -53,6 +53,28 @@ export function useCreatePage() {
   return useReducer(reducers.createPage);
 }
 
+/**
+ * `create_component_tree_page` — creates a page whose content is a
+ * `ComponentNode` tree (rendered by `<ComponentTreeRenderer>`) instead of
+ * BlockNote JSON. See `docs/PEAR_WEB_RENDERER.md` § Dual-format coexistence.
+ *
+ * Until the BlockNote → ComponentTree migration ADR ships, this is the
+ * only path that produces ComponentTree-format pages in the workspace.
+ * Surfaced from the sidebar so sprints 2–4 are dogfoodable end-to-end.
+ */
+export function useCreateComponentTreePage() {
+  return useReducer(reducers.createComponentTreePage);
+}
+
+/**
+ * `insert_component(parent_id, component_type, props_json, after_sibling_id)`
+ * — inserts a new live ComponentNode under `parent_id`. Used by the empty-
+ * tree affordance in `<ComponentTreeRenderer>` and (sprint 3) the slash menu.
+ */
+export function useInsertComponent() {
+  return useReducer(reducers.insertComponent);
+}
+
 export function useUpdatePageTitle() {
   return useReducer(reducers.updatePageTitle);
 }

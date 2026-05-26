@@ -6,6 +6,7 @@ import { useTheme } from "next-themes";
 import {
   usePages,
   useCreatePage,
+  useCreateComponentTreePage,
   useDeletePage,
   useMovePage,
   useDeletedPages,
@@ -433,6 +434,7 @@ export function Sidebar() {
   const navPages = filterNavVisiblePages(pages);
   const { pages: deletedPages } = useDeletedPages();
   const createPage = useCreatePage();
+  const createComponentTreePage = useCreateComponentTreePage();
   const deletePage = useDeletePage();
   const movePage = useMovePage();
   const { isActive } = useConnection();
@@ -545,6 +547,29 @@ export function Sidebar() {
     }
   }
 
+  // ComponentTree-format page creation. Goes through the dedicated
+  // `create_component_tree_page` reducer (which seeds a root `Container`
+  // component node) rather than `create_page` (which only creates BlockNote
+  // pages). Used until the BlockNote → ComponentTree migration ADR ships
+  // and we can converge on a single creation path.
+  async function handleNewComponentTreePage(parentId?: bigint) {
+    const snapshot = new Set(pages.map((p) => p.id));
+    setPendingNav(snapshot);
+    if (parentId) setExpandedIds((prev) => new Set(prev).add(String(parentId)));
+    setIsCreating(true);
+    try {
+      await createComponentTreePage({
+        parentId,
+        pageType: { tag: "Doc" },
+        title: "Untitled",
+      });
+    } catch {
+      setPendingNav(null);
+    } finally {
+      setIsCreating(false);
+    }
+  }
+
   function handleContextMenu(e: React.MouseEvent, page: PageRow) {
     e.preventDefault();
     e.stopPropagation();
@@ -555,6 +580,10 @@ export function Sidebar() {
         {
           label: "New subpage",
           onClick: () => handleNewPage(page.id, "Doc"),
+        },
+        {
+          label: "New sub-component-tree page",
+          onClick: () => handleNewComponentTreePage(page.id),
         },
         {
           label: "New sub-database",
@@ -770,6 +799,14 @@ export function Sidebar() {
           className="w-full text-left px-2 py-1.5 rounded text-xs text-neutral-500 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-900 hover:text-neutral-900 dark:hover:text-white transition-colors disabled:opacity-40"
         >
           + New page
+        </button>
+        <button
+          onClick={() => handleNewComponentTreePage(undefined)}
+          disabled={isCreating || !isActive}
+          title="New ComponentNode-tree page (web renderer sprints 2+)"
+          className="w-full text-left px-2 py-1.5 rounded text-xs text-neutral-500 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-900 hover:text-neutral-900 dark:hover:text-white transition-colors disabled:opacity-40"
+        >
+          + New component-tree page
         </button>
         <button
           onClick={() => handleNewPage(undefined, "Database")}

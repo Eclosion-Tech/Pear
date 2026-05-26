@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
+import { Children, useMemo } from "react";
+import { useInsertComponent } from "@/src/hooks/usePages";
 import type { ComponentRendererProps } from "../registry";
 
 /**
@@ -29,6 +30,7 @@ type ContainerProps = {
 
 export function ContainerRenderer({ node, children }: ComponentRendererProps) {
   const props = useMemo<ContainerProps>(() => safeParse(node.props), [node.props]);
+  const insertComponent = useInsertComponent();
 
   const layout = props.layout ?? "stack";
   const direction = props.direction ?? (layout === "stack" ? "column" : "row");
@@ -47,9 +49,6 @@ export function ContainerRenderer({ node, children }: ComponentRendererProps) {
         ? "flex-row"
         : "flex-col";
 
-  // Gap / padding pulled from props but clamped — Tailwind only ships a
-  // bounded set of spacing utilities. We use inline styles to avoid the
-  // JIT-vs-runtime class generation question.
   const style: React.CSSProperties = {};
   if (typeof props.gap === "number") style.gap = `${props.gap * 0.25}rem`;
   if (typeof props.padding === "number")
@@ -58,9 +57,39 @@ export function ContainerRenderer({ node, children }: ComponentRendererProps) {
     style.backgroundColor = props.backgroundColor;
   }
 
+  // Sprint-2 "add a block" affordance for the empty-tree case. A fresh
+  // ComponentTree page lands with just an empty root Container and no
+  // children — the user needs *something* to click. Sprint 3 generalizes
+  // this into the slash menu / drag handles / Enter-to-insert flow at
+  // every block boundary; here we only render it when the container has
+  // zero rendered children, so it doesn't intrude once content exists.
+  const isEmpty = Children.count(children) === 0;
+
   return (
     <div className={`${layoutClass} ${directionClass}`} style={style}>
       {children}
+      {isEmpty && (
+        <button
+          type="button"
+          onClick={() => {
+            insertComponent({
+              parentId: node.id,
+              componentType: "RichText",
+              propsJson: "{}",
+              afterSiblingId: undefined,
+            });
+          }}
+          className="my-2 self-start rounded-md border border-dashed
+                     border-neutral-300 dark:border-neutral-700
+                     px-3 py-1.5 text-xs text-neutral-500 dark:text-neutral-400
+                     hover:border-neutral-400 dark:hover:border-neutral-600
+                     hover:text-neutral-700 dark:hover:text-neutral-300
+                     transition-colors"
+          title="Insert a RichText block. Sprint 3 will add the slash menu."
+        >
+          + Add text block
+        </button>
+      )}
     </div>
   );
 }
