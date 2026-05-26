@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { useInsertComponent } from "@/src/hooks/usePages";
 import type { ComponentNode } from "@/src/module_bindings/types";
 
@@ -21,6 +21,19 @@ import type { ComponentNode } from "@/src/module_bindings/types";
  * The root container doesn't get chrome — it has nothing to be a sibling
  * of and no peer to drag with. The walker (`ComponentNodeView`) decides
  * which nodes to wrap.
+ *
+ * **Hover gating.** Chrome visibility is pure CSS (`group-hover` +
+ * `hover` fallback) rather than React state. An earlier version used
+ * `onMouseEnter`/`onMouseLeave` on the wrapper, but the chrome lives at
+ * `-left-12` — i.e. fully outside the wrapper's bounding box. Even though
+ * the chrome is a DOM descendant of the wrapper, the cursor traverses
+ * a hairline gap (or hits the chrome via `pointer-events`-disabled state
+ * during the React render race) and `onMouseLeave` fires on the wrapper
+ * before the chrome can grab the pointer — making the chrome impossible
+ * to click. CSS `:hover` propagates up to ancestors when any descendant
+ * is being designated, so `group-hover` on the wrapper stays true as the
+ * cursor crosses into the chrome subtree, and the chrome's own `hover:`
+ * keeps it visible even mid-transition.
  */
 export function BlockChrome({
   node,
@@ -29,19 +42,15 @@ export function BlockChrome({
   node: ComponentNode;
   children: ReactNode;
 }) {
-  const [hovered, setHovered] = useState(false);
   const insertComponent = useInsertComponent();
 
   return (
-    <div
-      className="group relative"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
+    <div className="group relative">
       <div
-        className={`absolute -left-12 top-0 flex items-start gap-0.5 pt-1
-                    transition-opacity duration-100
-                    ${hovered ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+        className="absolute -left-12 top-0 flex items-start gap-0.5 pt-1
+                   opacity-0 pointer-events-none transition-opacity duration-100
+                   group-hover:opacity-100 group-hover:pointer-events-auto
+                   hover:opacity-100 hover:pointer-events-auto"
       >
         <button
           type="button"
