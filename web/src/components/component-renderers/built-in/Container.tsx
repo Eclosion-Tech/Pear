@@ -1,7 +1,9 @@
 "use client";
 
 import { Children, useMemo } from "react";
+import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { useInsertComponent } from "@/src/hooks/usePages";
+import { useSurfaceFocus } from "@/src/hooks/useSurfaceFocus";
 import type { ComponentRendererProps } from "../registry";
 
 /**
@@ -28,9 +30,23 @@ type ContainerProps = {
   backgroundColor?: string;
 };
 
-export function ContainerRenderer({ node, children }: ComponentRendererProps) {
+export function ContainerRenderer({ node, tree, children }: ComponentRendererProps) {
   const props = useMemo<ContainerProps>(() => safeParse(node.props), [node.props]);
   const insertComponent = useInsertComponent();
+  const focus = useSurfaceFocus();
+
+  // Sortable order — every immediate child id of this container, in the
+  // same sort order the walker rendered them in. dnd-kit's
+  // SortableContext compares these strings against the active drag's id
+  // to figure out reordering. Container is the natural sortable list
+  // boundary because children share a parent (which is the move target).
+  // Cross-parent moves get a follow-up sprint; for now drops only land
+  // within the same Container.
+  const childOrder = useMemo<string[]>(
+    () =>
+      (tree.byParent.get(node.id) ?? []).map((c) => c.id.toString()),
+    [tree.byParent, node.id],
+  );
 
   const layout = props.layout ?? "stack";
   const direction = props.direction ?? (layout === "stack" ? "column" : "row");
@@ -67,11 +83,14 @@ export function ContainerRenderer({ node, children }: ComponentRendererProps) {
 
   return (
     <div className={`${layoutClass} ${directionClass}`} style={style}>
-      {children}
+      <SortableContext items={childOrder} strategy={verticalListSortingStrategy}>
+        {children}
+      </SortableContext>
       {isEmpty && (
         <button
           type="button"
           onClick={() => {
+            focus.armForInsert(node.id, undefined);
             insertComponent({
               parentId: node.id,
               componentType: "RichText",
@@ -85,7 +104,7 @@ export function ContainerRenderer({ node, children }: ComponentRendererProps) {
                      hover:border-neutral-400 dark:hover:border-neutral-600
                      hover:text-neutral-700 dark:hover:text-neutral-300
                      transition-colors"
-          title="Insert a RichText block. Sprint 3 will add the slash menu."
+          title="Insert a RichText block. Try typing / inside one to insert other block types."
         >
           + Add text block
         </button>

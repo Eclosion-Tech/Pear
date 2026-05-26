@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as Y from "yjs";
 import { IndexeddbPersistence } from "y-indexeddb";
-import { EditorState } from "prosemirror-state";
+import { EditorState, Selection } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 import { keymap } from "prosemirror-keymap";
 import {
@@ -53,14 +53,47 @@ export function RichTextEditor({
   doc,
   componentId,
   placeholder,
+  shouldClaimFocus,
   onFocus,
   onBlur,
+  onInsertSiblingBelow,
+  onDeleteSelf,
+  onSlashTrigger,
 }: {
   doc: Y.Doc;
   componentId: bigint;
   placeholder?: string;
+  /**
+   * Called once on editor mount to ask the surface autofocus
+   * coordinator whether this newly-mounted block was the target of a
+   * just-dispatched insert. Returns true exactly once per armed
+   * insert; this editor's mount effect then focuses itself.
+   */
+  shouldClaimFocus?: () => boolean;
   onFocus?: () => void;
   onBlur?: () => void;
+  /**
+   * Called when the user presses Enter at the end of the doc. Caller is
+   * expected to dispatch `insert_component` for a new RichText sibling.
+   * If absent, Enter falls through to ProseMirror's default `splitBlock`
+   * (creates a new paragraph within the same RichText).
+   */
+  onInsertSiblingBelow?: () => void;
+  /**
+   * Called when the user presses Backspace at the start of an empty doc.
+   * Caller is expected to dispatch `delete_component` for this node. If
+   * absent (e.g. this is the only block on the surface), Backspace
+   * falls through to its default behaviour (which is a no-op at pos 1
+   * of an empty paragraph).
+   */
+  onDeleteSelf?: () => void;
+  /**
+   * Called when the user types `/` at the start of an empty doc. Caller
+   * receives the cursor's screen rect (for popover positioning) and is
+   * expected to render the `<SlashMenu>`. The `/` keystroke is
+   * suppressed when this fires — it does not enter the doc.
+   */
+  onSlashTrigger?: (cursorRect: DOMRect) => void;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -72,6 +105,19 @@ export function RichTextEditor({
   // toolbar is a separate React subtree and needs to re-render when the
   // view becomes available.
   const [view, setView] = useState<EditorView | null>(null);
+
+  // Latest callback refs — the prosemirror keymap closes over the *first*
+  // render's values, so we route through refs that we update on every
+  // render. Keeps closure-captured Enter/Backspace logic in sync with
+  // parent-component state without forcing the editor to re-mount.
+  const onInsertSiblingBelowRef = useRef(onInsertSiblingBelow);
+  const onDeleteSelfRef = useRef(onDeleteSelf);
+  const onSlashTriggerRef = useRef(onSlashTrigger);
+  const shouldClaimFocusRef = useRef(shouldClaimFocus);
+  onInsertSiblingBelowRef.current = onInsertSiblingBelow;
+  onDeleteSelfRef.current = onDeleteSelf;
+  onSlashTriggerRef.current = onSlashTrigger;
+  shouldClaimFocusRef.current = shouldClaimFocus;
 
   useEffect(() => {
     if (!hostRef.current) return;
@@ -104,16 +150,67 @@ export function RichTextEditor({
           "Mod-u": toggleMark(richTextSchema.marks.underline),
           "Mod-Shift-s": toggleMark(richTextSchema.marks.strike),
           "Mod-`": toggleMark(richTextSchema.marks.code),
-          "Shift-Enter": chainCommands(exitCode, (state, dispatch) => {
+          "Shift-Enter": chainCommands(exitCode, (s, dispatch) => {
             if (dispatch) {
               dispatch(
-                state.tr
+                s.tr
                   .replaceSelectionWith(richTextSchema.nodes.hard_break.create())
                   .scrollIntoView(),
               );
             }
             return true;
           }),
+          // Block-boundary semantics — § Block chrome / Enter & Backspace.
+          // Enter at the very end of the doc inserts a new RichText sibling
+          // below via the substrate reducer (escapes this block). Anywhere
+          // else, Enter falls through to baseKeymap's `splitBlock` which
+          // creates a new paragraph within this same RichText.
+          Enter: (s) => {
+            if (!s.selection.empty) return false;
+            const atEnd = s.selection.$head.pos === s.doc.content.size - 1;
+            if (!atEnd) return false;
+            if (!onInsertSiblingBelowRef.current) return false;
+            onInsertSiblingBelowRef.current();
+            return true;
+          },
+          // Backspace at the start of an empty doc deletes this RichText
+          // (caller decides whether to allow it — e.g. forbids when this
+          // is the only block on the surface). Backspace at start of a
+          // non-empty doc would ideally merge with the previous RichText;
+          // that requires Yjs cross-doc content copy and lands in a later
+          // sprint. Until then, non-empty-start Backspace is a no-op.
+          Backspace: (s) => {
+            if (!s.selection.empty) return false;
+            const atStart = s.selection.$head.pos === 1;
+            if (!atStart) return false;
+            const isEmpty = s.doc.textContent.length === 0;
+            if (!isEmpty) return false;
+            if (!onDeleteSelfRef.current) return false;
+            onDeleteSelfRef.current();
+            return true;
+          },
+          // Slash menu trigger — only fires at the start of an empty
+          // doc, matching the ADR § Block chrome / Slash menu contract.
+          // Suppresses the "/" keystroke so it doesn't litter the doc
+          // when the user dismisses the menu. Editor.coordsAtPos gives
+          // us a viewport-relative cursor rect for popover anchoring.
+          "/": (s, _dispatch, view) => {
+            if (!view) return false;
+            if (!s.selection.empty) return false;
+            if (s.doc.textContent.length !== 0) return false;
+            if (s.selection.$head.pos !== 1) return false;
+            const trigger = onSlashTriggerRef.current;
+            if (!trigger) return false;
+            const coords = view.coordsAtPos(s.selection.from);
+            const rect = new DOMRect(
+              coords.left,
+              coords.top,
+              0,
+              coords.bottom - coords.top,
+            );
+            trigger(rect);
+            return true;
+          },
         }),
         keymap(baseKeymap),
       ],
@@ -140,6 +237,29 @@ export function RichTextEditor({
     });
     viewRef.current = editorView;
     setView(editorView);
+
+    // Autofocus claim — if the surface coordinator has armed this
+    // block as the focus target (Enter / slash-menu select / chrome
+    // `+` just dispatched the insert that produced us), take focus
+    // and place the cursor at the end of the doc. The selection move
+    // is uses a "remote" origin tag so it doesn't pollute the local
+    // undo stack with an empty step.
+    if (shouldClaimFocusRef.current?.()) {
+      try {
+        editorView.focus();
+        const tr = editorView.state.tr.setSelection(
+          Selection.atEnd(editorView.state.doc),
+        );
+        editorView.dispatch(tr);
+      } catch (err) {
+        if (typeof console !== "undefined") {
+          console.warn(
+            `[RichTextEditor] autofocus claim failed for component ${componentId}:`,
+            err,
+          );
+        }
+      }
+    }
 
     // Save cycle. Only flush when there have been local-origin updates since
     // the last flush; ignore remote/AI updates (they were authored elsewhere

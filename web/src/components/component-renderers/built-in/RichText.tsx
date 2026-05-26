@@ -9,8 +9,11 @@ import {
 } from "react";
 import * as Y from "yjs";
 import { yDocToHtml } from "@/src/lib/yjsToHtml";
+import { useDeleteComponent, useInsertComponent } from "@/src/hooks/usePages";
+import { useSurfaceFocus } from "@/src/hooks/useSurfaceFocus";
 import type { ComponentRendererProps } from "../registry";
 import { RichTextEditor } from "./RichTextEditor";
+import { SlashMenu, type SlashMenuItem } from "../SlashMenu";
 
 /**
  * Built-in `RichText` component — viewport-aware switcher.
@@ -49,6 +52,73 @@ type RichTextProps = {
 export function RichTextRenderer({ node, tree }: ComponentRendererProps) {
   const props = useMemo<RichTextProps>(() => safeParse(node.props), [node.props]);
   const state = tree.yjs.get(node.id);
+  const insertComponent = useInsertComponent();
+  const deleteComponent = useDeleteComponent();
+  const focus = useSurfaceFocus();
+
+  // Block-boundary structural callbacks — § Block chrome / Enter & Backspace.
+  // Enter at end of doc inserts a new RichText sibling immediately below
+  // and arms the autofocus coordinator so the new block takes focus on
+  // mount (no extra click needed). Backspace at start of an empty doc
+  // deletes this block, but only when it isn't the only child (otherwise
+  // the user would be stuck with an empty Container and have to fall back
+  // to the "+ Add text block" affordance). Both callbacks are fire-and-
+  // forget; the subscription delivers the resulting row update and React
+  // re-renders.
+  const onInsertSiblingBelow = () => {
+    if (node.parentId == null) return;
+    focus.armForInsert(node.parentId, node.id);
+    insertComponent({
+      parentId: node.parentId,
+      componentType: "RichText",
+      propsJson: "{}",
+      afterSiblingId: node.id,
+    });
+  };
+  const siblings = node.parentId != null ? tree.byParent.get(node.parentId) ?? [] : [];
+  const canDelete = siblings.length > 1;
+  const onDeleteSelf = canDelete
+    ? () => deleteComponent({ componentId: node.id })
+    : undefined;
+
+  // Slash-menu state — when the user types `/` at start of empty doc,
+  // RichTextEditor calls onSlashTrigger with the cursor rect; we open the
+  // popover at that anchor. On select we *replace* this empty RichText
+  // with the chosen block type (insert new at this position, then delete
+  // this one). Two reducer calls, both fire-and-forget; the subscription
+  // delivers both deltas atomically from the user's perspective.
+  const [slashAnchor, setSlashAnchor] = useState<DOMRect | null>(null);
+  const onSlashTrigger = (cursorRect: DOMRect) => setSlashAnchor(cursorRect);
+  const onSlashSelect = (item: SlashMenuItem) => {
+    setSlashAnchor(null);
+    if (node.parentId == null) return;
+    // The new block lands where this RichText currently is. Compute the
+    // predecessor in the parent's child list; that's the afterSiblingId
+    // for the insert. Empty siblings array → undefined → first child.
+    const parentSiblings = tree.byParent.get(node.parentId) ?? [];
+    const myIdx = parentSiblings.findIndex((s) => s.id === node.id);
+    const predecessor =
+      myIdx > 0 ? parentSiblings[myIdx - 1]?.id : undefined;
+    focus.armForInsert(node.parentId, predecessor);
+    insertComponent({
+      parentId: node.parentId,
+      componentType: item.componentType,
+      propsJson: JSON.stringify(item.defaultProps),
+      afterSiblingId: predecessor,
+    });
+    // Only delete the host RichText when it has at least one sibling —
+    // otherwise the parent Container would be left empty (briefly) and
+    // the user would see the empty-state affordance flash. With siblings
+    // present, the new block visually takes this block's slot.
+    if (parentSiblings.length > 1) {
+      deleteComponent({ componentId: node.id });
+    } else {
+      // Only-child case: keep the empty RichText so the Container isn't
+      // empty-state. The user can Backspace to clean up later once the
+      // new block has content. This matches BlockNote's "the original
+      // line stays until you type" feel and avoids the parent flicker.
+    }
+  };
 
   // One stable Y.Doc per RichText instance. Lives as long as this React
   // component is mounted, regardless of whether we're in static or live
@@ -149,11 +219,22 @@ export function RichTextRenderer({ node, tree }: ComponentRendererProps) {
           doc={doc}
           componentId={node.id}
           placeholder={props.placeholder}
+          shouldClaimFocus={() => focus.claimFocus(node.id)}
           onFocus={() => setHasFocus(true)}
           onBlur={() => setHasFocus(false)}
+          onInsertSiblingBelow={onInsertSiblingBelow}
+          onDeleteSelf={onDeleteSelf}
+          onSlashTrigger={onSlashTrigger}
         />
       ) : (
         <StaticBody html={html} placeholder={props.placeholder ?? ""} />
+      )}
+      {slashAnchor != null && (
+        <SlashMenu
+          anchorRect={slashAnchor}
+          onSelect={onSlashSelect}
+          onClose={() => setSlashAnchor(null)}
+        />
       )}
     </div>
   );

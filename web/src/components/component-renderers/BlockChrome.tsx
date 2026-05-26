@@ -1,8 +1,12 @@
 "use client";
 
-import { type ReactNode } from "react";
+import { useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { useInsertComponent } from "@/src/hooks/usePages";
+import { useSurfaceFocus } from "@/src/hooks/useSurfaceFocus";
 import type { ComponentNode } from "@/src/module_bindings/types";
+import { BlockMenu } from "./BlockMenu";
 
 /**
  * Hover-reveal block chrome — the `+` (insert sibling below) and grip
@@ -52,9 +56,54 @@ export function BlockChrome({
   children: ReactNode;
 }) {
   const insertComponent = useInsertComponent();
+  const focus = useSurfaceFocus();
+
+  // Block-actions menu (Notion-style) — opened by clicking (not dragging)
+  // the grip button. dnd-kit's PointerSensor activationConstraint of 8 px
+  // gives us the click-vs-drag boundary: a click on the grip with <8 px
+  // movement releases the pointer without starting a drag, and our normal
+  // onClick handler runs to open the menu.
+  //
+  // We keep a separate ref to the grip button so the menu can position
+  // itself relative to it. setActivatorNodeRef from useSortable wraps over
+  // this ref to keep both wires intact.
+  const [menuRect, setMenuRect] = useState<DOMRect | null>(null);
+  const gripRef = useRef<HTMLButtonElement | null>(null);
+
+  // `@dnd-kit/sortable` machinery — drives reordering via the grip button.
+  // The `id` is stringified because dnd-kit requires `string | number`, not
+  // `bigint`. We pair this BlockChrome with a `<SortableContext>` rendered
+  // by the parent `Container` (whose `byParent` slice declares the sort
+  // order) and a top-level `<DndContext>` in `<ComponentTreeRenderer>`.
+  //
+  // Listeners attach to `setActivatorNodeRef` — only the grip button can
+  // initiate a drag; clicking the block body, the `+`, or the trash does
+  // not. `attributes` carry accessibility hints (aria-roledescription,
+  // tabindex, etc.) and ride on the activator node.
+  //
+  // Outside of a SortableContext the hook is essentially inert: `transform`
+  // and `transition` stay `null`, so the block renders normally and the
+  // listeners no-op. That keeps BlockChrome safe to mount before the wider
+  // dnd machinery is in place.
+  const sortable = useSortable({ id: node.id.toString() });
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = sortable;
+
+  const wrapperStyle: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.4 : undefined,
+  };
 
   return (
-    <div className="group relative">
+    <div ref={setNodeRef} style={wrapperStyle} className="group relative">
       {/* Invisible hover-extender spanning the full 48-px gutter. Its
           only job is to be a hit target that keeps `group-hover` true as
           the cursor enters the chrome area. */}
@@ -75,6 +124,7 @@ export function BlockChrome({
             // always defined here. Guard defensively against a future
             // walker change and no-op if somehow null.
             if (node.parentId == null) return;
+            focus.armForInsert(node.parentId, node.id);
             insertComponent({
               parentId: node.parentId,
               componentType: "RichText",
@@ -82,7 +132,7 @@ export function BlockChrome({
               afterSiblingId: node.id,
             });
           }}
-          title="Insert a RichText block below. Sprint 3 will add the slash menu."
+          title="Insert a RichText block below"
           className="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700
                      dark:hover:bg-neutral-800 dark:hover:text-neutral-300
                      transition-colors"
@@ -98,10 +148,25 @@ export function BlockChrome({
           </svg>
         </button>
         <button
+          ref={(el) => {
+            setActivatorNodeRef(el);
+            gripRef.current = el;
+          }}
+          {...attributes}
+          {...listeners}
           type="button"
-          title="Drag to reorder (sprint 3)"
-          aria-label="Drag handle"
-          // No onClick / drag wiring yet. Cursor + visual feedback only.
+          onClick={() => {
+            // Click (no drag) — open the block menu. dnd-kit only suppresses
+            // the click if the pointer moved >8 px between down and up, so
+            // a quick tap on the grip reliably reaches this handler.
+            const el = gripRef.current;
+            if (!el) return;
+            setMenuRect(el.getBoundingClientRect());
+          }}
+          title="Drag to reorder, click for block actions"
+          aria-label="Block actions / drag handle"
+          aria-haspopup="menu"
+          aria-expanded={menuRect != null}
           className="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700
                      dark:hover:bg-neutral-800 dark:hover:text-neutral-300
                      cursor-grab active:cursor-grabbing
@@ -118,6 +183,13 @@ export function BlockChrome({
         </button>
       </div>
       {children}
+      {menuRect != null && (
+        <BlockMenu
+          node={node}
+          anchorRect={menuRect}
+          onClose={() => setMenuRect(null)}
+        />
+      )}
     </div>
   );
 }

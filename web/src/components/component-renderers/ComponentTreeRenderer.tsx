@@ -1,7 +1,16 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
+import {
+  DndContext,
+  PointerSensor,
+  type DragEndEvent,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
 import { useComponentTree } from "@/src/hooks/useComponentTree";
+import { useMoveComponent } from "@/src/hooks/usePages";
+import { SurfaceFocusProvider } from "@/src/hooks/useSurfaceFocus";
 import { ComponentNodeView } from "./ComponentNodeView";
 import { EmptyTreeFallback, SkeletonDoc } from "./fallbacks";
 import { assertRegistryAgainstDefs } from "./registry";
@@ -36,6 +45,7 @@ registerBuiltinRenderers();
  */
 export function ComponentTreeRenderer({ surfaceId }: { surfaceId: bigint }) {
   const tree = useComponentTree(surfaceId);
+  const moveComponent = useMoveComponent();
   const everReadyRef = useRef(false);
   if (!tree.loading) everReadyRef.current = true;
 
@@ -44,8 +54,78 @@ export function ComponentTreeRenderer({ surfaceId }: { surfaceId: bigint }) {
     assertRegistryAgainstDefs(tree.defs);
   }, [tree.defs, tree.loading]);
 
-  // First-ever load: show skeleton. Anything else: show the tree (possibly
-  // briefly stale if the underlying subscriptions are reconnecting).
+  // dnd-kit sensors. Require an 8-pixel mouse movement before a drag
+  // starts — keeps the grip button click-friendly (touches that don't
+  // intend to drag don't accidentally start one) and lets the underlying
+  // tooltip / focus rings show normally on a quick click.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+  );
+
+  // Drag-end → `move_component` dispatch.
+  //
+  // For sprint 3a we only support **same-parent reorder**: the active
+  // and over items must share a parent (which is the case when the
+  // user drops on a sibling inside the same Container's
+  // SortableContext). Cross-parent moves are a sprint-3 follow-up: the
+  // dnd-kit drop event would have to flow through a higher-level
+  // collision detector that knows about every Container, and the
+  // `move_component` call would pass the new parent's id explicitly.
+  //
+  // After identifying that the move is same-parent we compute the
+  // `afterSiblingId` semantically:
+  //   - If active is moving *down* (new index > old index), it lands
+  //     after `over` — so `afterSiblingId = over.id`.
+  //   - If active is moving *up* (new index < old index), it lands
+  //     before `over` — so `afterSiblingId = sibling immediately
+  //     preceding `over` in the previous ordering`, or `undefined`
+  //     when dropping at index 0.
+  // This convention matches what `move_component`'s reducer expects
+  // per `PEAR_COMPONENT_NODE_SCHEMA.md` § Integrity — sort order /
+  // afterSiblingId is the post-move predecessor.
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+
+      const activeId = parseBigInt(active.id);
+      const overId = parseBigInt(over.id);
+      if (activeId == null || overId == null) return;
+
+      const activeNode = tree.byId.get(activeId);
+      const overNode = tree.byId.get(overId);
+      if (!activeNode || !overNode) return;
+      if (activeNode.parentId == null) return;
+      if (activeNode.parentId !== overNode.parentId) {
+        // Cross-parent drop — not supported in sprint 3a.
+        return;
+      }
+
+      const siblings = tree.byParent.get(activeNode.parentId) ?? [];
+      const oldIndex = siblings.findIndex((s) => s.id === activeId);
+      const overIndex = siblings.findIndex((s) => s.id === overId);
+      if (oldIndex < 0 || overIndex < 0) return;
+      if (oldIndex === overIndex) return;
+
+      let afterSiblingId: bigint | undefined;
+      if (overIndex > oldIndex) {
+        // Moving down — land after `over`.
+        afterSiblingId = overNode.id;
+      } else {
+        // Moving up — land before `over`, i.e. after `over`'s predecessor.
+        afterSiblingId =
+          overIndex === 0 ? undefined : siblings[overIndex - 1]?.id;
+      }
+
+      moveComponent({
+        componentId: activeId,
+        newParentId: activeNode.parentId,
+        afterSiblingId,
+      });
+    },
+    [tree, moveComponent],
+  );
+
   if (tree.loading && !everReadyRef.current) {
     return <SkeletonDoc />;
   }
@@ -54,5 +134,24 @@ export function ComponentTreeRenderer({ surfaceId }: { surfaceId: bigint }) {
     return <EmptyTreeFallback />;
   }
 
-  return <ComponentNodeView node={tree.root} tree={tree} />;
+  return (
+    <SurfaceFocusProvider surfaceId={surfaceId}>
+      <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+        <ComponentNodeView node={tree.root} tree={tree} />
+      </DndContext>
+    </SurfaceFocusProvider>
+  );
+}
+
+/**
+ * dnd-kit identifiers are `string | number`; we stringify bigints into them.
+ * Parses back, returning `null` on malformed input so the drag handler can
+ * short-circuit gracefully.
+ */
+function parseBigInt(id: string | number): bigint | null {
+  try {
+    return BigInt(id);
+  } catch {
+    return null;
+  }
 }

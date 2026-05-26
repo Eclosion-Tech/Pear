@@ -69,10 +69,42 @@ export function useCreateComponentTreePage() {
 /**
  * `insert_component(parent_id, component_type, props_json, after_sibling_id)`
  * — inserts a new live ComponentNode under `parent_id`. Used by the empty-
- * tree affordance in `<ComponentTreeRenderer>` and (sprint 3) the slash menu.
+ * tree affordance in `<ComponentTreeRenderer>`, the BlockChrome `+` button,
+ * Enter-at-end-of-RichText, and (sprint 3b) the slash menu.
  */
 export function useInsertComponent() {
   return useReducer(reducers.insertComponent);
+}
+
+/**
+ * `move_component(component_id, new_parent_id, after_sibling_id)` — moves
+ * a live node within or between Container parents. Used by the drag-and-
+ * drop (`@dnd-kit/sortable`) flow in `<ComponentTreeRenderer>` and the
+ * block grip handle.
+ */
+export function useMoveComponent() {
+  return useReducer(reducers.moveComponent);
+}
+
+/**
+ * `delete_component(component_id)` — soft-deletes a live node (sets
+ * `deleted_at`, clamps any pending children to the parent). Used by the
+ * BlockChrome trash button and Backspace-at-start-of-empty-RichText.
+ * The root component is rejected server-side per `PEAR_COMPONENT_NODE_
+ * SCHEMA.md` § Integrity model — delete the whole page instead.
+ */
+export function useDeleteComponent() {
+  return useReducer(reducers.deleteComponent);
+}
+
+/**
+ * `update_component_props(component_id, props_json)` — replaces the
+ * stringified JSON props on a live node. Used by inline-editable
+ * renderers (Heading text edits, Container layout switches) and the
+ * sprint 3b slash menu's "Turn into…" flow.
+ */
+export function useUpdateComponentProps() {
+  return useReducer(reducers.updateComponentProps);
 }
 
 export function useUpdatePageTitle() {
