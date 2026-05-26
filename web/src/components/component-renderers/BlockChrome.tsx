@@ -22,18 +22,27 @@ import type { ComponentNode } from "@/src/module_bindings/types";
  * of and no peer to drag with. The walker (`ComponentNodeView`) decides
  * which nodes to wrap.
  *
- * **Hover gating.** Chrome visibility is pure CSS (`group-hover` +
- * `hover` fallback) rather than React state. An earlier version used
- * `onMouseEnter`/`onMouseLeave` on the wrapper, but the chrome lives at
- * `-left-12` — i.e. fully outside the wrapper's bounding box. Even though
- * the chrome is a DOM descendant of the wrapper, the cursor traverses
- * a hairline gap (or hits the chrome via `pointer-events`-disabled state
- * during the React render race) and `onMouseLeave` fires on the wrapper
- * before the chrome can grab the pointer — making the chrome impossible
- * to click. CSS `:hover` propagates up to ancestors when any descendant
- * is being designated, so `group-hover` on the wrapper stays true as the
- * cursor crosses into the chrome subtree, and the chrome's own `hover:`
- * keeps it visible even mid-transition.
+ * **Hover gating.** Chrome visibility is pure CSS (`group-hover`) rather
+ * than React state. A naïve approach with `onMouseEnter`/`onMouseLeave`
+ * on the wrapper breaks because the chrome lives at `-left-12` — fully
+ * outside the wrapper's bounding box. The cursor traverses a hairline
+ * gap to reach the chrome and `onMouseLeave` fires before the chrome can
+ * grab the pointer.
+ *
+ * The fix is a transparent **hover extender** — an invisible spacer
+ * (`pointer-events-auto`) sibling of the chrome that covers the entire
+ * 48-px left gutter. Because the extender is a DOM descendant of the
+ * `group` wrapper, hovering anywhere in the gutter keeps `group-hover`
+ * true, which keeps the chrome `opacity-100` *and* `pointer-events-auto`
+ * — there's no race between visibility and hit-testability.
+ *
+ * Without the extender we hit a classic chicken-and-egg: the chrome
+ * starts `pointer-events-none` (so users can't click invisible buttons
+ * in the gutter), but a `hover:pointer-events-auto` fallback on the
+ * chrome itself never fires because the chrome is non-hit-testable in
+ * the first place. The extender resolves this by being the always-on
+ * hit target that triggers `group-hover` before the chrome needs to
+ * receive any pointer events of its own.
  */
 export function BlockChrome({
   node,
@@ -46,11 +55,17 @@ export function BlockChrome({
 
   return (
     <div className="group relative">
+      {/* Invisible hover-extender spanning the full 48-px gutter. Its
+          only job is to be a hit target that keeps `group-hover` true as
+          the cursor enters the chrome area. */}
+      <div
+        aria-hidden="true"
+        className="absolute -left-12 inset-y-0 w-12 pointer-events-auto"
+      />
       <div
         className="absolute -left-12 top-0 flex items-start gap-0.5 pt-1
                    opacity-0 pointer-events-none transition-opacity duration-100
-                   group-hover:opacity-100 group-hover:pointer-events-auto
-                   hover:opacity-100 hover:pointer-events-auto"
+                   group-hover:opacity-100 group-hover:pointer-events-auto"
       >
         <button
           type="button"
