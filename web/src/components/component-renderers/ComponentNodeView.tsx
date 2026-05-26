@@ -6,6 +6,7 @@ import type { ComponentTree } from "@/src/hooks/useComponentTree";
 import { validateComponentProps } from "@/src/lib/componentProps";
 import { getRenderer } from "./registry";
 import { UnregisteredComponentFallback } from "./fallbacks";
+import { BlockChrome } from "./BlockChrome";
 
 /**
  * Recursive walker — looks up the renderer for `node.componentType`, runs
@@ -61,9 +62,15 @@ export const ComponentNodeView = memo(function ComponentNodeView({
     <ComponentNodeView key={String(c.id)} node={c} tree={tree} />
   ));
 
-  return (
+  // Non-root nodes get hover-reveal block chrome (+ / drag-grip) on the
+  // left gutter. The root has no peer to be a sibling of, so it's
+  // chrome-less. § Block chrome / sprint 2.5 — wired here so every node
+  // type picks up the same affordance without each renderer opting in.
+  const rendered = (
     <Renderer node={node} def={def} tree={tree}>
       {renderedChildren}
     </Renderer>
   );
+  if (node.parentId == null) return rendered;
+  return <BlockChrome node={node}>{rendered}</BlockChrome>;
 });

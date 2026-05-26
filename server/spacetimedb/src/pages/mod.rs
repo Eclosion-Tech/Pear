@@ -279,14 +279,37 @@ pub fn create_component_tree_page(
     });
 
     // Seed the root node. parent_id: None is the single-root-per-surface
-    // invariant from § Integrity model. Props are an empty Container —
+    // invariant from § Integrity model. Props are a stack Container —
     // clients can update_component_props on this id to set layout.
+    let root_id = next_component_node_id(ctx);
     ctx.db.component_node().insert(ComponentNode {
-        id: next_component_node_id(ctx),
+        id: root_id,
         surface_id: page.id,
         parent_id: None,
         component_type: "Container".to_string(),
         props: r#"{"layout":"stack"}"#.to_string(),
+        order: 1000,
+        created_by: ActorType::Human,
+        updated_by: ActorType::Human,
+        created_at: ctx.timestamp,
+        updated_at: ctx.timestamp,
+        deleted_at: None,
+    });
+
+    // Seed one default RichText under the root so the page lands as an
+    // immediately-editable surface — same UX shape as BlockNote/Notion,
+    // where a fresh page already has an editable first block. Users can
+    // delete this block or replace its layout via the (forthcoming sprint
+    // 3) block chrome and slash menu. No ComponentYjsState row is created
+    // until the editor saves; the client treats "missing yjs state" as
+    // "empty doc" per `pear/web/src/components/component-renderers/
+    // built-in/RichText.tsx`.
+    ctx.db.component_node().insert(ComponentNode {
+        id: next_component_node_id(ctx),
+        surface_id: page.id,
+        parent_id: Some(root_id),
+        component_type: "RichText".to_string(),
+        props: "{}".to_string(),
         order: 1000,
         created_by: ActorType::Human,
         updated_by: ActorType::Human,

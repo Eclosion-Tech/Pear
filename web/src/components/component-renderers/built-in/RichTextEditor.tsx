@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as Y from "yjs";
 import { IndexeddbPersistence } from "y-indexeddb";
 import { EditorState } from "prosemirror-state";
@@ -24,6 +24,7 @@ import {
 } from "@/src/lib/richTextSchema";
 import { useSaveComponentYjsState } from "@/src/hooks/usePages";
 import { useWorkspace } from "@/src/providers/WorkspaceProvider";
+import { FormattingToolbar } from "./FormattingToolbar";
 
 /** Cadence — see `docs/PEAR_WEB_RENDERER.md` § Editor stack — Save cycle. */
 const SAVE_INTERVAL_MS = 30_000;
@@ -66,6 +67,11 @@ export function RichTextEditor({
   const idbRef = useRef<IndexeddbPersistence | null>(null);
   const saveComponentYjsState = useSaveComponentYjsState();
   const { idbNamespace } = useWorkspace();
+  // Exposed to the floating toolbar so it can read the editor selection
+  // and dispatch toggleMark commands. Lives in state (not ref) because the
+  // toolbar is a separate React subtree and needs to re-render when the
+  // view becomes available.
+  const [view, setView] = useState<EditorView | null>(null);
 
   useEffect(() => {
     if (!hostRef.current) return;
@@ -113,7 +119,7 @@ export function RichTextEditor({
       ],
     });
 
-    const view = new EditorView(hostRef.current, {
+    const editorView = new EditorView(hostRef.current, {
       state,
       attributes: {
         class:
@@ -132,7 +138,8 @@ export function RichTextEditor({
         },
       },
     });
-    viewRef.current = view;
+    viewRef.current = editorView;
+    setView(editorView);
 
     // Save cycle. Only flush when there have been local-origin updates since
     // the last flush; ignore remote/AI updates (they were authored elsewhere
@@ -169,8 +176,9 @@ export function RichTextEditor({
       window.clearInterval(interval);
       window.removeEventListener("beforeunload", onBeforeUnload);
       flush();
-      view.destroy();
+      editorView.destroy();
       viewRef.current = null;
+      setView(null);
       idb.destroy();
       idbRef.current = null;
     };
@@ -180,21 +188,24 @@ export function RichTextEditor({
   }, [doc, componentId, idbNamespace]);
 
   return (
-    <div
-      ref={hostRef}
-      className="my-2 text-neutral-900 dark:text-neutral-100 leading-relaxed
-                 [&_.ProseMirror]:outline-none
-                 [&_.ProseMirror_p]:my-2
-                 [&_.ProseMirror_a]:underline
-                 [&_.ProseMirror_code]:rounded
-                 [&_.ProseMirror_code]:bg-neutral-100
-                 dark:[&_.ProseMirror_code]:bg-neutral-800
-                 [&_.ProseMirror_code]:px-1
-                 [&_.ProseMirror_code]:py-0.5
-                 [&_.ProseMirror_strong]:font-semibold
-                 [&_.ProseMirror_em]:italic
-                 [&_.ProseMirror_u]:underline
-                 [&_.ProseMirror_s]:line-through"
-    />
+    <>
+      <div
+        ref={hostRef}
+        className="my-2 text-neutral-900 dark:text-neutral-100 leading-relaxed
+                   [&_.ProseMirror]:outline-none
+                   [&_.ProseMirror_p]:my-2
+                   [&_.ProseMirror_a]:underline
+                   [&_.ProseMirror_code]:rounded
+                   [&_.ProseMirror_code]:bg-neutral-100
+                   dark:[&_.ProseMirror_code]:bg-neutral-800
+                   [&_.ProseMirror_code]:px-1
+                   [&_.ProseMirror_code]:py-0.5
+                   [&_.ProseMirror_strong]:font-semibold
+                   [&_.ProseMirror_em]:italic
+                   [&_.ProseMirror_u]:underline
+                   [&_.ProseMirror_s]:line-through"
+      />
+      <FormattingToolbar view={view} />
+    </>
   );
 }

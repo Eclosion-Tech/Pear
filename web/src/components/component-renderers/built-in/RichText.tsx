@@ -83,8 +83,25 @@ export function RichTextRenderer({ node, tree }: ComponentRendererProps) {
   }, [doc]);
 
   // Viewport-aware mode switch.
+  //
+  // Initial state is `true` — blocks default to live mode on mount so that
+  // an editable RichText is always ready when the user clicks. The
+  // IntersectionObserver, attached after first paint, flips to static only
+  // if the block is actually outside the preload band.
+  //
+  // We start live (not static) for two reasons:
+  //   1. Empty RichText nodes have a 0-height bounding box until they get
+  //      content. Browsers treat 0-area elements as never-intersecting
+  //      with `threshold: 0`, so an empty block would otherwise be stuck
+  //      in invisible static mode forever — the user couldn't click into
+  //      it to start typing.
+  //   2. The cost of mounting a few extra prosemirror views above the
+  //      fold is bounded; the cost of users staring at invisible blocks
+  //      is not.
+  // Far-off-screen blocks transition to static normally on the observer's
+  // first poll.
   const hostRef = useRef<HTMLDivElement | null>(null);
-  const [inViewport, setInViewport] = useState(false);
+  const [inViewport, setInViewport] = useState(true);
   const [hasFocus, setHasFocus] = useState(false);
 
   useEffect(() => {
@@ -123,7 +140,10 @@ export function RichTextRenderer({ node, tree }: ComponentRendererProps) {
   }, [doc]);
 
   return (
-    <div ref={hostRef}>
+    // `min-h-[1.5em]` keeps the wrapper non-zero-height even for empty
+    // RichText nodes — required for IntersectionObserver to be able to
+    // report intersection at all (zero-area elements never intersect).
+    <div ref={hostRef} className="min-h-[1.5em]">
       {live ? (
         <RichTextEditor
           doc={doc}
