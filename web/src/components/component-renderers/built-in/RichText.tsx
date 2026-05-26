@@ -77,8 +77,19 @@ export function RichTextRenderer({ node, tree }: ComponentRendererProps) {
   };
   const siblings = node.parentId != null ? tree.byParent.get(node.parentId) ?? [] : [];
   const canDelete = siblings.length > 1;
+  // Backspace-on-empty deletes this block AND moves focus to a neighbour,
+  // matching Notion/BlockNote: the previous sibling (caret at end), or
+  // the next sibling if this is the first child. Without the focus
+  // handoff, the user has to click into the next block — small but
+  // continually-occurring friction during normal editing flow.
   const onDeleteSelf = canDelete
-    ? () => deleteComponent({ componentId: node.id })
+    ? () => {
+        const myIdx = siblings.findIndex((s) => s.id === node.id);
+        const neighbour =
+          myIdx > 0 ? siblings[myIdx - 1] : siblings[myIdx + 1];
+        if (neighbour) focus.requestFocus(neighbour.id);
+        deleteComponent({ componentId: node.id });
+      }
     : undefined;
 
   // Slash-menu state — when the user types `/` at start of empty doc,

@@ -67,9 +67,35 @@ import type { ComponentNode } from "@/src/module_bindings/types";
  * `armForInsert` or an unrelated insert clears it — harmless because
  * `claimFocus` is single-shot.
  */
+/**
+ * A focus function — implemented by every focusable renderer (RichText
+ * editor, contenteditable Heading, …). Called by `requestFocus`. The
+ * expectation is that the function focuses the renderer's editable
+ * surface *and* moves the caret to the end, matching the claim-on-
+ * mount autofocus contract so Backspace-into-previous and slash-menu-
+ * insert land the user in the same state.
+ */
+type FocusFn = () => void;
+
 type SurfaceFocusValue = {
   armForInsert: (parentId: bigint, afterSiblingId?: bigint) => void;
   claimFocus: (nodeId: bigint) => boolean;
+  /**
+   * Register a focus handler for a focusable renderer. Returns an
+   * unregister function — call from the renderer's effect cleanup.
+   */
+  registerFocusable: (nodeId: bigint, focusFn: FocusFn) => () => void;
+  /**
+   * Imperatively focus an *existing* block — used by Backspace-on-
+   * empty-RichText (focus the previous sibling), the (future) "Turn
+   * into…" flow (focus the converted block), etc. If the target is
+   * registered, focuses immediately. If not (block is in viewport-
+   * static mode or otherwise unmounted), falls through to the same
+   * `claimFocus` machinery as `armForInsert`: the focus target is
+   * recorded and will be claimed by the renderer when it next mounts
+   * its editable surface.
+   */
+  requestFocus: (nodeId: bigint) => void;
 };
 
 const SurfaceFocusContext = createContext<SurfaceFocusValue | null>(null);
@@ -94,6 +120,13 @@ export function SurfaceFocusProvider({
   // ref keeps the onInsert closure in sync without re-subscribing.
   const surfaceIdRef = useRef(surfaceId);
   surfaceIdRef.current = surfaceId;
+
+  // Registry of currently-mounted focusable renderers. Keyed by node
+  // id; value is the focus function the renderer registered. The
+  // registry is a ref (mutation doesn't trigger re-renders) — focus
+  // changes are imperative and one-shot per gesture, no React state
+  // needs to react to them.
+  const focusablesRef = useRef<Map<bigint, FocusFn>>(new Map());
 
   // Subscribe to component_node inserts with a stable callback. The
   // empty-deps useCallback keeps the same function identity across
@@ -125,6 +158,37 @@ export function SurfaceFocusProvider({
       }
       return false;
     },
+    registerFocusable: (nodeId, focusFn) => {
+      focusablesRef.current.set(nodeId, focusFn);
+      return () => {
+        // Only delete if we still own the entry — guards against
+        // re-mounts replacing the entry before our cleanup runs.
+        if (focusablesRef.current.get(nodeId) === focusFn) {
+          focusablesRef.current.delete(nodeId);
+        }
+      };
+    },
+    requestFocus: (nodeId) => {
+      const fn = focusablesRef.current.get(nodeId);
+      if (fn) {
+        try {
+          fn();
+        } catch (err) {
+          if (typeof console !== "undefined") {
+            console.warn(
+              `[SurfaceFocus] requestFocus(${nodeId}) handler threw:`,
+              err,
+            );
+          }
+        }
+        return;
+      }
+      // Not mounted yet (off-screen / viewport-static). Fall through
+      // to the claim-on-mount path: the next time the renderer mounts
+      // its editable surface and calls claimFocus(nodeId), it gets
+      // true and focuses itself. Same machinery as `armForInsert`.
+      focusTargetRef.current = nodeId;
+    },
   });
 
   return (
@@ -149,4 +213,6 @@ export function useSurfaceFocus(): SurfaceFocusValue {
 const NOOP_FOCUS: SurfaceFocusValue = {
   armForInsert: () => {},
   claimFocus: () => false,
+  registerFocusable: () => () => {},
+  requestFocus: () => {},
 };

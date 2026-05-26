@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import {
+  useDeleteComponent,
   useInsertComponent,
   useUpdateComponentProps,
 } from "@/src/hooks/usePages";
@@ -59,7 +60,7 @@ const SIZE_CLASS: Record<number, string> = {
 
 const SAVE_DEBOUNCE_MS = 400;
 
-export function HeadingRenderer({ node }: ComponentRendererProps) {
+export function HeadingRenderer({ node, tree }: ComponentRendererProps) {
   const props = useMemo<HeadingProps>(() => safeParse(node.props), [node.props]);
   const level = clampLevel(props.level);
   const text = props.text ?? "";
@@ -74,20 +75,30 @@ export function HeadingRenderer({ node }: ComponentRendererProps) {
 
   const updateProps = useUpdateComponentProps();
   const insertComponent = useInsertComponent();
+  const deleteComponent = useDeleteComponent();
   const focus = useSurfaceFocus();
 
-  // Initial mount: stamp the DOM with the prop's text and claim
-  // autofocus if the surface coordinator armed us. Subsequent prop
-  // changes are handled by the effect below.
+  // Initial mount: stamp the DOM with the prop's text, register this
+  // heading with the surface focus coordinator so Backspace-into-
+  // previous can imperatively land here, and claim autofocus if the
+  // coordinator armed us (slash menu / Enter from an earlier sibling).
+  // Subsequent prop changes are handled by the effect below.
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     el.textContent = text;
     lastKnownTextRef.current = text;
-    if (focus.claimFocus(node.id)) {
+    const focusSelf = () => {
       el.focus();
       placeCursorAtEnd(el);
+    };
+    const unregister = focus.registerFocusable(node.id, focusSelf);
+    if (focus.claimFocus(node.id)) {
+      focusSelf();
     }
+    return () => {
+      unregister();
+    };
     // We deliberately omit `text` and `focus` from the dep array — this
     // effect should run *exactly once per mount*. External prop updates
     // are handled by the `lastKnownTextRef` check in the next effect.
@@ -140,25 +151,59 @@ export function HeadingRenderer({ node }: ComponentRendererProps) {
     flushSave(latest);
   };
 
-  // Block-level Enter inside a heading drops out into a new RichText
-  // sibling below — matches Notion/BlockNote behaviour. Without this,
-  // a newline inside contenteditable=plaintext-only would insert a
-  // literal `\n` and stretch the heading vertically. The new RichText
-  // grabs focus via the surface autofocus coordinator.
+  // Block-level keymap inside a heading:
+  //   • Enter — drop out into a new RichText sibling below, matching
+  //     Notion/BlockNote. Without preventDefault a contentEditable=
+  //     plaintext-only would insert a literal `\n` and stretch the
+  //     heading vertically. The new RichText grabs focus via the
+  //     surface autofocus coordinator.
+  //   • Backspace on empty heading at caret-start — delete this block
+  //     and move focus to the previous sibling (caret at end), same
+  //     contract as RichText's `onDeleteSelf`. Without this the user
+  //     has to click out and Backspace from the next block — common
+  //     when accidentally inserting a Heading via the slash menu.
   const onKeyDown = (e: React.KeyboardEvent<HTMLHeadingElement>) => {
-    if (e.key !== "Enter" || e.shiftKey) return;
-    if (node.parentId == null) return;
-    e.preventDefault();
-    // Persist the heading text first so we don't lose any unsaved
-    // keystrokes when focus moves away.
-    onBlur();
-    focus.armForInsert(node.parentId, node.id);
-    insertComponent({
-      parentId: node.parentId,
-      componentType: "RichText",
-      propsJson: "{}",
-      afterSiblingId: node.id,
-    });
+    if (e.key === "Enter" && !e.shiftKey) {
+      if (node.parentId == null) return;
+      e.preventDefault();
+      // Persist the heading text first so we don't lose any unsaved
+      // keystrokes when focus moves away.
+      onBlur();
+      focus.armForInsert(node.parentId, node.id);
+      insertComponent({
+        parentId: node.parentId,
+        componentType: "RichText",
+        propsJson: "{}",
+        afterSiblingId: node.id,
+      });
+      return;
+    }
+    if (e.key === "Backspace") {
+      if (node.parentId == null) return;
+      const el = ref.current;
+      if (!el) return;
+      // Only fire delete when (a) the heading is empty and (b) the
+      // caret is collapsed at offset 0 — partial selections fall
+      // through to default contenteditable behaviour. `textContent`
+      // being empty implies the heading carries no text.
+      if ((el.textContent ?? "").length !== 0) return;
+      const siblings = tree.byParent.get(node.parentId) ?? [];
+      // Server forbids deleting the only child of a Container (root-
+      // collapse prevention, see `delete_component` in components.rs).
+      // Bail before dispatching to avoid a confusing toast-less failure.
+      if (siblings.length <= 1) return;
+      e.preventDefault();
+      const myIdx = siblings.findIndex((s) => s.id === node.id);
+      const neighbour =
+        myIdx > 0 ? siblings[myIdx - 1] : siblings[myIdx + 1];
+      if (neighbour) focus.requestFocus(neighbour.id);
+      // No need to flush save — the heading's text is empty.
+      if (saveTimerRef.current != null) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+      deleteComponent({ componentId: node.id });
+    }
   };
 
   const cls = `${SIZE_CLASS[level]} text-neutral-900 dark:text-neutral-100

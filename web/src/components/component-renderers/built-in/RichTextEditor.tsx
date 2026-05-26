@@ -23,6 +23,7 @@ import {
   PROSEMIRROR_FRAGMENT_KEY,
 } from "@/src/lib/richTextSchema";
 import { useSaveComponentYjsState } from "@/src/hooks/usePages";
+import { useSurfaceFocus } from "@/src/hooks/useSurfaceFocus";
 import { useWorkspace } from "@/src/providers/WorkspaceProvider";
 import { FormattingToolbar } from "./FormattingToolbar";
 
@@ -99,6 +100,7 @@ export function RichTextEditor({
   const viewRef = useRef<EditorView | null>(null);
   const idbRef = useRef<IndexeddbPersistence | null>(null);
   const saveComponentYjsState = useSaveComponentYjsState();
+  const focus = useSurfaceFocus();
   const { idbNamespace } = useWorkspace();
   // Exposed to the floating toolbar so it can read the editor selection
   // and dispatch toggleMark commands. Lives in state (not ref) because the
@@ -238,13 +240,13 @@ export function RichTextEditor({
     viewRef.current = editorView;
     setView(editorView);
 
-    // Autofocus claim — if the surface coordinator has armed this
-    // block as the focus target (Enter / slash-menu select / chrome
-    // `+` just dispatched the insert that produced us), take focus
-    // and place the cursor at the end of the doc. The selection move
-    // is uses a "remote" origin tag so it doesn't pollute the local
-    // undo stack with an empty step.
-    if (shouldClaimFocusRef.current?.()) {
+    // Imperative focus handler — registered with the surface focus
+    // coordinator so Backspace-into-previous / "Turn into…" / etc.
+    // can imperatively focus this editor + place the caret at end.
+    // Identical semantics to the claim-on-mount autofocus path
+    // below, so users land in the same state regardless of which
+    // gesture pulled them here.
+    const focusSelf = () => {
       try {
         editorView.focus();
         const tr = editorView.state.tr.setSelection(
@@ -254,11 +256,21 @@ export function RichTextEditor({
       } catch (err) {
         if (typeof console !== "undefined") {
           console.warn(
-            `[RichTextEditor] autofocus claim failed for component ${componentId}:`,
+            `[RichTextEditor] focusSelf failed for component ${componentId}:`,
             err,
           );
         }
       }
+    };
+    const unregister = focus.registerFocusable(componentId, focusSelf);
+
+    // Autofocus claim — if the surface coordinator has armed this
+    // block as the focus target (Enter / slash-menu select / chrome
+    // `+` just dispatched the insert that produced us, OR a sibling's
+    // Backspace just requested focus on us before we were mounted),
+    // run the same focusSelf above.
+    if (shouldClaimFocusRef.current?.()) {
+      focusSelf();
     }
 
     // Save cycle. Only flush when there have been local-origin updates since
@@ -292,6 +304,7 @@ export function RichTextEditor({
     window.addEventListener("beforeunload", onBeforeUnload);
 
     return () => {
+      unregister();
       doc.off("update", onUpdate);
       window.clearInterval(interval);
       window.removeEventListener("beforeunload", onBeforeUnload);
