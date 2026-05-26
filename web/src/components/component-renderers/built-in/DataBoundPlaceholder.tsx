@@ -1,6 +1,6 @@
 "use client";
 
-import type { ComponentRendererProps } from "../registry";
+import type { BlockRendererProps } from "@eclosion-tech/pulp";
 
 /**
  * Sprint-1 placeholder for the data-bound built-ins: `Form`, `Table`,
@@ -29,7 +29,7 @@ export function DataBoundPlaceholder({
   node,
   def,
   children,
-}: ComponentRendererProps) {
+}: BlockRendererProps) {
   const niceName = NICE_NAMES[node.componentType] ?? node.componentType;
 
   return (

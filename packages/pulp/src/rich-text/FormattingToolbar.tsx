@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import type { EditorView } from "prosemirror-view";
 import type { MarkType } from "prosemirror-model";
 import { toggleMark } from "prosemirror-commands";
-import { richTextSchema } from "@/src/lib/richTextSchema";
+import { richTextSchema } from "./richTextSchema";
 
 /**
  * Floating bubble menu rendered above the user's selection inside a

@@ -69,6 +69,17 @@ export function DocPage({ page }: DocPageProps) {
 
   return (
     <div className="flex h-full overflow-hidden">
+      {process.env.NODE_ENV !== "production" && (
+        <div
+          className="fixed bottom-3 right-3 z-50 rounded-md border border-neutral-200
+                     dark:border-neutral-700 bg-white/90 dark:bg-neutral-900/90
+                     px-2 py-1 text-[10px] font-mono text-neutral-500 dark:text-neutral-400
+                     shadow-sm backdrop-blur-sm pointer-events-none"
+          aria-hidden
+        >
+          {page.contentFormat?.tag === "ComponentTree" ? "ComponentTree" : "BlockNote"}
+        </div>
+      )}
       <div
         className={`flex flex-col overflow-y-auto transition-all ${historyOpen ? "flex-1 min-w-0" : "flex-1"}`}
       >

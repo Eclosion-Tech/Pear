@@ -35,6 +35,37 @@ export function yDocToHtml(doc: Y.Doc): string {
   return renderFragment(frag);
 }
 
+/** Plain text extraction for Turn into… and similar block conversions. */
+export function yDocToPlainText(doc: Y.Doc): string {
+  const frag = doc.get(FRAGMENT_KEY, Y.XmlFragment) as Y.XmlFragment;
+  const blocks: string[] = [];
+  for (const child of frag.toArray()) {
+    if (child instanceof Y.XmlElement) {
+      blocks.push(plainTextFromNode(child));
+    } else if (child instanceof Y.XmlText) {
+      blocks.push(plainTextFromXmlText(child));
+    }
+  }
+  return blocks.filter((b) => b.length > 0).join("\n");
+}
+
+function plainTextFromNode(el: Y.XmlElement): string {
+  let out = "";
+  for (const child of el.toArray()) {
+    if (child instanceof Y.XmlText) out += plainTextFromXmlText(child);
+    else if (child instanceof Y.XmlElement) out += plainTextFromNode(child);
+  }
+  return out;
+}
+
+function plainTextFromXmlText(node: Y.XmlText): string {
+  const deltas = node.toDelta() as Array<{ insert: string }>;
+  return deltas
+    .filter((d) => typeof d.insert === "string")
+    .map((d) => d.insert)
+    .join("");
+}
+
 function renderFragment(frag: Y.XmlFragment): string {
   let out = "";
   for (const child of frag.toArray()) {

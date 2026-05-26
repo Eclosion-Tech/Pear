@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import { useTable } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
 import { usePearWorkspaceSlug, workspaceBlobSrc } from "@/src/lib/blobUpload";
-import type { ComponentRendererProps } from "../registry";
+import type { BlockRendererProps } from "@eclosion-tech/pulp";
 
 /**
  * Built-in `Image` component. References an `Attachment` row by id; the
@@ -29,7 +29,7 @@ type ImageProps = {
   height?: number;
 };
 
-export function ImageRenderer({ node }: ComponentRendererProps) {
+export function ImageRenderer({ node }: BlockRendererProps) {
   const props = useMemo<ImageProps>(() => safeParse(node.props), [node.props]);
   const slug = usePearWorkspaceSlug();
   const [attachments] = useTable(tables.attachment);

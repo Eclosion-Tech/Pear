@@ -1,10 +1,14 @@
 "use client";
 
 import { Children, useMemo } from "react";
-import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { useInsertComponent } from "@/src/hooks/usePages";
-import { useSurfaceFocus } from "@/src/hooks/useSurfaceFocus";
-import type { ComponentRendererProps } from "../registry";
+import {
+  BlockChromeHeaderControls,
+  ContainerDropZone,
+  knownSiblingIdsForParent,
+  usePulp,
+  useSurfaceFocus,
+  type BlockRendererProps,
+} from "@eclosion-tech/pulp";
 
 /**
  * Built-in `Container` component. Layout primitive — flex / grid / stack
@@ -30,23 +34,11 @@ type ContainerProps = {
   backgroundColor?: string;
 };
 
-export function ContainerRenderer({ node, tree, children }: ComponentRendererProps) {
+export function ContainerRenderer({ node, def, tree, children }: BlockRendererProps) {
   const props = useMemo<ContainerProps>(() => safeParse(node.props), [node.props]);
-  const insertComponent = useInsertComponent();
+  const { insertBlock } = usePulp();
   const focus = useSurfaceFocus();
-
-  // Sortable order — every immediate child id of this container, in the
-  // same sort order the walker rendered them in. dnd-kit's
-  // SortableContext compares these strings against the active drag's id
-  // to figure out reordering. Container is the natural sortable list
-  // boundary because children share a parent (which is the move target).
-  // Cross-parent moves get a follow-up sprint; for now drops only land
-  // within the same Container.
-  const childOrder = useMemo<string[]>(
-    () =>
-      (tree.byParent.get(node.id) ?? []).map((c) => c.id.toString()),
-    [tree.byParent, node.id],
-  );
+  const acceptsChildren = def.acceptsChildren;
 
   const layout = props.layout ?? "stack";
   const direction = props.direction ?? (layout === "stack" ? "column" : "row");
@@ -80,36 +72,77 @@ export function ContainerRenderer({ node, tree, children }: ComponentRendererPro
   // every block boundary; here we only render it when the container has
   // zero rendered children, so it doesn't intrude once content exists.
   const isEmpty = Children.count(children) === 0;
+  // Page root is an invisible layout shell — nested containers (from the
+  // slash menu) get a light chrome outline so structure is visible while
+  // editing. Matches the empty-state dashed affordance language.
+  const isRoot = node.parentId == null;
+  const nestedChrome = isRoot
+    ? ""
+    : "relative rounded-md border border-dashed border-neutral-200 " +
+      // Reserve an inner gutter column so child block chrome (+ / grip)
+      // sits inside the dashed border instead of straddling it.
+      "dark:border-neutral-700 min-h-[2rem] pl-12 pr-2 " +
+      // When children exist, leave room under the absolute header row
+      // (container + / grip) so the first child's gutter doesn't overlap.
+      (isEmpty ? "py-2" : "pt-7 pb-2") +
+      " group/container";
 
   return (
-    <div className={`${layoutClass} ${directionClass}`} style={style}>
-      <SortableContext items={childOrder} strategy={verticalListSortingStrategy}>
-        {children}
-      </SortableContext>
-      {isEmpty && (
-        <button
-          type="button"
-          onClick={() => {
-            focus.armForInsert(node.id, undefined);
-            insertComponent({
-              parentId: node.id,
-              componentType: "RichText",
-              propsJson: "{}",
-              afterSiblingId: undefined,
-            });
-          }}
-          className="my-2 self-start rounded-md border border-dashed
-                     border-neutral-300 dark:border-neutral-700
-                     px-3 py-1.5 text-xs text-neutral-500 dark:text-neutral-400
-                     hover:border-neutral-400 dark:hover:border-neutral-600
-                     hover:text-neutral-700 dark:hover:text-neutral-300
-                     transition-colors"
-          title="Insert a RichText block. Try typing / inside one to insert other block types."
-        >
-          + Add text block
-        </button>
-      )}
-    </div>
+    <ContainerDropZone
+      containerId={node.id}
+      tree={tree}
+      acceptsChildren={acceptsChildren}
+      className={`${layoutClass} ${directionClass} ${nestedChrome}`}
+      style={style}
+      header={
+        isRoot ? undefined : (
+          <div
+            className="pointer-events-none absolute left-2 top-1.5 z-[1] flex items-center gap-2
+                       opacity-0 transition-opacity duration-100
+                       group-hover/container:opacity-100
+                       group-focus-within/container:opacity-100"
+          >
+            <BlockChromeHeaderControls />
+            <span
+              className="text-[10px] font-mono leading-none
+                         text-neutral-400 dark:text-neutral-500"
+              aria-hidden
+            >
+              Container
+            </span>
+          </div>
+        )
+      }
+      footer={
+        isEmpty ? (
+          <button
+            type="button"
+            onClick={() => {
+              focus.armForInsert(node.id, undefined, {
+                knownSiblingIds: knownSiblingIdsForParent(tree, node.id),
+              });
+              insertBlock({
+                parentId: node.id,
+                componentType: "RichText",
+                propsJson: "{}",
+                afterSiblingId: undefined,
+              });
+            }}
+            className="my-2 self-start rounded-md border border-dashed
+                       border-neutral-300 dark:border-neutral-700
+                       px-3 py-1.5 text-xs text-neutral-500 dark:text-neutral-400
+                       hover:border-neutral-400 dark:hover:border-neutral-600
+                       hover:text-neutral-700 dark:hover:text-neutral-300
+                       transition-colors"
+            title="Insert a RichText block. Try typing / inside one to insert other block types."
+          >
+            + Add text block
+          </button>
+        ) : undefined
+      }
+    >
+      {children}
+    </ContainerDropZone>
   );
 }
 

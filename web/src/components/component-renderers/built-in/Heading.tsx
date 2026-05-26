@@ -2,12 +2,13 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import {
-  useDeleteComponent,
-  useInsertComponent,
-  useUpdateComponentProps,
-} from "@/src/hooks/usePages";
-import { useSurfaceFocus } from "@/src/hooks/useSurfaceFocus";
-import type { ComponentRendererProps } from "../registry";
+  usePulp,
+  useSurfaceFocus,
+  getBlockSibling,
+  knownSiblingIdsForParent,
+  mergePlainTextIntoRichText,
+  type BlockRendererProps,
+} from "@eclosion-tech/pulp";
 
 /**
  * Built-in `Heading` component — inline-editable contenteditable.
@@ -49,18 +50,22 @@ type HeadingProps = {
   text?: string;
 };
 
+// Block-editor spacing — symmetric vertical rhythm so `<BlockChrome>`
+// gutter icons center on the text line. Document-style `mt-*` on headings
+// (meant for flowing article layout) skews gutter centering upward because
+// the chrome box includes empty margin above the glyphs.
 const SIZE_CLASS: Record<number, string> = {
-  1: "text-4xl font-bold mt-8 mb-3",
-  2: "text-3xl font-bold mt-6 mb-2",
-  3: "text-2xl font-semibold mt-5 mb-2",
-  4: "text-xl font-semibold mt-4 mb-2",
-  5: "text-lg font-medium mt-3 mb-1",
-  6: "text-base font-medium mt-3 mb-1",
+  1: "text-4xl font-bold leading-tight my-2",
+  2: "text-3xl font-bold leading-tight my-2",
+  3: "text-2xl font-semibold leading-tight my-2",
+  4: "text-xl font-semibold leading-tight my-2",
+  5: "text-lg font-medium leading-tight my-2",
+  6: "text-base font-medium leading-tight my-2",
 };
 
 const SAVE_DEBOUNCE_MS = 400;
 
-export function HeadingRenderer({ node, tree }: ComponentRendererProps) {
+export function HeadingRenderer({ node, tree }: BlockRendererProps) {
   const props = useMemo<HeadingProps>(() => safeParse(node.props), [node.props]);
   const level = clampLevel(props.level);
   const text = props.text ?? "";
@@ -73,9 +78,7 @@ export function HeadingRenderer({ node, tree }: ComponentRendererProps) {
   const lastKnownTextRef = useRef<string>(text);
   const saveTimerRef = useRef<number | null>(null);
 
-  const updateProps = useUpdateComponentProps();
-  const insertComponent = useInsertComponent();
-  const deleteComponent = useDeleteComponent();
+  const { insertBlock, deleteBlock, updateBlockProps, saveYjsState } = usePulp();
   const focus = useSurfaceFocus();
 
   // Initial mount: stamp the DOM with the prop's text, register this
@@ -88,13 +91,31 @@ export function HeadingRenderer({ node, tree }: ComponentRendererProps) {
     if (!el) return;
     el.textContent = text;
     lastKnownTextRef.current = text;
-    const focusSelf = () => {
+    const focusSelf = (placement: "start" | "end" = "end") => {
       el.focus();
-      placeCursorAtEnd(el);
+      if (placement === "start") placeCursorAtStart(el);
+      else placeCursorAtEnd(el);
+      focus.ackFocus(node.id);
     };
     const unregister = focus.registerFocusable(node.id, focusSelf);
-    if (focus.claimFocus(node.id)) {
-      focusSelf();
+    const claim = focus.claimFocus(node.id);
+    if (claim) {
+      focusSelf(claim);
+      focus.ackFocus(node.id);
+    } else {
+      const retryDelaysMs = [0, 16, 50, 100, 200, 400];
+      const timeouts = retryDelaysMs.map((delayMs) =>
+        window.setTimeout(() => {
+          const retry = focus.claimFocus(node.id);
+          if (!retry) return;
+          focusSelf(retry);
+          focus.ackFocus(node.id);
+        }, delayMs),
+      );
+      return () => {
+        for (const id of timeouts) window.clearTimeout(id);
+        unregister();
+      };
     }
     return () => {
       unregister();
@@ -127,7 +148,7 @@ export function HeadingRenderer({ node, tree }: ComponentRendererProps) {
   const flushSave = (latest: string) => {
     if (latest === lastKnownTextRef.current) return;
     lastKnownTextRef.current = latest;
-    updateProps({
+    updateBlockProps({
       componentId: node.id,
       propsJson: JSON.stringify({ level, text: latest }),
     });
@@ -157,6 +178,9 @@ export function HeadingRenderer({ node, tree }: ComponentRendererProps) {
   //     plaintext-only would insert a literal `\n` and stretch the
   //     heading vertically. The new RichText grabs focus via the
   //     surface autofocus coordinator.
+  //   • Backspace at caret-start on a non-empty heading — merge the
+  //     heading text into the previous sibling (RichText or Heading),
+  //     then delete this block. Matches Notion's "un-heading" gesture.
   //   • Backspace on empty heading at caret-start — delete this block
   //     and move focus to the previous sibling (caret at end), same
   //     contract as RichText's `onDeleteSelf`. Without this the user
@@ -169,8 +193,10 @@ export function HeadingRenderer({ node, tree }: ComponentRendererProps) {
       // Persist the heading text first so we don't lose any unsaved
       // keystrokes when focus moves away.
       onBlur();
-      focus.armForInsert(node.parentId, node.id);
-      insertComponent({
+      focus.armForInsert(node.parentId, node.id, {
+        knownSiblingIds: knownSiblingIdsForParent(tree, node.parentId),
+      });
+      insertBlock({
         parentId: node.parentId,
         componentType: "RichText",
         propsJson: "{}",
@@ -181,28 +207,95 @@ export function HeadingRenderer({ node, tree }: ComponentRendererProps) {
     if (e.key === "Backspace") {
       if (node.parentId == null) return;
       const el = ref.current;
-      if (!el) return;
-      // Only fire delete when (a) the heading is empty and (b) the
-      // caret is collapsed at offset 0 — partial selections fall
-      // through to default contenteditable behaviour. `textContent`
-      // being empty implies the heading carries no text.
-      if ((el.textContent ?? "").length !== 0) return;
+      if (!el || !isCaretAtStart(el)) return;
+      const sel = window.getSelection();
+      if (!sel?.isCollapsed) return;
+
       const siblings = tree.byParent.get(node.parentId) ?? [];
       // Server forbids deleting the only child of a Container (root-
       // collapse prevention, see `delete_component` in components.rs).
-      // Bail before dispatching to avoid a confusing toast-less failure.
       if (siblings.length <= 1) return;
-      e.preventDefault();
+
       const myIdx = siblings.findIndex((s) => s.id === node.id);
-      const neighbour =
-        myIdx > 0 ? siblings[myIdx - 1] : siblings[myIdx + 1];
-      if (neighbour) focus.requestFocus(neighbour.id);
-      // No need to flush save — the heading's text is empty.
+      const prev = myIdx > 0 ? siblings[myIdx - 1] : undefined;
+      const headingText = el.textContent ?? "";
+
+      if (headingText.length === 0) {
+        e.preventDefault();
+        const neighbour =
+          prev ?? (myIdx + 1 < siblings.length ? siblings[myIdx + 1] : undefined);
+        if (neighbour) focus.requestFocus(neighbour.id, "end");
+        if (saveTimerRef.current != null) {
+          window.clearTimeout(saveTimerRef.current);
+          saveTimerRef.current = null;
+        }
+        deleteBlock({ componentId: node.id });
+        return;
+      }
+
+      if (!prev) return;
+
+      e.preventDefault();
       if (saveTimerRef.current != null) {
         window.clearTimeout(saveTimerRef.current);
         saveTimerRef.current = null;
       }
-      deleteComponent({ componentId: node.id });
+
+      if (prev.componentType === "RichText") {
+        const merged = mergePlainTextIntoRichText(
+          prev.id,
+          headingText,
+          tree,
+          focus,
+          saveYjsState,
+        );
+        if (merged != null) {
+          deleteBlock({ componentId: node.id });
+          if (!focus.getEditor(prev.id)) {
+            focus.requestFocus(prev.id, "end");
+          }
+          return;
+        }
+      }
+
+      if (prev.componentType === "Heading") {
+        const prevProps = safeParse(prev.props);
+        const prevText =
+          typeof prevProps.text === "string" ? prevProps.text : "";
+        updateBlockProps({
+          componentId: prev.id,
+          propsJson: JSON.stringify({
+            level: clampLevel(prevProps.level),
+            text: prevText + headingText,
+          }),
+        });
+        deleteBlock({ componentId: node.id });
+        focus.requestFocus(prev.id, "end");
+        return;
+      }
+
+      // Non-text previous block — fall back to focus-only (same as
+      // RichText merge when prev isn't text-backed).
+      focus.requestFocus(prev.id, "end");
+    }
+    if (e.key === "ArrowUp") {
+      const el = ref.current;
+      if (!el || !isCaretAtStart(el)) return;
+      const prev = getBlockSibling(tree, node.id, "prev");
+      if (!prev) return;
+      e.preventDefault();
+      onBlur();
+      focus.requestFocus(prev.id, "end");
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      const el = ref.current;
+      if (!el || !isCaretAtEnd(el)) return;
+      const next = getBlockSibling(tree, node.id, "next");
+      if (!next) return;
+      e.preventDefault();
+      onBlur();
+      focus.requestFocus(next.id, "start");
     }
   };
 
@@ -266,4 +359,36 @@ function placeCursorAtEnd(el: HTMLElement) {
   if (!sel) return;
   sel.removeAllRanges();
   sel.addRange(range);
+}
+
+function placeCursorAtStart(el: HTMLElement) {
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(true);
+  const sel = window.getSelection();
+  if (!sel) return;
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+function isCaretAtStart(el: HTMLElement): boolean {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return false;
+  const range = sel.getRangeAt(0);
+  if (!el.contains(range.startContainer)) return false;
+  const probe = document.createRange();
+  probe.selectNodeContents(el);
+  probe.setEnd(range.startContainer, range.startOffset);
+  return probe.toString().length === 0;
+}
+
+function isCaretAtEnd(el: HTMLElement): boolean {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return false;
+  const range = sel.getRangeAt(0);
+  if (!el.contains(range.startContainer)) return false;
+  const probe = document.createRange();
+  probe.selectNodeContents(el);
+  probe.setStart(range.startContainer, range.startOffset);
+  return probe.toString().length === 0;
 }

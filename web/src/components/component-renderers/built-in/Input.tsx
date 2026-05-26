@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import type { ComponentRendererProps } from "../registry";
+import type { BlockRendererProps } from "@eclosion-tech/pulp";
 
 /**
  * Built-in `Input` component — sprint 1 read-only render path.
@@ -25,7 +25,7 @@ type InputProps = {
   required?: boolean;
 };
 
-export function InputRenderer({ node }: ComponentRendererProps) {
+export function InputRenderer({ node }: BlockRendererProps) {
   const props = useMemo<InputProps>(() => safeParse(node.props), [node.props]);
 
   return (

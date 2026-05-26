@@ -3,59 +3,39 @@
 import { useMemo } from "react";
 import { useTable } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
+import type { BlockTree } from "@eclosion-tech/pulp";
 import type {
   ComponentNode,
   ComponentTypeDefinition,
   ComponentYjsState,
 } from "@/src/module_bindings/types";
 
-/**
- * The shape returned by `useComponentTree`. See `docs/PEAR_WEB_RENDERER.md` §
- * Read path — `useComponentTree(surfaceId)` for the design contract.
- *
- * - `root` is the single component node with `parent_id = None` for this
- *   surface, per the substrate's single-root-per-surface invariant
- *   (`docs/PEAR_COMPONENT_NODE_SCHEMA.md` § Integrity model).
- * - `byId` maps every live (non-deleted) node id to its row.
- * - `byParent` maps a parent id (or `null` for the root) to its children,
- *   pre-sorted by `order` ascending. Soft-deleted nodes are excluded.
- * - `defs` is the registry side — every `ComponentTypeDefinition` row keyed
- *   on its `componentType` string. Includes types not used on this surface;
- *   the set is small so we don't filter.
- * - `yjs` maps the component node id to its `ComponentYjsState` row, if any.
- *   Only `RichText` and other `has_yjs_state` types have entries; the
- *   renderer is responsible for treating "missing" as "empty doc".
- * - `loading` is true until the three subscriptions have hydrated. Renderers
- *   should show a skeleton while loading; partial hydration can show a
- *   misleading "empty tree" otherwise.
- */
-export type ComponentTree = {
+/** Pear substrate tree — structurally compatible with pulp's `BlockTree`. */
+export type ComponentTree = BlockTree & {
   root: ComponentNode | null;
   byId: Map<bigint, ComponentNode>;
   byParent: Map<bigint | null, ComponentNode[]>;
   defs: Map<string, ComponentTypeDefinition>;
   yjs: Map<bigint, ComponentYjsState>;
-  loading: boolean;
+};
+
+export type ComponentTreeNodeCallbacks = {
+  onInsert?: (row: ComponentNode) => void;
 };
 
 /**
  * Subscribes to `component_node`, `component_type_definition`, and
  * `component_yjs_state`; returns an indexed view scoped to one surface.
  *
- * Subscription rules (per ADR § Read path):
- *   - A row UPDATE on one ComponentNode only re-renders the React component
- *     for that node (via memoization keyed on `node.id`/`updatedAt`) and
- *     (if parent_id or order changed) the parent's child-list memo.
- *   - A new ComponentNode INSERT re-renders the parent's child-list memo.
- *   - ComponentYjsState UPDATEs flow to per-RichText editors directly via
- *     `Y.applyUpdate(doc, bytes, "remote")` in sprint 2; sprint 1 just
- *     re-runs the Y → HTML pass on the static renderer.
- *
- * `surfaceId` is `Page.id` at v1. Future: DatabaseView, CustomView surfaces
- * will use the same hook with their own surface id space.
+ * Pass `nodeCallbacks.onInsert` to run side effects (e.g. insert autofocus)
+ * on the **same** `component_node` subscription that feeds the tree — avoids
+ * a second `useTable` racing the render snapshot.
  */
-export function useComponentTree(surfaceId: bigint): ComponentTree {
-  const [nodes, nodesReady] = useTable(tables.component_node);
+export function useComponentTree(
+  surfaceId: bigint,
+  nodeCallbacks?: ComponentTreeNodeCallbacks,
+): ComponentTree {
+  const [nodes, nodesReady] = useTable(tables.component_node, nodeCallbacks);
   const [defRows, defsReady] = useTable(tables.component_type_definition);
   const [yjsRows, yjsReady] = useTable(tables.component_yjs_state);
 

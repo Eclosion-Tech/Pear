@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import type { ComponentRendererProps } from "../registry";
+import type { BlockRendererProps } from "@eclosion-tech/pulp";
 
 /**
  * Built-in `CodeRef` component — typed pointer to code in an external
@@ -31,7 +31,7 @@ type CodeRefProps = {
   symbol?: string;
 };
 
-export function CodeRefRenderer({ node }: ComponentRendererProps) {
+export function CodeRefRenderer({ node }: BlockRendererProps) {
   const props = useMemo<CodeRefProps>(() => safeParse(node.props), [node.props]);
 
   const repoLabel =

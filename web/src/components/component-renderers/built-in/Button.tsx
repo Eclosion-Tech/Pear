@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import type { ComponentRendererProps } from "../registry";
+import type { BlockRendererProps } from "@eclosion-tech/pulp";
 
 /**
  * Built-in `Button` component — sprint 1 read-only render path.
@@ -34,7 +34,7 @@ const VARIANT_CLASS: Record<NonNullable<ButtonProps["variant"]>, string> = {
     "bg-transparent hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300 border-transparent",
 };
 
-export function ButtonRenderer({ node }: ComponentRendererProps) {
+export function ButtonRenderer({ node }: BlockRendererProps) {
   const props = useMemo<ButtonProps>(() => safeParse(node.props), [node.props]);
   const variant = props.variant ?? "secondary";
   const cls = VARIANT_CLASS[variant];

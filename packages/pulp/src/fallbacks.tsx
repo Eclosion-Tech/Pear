@@ -1,22 +1,12 @@
 "use client";
 
 import { memo } from "react";
-import type { ComponentNode } from "@/src/module_bindings/types";
+import type { BlockNode } from "./types";
 
-/**
- * Rendered when the walker encounters a `componentType` that has no
- * `ComponentTypeDefinition` row (workspace is missing the type seed) or
- * has no code-side renderer (registry drift). See
- * `docs/PEAR_WEB_RENDERER.md` § Registry — Coupled invariant.
- *
- * The renderer is intentionally visible — a silent fallback to nothing
- * would let component-type bugs ship unnoticed. This matches the substrate's
- * defensive integrity stance.
- */
 export const UnregisteredComponentFallback = memo(function UnregisteredComponentFallback({
   node,
 }: {
-  node: ComponentNode;
+  node: BlockNode;
 }) {
   return (
     <div className="my-2 rounded-md border border-dashed border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-xs">
@@ -32,11 +22,6 @@ export const UnregisteredComponentFallback = memo(function UnregisteredComponent
   );
 });
 
-/**
- * Rendered while `useComponentTree` is hydrating its three subscriptions.
- * Partial hydration without a skeleton can flash a misleading
- * "<EmptyTreeFallback>" before child rows arrive.
- */
 export const SkeletonDoc = memo(function SkeletonDoc() {
   return (
     <div className="space-y-3 animate-pulse">
@@ -48,12 +33,6 @@ export const SkeletonDoc = memo(function SkeletonDoc() {
   );
 });
 
-/**
- * Rendered when the surface has no root component node. Shouldn't normally
- * happen — `create_component_tree_page` always seeds a root Container —
- * but defence-in-depth: a workspace that survived a partial migration or a
- * harness bug could end up here.
- */
 export const EmptyTreeFallback = memo(function EmptyTreeFallback() {
   return (
     <div className="my-8 rounded-md border border-dashed border-neutral-300 dark:border-neutral-700 px-4 py-8 text-center text-sm text-neutral-500 dark:text-neutral-400">

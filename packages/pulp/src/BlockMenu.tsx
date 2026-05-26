@@ -2,49 +2,40 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useDeleteComponent } from "@/src/hooks/usePages";
-import type { ComponentNode } from "@/src/module_bindings/types";
+import { duplicateBlock, turnIntoBlock } from "./blockActions";
+import { copyBlockLink } from "./blockLink";
+import { usePulp } from "./context/PulpProvider";
+import { useSurfaceFocus } from "./focus/SurfaceFocusProvider";
+import { SlashMenu, SPRINT_3B_SLASH_ITEMS } from "./SlashMenu";
+import type { BlockNode } from "./types";
 
 /**
  * Block action menu — the popover opened by clicking (not dragging) the
  * grip button in `<BlockChrome>`. Patterned after Notion's "•••" block
  * menu, but anchored to the existing grip handle since dnd-kit's
  * activation distance gives us a free click-vs-drag distinction.
- *
- * Sprint 3a ships a single action: **Delete**. The menu architecture is
- * here so sprint 3b (slash menu work) can drop in Duplicate, Turn into,
- * Copy link, Comment, etc. without re-litigating the popover plumbing.
- *
- * Why a menu and not a bare trash button: a trash icon next to `+` and
- * grip is a one-click footgun. A click-through menu makes deletion
- * intentional ("click grip → read menu → click Delete") and aligns
- * with the rest of the block chrome direction.
  */
 export function BlockMenu({
   node,
   anchorRect,
   onClose,
 }: {
-  node: ComponentNode;
+  node: BlockNode;
   /** Bounding rect of the grip button — used to position the menu. */
   anchorRect: DOMRect;
   onClose: () => void;
 }) {
-  const deleteComponent = useDeleteComponent();
+  const pulp = usePulp();
+  const focus = useSurfaceFocus();
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = useState(() => computePosition(anchorRect));
+  const [turnIntoOpen, setTurnIntoOpen] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState(false);
 
-  // If the page reflows (scroll, resize) while the menu is open, the
-  // anchor's screen position may have shifted. We don't bother repositioning
-  // mid-flow; the menu closes on scroll instead. Matches Notion's behaviour
-  // and avoids the jank of a popover that follows a moving target.
   useEffect(() => {
     setPosition(computePosition(anchorRect));
   }, [anchorRect]);
 
-  // Outside-click + Escape to close. Using `mousedown` (not `click`) so the
-  // close fires before the new target's click handler — feels snappier and
-  // matches how every other popover library on the planet does it.
   useEffect(() => {
     function onPointerDown(e: PointerEvent) {
       if (!menuRef.current) return;
@@ -70,6 +61,26 @@ export function BlockMenu({
     };
   }, [onClose]);
 
+  const pulpMutations = pulp;
+
+  if (turnIntoOpen) {
+    return (
+      <SlashMenu
+        anchorRect={anchorRect}
+        items={SPRINT_3B_SLASH_ITEMS}
+        onClose={() => {
+          setTurnIntoOpen(false);
+          onClose();
+        }}
+        onSelect={(item) => {
+          turnIntoBlock(node, pulp.tree, item, pulpMutations, focus);
+          setTurnIntoOpen(false);
+          onClose();
+        }}
+      />
+    );
+  }
+
   return createPortal(
     <div
       ref={menuRef}
@@ -81,23 +92,48 @@ export function BlockMenu({
       aria-label="Block actions"
     >
       <MenuItem
-        label="Delete"
-        shortcut=""
-        destructive
+        label="Duplicate"
         onSelect={() => {
-          // Soft delete — `restore_component` reachable from the page
-          // history panel until purge. Same semantics as Backspace-on-
-          // empty per `PEAR_COMPONENT_NODE_SCHEMA.md` § Integrity model.
-          deleteComponent({ componentId: node.id });
+          duplicateBlock(node, pulp.tree, pulpMutations, focus);
           onClose();
         }}
       />
-      {/* Sprint 3b will populate: Duplicate, Turn into…, Copy link,
-          Comment. The popover is structured to accept those entries
-          without a redesign — pattern is the same shape as
-          `<FormattingToolbar>`'s mark buttons. */}
+      <MenuItem
+        label="Turn into…"
+        onSelect={() => setTurnIntoOpen(true)}
+      />
+      <MenuItem
+        label={copyFeedback ? "Link copied" : "Copy link"}
+        onSelect={async () => {
+          const ok = await copyBlockLink(node.id);
+          if (ok) {
+            setCopyFeedback(true);
+            window.setTimeout(onClose, 600);
+          } else {
+            onClose();
+          }
+        }}
+      />
+      <MenuDivider />
+      <MenuItem
+        label="Delete"
+        destructive
+        onSelect={() => {
+          pulp.deleteBlock({ componentId: node.id });
+          onClose();
+        }}
+      />
     </div>,
     document.body,
+  );
+}
+
+function MenuDivider() {
+  return (
+    <div
+      role="separator"
+      className="my-1 border-t border-neutral-200 dark:border-neutral-700"
+    />
   );
 }
 
@@ -135,15 +171,11 @@ function MenuItem({
   );
 }
 
-/**
- * Places the menu just below the grip button, viewport-clamped on the right.
- * No floating-ui dependency — the rect math is cheap and the menu is small.
- */
 function computePosition(anchor: DOMRect): { top: number; left: number } {
   const top = anchor.bottom + 4;
   const desiredLeft = anchor.left;
   const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1024;
-  const menuWidth = 200; // rough — Tailwind min-w-[180px] + padding
+  const menuWidth = 200;
   const left = Math.min(desiredLeft, viewportWidth - menuWidth - 8);
   return { top, left };
 }

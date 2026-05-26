@@ -1,14 +1,9 @@
-export { ComponentTreeRenderer } from "./ComponentTreeRenderer";
-export { ComponentNodeView } from "./ComponentNodeView";
+export { ComponentTreeRenderer } from "./PearComponentTreeRenderer";
 export {
   registerRenderer,
   getRenderer,
   getRegisteredTypes,
   assertRegistryAgainstDefs,
-} from "./registry";
-export type { ComponentRenderer, ComponentRendererProps } from "./registry";
-export {
-  UnregisteredComponentFallback,
-  SkeletonDoc,
-  EmptyTreeFallback,
-} from "./fallbacks";
+  type BlockRendererProps as ComponentRendererProps,
+  type BlockRenderer as ComponentRenderer,
+} from "@eclosion-tech/pulp";

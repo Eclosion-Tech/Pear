@@ -98,6 +98,14 @@ export function useDeleteComponent() {
 }
 
 /**
+ * `restore_component(component_id)` — soft-undelete a previously deleted
+ * node. Used by the surface undo coordinator when reversing `deleteBlock`.
+ */
+export function useRestoreComponent() {
+  return useReducer(reducers.restoreComponent);
+}
+
+/**
  * `update_component_props(component_id, props_json)` — replaces the
  * stringified JSON props on a live node. Used by inline-editable
  * renderers (Heading text edits, Container layout switches) and the
