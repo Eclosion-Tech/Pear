@@ -80,6 +80,8 @@ export type PulpConfig = {
     props: string,
     schema: string,
   ) => PropValidationResult;
+  /** Override slash / turn-into menu items (Pear sprint 4+). */
+  slashItems?: import("./SlashMenu").SlashMenuItem[];
 };
 
 export type PulpContextValue = {

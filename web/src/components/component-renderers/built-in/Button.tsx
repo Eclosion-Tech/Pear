@@ -1,26 +1,21 @@
 "use client";
 
 import { useMemo } from "react";
+import { useRouter } from "next/navigation";
 import type { BlockRendererProps } from "@eclosion-tech/pulp";
+import { useFormContext } from "../FormContext";
 
 /**
- * Built-in `Button` component — sprint 1 read-only render path.
- *
- * Renders the button chrome (label + variant) without wiring any action.
- * Sprint 4 wires the action types declared in the prop schema:
- * `submit_form`, `navigate`, `open_url`, `trigger_automation`, `create_row`,
- * `delete_row`, `write_property`. Per-instance capability narrowing is
- * tracked as a follow-up in `docs/PEAR_COMPONENT_NODE_SCHEMA.md`.
- *
- * Prop schema (`prop_schemas::BUTTON` in components.rs):
- *   { label: string (required),
- *     variant?: "primary" | "secondary" | "danger" | "ghost",
- *     action: { type: ActionType, ... } (required) }
+ * Built-in `Button` — action trigger with sprint-4 wiring for common types.
  */
 type ButtonProps = {
   label?: string;
   variant?: "primary" | "secondary" | "danger" | "ghost";
-  action?: { type?: string };
+  action?: {
+    type?: string;
+    pageId?: string | number;
+    url?: string;
+  };
 };
 
 const VARIANT_CLASS: Record<NonNullable<ButtonProps["variant"]>, string> = {
@@ -36,14 +31,49 @@ const VARIANT_CLASS: Record<NonNullable<ButtonProps["variant"]>, string> = {
 
 export function ButtonRenderer({ node }: BlockRendererProps) {
   const props = useMemo<ButtonProps>(() => safeParse(node.props), [node.props]);
+  const router = useRouter();
+  const form = useFormContext();
   const variant = props.variant ?? "secondary";
   const cls = VARIANT_CLASS[variant];
+  const actionType = props.action?.type;
+
+  const wired =
+    actionType === "submit_form" ||
+    actionType === "navigate" ||
+    actionType === "open_url";
+
+  function handleClick() {
+    switch (actionType) {
+      case "submit_form":
+        form?.requestSubmit();
+        break;
+      case "navigate": {
+        const raw = props.action?.pageId;
+        if (raw == null || raw === "") return;
+        router.push(`/workspace/${String(raw)}`);
+        break;
+      }
+      case "open_url": {
+        const url = props.action?.url;
+        if (!url) return;
+        window.open(url, "_blank", "noopener,noreferrer");
+        break;
+      }
+      default:
+        break;
+    }
+  }
 
   return (
     <button
       type="button"
-      disabled
-      title={`Action: ${props.action?.type ?? "(unset)"} — wiring lands in sprint 4`}
+      disabled={!wired}
+      onClick={handleClick}
+      title={
+        wired
+          ? undefined
+          : `Action "${actionType ?? "(unset)"}" not wired in sprint 4`
+      }
       className={`my-1 inline-flex items-center justify-center rounded-md
                   border px-4 py-1.5 text-sm font-medium
                   transition-colors disabled:cursor-not-allowed disabled:opacity-80

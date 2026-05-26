@@ -135,6 +135,14 @@ pub fn run_pending_migrations(ctx: &ReducerContext) -> Result<(), String> {
             Ok::<(), String>(())
         }
     );
+    run_step!(
+        ctx,
+        "component_type_sprint4_builtins_v1",
+        |ctx: &ReducerContext| {
+            seed_builtin_component_types(ctx);
+            Ok::<(), String>(())
+        }
+    );
     Ok(())
 }
 

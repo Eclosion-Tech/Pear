@@ -64,7 +64,7 @@ type RichTextProps = {
 export function RichTextRenderer({ node, tree }: BlockRendererProps) {
   const props = useMemo<RichTextProps>(() => safeParse(node.props), [node.props]);
   const state = tree.yjs.get(node.id);
-  const { insertBlock, deleteBlock, saveYjsState } = usePulp();
+  const { insertBlock, deleteBlock, saveYjsState, config } = usePulp();
   const focus = useSurfaceFocus();
   /** Set before intentional soft-delete so unmount flush skips save. */
   const suppressSaveRef = useRef(false);
@@ -543,6 +543,7 @@ export function RichTextRenderer({ node, tree }: BlockRendererProps) {
           anchorRect={slashAnchor}
           onSelect={onSlashSelect}
           onClose={() => setSlashAnchor(null)}
+          items={config.slashItems}
         />
       )}
     </div>

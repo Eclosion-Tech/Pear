@@ -395,6 +395,48 @@ mod prop_schemas {
   },
   "required": ["repo", "ref", "path"]
 }"#;
+
+    /// BlockNote-era page link — stores cached title for instant render.
+    pub const PAGE_LINK: &str = r#"{
+  "type": "object",
+  "properties": {
+    "pageId": { "type": "string" },
+    "pageTitle": { "type": "string" }
+  },
+  "required": ["pageId", "pageTitle"]
+}"#;
+
+    /// Inline conversation embed (Phase A AI integration).
+    pub const CONVERSATION: &str = r#"{
+  "type": "object",
+  "properties": {
+    "conversationId": { "type": "string" },
+    "collapsed": { "type": "string" },
+    "autoCollapseThresholdMinutes": { "type": "string" }
+  },
+  "required": ["conversationId"]
+}"#;
+
+    /// Audio recording / upload block (storageKey + optional transcript).
+    pub const AUDIO: &str = r#"{
+  "type": "object",
+  "properties": {
+    "storageKey": { "type": "string" },
+    "transcript": { "type": "string" },
+    "durationSec": { "type": "number" },
+    "boot": { "type": "string" }
+  }
+}"#;
+
+    /// Rich image block from BlockNote migration (storageKey + caption).
+    /// Distinct from v1 `Image` (attachmentId) to keep migration 1:1.
+    pub const IMAGE_BLOCK: &str = r#"{
+  "type": "object",
+  "properties": {
+    "storageKey": { "type": "string" },
+    "caption": { "type": "string" }
+  }
+}"#;
 }
 
 /// One row in the to-be-seeded registry. Tuple form keeps the seed call site
@@ -518,23 +560,49 @@ fn builtin_specs() -> Vec<BuiltinSpec> {
             has_yjs_state: false,
             accepts_children: false,
         },
+        BuiltinSpec {
+            component_type: "PageLink",
+            display_name: "Page link",
+            description: "Link to a child or sibling page. Cached title renders instantly from props; live subscription overrides on rename.",
+            prop_schema: prop_schemas::PAGE_LINK,
+            capabilities: vec![NavigatesToPage],
+            has_yjs_state: false,
+            accepts_children: false,
+        },
+        BuiltinSpec {
+            component_type: "Conversation",
+            display_name: "Conversation",
+            description: "Inline AI conversation embed with collapsed preview and Open affordance.",
+            prop_schema: prop_schemas::CONVERSATION,
+            capabilities: vec![],
+            has_yjs_state: false,
+            accepts_children: false,
+        },
+        BuiltinSpec {
+            component_type: "Audio",
+            display_name: "Audio",
+            description: "Audio recording or upload with optional live transcript.",
+            prop_schema: prop_schemas::AUDIO,
+            capabilities: vec![],
+            has_yjs_state: false,
+            accepts_children: false,
+        },
+        BuiltinSpec {
+            component_type: "ImageBlock",
+            display_name: "Image",
+            description: "Uploaded image via workspace blob storage (BlockNote migration path). Distinct from v1 Image (attachmentId).",
+            prop_schema: prop_schemas::IMAGE_BLOCK,
+            capabilities: vec![],
+            has_yjs_state: false,
+            accepts_children: false,
+        },
     ]
 }
 
-/// Seed the built-in component type registry. Idempotent — skips if the
-/// `Container` row already exists. Called from `init` after the publisher
-/// identity has been recorded by [`ensure_publisher_identity_recorded`].
+/// Seed the built-in component type registry. Idempotent — inserts any
+/// built-in type row that is not yet present. Safe to call from `init` and
+/// from post-upgrade migrations when new sprint-N types ship.
 pub(crate) fn seed_builtin_component_types(ctx: &ReducerContext) {
-    let already_seeded = ctx
-        .db
-        .component_type_definition()
-        .component_type()
-        .find("Container".to_string())
-        .is_some();
-    if already_seeded {
-        return;
-    }
-
     let publisher_identity = ctx
         .db
         .module_install_meta()
@@ -544,9 +612,19 @@ pub(crate) fn seed_builtin_component_types(ctx: &ReducerContext) {
         .unwrap_or_else(|| ctx.sender());
 
     for spec in builtin_specs() {
+        let component_type = spec.component_type.to_string();
+        if ctx
+            .db
+            .component_type_definition()
+            .component_type()
+            .find(component_type.clone())
+            .is_some()
+        {
+            continue;
+        }
         ctx.db.component_type_definition().insert(ComponentTypeDefinition {
             id: next_component_type_definition_id(ctx),
-            component_type: spec.component_type.to_string(),
+            component_type,
             display_name: spec.display_name.to_string(),
             description: spec.description.to_string(),
             prop_schema: spec.prop_schema.to_string(),

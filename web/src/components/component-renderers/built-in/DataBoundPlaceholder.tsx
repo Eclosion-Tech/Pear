@@ -3,11 +3,8 @@
 import type { BlockRendererProps } from "@eclosion-tech/pulp";
 
 /**
- * Sprint-1 placeholder for the data-bound built-ins: `Form`, `Table`,
- * `Card`, `List`. These types are seeded in the registry but their full
- * implementations land in sprint 4 (Form / Input interactivity) and the
- * custom-view runtime ADR (Table / Card / List data resolution +
- * write-back).
+ * Sprint-1 placeholder for Table / Card / List. Form / Input / Button
+ * shipped in sprint 4; Table / Card / List await the custom-view runtime ADR.
  *
  * The placeholder is visible — same defence-in-depth stance as
  * `UnregisteredComponentFallback`. We want a workspace running this build
@@ -39,7 +36,7 @@ export function DataBoundPlaceholder({
           {niceName}
         </span>
         <span className="text-neutral-400 dark:text-neutral-500">
-          Data wiring ships in sprint 4
+          Data wiring ships with the custom-view runtime ADR
         </span>
       </div>
       {def.acceptsChildren && <div className="ml-2">{children}</div>}

@@ -24,7 +24,10 @@ import {
   useUpdateComponentProps,
 } from "@/src/hooks/usePages";
 import { useWorkspace } from "@/src/providers/WorkspaceProvider";
+import { AudioAttachmentContext } from "@/src/components/AudioAttachmentContext";
+import { useCreateAttachment } from "@/src/hooks/usePages";
 import { registerPearBuiltinRenderers } from "./built-in";
+import { PEAR_SLASH_ITEMS } from "./pearSlashItems";
 
 registerCoreBlocks();
 registerPearBuiltinRenderers();
@@ -41,6 +44,7 @@ export function ComponentTreeRenderer({ surfaceId }: { surfaceId: bigint }) {
   const moveComponent = useMoveComponent();
   const updateComponentProps = useUpdateComponentProps();
   const saveComponentYjsState = useSaveComponentYjsState();
+  const createAttachment = useCreateAttachment();
 
   const focusCoordinatorRef = useRef<SurfaceFocusCoordinator | null>(null);
   if (focusCoordinatorRef.current == null) {
@@ -153,17 +157,25 @@ export function ComponentTreeRenderer({ surfaceId }: { surfaceId: bigint }) {
     () => ({
       idbPrefix: `pear:${idbNamespace}`,
       validateProps: validateComponentProps,
+      slashItems: PEAR_SLASH_ITEMS,
     }),
     [idbNamespace],
   );
 
+  const attachmentCtx = useMemo(
+    () => ({ pageId: surfaceId, createAttachment }),
+    [surfaceId, createAttachment],
+  );
+
   return (
-    <PulpProvider tree={tree} config={config} mutations={mutations}>
-      <SurfaceFocusProvider coordinator={focusCoordinator}>
-        <SurfaceUndoProvider coordinator={undoCoordinator}>
-          <BlockEditor />
-        </SurfaceUndoProvider>
-      </SurfaceFocusProvider>
-    </PulpProvider>
+    <AudioAttachmentContext.Provider value={attachmentCtx}>
+      <PulpProvider tree={tree} config={config} mutations={mutations}>
+        <SurfaceFocusProvider coordinator={focusCoordinator}>
+          <SurfaceUndoProvider coordinator={undoCoordinator}>
+            <BlockEditor />
+          </SurfaceUndoProvider>
+        </SurfaceFocusProvider>
+      </PulpProvider>
+    </AudioAttachmentContext.Provider>
   );
 }

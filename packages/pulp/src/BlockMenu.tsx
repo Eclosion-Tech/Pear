@@ -67,7 +67,7 @@ export function BlockMenu({
     return (
       <SlashMenu
         anchorRect={anchorRect}
-        items={SPRINT_3B_SLASH_ITEMS}
+        items={pulp.config.slashItems ?? SPRINT_3B_SLASH_ITEMS}
         onClose={() => {
           setTurnIntoOpen(false);
           onClose();
