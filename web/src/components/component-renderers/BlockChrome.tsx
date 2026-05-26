@@ -114,7 +114,8 @@ export function BlockChrome({
       <div
         className="absolute -left-12 top-0 flex items-start gap-0.5 pt-1
                    opacity-0 pointer-events-none transition-opacity duration-100
-                   group-hover:opacity-100 group-hover:pointer-events-auto"
+                   group-hover:opacity-100 group-hover:pointer-events-auto
+                   group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
       >
         <button
           type="button"
