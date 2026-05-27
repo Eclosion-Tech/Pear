@@ -14,7 +14,10 @@ import {
   type BlockTree,
 } from "@eclosion-tech/pulp";
 import type { ComponentNode } from "@/src/module_bindings/types";
-import { useComponentTree } from "@/src/hooks/useComponentTree";
+import {
+  useComponentTree,
+  useEnsureBuiltinComponentTypes,
+} from "@/src/hooks/useComponentTree";
 import {
   filterNavVisiblePages,
   useDeleteComponent,
@@ -83,7 +86,10 @@ export function ComponentTreeRenderer({ surfaceId }: { surfaceId: bigint }) {
     [focusCoordinator, undoCoordinator],
   );
 
-  const tree = useComponentTree(surfaceId, { onInsert: onNodeInsert }) as BlockTree;
+  const tree = useComponentTree(surfaceId, { onInsert: onNodeInsert }) as BlockTree & {
+    loading: boolean;
+  };
+  useEnsureBuiltinComponentTypes(tree.defs, !tree.loading);
   const treeRef = useRef(tree);
   treeRef.current = tree;
 

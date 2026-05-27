@@ -105,6 +105,11 @@ export function useRestoreComponent() {
   return useReducer(reducers.restoreComponent);
 }
 
+/** Idempotent post-publish hook — seeds new built-in component types. */
+export function useRunPendingMigrations() {
+  return useReducer(reducers.runPendingMigrations);
+}
+
 /**
  * `update_component_props(component_id, props_json)` — replaces the
  * stringified JSON props on a live node. Used by inline-editable

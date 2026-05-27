@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useTable } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
 import type { BlockTree } from "@eclosion-tech/pulp";
@@ -9,6 +9,8 @@ import type {
   ComponentTypeDefinition,
   ComponentYjsState,
 } from "@/src/module_bindings/types";
+import { PEAR_REGISTRY_REQUIRED_TYPES } from "@/src/components/component-renderers/pearSlashItems";
+import { useRunPendingMigrations } from "@/src/hooks/usePages";
 
 /** Pear substrate tree — structurally compatible with pulp's `BlockTree`. */
 export type ComponentTree = BlockTree & {
@@ -95,4 +97,38 @@ export function useComponentTree(
 
     return { root, byId, byParent, defs, yjs, loading };
   }, [nodes, defRows, yjsRows, surfaceId, loading]);
+}
+
+/**
+ * When Pear-only built-ins are missing from `component_type_definition`,
+ * invoke `run_pending_migrations` once. This seeds rows added after the
+ * workspace was first provisioned (e.g. document list types). Production
+ * upgrades normally run the same reducer from lifecycle after publish.
+ */
+export function useEnsureBuiltinComponentTypes(
+  defs: ReadonlyMap<string, unknown>,
+  ready: boolean,
+) {
+  const runPendingMigrations = useRunPendingMigrations();
+  const inflightRef = useRef(false);
+
+  useEffect(() => {
+    if (!ready || inflightRef.current) return;
+
+    const missing = PEAR_REGISTRY_REQUIRED_TYPES.filter((t) => !defs.has(t));
+    if (missing.length === 0) return;
+
+    inflightRef.current = true;
+    runPendingMigrations()
+      .catch((err: unknown) => {
+        console.warn(
+          `[ComponentTree] Missing builtin types (${missing.join(", ")}). ` +
+            "Republish Pear module and run run_pending_migrations (local: restart STDB container).",
+          err,
+        );
+      })
+      .finally(() => {
+        inflightRef.current = false;
+      });
+  }, [defs, ready, runPendingMigrations]);
 }

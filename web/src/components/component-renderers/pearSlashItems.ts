@@ -6,6 +6,19 @@ import {
   type BlockTypeDefinition,
 } from "@eclosion-tech/pulp";
 
+/**
+ * Pear-only built-ins the slash menu expects in `component_type_definition`.
+ * When any are missing, `slashItemsForDefs` hides them and inserts would fail.
+ */
+export const PEAR_REGISTRY_REQUIRED_TYPES = [
+  "BulletListItem",
+  "NumberedListItem",
+  "ChecklistItem",
+  "ImageBlock",
+  "Audio",
+  "PageLink",
+] as const;
+
 /** Pear sprint-4 slash / turn-into items — extends pulp's curated set. */
 export const PEAR_SLASH_ITEMS: SlashMenuItem[] = [
   ...SPRINT_3B_SLASH_ITEMS,
@@ -79,5 +92,15 @@ export function slashItemsForDefs(
   items: SlashMenuItem[],
   defs: Map<string, BlockTypeDefinition>,
 ): SlashMenuItem[] {
-  return items.filter((item) => defs.has(item.componentType));
+  const filtered = items.filter((item) => defs.has(item.componentType));
+  if (typeof process !== "undefined" && process.env.NODE_ENV !== "production") {
+    const hidden = items.filter((item) => !defs.has(item.componentType));
+    if (hidden.length > 0) {
+      console.debug(
+        "[slash menu] hidden — not in workspace registry:",
+        hidden.map((item) => item.componentType),
+      );
+    }
+  }
+  return filtered;
 }
