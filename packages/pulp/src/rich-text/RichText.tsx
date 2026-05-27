@@ -191,8 +191,8 @@ export function RichTextRenderer({ node, tree }: BlockRendererProps) {
     });
     insertBlock({
       parentId: node.parentId,
-      componentType: "RichText",
-      propsJson: "{}",
+      componentType: node.componentType,
+      propsJson: JSON.stringify(splitPropsFor(node.componentType, node.props)),
       afterSiblingId: node.id,
     });
     return true;
@@ -249,7 +249,8 @@ export function RichTextRenderer({ node, tree }: BlockRendererProps) {
     if (myIdx <= 0) return false;
     const prev = siblings[myIdx - 1];
 
-    if (prev.componentType !== "RichText") {
+    const prevDef = tree.defs.get(prev.componentType);
+    if (!prevDef?.hasYjsState) {
       focus.requestFocus(prev.id);
       return true;
     }
@@ -587,6 +588,33 @@ function StaticBody({
 function safeParse(s: string): RichTextProps {
   try {
     return JSON.parse(s) as RichTextProps;
+  } catch {
+    return {};
+  }
+}
+
+function splitPropsFor(
+  componentType: string,
+  propsJson: string,
+): Record<string, unknown> {
+  if (componentType === "ChecklistItem") {
+    return { ...safeParseAny(propsJson), checked: false };
+  }
+  if (
+    componentType === "BulletListItem" ||
+    componentType === "NumberedListItem"
+  ) {
+    return safeParseAny(propsJson);
+  }
+  return {};
+}
+
+function safeParseAny(s: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(s) as unknown;
+    return parsed && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>)
+      : {};
   } catch {
     return {};
   }

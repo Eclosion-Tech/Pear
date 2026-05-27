@@ -13,6 +13,11 @@ import { ConversationRenderer } from "./Conversation";
 import { AudioRenderer } from "./Audio";
 import { FormRenderer } from "./Form";
 import { DataBoundPlaceholder } from "./DataBoundPlaceholder";
+import {
+  BulletListItemRenderer,
+  ChecklistItemRenderer,
+  NumberedListItemRenderer,
+} from "./DocumentListItem";
 
 /**
  * Pear-specific block renderers — registered alongside pulp's core
@@ -35,6 +40,9 @@ export function registerPearBuiltinRenderers(): void {
   registerRenderer("Conversation", ConversationRenderer);
   registerRenderer("Audio", AudioRenderer);
   registerRenderer("Form", FormRenderer);
+  registerRenderer("BulletListItem", BulletListItemRenderer);
+  registerRenderer("NumberedListItem", NumberedListItemRenderer);
+  registerRenderer("ChecklistItem", ChecklistItemRenderer);
 
   registerRenderer("Table", DataBoundPlaceholder);
   registerRenderer("Card", DataBoundPlaceholder);

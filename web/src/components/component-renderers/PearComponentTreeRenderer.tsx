@@ -16,12 +16,15 @@ import {
 import type { ComponentNode } from "@/src/module_bindings/types";
 import { useComponentTree } from "@/src/hooks/useComponentTree";
 import {
+  filterNavVisiblePages,
   useDeleteComponent,
   useInsertComponent,
   useMoveComponent,
+  usePages,
   useRestoreComponent,
   useSaveComponentYjsState,
   useUpdateComponentProps,
+  type PageRow,
 } from "@/src/hooks/usePages";
 import { useWorkspace } from "@/src/providers/WorkspaceProvider";
 import { AudioAttachmentContext } from "@/src/components/AudioAttachmentContext";
@@ -45,6 +48,7 @@ export function ComponentTreeRenderer({ surfaceId }: { surfaceId: bigint }) {
   const updateComponentProps = useUpdateComponentProps();
   const saveComponentYjsState = useSaveComponentYjsState();
   const createAttachment = useCreateAttachment();
+  const { pages } = usePages();
 
   const focusCoordinatorRef = useRef<SurfaceFocusCoordinator | null>(null);
   if (focusCoordinatorRef.current == null) {
@@ -166,8 +170,14 @@ export function ComponentTreeRenderer({ surfaceId }: { surfaceId: bigint }) {
       idbPrefix: `pear:${idbNamespace}`,
       validateProps: validateComponentProps,
       slashItems: slashItemsForDefs(PEAR_SLASH_ITEMS, tree.defs),
+      linkTargets: filterNavVisiblePages(pages).map((page) => ({
+        id: String(page.id),
+        label: page.title || "Untitled",
+        href: `/workspace/${page.id}`,
+        subtitle: buildBreadcrumb(page, pages),
+      })),
     }),
-    [idbNamespace, tree.defs],
+    [idbNamespace, pages, tree.defs],
   );
 
   const attachmentCtx = useMemo(
@@ -186,4 +196,16 @@ export function ComponentTreeRenderer({ surfaceId }: { surfaceId: bigint }) {
       </PulpProvider>
     </AudioAttachmentContext.Provider>
   );
+}
+
+function buildBreadcrumb(page: PageRow, allPages: PageRow[]): string {
+  const parts: string[] = [];
+  let cur = page;
+  while (cur.parentId != null) {
+    const parent = allPages.find((p) => p.id === cur.parentId);
+    if (!parent) break;
+    parts.unshift(parent.title || "Untitled");
+    cur = parent;
+  }
+  return parts.join(" / ");
 }

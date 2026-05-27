@@ -10,7 +10,35 @@ import {
 export const PEAR_SLASH_ITEMS: SlashMenuItem[] = [
   ...SPRINT_3B_SLASH_ITEMS,
   {
+    id: "bullet-list",
+    section: "Lists",
+    label: "Bullet list",
+    description: "Simple bulleted list item.",
+    componentType: "BulletListItem",
+    defaultProps: { placeholder: "" },
+    searchTokens: ["bullet", "list", "ul", "unordered"],
+  },
+  {
+    id: "numbered-list",
+    section: "Lists",
+    label: "Numbered list",
+    description: "Simple numbered list item.",
+    componentType: "NumberedListItem",
+    defaultProps: { placeholder: "" },
+    searchTokens: ["number", "numbered", "list", "ol", "ordered"],
+  },
+  {
+    id: "checklist",
+    section: "Lists",
+    label: "Checklist",
+    description: "Task list item with a checkbox.",
+    componentType: "ChecklistItem",
+    defaultProps: { checked: false, placeholder: "" },
+    searchTokens: ["check", "checklist", "todo", "task"],
+  },
+  {
     id: "image-block",
+    section: "Media",
     label: "Image",
     description: "Upload an image with optional caption.",
     componentType: "ImageBlock",
@@ -19,6 +47,7 @@ export const PEAR_SLASH_ITEMS: SlashMenuItem[] = [
   },
   {
     id: "audio",
+    section: "Media",
     label: "Audio",
     description: "Record or upload audio with transcript.",
     componentType: "Audio",
@@ -27,6 +56,7 @@ export const PEAR_SLASH_ITEMS: SlashMenuItem[] = [
   },
   {
     id: "new-page",
+    section: "Pages",
     label: "New page",
     description: "Create a subpage linked here.",
     componentType: "PageLink",
@@ -35,6 +65,7 @@ export const PEAR_SLASH_ITEMS: SlashMenuItem[] = [
   },
   {
     id: "page-link",
+    section: "Pages",
     label: "Link to page",
     description: "Link to an existing page.",
     componentType: "PageLink",

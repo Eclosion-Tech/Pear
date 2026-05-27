@@ -82,6 +82,13 @@ export type PulpConfig = {
   ) => PropValidationResult;
   /** Override slash / turn-into menu items (Pear sprint 4+). */
   slashItems?: import("./SlashMenu").SlashMenuItem[];
+  /** Optional internal destinations for rich-text link insertion. */
+  linkTargets?: Array<{
+    id: string;
+    label: string;
+    href: string;
+    subtitle?: string;
+  }>;
 };
 
 export type PulpContextValue = {

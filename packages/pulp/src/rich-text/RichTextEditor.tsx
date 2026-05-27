@@ -38,7 +38,7 @@ import {
 import { focusDebug, idStr } from "../focus/focusDebug";
 import { isAtDocEnd, isAtDocStart } from "../navigation/blockNavigation";
 import { useSurfaceUndo } from "../undo/SurfaceUndoProvider";
-import { FormattingToolbar, applyLinkToSelection } from "./FormattingToolbar";
+import { FormattingToolbar } from "./FormattingToolbar";
 
 /** Cadence — see `docs/PEAR_WEB_RENDERER.md` § Editor stack — Save cycle. */
 const SAVE_INTERVAL_MS = 30_000;
@@ -152,6 +152,7 @@ export function RichTextEditor({
   // toolbar is a separate React subtree and needs to re-render when the
   // view becomes available.
   const [view, setView] = useState<EditorView | null>(null);
+  const [linkRequest, setLinkRequest] = useState(0);
 
   // Latest callback refs — the prosemirror keymap closes over the *first*
   // render's values, so we route through refs that we update on every
@@ -199,9 +200,10 @@ export function RichTextEditor({
           "Mod-u": toggleMark(richTextSchema.marks.underline),
           "Mod-Shift-s": toggleMark(richTextSchema.marks.strike),
           "Mod-`": toggleMark(richTextSchema.marks.code),
-          "Mod-k": (_s, _dispatch, view) => {
-            if (!view) return false;
-            return applyLinkToSelection(view);
+          "Mod-k": (s) => {
+            if (s.selection.empty) return false;
+            setLinkRequest((n) => n + 1);
+            return true;
           },
           "Shift-Enter": chainCommands(exitCode, (s, dispatch) => {
             if (dispatch) {
@@ -310,6 +312,15 @@ export function RichTextEditor({
         "data-placeholder": placeholder ?? "",
       },
       handleDOMEvents: {
+        click: (_view, event) => {
+          const anchor = (event.target as Element | null)?.closest?.("a[href]");
+          if (!(anchor instanceof HTMLAnchorElement)) return false;
+          const href = anchor.getAttribute("href");
+          if (!href) return false;
+          event.preventDefault();
+          navigateToHref(href);
+          return true;
+        },
         focus: () => {
           onFocus?.();
           // Do not ack here — focus fires synchronously during applyEditorFocus
@@ -473,7 +484,24 @@ export function RichTextEditor({
                    [&_.ProseMirror_u]:underline
                    [&_.ProseMirror_s]:line-through"
       />
-      <FormattingToolbar view={view} />
+      <FormattingToolbar view={view} linkRequest={linkRequest} />
     </>
   );
+}
+
+function navigateToHref(href: string): void {
+  if (href.startsWith("/") || href.startsWith("#")) {
+    window.location.assign(href);
+    return;
+  }
+  try {
+    const url = new URL(href, window.location.href);
+    if (url.origin === window.location.origin) {
+      window.location.assign(url.href);
+    } else {
+      window.open(url.href, "_blank", "noopener,noreferrer");
+    }
+  } catch {
+    window.location.assign(href);
+  }
 }

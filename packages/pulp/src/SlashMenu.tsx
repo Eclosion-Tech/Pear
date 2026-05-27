@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Fragment,
   useEffect,
   useMemo,
   useRef,
@@ -33,6 +34,8 @@ import { createPortal } from "react-dom";
  */
 export type SlashMenuItem = {
   id: string;
+  /** Optional menu section label used to group related blocks. */
+  section?: string;
   label: string;
   description: string;
   componentType: string;
@@ -49,6 +52,7 @@ export type SlashMenuItem = {
 export const SPRINT_3B_SLASH_ITEMS: SlashMenuItem[] = [
   {
     id: "text",
+    section: "Text",
     label: "Text",
     description: "Plain paragraph.",
     componentType: "RichText",
@@ -57,6 +61,7 @@ export const SPRINT_3B_SLASH_ITEMS: SlashMenuItem[] = [
   },
   {
     id: "h1",
+    section: "Text",
     label: "Heading 1",
     description: "Large section title.",
     componentType: "Heading",
@@ -65,6 +70,7 @@ export const SPRINT_3B_SLASH_ITEMS: SlashMenuItem[] = [
   },
   {
     id: "h2",
+    section: "Text",
     label: "Heading 2",
     description: "Medium section title.",
     componentType: "Heading",
@@ -73,6 +79,7 @@ export const SPRINT_3B_SLASH_ITEMS: SlashMenuItem[] = [
   },
   {
     id: "h3",
+    section: "Text",
     label: "Heading 3",
     description: "Small section title.",
     componentType: "Heading",
@@ -81,6 +88,7 @@ export const SPRINT_3B_SLASH_ITEMS: SlashMenuItem[] = [
   },
   {
     id: "container",
+    section: "Layout",
     label: "Container",
     description: "Layout group for nested blocks.",
     componentType: "Container",
@@ -111,6 +119,7 @@ export function SlashMenu({
     return items.filter(
       (i) =>
         i.label.toLowerCase().includes(q) ||
+        i.section?.toLowerCase().includes(q) ||
         i.searchTokens.some((t) => t.includes(q)),
     );
   }, [items, query]);
@@ -197,30 +206,47 @@ export function SlashMenu({
             No matching blocks
           </div>
         ) : (
-          filtered.map((item, idx) => (
-            <button
-              key={item.id}
-              type="button"
-              role="option"
-              aria-selected={idx === activeIndex}
-              onMouseEnter={() => setActiveIndex(idx)}
-              onClick={() => onSelect(item)}
-              className={`flex w-full flex-col items-start gap-0.5 px-3 py-1.5 text-left
-                          transition-colors
-                          ${
-                            idx === activeIndex
-                              ? "bg-neutral-100 dark:bg-neutral-800"
-                              : "hover:bg-neutral-50 dark:hover:bg-neutral-800/60"
-                          }`}
-            >
-              <span className="text-sm text-neutral-900 dark:text-neutral-100">
-                {item.label}
-              </span>
-              <span className="text-xs text-neutral-500 dark:text-neutral-400">
-                {item.description}
-              </span>
-            </button>
-          ))
+          filtered.map((item, idx) => {
+            const section = normalizedSection(item);
+            const previousSection =
+              idx > 0 ? normalizedSection(filtered[idx - 1]) : null;
+            const showSection = section != null && section !== previousSection;
+
+            return (
+              <Fragment key={item.id}>
+                {showSection ? (
+                  <div
+                    role="presentation"
+                    className="px-3 pb-1 pt-2 text-[11px] font-medium uppercase
+                               text-neutral-500 dark:text-neutral-400"
+                  >
+                    {section}
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={idx === activeIndex}
+                  onMouseEnter={() => setActiveIndex(idx)}
+                  onClick={() => onSelect(item)}
+                  className={`flex w-full flex-col items-start gap-0.5 px-3 py-1.5 text-left
+                              transition-colors
+                              ${
+                                idx === activeIndex
+                                  ? "bg-neutral-100 dark:bg-neutral-800"
+                                  : "hover:bg-neutral-50 dark:hover:bg-neutral-800/60"
+                              }`}
+                >
+                  <span className="text-sm text-neutral-900 dark:text-neutral-100">
+                    {item.label}
+                  </span>
+                  <span className="text-xs text-neutral-500 dark:text-neutral-400">
+                    {item.description}
+                  </span>
+                </button>
+              </Fragment>
+            );
+          })
         )}
       </div>
     </div>,
@@ -235,4 +261,9 @@ function computePosition(anchor: DOMRect): { top: number; left: number } {
   const menuWidth = 280;
   const left = Math.min(desiredLeft, viewportWidth - menuWidth - 8);
   return { top, left };
+}
+
+function normalizedSection(item: SlashMenuItem): string | null {
+  const section = item.section?.trim();
+  return section && section.length > 0 ? section : null;
 }

@@ -212,7 +212,12 @@ pub struct ComponentTypeDefinition {
 /// Allocator for `ComponentNode.id`.
 pub(crate) fn next_component_node_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "component_node", || {
-        ctx.db.component_node().iter().map(|r| r.id).max().unwrap_or(0)
+        ctx.db
+            .component_node()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
     })
 }
 
@@ -437,6 +442,31 @@ mod prop_schemas {
     "caption": { "type": "string" }
   }
 }"#;
+
+    /// Document-list item components. Text lives in per-item Yjs state;
+    /// checklist state is a normal prop so toggles are structural writes.
+    pub const BULLET_LIST_ITEM: &str = r#"{
+  "type": "object",
+  "properties": {
+    "placeholder": { "type": "string" }
+  }
+}"#;
+
+    pub const NUMBERED_LIST_ITEM: &str = r#"{
+  "type": "object",
+  "properties": {
+    "placeholder": { "type": "string" }
+  }
+}"#;
+
+    pub const CHECKLIST_ITEM: &str = r#"{
+  "type": "object",
+  "properties": {
+    "checked": { "type": "boolean" },
+    "placeholder": { "type": "string" }
+  },
+  "required": ["checked"]
+}"#;
 }
 
 /// One row in the to-be-seeded registry. Tuple form keeps the seed call site
@@ -596,6 +626,33 @@ fn builtin_specs() -> Vec<BuiltinSpec> {
             has_yjs_state: false,
             accepts_children: false,
         },
+        BuiltinSpec {
+            component_type: "BulletListItem",
+            display_name: "Bullet list item",
+            description: "Document bullet list item. Text lives in per-item Yjs state; nesting is structural via ComponentNode parentage.",
+            prop_schema: prop_schemas::BULLET_LIST_ITEM,
+            capabilities: vec![],
+            has_yjs_state: true,
+            accepts_children: true,
+        },
+        BuiltinSpec {
+            component_type: "NumberedListItem",
+            display_name: "Numbered list item",
+            description: "Document numbered list item. Text lives in per-item Yjs state; numbering is derived by the renderer.",
+            prop_schema: prop_schemas::NUMBERED_LIST_ITEM,
+            capabilities: vec![],
+            has_yjs_state: true,
+            accepts_children: true,
+        },
+        BuiltinSpec {
+            component_type: "ChecklistItem",
+            display_name: "Checklist item",
+            description: "Document checklist item with checked state in props and text in per-item Yjs state.",
+            prop_schema: prop_schemas::CHECKLIST_ITEM,
+            capabilities: vec![],
+            has_yjs_state: true,
+            accepts_children: true,
+        },
     ]
 }
 
@@ -622,19 +679,21 @@ pub(crate) fn seed_builtin_component_types(ctx: &ReducerContext) {
         {
             continue;
         }
-        ctx.db.component_type_definition().insert(ComponentTypeDefinition {
-            id: next_component_type_definition_id(ctx),
-            component_type,
-            display_name: spec.display_name.to_string(),
-            description: spec.description.to_string(),
-            prop_schema: spec.prop_schema.to_string(),
-            capabilities: spec.capabilities,
-            has_yjs_state: spec.has_yjs_state,
-            accepts_children: spec.accepts_children,
-            is_builtin: true,
-            registered_by: publisher_identity,
-            created_at: ctx.timestamp,
-        });
+        ctx.db
+            .component_type_definition()
+            .insert(ComponentTypeDefinition {
+                id: next_component_type_definition_id(ctx),
+                component_type,
+                display_name: spec.display_name.to_string(),
+                description: spec.description.to_string(),
+                prop_schema: spec.prop_schema.to_string(),
+                capabilities: spec.capabilities,
+                has_yjs_state: spec.has_yjs_state,
+                accepts_children: spec.accepts_children,
+                is_builtin: true,
+                registered_by: publisher_identity,
+                created_at: ctx.timestamp,
+            });
     }
 }
 
@@ -1073,11 +1132,14 @@ pub fn save_component_yjs_state(
         .component_node_id()
         .find(component_id)
     {
-        ctx.db.component_yjs_state().component_node_id().update(ComponentYjsState {
-            data,
-            updated_at: ctx.timestamp,
-            ..existing
-        });
+        ctx.db
+            .component_yjs_state()
+            .component_node_id()
+            .update(ComponentYjsState {
+                data,
+                updated_at: ctx.timestamp,
+                ..existing
+            });
     } else {
         ctx.db.component_yjs_state().insert(ComponentYjsState {
             component_node_id: component_id,
@@ -1127,7 +1189,9 @@ pub fn register_component_type(
         .find(component_type.clone())
         .is_some()
     {
-        return Err(format!("Component type {component_type:?} is already registered"));
+        return Err(format!(
+            "Component type {component_type:?} is already registered"
+        ));
     }
 
     ctx.db
@@ -1193,13 +1257,16 @@ pub fn update_component_type(
         );
     }
 
-    ctx.db.component_type_definition().id().update(ComponentTypeDefinition {
-        display_name: display_name.unwrap_or_else(|| existing.display_name.clone()),
-        description: description.unwrap_or_else(|| existing.description.clone()),
-        prop_schema: prop_schema_json.unwrap_or_else(|| existing.prop_schema.clone()),
-        capabilities: capabilities.unwrap_or_else(|| existing.capabilities.clone()),
-        ..existing
-    });
+    ctx.db
+        .component_type_definition()
+        .id()
+        .update(ComponentTypeDefinition {
+            display_name: display_name.unwrap_or_else(|| existing.display_name.clone()),
+            description: description.unwrap_or_else(|| existing.description.clone()),
+            prop_schema: prop_schema_json.unwrap_or_else(|| existing.prop_schema.clone()),
+            capabilities: capabilities.unwrap_or_else(|| existing.capabilities.clone()),
+            ..existing
+        });
     Ok(())
 }
 
@@ -1220,7 +1287,10 @@ pub(crate) fn purge_component_tree(ctx: &ReducerContext, page_id: u64) {
         .map(|n| n.id)
         .collect();
     for nid in &node_ids {
-        ctx.db.component_yjs_state().component_node_id().delete(*nid);
+        ctx.db
+            .component_yjs_state()
+            .component_node_id()
+            .delete(*nid);
         ctx.db.component_node().id().delete(*nid);
     }
 }
@@ -1326,9 +1396,7 @@ pub(crate) fn restore_component_tree(
 
     let parsed: serde_json::Value =
         serde_json::from_str(snapshot_json).map_err(|e| format!("snapshot json: {e}"))?;
-    let obj = parsed
-        .as_object()
-        .ok_or("snapshot root is not an object")?;
+    let obj = parsed.as_object().ok_or("snapshot root is not an object")?;
     let version = obj
         .get("v")
         .and_then(|v| v.as_str())
@@ -1377,12 +1445,13 @@ pub(crate) fn restore_component_tree(
         require_type_def(ctx, &component_type)?;
 
         // Map parent_id (None → None for root; Some(snap_p) must already be in id_map).
-        let new_parent_id = match snap_parent_id {
-            None => None,
-            Some(p) => Some(*id_map.get(&p).ok_or_else(|| {
-                format!("snapshot node {snap_id} references unknown parent {p}")
-            })?),
-        };
+        let new_parent_id =
+            match snap_parent_id {
+                None => None,
+                Some(p) => Some(*id_map.get(&p).ok_or_else(|| {
+                    format!("snapshot node {snap_id} references unknown parent {p}")
+                })?),
+            };
 
         let new_id = next_component_node_id(ctx);
         id_map.insert(snap_id, new_id);
