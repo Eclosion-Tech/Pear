@@ -95,23 +95,34 @@ export function FormattingToolbar({
 
       setCoords({
         top: placeBelow
-          ? rect.bottom + window.scrollY + TOOLBAR_SELECTION_GAP
-          : rect.top + window.scrollY - TOOLBAR_ESTIMATED_HEIGHT - TOOLBAR_SELECTION_GAP,
-        left: rect.left + rect.width / 2 + window.scrollX,
+          ? rect.bottom + TOOLBAR_SELECTION_GAP
+          : rect.top - TOOLBAR_ESTIMATED_HEIGHT - TOOLBAR_SELECTION_GAP,
+        left: rect.left + rect.width / 2,
         marks,
       });
     };
 
     // ProseMirror fires its own selection events; piggyback DOM
     // selectionchange to catch native shifts (e.g. arrow keys held).
-    const onSelectionChange = () => {
-      // Defer to next frame so prosemirror's view has settled.
-      requestAnimationFrame(compute);
+    // Scroll is included because Pear documents scroll inside app
+    // containers, not always through `window`.
+    let frame: number | null = null;
+    const scheduleCompute = () => {
+      if (frame != null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        compute();
+      });
     };
-    document.addEventListener("selectionchange", onSelectionChange);
+    document.addEventListener("selectionchange", scheduleCompute);
+    document.addEventListener("scroll", scheduleCompute, true);
+    window.addEventListener("scroll", scheduleCompute, true);
     compute();
     return () => {
-      document.removeEventListener("selectionchange", onSelectionChange);
+      document.removeEventListener("selectionchange", scheduleCompute);
+      document.removeEventListener("scroll", scheduleCompute, true);
+      window.removeEventListener("scroll", scheduleCompute, true);
+      if (frame != null) cancelAnimationFrame(frame);
     };
   }, [view]);
 
@@ -127,7 +138,7 @@ export function FormattingToolbar({
     <div
       ref={toolbarRef}
       style={{ top: coords.top, left: coords.left, transform: "translateX(-50%)" }}
-      className="absolute z-50 flex items-center gap-0.5 rounded-md border
+      className="fixed z-50 flex items-center gap-0.5 rounded-md border
                  border-neutral-200 dark:border-neutral-700
                  bg-white dark:bg-neutral-900 px-1 py-1 shadow-lg"
       // Prevent mousedown from collapsing the prosemirror selection before
@@ -217,8 +228,8 @@ function buildLinkEditorState(view: EditorView): LinkEditorState | null {
   if (!rect) return null;
 
   return {
-    top: rect.bottom + window.scrollY + 8,
-    left: rect.left + rect.width / 2 + window.scrollX,
+    top: rect.bottom + 8,
+    left: rect.left + rect.width / 2,
     from,
     to,
     href: getLinkHref(state, richTextSchema.marks.link, from, to) ?? "",
@@ -268,7 +279,7 @@ function LinkEditorPopover({
   return (
     <div
       style={{ top: state.top, left: state.left, transform: "translateX(-50%)" }}
-      className="absolute z-[60] w-[320px] overflow-hidden rounded-md border border-neutral-200 bg-white text-left shadow-xl dark:border-neutral-700 dark:bg-neutral-900"
+      className="fixed z-[60] w-[320px] overflow-hidden rounded-md border border-neutral-200 bg-white text-left shadow-xl dark:border-neutral-700 dark:bg-neutral-900"
       onMouseDown={(e) => e.stopPropagation()}
     >
       <div className="border-b border-neutral-100 p-2 dark:border-neutral-800">
