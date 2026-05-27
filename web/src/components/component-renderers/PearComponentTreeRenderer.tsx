@@ -27,7 +27,7 @@ import { useWorkspace } from "@/src/providers/WorkspaceProvider";
 import { AudioAttachmentContext } from "@/src/components/AudioAttachmentContext";
 import { useCreateAttachment } from "@/src/hooks/usePages";
 import { registerPearBuiltinRenderers } from "./built-in";
-import { PEAR_SLASH_ITEMS } from "./pearSlashItems";
+import { PEAR_SLASH_ITEMS, slashItemsForDefs } from "./pearSlashItems";
 
 registerCoreBlocks();
 registerPearBuiltinRenderers();
@@ -101,13 +101,21 @@ export function ComponentTreeRenderer({ surfaceId }: { surfaceId: bigint }) {
         componentType: string;
         propsJson: string;
         afterSiblingId?: bigint;
-      }) =>
+      }) => {
+        if (!treeRef.current.defs.has(componentType)) {
+          console.warn(
+            `[ComponentTree] cannot insert "${componentType}" — not registered in this workspace. ` +
+              "Publish Pear module ≥0.11.3 and run migrations.",
+          );
+          return;
+        }
         insertComponent({
           parentId,
           componentType,
           propsJson,
           afterSiblingId,
-        }),
+        });
+      },
       deleteBlock: ({ componentId }: { componentId: bigint }) =>
         deleteComponent({ componentId }),
       restoreBlock: ({ componentId }: { componentId: bigint }) =>
@@ -157,9 +165,9 @@ export function ComponentTreeRenderer({ surfaceId }: { surfaceId: bigint }) {
     () => ({
       idbPrefix: `pear:${idbNamespace}`,
       validateProps: validateComponentProps,
-      slashItems: PEAR_SLASH_ITEMS,
+      slashItems: slashItemsForDefs(PEAR_SLASH_ITEMS, tree.defs),
     }),
-    [idbNamespace],
+    [idbNamespace, tree.defs],
   );
 
   const attachmentCtx = useMemo(

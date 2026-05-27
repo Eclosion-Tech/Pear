@@ -1,7 +1,10 @@
 "use client";
 
-import { useMemo } from "react";
-import { SPRINT_3B_SLASH_ITEMS, type SlashMenuItem } from "@eclosion-tech/pulp";
+import {
+  SPRINT_3B_SLASH_ITEMS,
+  type SlashMenuItem,
+  type BlockTypeDefinition,
+} from "@eclosion-tech/pulp";
 
 /** Pear sprint-4 slash / turn-into items — extends pulp's curated set. */
 export const PEAR_SLASH_ITEMS: SlashMenuItem[] = [
@@ -31,3 +34,11 @@ export const PEAR_SLASH_ITEMS: SlashMenuItem[] = [
     searchTokens: ["page", "link", "subpage", "doc"],
   },
 ];
+
+/** Only offer slash items whose type exists in this workspace's registry table. */
+export function slashItemsForDefs(
+  items: SlashMenuItem[],
+  defs: Map<string, BlockTypeDefinition>,
+): SlashMenuItem[] {
+  return items.filter((item) => defs.has(item.componentType));
+}
