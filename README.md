@@ -149,6 +149,7 @@ cd server/spacetimedb
 cargo build --release --target wasm32-unknown-unknown
 cd ..
 spacetime publish -s local pear-dev
+spacetime call -s local --yes pear-dev run_pending_migrations
 ```
 
 ### Frontend

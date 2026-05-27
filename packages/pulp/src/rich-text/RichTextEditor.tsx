@@ -317,6 +317,13 @@ export function RichTextEditor({
           if (!(anchor instanceof HTMLAnchorElement)) return false;
           const href = anchor.getAttribute("href");
           if (!href) return false;
+
+          const mouse = event as MouseEvent;
+          if (!mouse.metaKey && !mouse.ctrlKey) {
+            event.preventDefault();
+            return true;
+          }
+
           event.preventDefault();
           navigateToHref(href);
           return true;

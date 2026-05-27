@@ -33,6 +33,9 @@ type LinkEditorState = {
   href: string;
 };
 
+const TOOLBAR_ESTIMATED_HEIGHT = 40;
+const TOOLBAR_SELECTION_GAP = 8;
+
 export function FormattingToolbar({
   view,
   linkRequest,
@@ -58,14 +61,20 @@ export function FormattingToolbar({
     if (!view) return;
 
     const compute = () => {
+      if (linkEditorOpenRef.current) return;
+
       const state = view.state;
       const { from, to, empty } = state.selection;
-      if (empty || (!view.hasFocus() && !linkEditorOpenRef.current)) {
+      if (empty || !view.hasFocus()) {
         setCoords(null);
         return;
       }
       const selection = window.getSelection();
       if (!selection || selection.rangeCount === 0) {
+        setCoords(null);
+        return;
+      }
+      if (!selectionBelongsTo(selection, view.dom)) {
         setCoords(null);
         return;
       }
@@ -75,6 +84,8 @@ export function FormattingToolbar({
         setCoords(null);
         return;
       }
+      const placeBelow =
+        rect.top < TOOLBAR_ESTIMATED_HEIGHT + TOOLBAR_SELECTION_GAP;
 
       const marks: Record<string, boolean> = {};
       for (const name of MARK_ORDER) {
@@ -83,7 +94,9 @@ export function FormattingToolbar({
       }
 
       setCoords({
-        top: rect.top + window.scrollY - 44,
+        top: placeBelow
+          ? rect.bottom + window.scrollY + TOOLBAR_SELECTION_GAP
+          : rect.top + window.scrollY - TOOLBAR_ESTIMATED_HEIGHT - TOOLBAR_SELECTION_GAP,
         left: rect.left + rect.width / 2 + window.scrollX,
         marks,
       });
@@ -114,7 +127,7 @@ export function FormattingToolbar({
     <div
       ref={toolbarRef}
       style={{ top: coords.top, left: coords.left, transform: "translateX(-50%)" }}
-      className="fixed z-50 flex items-center gap-0.5 rounded-md border
+      className="absolute z-50 flex items-center gap-0.5 rounded-md border
                  border-neutral-200 dark:border-neutral-700
                  bg-white dark:bg-neutral-900 px-1 py-1 shadow-lg"
       // Prevent mousedown from collapsing the prosemirror selection before
@@ -255,8 +268,8 @@ function LinkEditorPopover({
   return (
     <div
       style={{ top: state.top, left: state.left, transform: "translateX(-50%)" }}
-      className="fixed z-[60] w-[320px] overflow-hidden rounded-md border border-neutral-200 bg-white text-left shadow-xl dark:border-neutral-700 dark:bg-neutral-900"
-      onMouseDown={(e) => e.preventDefault()}
+      className="absolute z-[60] w-[320px] overflow-hidden rounded-md border border-neutral-200 bg-white text-left shadow-xl dark:border-neutral-700 dark:bg-neutral-900"
+      onMouseDown={(e) => e.stopPropagation()}
     >
       <div className="border-b border-neutral-100 p-2 dark:border-neutral-800">
         <input
@@ -426,4 +439,14 @@ function selectionRect(): DOMRect | null {
   const rect = selection.getRangeAt(0).getBoundingClientRect();
   if (rect.width === 0 && rect.height === 0) return null;
   return rect;
+}
+
+function selectionBelongsTo(selection: Selection, root: Node): boolean {
+  const { anchorNode, focusNode } = selection;
+  return (
+    anchorNode != null &&
+    focusNode != null &&
+    root.contains(anchorNode) &&
+    root.contains(focusNode)
+  );
 }

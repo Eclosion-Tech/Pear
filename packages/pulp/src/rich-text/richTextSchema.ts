@@ -71,6 +71,7 @@ export const richTextSchema = new Schema({
         {
           href: mark.attrs.href as string,
           title: (mark.attrs.title as string | null) ?? "",
+          draggable: "false",
           rel: "noopener noreferrer",
         },
         0,

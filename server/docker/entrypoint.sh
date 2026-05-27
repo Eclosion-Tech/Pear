@@ -27,6 +27,8 @@ if [ -d "$MODULE_WASM" ] && [ -f "$MODULE_WASM/server.wasm" ]; then
   MODULE_WASM="$MODULE_WASM/server.wasm"
 fi
 
+PUBLISH_OK=0
+
 if [ -f "$MODULE_WASM" ]; then
   echo "[pear] Publishing module from $MODULE_WASM as '$DB_NAME'..."
   # --break-clients matches lifecycle's production migration policy (see
@@ -45,6 +47,7 @@ if [ -f "$MODULE_WASM" ]; then
     --break-clients \
     --yes; then
     echo "[pear] Module published."
+    PUBLISH_OK=1
   else
     echo "[pear] WARNING: Initial publish failed. Clearing stale spacetime CLI state and retrying..."
     rm -rf /root/.config/spacetime
@@ -57,6 +60,7 @@ if [ -f "$MODULE_WASM" ]; then
       --break-clients \
       --yes; then
       echo "[pear] Module published on retry."
+      PUBLISH_OK=1
     else
       echo "[pear] ERROR: Module publish failed after retry."
       echo "[pear] SpacetimeDB will keep running, but clients may fail until publish succeeds."
@@ -65,6 +69,20 @@ if [ -f "$MODULE_WASM" ]; then
 else
   echo "[pear] WARNING: $MODULE_WASM not found."
   echo "[pear] Run 'cd server && spacetime build' on the host first, then restart this container."
+fi
+
+if [ "$PUBLISH_OK" -eq 1 ]; then
+  echo "[pear] Running pending migrations for '$DB_NAME'..."
+  if spacetime call \
+    --server http://localhost:3000 \
+    --yes \
+    "$DB_NAME" \
+    run_pending_migrations; then
+    echo "[pear] Pending migrations complete."
+  else
+    echo "[pear] WARNING: run_pending_migrations failed."
+    echo "[pear] Built-in registry rows may be stale until migrations are run manually."
+  fi
 fi
 
 # Hand off to the SpacetimeDB server process
