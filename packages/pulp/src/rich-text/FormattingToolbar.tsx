@@ -105,6 +105,10 @@ export function FormattingToolbar({ view }: { view: EditorView | null }) {
           shortcut={MARK_SHORTCUT[name]}
           active={coords.marks[name] ?? false}
           onClick={() => {
+            if (name === "link") {
+              applyLinkToSelection(view);
+              return;
+            }
             const markType = richTextSchema.marks[name];
             if (!markType) return;
             toggleMark(markType)(view.state, view.dispatch);
@@ -117,13 +121,14 @@ export function FormattingToolbar({ view }: { view: EditorView | null }) {
   );
 }
 
-const MARK_ORDER = ["bold", "italic", "underline", "strike", "code"] as const;
+const MARK_ORDER = ["bold", "italic", "underline", "strike", "code", "link"] as const;
 const MARK_LABEL: Record<(typeof MARK_ORDER)[number], string> = {
   bold: "B",
   italic: "I",
   underline: "U",
   strike: "S",
   code: "</>",
+  link: "Link",
 };
 const MARK_SHORTCUT: Record<(typeof MARK_ORDER)[number], string> = {
   bold: "⌘B",
@@ -131,7 +136,33 @@ const MARK_SHORTCUT: Record<(typeof MARK_ORDER)[number], string> = {
   underline: "⌘U",
   strike: "⌘⇧S",
   code: "⌘`",
+  link: "⌘K",
 };
+
+export function applyLinkToSelection(view: EditorView): boolean {
+  const markType = richTextSchema.marks.link;
+  if (!markType) return false;
+
+  const { state } = view;
+  const { from, to, empty } = state.selection;
+  if (empty) return false;
+
+  const existingHref = getLinkHref(state, markType, from, to);
+  const raw = window.prompt("Link URL", existingHref ?? "");
+  if (raw == null) {
+    view.focus();
+    return true;
+  }
+
+  const href = normalizeHref(raw);
+  let tr = state.tr.removeMark(from, to, markType);
+  if (href) {
+    tr = tr.addMark(from, to, markType.create({ href }));
+  }
+  view.dispatch(tr.scrollIntoView());
+  view.focus();
+  return true;
+}
 
 function ToolbarButton({
   label,
@@ -167,7 +198,9 @@ function ToolbarButton({
                 ? "underline"
                 : label === "S"
                   ? "line-through"
-                  : "font-mono"
+                  : label === "</>"
+                    ? "font-mono"
+                    : ""
         }
       >
         {label}
@@ -198,4 +231,34 @@ function markActive(
     return undefined;
   });
   return has;
+}
+
+function getLinkHref(
+  state: import("prosemirror-state").EditorState,
+  markType: MarkType,
+  from: number,
+  to: number,
+): string | null {
+  let href: string | null = null;
+  state.doc.nodesBetween(from, to, (node) => {
+    if (!node.isText) return undefined;
+    const mark = markType.isInSet(node.marks);
+    if (!mark) return undefined;
+    href = typeof mark.attrs.href === "string" ? mark.attrs.href : "";
+    return false;
+  });
+  return href;
+}
+
+function normalizeHref(raw: string): string {
+  const href = raw.trim();
+  if (!href) return "";
+  if (
+    href.startsWith("/") ||
+    href.startsWith("#") ||
+    /^[a-z][a-z0-9+.-]*:/i.test(href)
+  ) {
+    return href;
+  }
+  return `https://${href}`;
 }

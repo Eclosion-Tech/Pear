@@ -26,12 +26,20 @@ export const PEAR_SLASH_ITEMS: SlashMenuItem[] = [
     searchTokens: ["audio", "record", "recording", "voice", "sound"],
   },
   {
+    id: "new-page",
+    label: "New page",
+    description: "Create a subpage linked here.",
+    componentType: "PageLink",
+    defaultProps: { pageId: "", pageTitle: "Untitled", createSubpage: true },
+    searchTokens: ["new", "page", "subpage", "child", "doc"],
+  },
+  {
     id: "page-link",
-    label: "Page link",
-    description: "Link to another page (set pageId in props).",
+    label: "Link to page",
+    description: "Link to an existing page.",
     componentType: "PageLink",
     defaultProps: { pageId: "", pageTitle: "Untitled" },
-    searchTokens: ["page", "link", "subpage", "doc"],
+    searchTokens: ["page", "link", "existing", "doc"],
   },
 ];
 

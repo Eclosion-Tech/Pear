@@ -38,7 +38,7 @@ import {
 import { focusDebug, idStr } from "../focus/focusDebug";
 import { isAtDocEnd, isAtDocStart } from "../navigation/blockNavigation";
 import { useSurfaceUndo } from "../undo/SurfaceUndoProvider";
-import { FormattingToolbar } from "./FormattingToolbar";
+import { FormattingToolbar, applyLinkToSelection } from "./FormattingToolbar";
 
 /** Cadence — see `docs/PEAR_WEB_RENDERER.md` § Editor stack — Save cycle. */
 const SAVE_INTERVAL_MS = 30_000;
@@ -199,6 +199,10 @@ export function RichTextEditor({
           "Mod-u": toggleMark(richTextSchema.marks.underline),
           "Mod-Shift-s": toggleMark(richTextSchema.marks.strike),
           "Mod-`": toggleMark(richTextSchema.marks.code),
+          "Mod-k": (_s, _dispatch, view) => {
+            if (!view) return false;
+            return applyLinkToSelection(view);
+          },
           "Shift-Enter": chainCommands(exitCode, (s, dispatch) => {
             if (dispatch) {
               dispatch(
