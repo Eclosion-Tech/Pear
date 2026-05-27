@@ -37,6 +37,9 @@ export function BlockMenu({
   }, [anchorRect]);
 
   useEffect(() => {
+    // SlashMenu registers its own dismiss-on-scroll when "Turn into…" is open.
+    if (turnIntoOpen) return;
+
     function onPointerDown(e: PointerEvent) {
       if (!menuRef.current) return;
       if (menuRef.current.contains(e.target as Node)) return;
@@ -48,7 +51,10 @@ export function BlockMenu({
         onClose();
       }
     }
-    function onScroll() {
+    function onScroll(e: Event) {
+      if (!menuRef.current) return;
+      const target = e.target;
+      if (target instanceof Node && menuRef.current.contains(target)) return;
       onClose();
     }
     document.addEventListener("pointerdown", onPointerDown);
@@ -59,7 +65,7 @@ export function BlockMenu({
       document.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("scroll", onScroll, true);
     };
-  }, [onClose]);
+  }, [onClose, turnIntoOpen]);
 
   const pulpMutations = pulp;
 

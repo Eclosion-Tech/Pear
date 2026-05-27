@@ -137,7 +137,10 @@ export function SlashMenu({
       if (menuRef.current.contains(e.target as Node)) return;
       onClose();
     }
-    function onScroll() {
+    function onScroll(e: Event) {
+      if (!menuRef.current) return;
+      const target = e.target;
+      if (target instanceof Node && menuRef.current.contains(target)) return;
       onClose();
     }
     document.addEventListener("pointerdown", onPointerDown);
