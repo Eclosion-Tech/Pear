@@ -35,6 +35,10 @@ type LinkEditorState = {
 
 const TOOLBAR_ESTIMATED_HEIGHT = 40;
 const TOOLBAR_SELECTION_GAP = 8;
+const LINK_POPOVER_ESTIMATED_HEIGHT = 300;
+const LINK_POPOVER_WIDTH = 320;
+const LINK_POPOVER_SELECTION_GAP = 8;
+const VIEWPORT_EDGE_PADDING = 8;
 
 export function FormattingToolbar({
   view,
@@ -54,33 +58,25 @@ export function FormattingToolbar({
   >(null);
   const [linkEditor, setLinkEditor] = useState<LinkEditorState | null>(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
-  const linkEditorOpenRef = useRef(false);
-  linkEditorOpenRef.current = linkEditor != null;
+  const linkEditorRef = useRef<LinkEditorState | null>(null);
+  linkEditorRef.current = linkEditor;
 
   useEffect(() => {
     if (!view) return;
 
     const compute = () => {
-      if (linkEditorOpenRef.current) return;
-
       const state = view.state;
       const { from, to, empty } = state.selection;
-      if (empty || !view.hasFocus()) {
+      const openLinkEditor = linkEditorRef.current;
+      if ((empty && !openLinkEditor) || (!view.hasFocus() && !openLinkEditor)) {
         setCoords(null);
         return;
       }
-      const selection = window.getSelection();
-      if (!selection || selection.rangeCount === 0) {
-        setCoords(null);
-        return;
-      }
-      if (!selectionBelongsTo(selection, view.dom)) {
-        setCoords(null);
-        return;
-      }
-      const range = selection.getRangeAt(0);
-      const rect = range.getBoundingClientRect();
-      if (rect.width === 0 && rect.height === 0) {
+
+      const anchorFrom = openLinkEditor?.from ?? from;
+      const anchorTo = openLinkEditor?.to ?? to;
+      const rect = selectionRect(view, anchorFrom, anchorTo);
+      if (!rect) {
         setCoords(null);
         return;
       }
@@ -90,7 +86,7 @@ export function FormattingToolbar({
       const marks: Record<string, boolean> = {};
       for (const name of MARK_ORDER) {
         const markType = richTextSchema.marks[name];
-        if (markType) marks[name] = markActive(state, markType, from, to);
+        if (markType) marks[name] = markActive(state, markType, anchorFrom, anchorTo);
       }
 
       setCoords({
@@ -100,6 +96,19 @@ export function FormattingToolbar({
         left: rect.left + rect.width / 2,
         marks,
       });
+
+      if (openLinkEditor) {
+        const position = linkEditorPosition(rect);
+        setLinkEditor((prev) =>
+          prev
+            ? {
+                ...prev,
+                top: position.top,
+                left: position.left,
+              }
+            : prev,
+        );
+      }
     };
 
     // ProseMirror fires its own selection events; piggyback DOM
@@ -135,37 +144,39 @@ export function FormattingToolbar({
   if (!coords || !view) return null;
 
   return createPortal(
-    <div
-      ref={toolbarRef}
-      style={{ top: coords.top, left: coords.left, transform: "translateX(-50%)" }}
-      className="fixed z-50 flex items-center gap-0.5 rounded-md border
-                 border-neutral-200 dark:border-neutral-700
-                 bg-white dark:bg-neutral-900 px-1 py-1 shadow-lg"
-      // Prevent mousedown from collapsing the prosemirror selection before
-      // the toggle command runs. ProseMirror's selection lives in DOM
-      // focus + an internal state; clicking the toolbar's host would blur
-      // the editor and leave us with no selection to act on.
-      onMouseDown={(e) => e.preventDefault()}
-    >
-      {MARK_ORDER.map((name) => (
-        <ToolbarButton
-          key={name}
-          label={MARK_LABEL[name]}
-          shortcut={MARK_SHORTCUT[name]}
-          active={coords.marks[name] ?? false}
-          onClick={() => {
-            if (name === "link") {
-              const next = buildLinkEditorState(view);
-              if (next) setLinkEditor(next);
-              return;
-            }
-            const markType = richTextSchema.marks[name];
-            if (!markType) return;
-            toggleMark(markType)(view.state, view.dispatch);
-            view.focus();
-          }}
-        />
-      ))}
+    <>
+      <div
+        ref={toolbarRef}
+        style={{ top: coords.top, left: coords.left, transform: "translateX(-50%)" }}
+        className="fixed z-50 flex items-center gap-0.5 rounded-md border
+                   border-neutral-200 dark:border-neutral-700
+                   bg-white dark:bg-neutral-900 px-1 py-1 shadow-lg"
+        // Prevent mousedown from collapsing the prosemirror selection before
+        // the toggle command runs. ProseMirror's selection lives in DOM
+        // focus + an internal state; clicking the toolbar's host would blur
+        // the editor and leave us with no selection to act on.
+        onMouseDown={(e) => e.preventDefault()}
+      >
+        {MARK_ORDER.map((name) => (
+          <ToolbarButton
+            key={name}
+            label={MARK_LABEL[name]}
+            shortcut={MARK_SHORTCUT[name]}
+            active={coords.marks[name] ?? false}
+            onClick={() => {
+              if (name === "link") {
+                const next = buildLinkEditorState(view);
+                if (next) setLinkEditor(next);
+                return;
+              }
+              const markType = richTextSchema.marks[name];
+              if (!markType) return;
+              toggleMark(markType)(view.state, view.dispatch);
+              view.focus();
+            }}
+          />
+        ))}
+      </div>
       {linkEditor && (
         <LinkEditorPopover
           state={linkEditor}
@@ -174,7 +185,7 @@ export function FormattingToolbar({
           onClose={() => setLinkEditor(null)}
         />
       )}
-    </div>,
+    </>,
     document.body,
   );
 }
@@ -224,12 +235,13 @@ function buildLinkEditorState(view: EditorView): LinkEditorState | null {
   const { from, to, empty } = state.selection;
   if (empty) return null;
 
-  const rect = selectionRect();
+  const rect = selectionRect(view, from, to);
   if (!rect) return null;
+  const position = linkEditorPosition(rect);
 
   return {
-    top: rect.bottom + 8,
-    left: rect.left + rect.width / 2,
+    top: position.top,
+    left: position.left,
     from,
     to,
     href: getLinkHref(state, richTextSchema.marks.link, from, to) ?? "",
@@ -444,12 +456,98 @@ function normalizeHref(raw: string): string {
   return `https://${href}`;
 }
 
-function selectionRect(): DOMRect | null {
+function selectionRect(view: EditorView, from: number, to: number): DOMRect | null {
   const selection = window.getSelection();
-  if (!selection || selection.rangeCount === 0) return null;
-  const rect = selection.getRangeAt(0).getBoundingClientRect();
-  if (rect.width === 0 && rect.height === 0) return null;
-  return rect;
+  if (
+    selection &&
+    selection.rangeCount > 0 &&
+    selectionBelongsTo(selection, view.dom)
+  ) {
+    const rect = selection.getRangeAt(0).getBoundingClientRect();
+    if (usableRect(rect)) return rect;
+  }
+  return editorRangeRect(view, from, to);
+}
+
+function editorRangeRect(view: EditorView, from: number, to: number): DOMRect | null {
+  try {
+    if (from === to) {
+      const coords = view.coordsAtPos(from);
+      return new DOMRect(
+        coords.left,
+        coords.top,
+        0,
+        Math.max(1, coords.bottom - coords.top),
+      );
+    }
+
+    const start = view.domAtPos(from);
+    const end = view.domAtPos(to);
+    const range = document.createRange();
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset);
+
+    const rects = Array.from(range.getClientRects()).filter(usableRect);
+    const rect = rects.length > 0 ? boundingRect(rects) : range.getBoundingClientRect();
+    if (usableRect(rect)) return rect;
+  } catch {
+    // Fall through to coordsAtPos below. ProseMirror can throw here while
+    // a remote Yjs update is replacing the same DOM span we are anchoring.
+  }
+
+  try {
+    const start = view.coordsAtPos(from);
+    const end = view.coordsAtPos(to);
+    const left = Math.min(start.left, end.left);
+    const right = Math.max(start.right, end.right, left + 1);
+    const top = Math.min(start.top, end.top);
+    const bottom = Math.max(start.bottom, end.bottom, top + 1);
+    return new DOMRect(left, top, right - left, bottom - top);
+  } catch {
+    return null;
+  }
+}
+
+function boundingRect(rects: DOMRect[]): DOMRect {
+  let left = Number.POSITIVE_INFINITY;
+  let right = Number.NEGATIVE_INFINITY;
+  let top = Number.POSITIVE_INFINITY;
+  let bottom = Number.NEGATIVE_INFINITY;
+  for (const rect of rects) {
+    left = Math.min(left, rect.left);
+    right = Math.max(right, rect.right);
+    top = Math.min(top, rect.top);
+    bottom = Math.max(bottom, rect.bottom);
+  }
+  return new DOMRect(left, top, right - left, bottom - top);
+}
+
+function usableRect(rect: DOMRect): boolean {
+  return rect.width > 0 || rect.height > 0;
+}
+
+function linkEditorPosition(rect: DOMRect): { top: number; left: number } {
+  const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1024;
+  const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 768;
+  const halfWidth = LINK_POPOVER_WIDTH / 2;
+  const minLeft = halfWidth + VIEWPORT_EDGE_PADDING;
+  const maxLeft = Math.max(minLeft, viewportWidth - halfWidth - VIEWPORT_EDGE_PADDING);
+  const left = clamp(rect.left + rect.width / 2, minLeft, maxLeft);
+
+  let top = rect.bottom + LINK_POPOVER_SELECTION_GAP;
+  const wouldOverflow =
+    top + LINK_POPOVER_ESTIMATED_HEIGHT > viewportHeight - VIEWPORT_EDGE_PADDING;
+  if (
+    wouldOverflow &&
+    rect.top > LINK_POPOVER_ESTIMATED_HEIGHT + LINK_POPOVER_SELECTION_GAP
+  ) {
+    top = rect.top - LINK_POPOVER_ESTIMATED_HEIGHT - LINK_POPOVER_SELECTION_GAP;
+  }
+  return { top: Math.max(VIEWPORT_EDGE_PADDING, top), left };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }
 
 function selectionBelongsTo(selection: Selection, root: Node): boolean {
