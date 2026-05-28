@@ -37,9 +37,9 @@ import {
   plainTextToYDoc,
   type TextAlign,
 } from "../rich-text/richTextFormatting";
-import { SPRINT_3B_SLASH_ITEMS } from "../SlashMenu";
+import { SPRINT_3B_SLASH_ITEMS, type SlashMenuItem } from "../SlashMenu";
 import { turnIntoToolbarItems } from "../toolbarTurnIntoItems";
-import type { SlashMenuItem } from "../SlashMenu";
+import { resolveHeadingEnter } from "./headingEnter";
 
 type HeadingProps = {
   level?: number;
@@ -166,21 +166,36 @@ export function HeadingRenderer({ node, tree, children }: BlockRendererProps) {
 
   const onSplit = useCallback(
     (_view: EditorView): boolean => {
-      const children = tree.byParent.get(node.id) ?? [];
-      const lastChild = children[children.length - 1];
-      focus.armForInsert(node.id, lastChild?.id, {
+      const action = resolveHeadingEnter(tree, node);
+      if (!action) return false;
+
+      if (action.kind === "append-section") {
+        focus.armForInsert(action.headingId, action.afterChildId, {
+          focusAt: "start",
+          knownSiblingIds: knownSiblingIdsForParent(tree, action.headingId),
+        });
+        insertBlock({
+          parentId: action.headingId,
+          componentType: "RichText",
+          propsJson: "{}",
+          afterSiblingId: action.afterChildId,
+        });
+        return true;
+      }
+
+      focus.armForInsert(action.parentId, action.afterSiblingId, {
         focusAt: "start",
-        knownSiblingIds: knownSiblingIdsForParent(tree, node.id),
+        knownSiblingIds: knownSiblingIdsForParent(tree, action.parentId),
       });
       insertBlock({
-        parentId: node.id,
+        parentId: action.parentId,
         componentType: "RichText",
         propsJson: "{}",
-        afterSiblingId: lastChild?.id,
+        afterSiblingId: action.afterSiblingId,
       });
       return true;
     },
-    [tree, node.id, focus, insertBlock],
+    [tree, node, focus, insertBlock],
   );
 
   const siblings = node.parentId != null ? tree.byParent.get(node.parentId) ?? [] : [];

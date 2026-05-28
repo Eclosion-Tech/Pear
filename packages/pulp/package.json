@@ -27,6 +27,12 @@
   "devDependencies": {
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "typescript": "^5"
+    "happy-dom": "^20.0.2",
+    "typescript": "^5",
+    "vitest": "^3.2.4"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
   }
 }

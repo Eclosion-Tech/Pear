@@ -36,9 +36,20 @@ import {
   type FocusPlacement,
 } from "../focus/SurfaceFocusCoordinator";
 import { focusDebug, idStr } from "../focus/focusDebug";
-import { isAtDocEnd, isAtDocStart } from "../navigation/blockNavigation";
 import { useSurfaceUndo } from "../undo/SurfaceUndoProvider";
 import { FormattingToolbar, type BlockToolbarActions } from "./FormattingToolbar";
+import {
+  handleRichTextArrowDown,
+  handleRichTextArrowUp,
+  handleRichTextBackspace,
+  handleRichTextEnter,
+  handleRichTextShiftTab,
+  handleRichTextTab,
+  inlineMarksDisabled,
+  type EditorSurfaceMode,
+} from "./richTextKeymap";
+
+export type { EditorSurfaceMode } from "./richTextKeymap";
 
 /** Cadence — see `docs/PEAR_WEB_RENDERER.md` § Editor stack — Save cycle. */
 const SAVE_INTERVAL_MS = 30_000;
@@ -57,10 +68,6 @@ const HEADING_EDITOR_PROSE: Record<number, string> = {
   5: "my-2 text-lg font-medium leading-tight text-neutral-900 dark:text-neutral-100 [&_.ProseMirror]:outline-none [&_.ProseMirror_p]:my-0",
   6: "my-2 text-base font-medium leading-tight text-neutral-900 dark:text-neutral-100 [&_.ProseMirror]:outline-none [&_.ProseMirror_p]:my-0",
 };
-
-export type EditorSurfaceMode =
-  | { kind: "body"; textDensity?: "default" | "listItem" }
-  | { kind: "heading"; level: 1 | 2 | 3 | 4 | 5 | 6 };
 
 /**
  * Live `RichText` editor — sprint 2 of the web renderer.
@@ -236,27 +243,27 @@ export function RichTextEditor({
         keymap({
           // Mod-Z / Mod-Shift-Z routed at surface level — § Cross-block undo.
           "Mod-b": (s, dispatch) => {
-            if (surfaceModeRef.current.kind === "heading") return false;
+            if (inlineMarksDisabled(surfaceModeRef.current)) return false;
             return toggleMark(richTextSchema.marks.bold)(s, dispatch);
           },
           "Mod-i": (s, dispatch) => {
-            if (surfaceModeRef.current.kind === "heading") return false;
+            if (inlineMarksDisabled(surfaceModeRef.current)) return false;
             return toggleMark(richTextSchema.marks.italic)(s, dispatch);
           },
           "Mod-u": (s, dispatch) => {
-            if (surfaceModeRef.current.kind === "heading") return false;
+            if (inlineMarksDisabled(surfaceModeRef.current)) return false;
             return toggleMark(richTextSchema.marks.underline)(s, dispatch);
           },
           "Mod-Shift-s": (s, dispatch) => {
-            if (surfaceModeRef.current.kind === "heading") return false;
+            if (inlineMarksDisabled(surfaceModeRef.current)) return false;
             return toggleMark(richTextSchema.marks.strike)(s, dispatch);
           },
           "Mod-`": (s, dispatch) => {
-            if (surfaceModeRef.current.kind === "heading") return false;
+            if (inlineMarksDisabled(surfaceModeRef.current)) return false;
             return toggleMark(richTextSchema.marks.code)(s, dispatch);
           },
           "Mod-k": (s) => {
-            if (surfaceModeRef.current.kind === "heading") return false;
+            if (inlineMarksDisabled(surfaceModeRef.current)) return false;
             if (s.selection.empty) return false;
             setLinkRequest((n) => n + 1);
             return true;
@@ -282,66 +289,30 @@ export function RichTextEditor({
           // Enter is intercepted earlier as hard_break and never
           // reaches this handler.
           Enter: (s) => {
-            if (!s.selection.empty) return false;
-            const view = viewRef.current;
-            if (!view) return false;
-            const handler = onSplitRef.current;
-            if (!handler) return false;
             focusDebug("Enter key → onSplit", { componentId: idStr(componentId) });
-            return handler(view);
+            return handleRichTextEnter(s, viewRef.current, {
+              onSplit: onSplitRef.current,
+            });
           },
-          // Backspace at start of doc. Two paths:
-          //   • Doc empty → delete this block (caller decides whether
-          //     to allow it — e.g. forbids when this is the only block
-          //     on the surface).
-          //   • Doc non-empty → merge: append this doc's content into
-          //     the previous sibling's RichText, then delete this
-          //     block (Notion-style join). Caller handles the cross-
-          //     doc content extraction.
-          // Backspace anywhere else falls through to the default
-          // (delete one character).
           Backspace: (s) => {
-            if (!s.selection.empty) return false;
-            const atStart = s.selection.$head.pos === 1;
-            if (!atStart) return false;
-            const view = viewRef.current;
-            if (!view) return false;
-            const isEmpty = s.doc.textContent.length === 0;
-            if (isEmpty) {
-              if (!onDeleteSelfRef.current) return false;
-              onDeleteSelfRef.current();
-              return true;
-            }
-            const merge = onMergeWithPrevRef.current;
-            if (!merge) return false;
-            return merge(view);
+            return handleRichTextBackspace(s, viewRef.current, {
+              onDeleteSelf: onDeleteSelfRef.current,
+              onMergeWithPrev: onMergeWithPrevRef.current,
+            });
           },
-          // Cross-block navigation — Notion-style: leave the block when
-          // the caret is collapsed at the first/last editable position.
           ArrowUp: (s) => {
-            if (!s.selection.empty) return false;
-            const docEnd = s.doc.content.size;
-            if (!isAtDocStart(docEnd, s.selection.head)) return false;
-            const nav = onNavigatePrevRef.current;
-            return nav?.() ?? false;
+            return handleRichTextArrowUp(s, {
+              onNavigatePrev: onNavigatePrevRef.current,
+            });
           },
           ArrowDown: (s) => {
-            if (!s.selection.empty) return false;
-            const docEnd = s.doc.content.size;
-            if (!isAtDocEnd(docEnd, s.selection.head)) return false;
-            const nav = onNavigateNextRef.current;
-            return nav?.() ?? false;
+            return handleRichTextArrowDown(s, {
+              onNavigateNext: onNavigateNextRef.current,
+            });
           },
-          Tab: () => {
-            const handler = onIndentRef.current;
-            if (!handler) return false;
-            return handler();
-          },
-          "Shift-Tab": () => {
-            const handler = onOutdentRef.current;
-            if (!handler) return false;
-            return handler();
-          },
+          Tab: () => handleRichTextTab({ onIndent: onIndentRef.current }),
+          "Shift-Tab": () =>
+            handleRichTextShiftTab({ onOutdent: onOutdentRef.current }),
           // Slash menu trigger — only fires at the start of an empty
           // doc, matching the ADR § Block chrome / Slash menu contract.
           // Suppresses the "/" keystroke so it doesn't litter the doc

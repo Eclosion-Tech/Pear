@@ -62,7 +62,16 @@ export {
 export { RichTextRenderer } from "./rich-text/RichText";
 export type { RichTextTextDensity } from "./rich-text/RichText";
 export { RichTextEditor } from "./rich-text/RichTextEditor";
-export type { EditorSurfaceMode } from "./rich-text/RichTextEditor";
+export type { EditorSurfaceMode } from "./rich-text/richTextKeymap";
+export {
+  handleRichTextEnter,
+  handleRichTextBackspace,
+  handleRichTextArrowUp,
+  handleRichTextArrowDown,
+  inlineMarksDisabled,
+} from "./rich-text/richTextKeymap";
+export { resolveHeadingEnter } from "./heading/headingEnter";
+export type { HeadingEnterAction } from "./heading/headingEnter";
 export { FormattingToolbar } from "./rich-text/FormattingToolbar";
 export type { BlockToolbarActions } from "./rich-text/FormattingToolbar";
 export { HeadingRenderer } from "./heading/HeadingRenderer";

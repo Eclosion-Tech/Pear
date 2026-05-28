@@ -29,6 +29,16 @@ import {
 
 Public npm publish is planned after sprint 3c.3–4 stabilizes the API.
 
+## Tests
+
+```bash
+cd packages/pulp
+pnpm test        # run once
+pnpm test:watch  # watch mode
+```
+
+Vitest covers block navigation, structural actions (nest/merge/turn-into), heading Enter semantics, drag-move resolution, rich-text formatting, and ProseMirror keymap handlers.
+
 ## Undo / redo
 
 `SurfaceUndoCoordinator` + `<SurfaceUndoProvider>` — document-wide Cmd-Z mixing Yjs text edits and structural ops. Host app wraps mutations via `coordinator.wrapMutations()` and wires `restoreBlock` for soft-delete undo (Pear: `restore_component`).
