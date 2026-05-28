@@ -7,16 +7,29 @@ export type HeadingEnterAction =
       afterSiblingId: BlockId;
     }
   | {
-      kind: "append-section";
+      kind: "prepend-section";
       headingId: BlockId;
-      afterChildId?: BlockId;
     };
 
 /**
- * Decide what Enter does in a heading title editor.
+ * True when a heading behaves as a collapsible section — either explicitly
+ * (`section: true` in props) or implicitly because it already owns children.
+ * Once a heading has held children it stays a section (the prop is promoted),
+ * so an emptied section keeps its toggle — Notion's toggle-heading semantics.
+ */
+export function isHeadingSection(tree: BlockTree, node: BlockNode): boolean {
+  if (parseSectionFlag(node.props)) return true;
+  return (tree.byParent.get(node.id) ?? []).length > 0;
+}
+
+/**
+ * Decide where Enter in a heading title drops the split suffix.
  *
- * - No section children yet → new RichText sibling below the heading.
- * - Section exists → append RichText at end of nested section body.
+ * - Section heading → suffix becomes the **first child** of the section body.
+ * - Flat heading → suffix becomes a **RichText sibling** below the heading.
+ *
+ * The caller (`HeadingRenderer`) splits the title doc at the caret and seeds
+ * the new RichText with the suffix; at-end is the degenerate empty-suffix case.
  */
 export function resolveHeadingEnter(
   tree: BlockTree,
@@ -24,15 +37,8 @@ export function resolveHeadingEnter(
 ): HeadingEnterAction | null {
   if (node.parentId == null) return null;
 
-  const sectionChildren = tree.byParent.get(node.id) ?? [];
-
-  if (sectionChildren.length > 0) {
-    const lastChild = sectionChildren[sectionChildren.length - 1];
-    return {
-      kind: "append-section",
-      headingId: node.id,
-      afterChildId: lastChild?.id,
-    };
+  if (isHeadingSection(tree, node)) {
+    return { kind: "prepend-section", headingId: node.id };
   }
 
   return {
@@ -40,4 +46,12 @@ export function resolveHeadingEnter(
     parentId: node.parentId,
     afterSiblingId: node.id,
   };
+}
+
+function parseSectionFlag(propsJson: string): boolean {
+  try {
+    return (JSON.parse(propsJson) as { section?: unknown }).section === true;
+  } catch {
+    return false;
+  }
 }

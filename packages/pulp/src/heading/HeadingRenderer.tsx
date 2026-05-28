@@ -14,6 +14,7 @@ import { yDocToHtml } from "../rich-text/yjsToHtml";
 import { RichTextEditor, type EditorSurfaceMode } from "../rich-text/RichTextEditor";
 import { usePulp } from "../context/PulpProvider";
 import { useSurfaceFocus } from "../focus/SurfaceFocusProvider";
+import { useSurfaceSelectionOptional } from "../selection/SurfaceSelectionProvider";
 import type { BlockRendererProps } from "../registry";
 import type { BlockId } from "../types";
 import type { FocusPlacement } from "../focus/SurfaceFocusCoordinator";
@@ -39,6 +40,7 @@ import {
 } from "../rich-text/richTextFormatting";
 import { SPRINT_3B_SLASH_ITEMS, type SlashMenuItem } from "../SlashMenu";
 import { turnIntoToolbarItems } from "../toolbarTurnIntoItems";
+import { splitEditorAtCaret } from "../rich-text/splitEditorAtCaret";
 import { resolveHeadingEnter } from "./headingEnter";
 
 type HeadingProps = {
@@ -47,6 +49,8 @@ type HeadingProps = {
   text?: string;
   textAlign?: TextAlign;
   collapsed?: boolean;
+  /** Collapsible-section heading (owns nested children). */
+  section?: boolean;
 };
 
 const HEADING_STATIC_CLASS: Record<number, string> = {
@@ -64,14 +68,17 @@ export function HeadingRenderer({ node, tree, children }: BlockRendererProps) {
   const textAlign = normalizeTextAlign(props.textAlign);
   const collapsed = props.collapsed ?? false;
   const legacyText = props.text ?? "";
+  const sectionFlag = props.section === true;
 
   const sectionChildren = tree.byParent.get(node.id) ?? [];
-  const hasSection = sectionChildren.length > 0;
+  // Render as a section when explicitly flagged OR while it owns children.
+  const hasSection = sectionFlag || sectionChildren.length > 0;
 
   const state = tree.yjs.get(node.id);
   const { insertBlock, deleteBlock, moveBlock, saveYjsState, config, updateBlockProps } =
     usePulp();
   const focus = useSurfaceFocus();
+  const selection = useSurfaceSelectionOptional();
   const suppressSaveRef = useRef(false);
   const editorApplyFocusRef = useRef<((placement: FocusPlacement) => void) | null>(
     null,
@@ -131,17 +138,17 @@ export function HeadingRenderer({ node, tree, children }: BlockRendererProps) {
 
   useEffect(() => () => doc.destroy(), [doc]);
 
-  const onNavigatePrev = useCallback((): boolean => {
+  const onNavigatePrev = useCallback((goalX?: number): boolean => {
     const prev = getDocumentPrevBlock(tree, node.id);
     if (!prev) return false;
-    focus.requestFocus(prev.id, "end");
+    focus.requestFocus(prev.id, "end", goalX);
     return true;
   }, [tree, node.id, focus]);
 
-  const onNavigateNext = useCallback((): boolean => {
+  const onNavigateNext = useCallback((goalX?: number): boolean => {
     const next = getDocumentNextBlock(tree, node.id);
     if (!next) return false;
-    focus.requestFocus(next.id, "start");
+    focus.requestFocus(next.id, "start", goalX);
     return true;
   }, [tree, node.id, focus]);
 
@@ -165,12 +172,19 @@ export function HeadingRenderer({ node, tree, children }: BlockRendererProps) {
   }, [focus, node.id, tree, saveYjsState]);
 
   const onSplit = useCallback(
-    (_view: EditorView): boolean => {
+    (view: EditorView): boolean => {
       const action = resolveHeadingEnter(tree, node);
       if (!action) return false;
 
-      if (action.kind === "append-section") {
-        focus.armForInsert(action.headingId, action.afterChildId, {
+      // Split the title at the caret — prefix stays in the heading, suffix
+      // (marks carried) seeds the new RichText. At-end is an empty suffix.
+      const initialDoc = splitEditorAtCaret(view);
+      if (!initialDoc) return false;
+
+      if (action.kind === "prepend-section") {
+        // New body paragraph at the top of the section.
+        focus.armForInsert(action.headingId, undefined, {
+          initialDoc,
           focusAt: "start",
           knownSiblingIds: knownSiblingIdsForParent(tree, action.headingId),
         });
@@ -178,12 +192,12 @@ export function HeadingRenderer({ node, tree, children }: BlockRendererProps) {
           parentId: action.headingId,
           componentType: "RichText",
           propsJson: "{}",
-          afterSiblingId: action.afterChildId,
         });
         return true;
       }
 
       focus.armForInsert(action.parentId, action.afterSiblingId, {
+        initialDoc,
         focusAt: "start",
         knownSiblingIds: knownSiblingIdsForParent(tree, action.parentId),
       });
@@ -225,10 +239,11 @@ export function HeadingRenderer({ node, tree, children }: BlockRendererProps) {
         propsJson: headingPropsJson(level, {
           textAlign: align,
           collapsed,
+          section: sectionFlag,
         }),
       });
     },
-    [collapsed, level, node.id, updateBlockProps],
+    [collapsed, level, node.id, sectionFlag, updateBlockProps],
   );
 
   const blockActions = useMemo(
@@ -292,15 +307,46 @@ export function HeadingRenderer({ node, tree, children }: BlockRendererProps) {
     [node, tree, focus, saveYjsState],
   );
 
+  const onEscape = useCallback((): boolean => {
+    if (!selection) return false;
+    selection.controller.selectOnly(node.id);
+    focus.getEditor(node.id)?.dom.blur();
+    return true;
+  }, [selection, node.id, focus]);
+
   const toggleCollapsed = () => {
     updateBlockProps({
       componentId: node.id,
       propsJson: headingPropsJson(level, {
         textAlign,
         collapsed: !collapsed,
+        section: sectionFlag,
       }),
     });
   };
+
+  // Promote to an explicit section once the heading owns children, so the
+  // toggle persists even if the children are later removed (Notion's
+  // toggle-heading semantics). Idempotent — the condition clears after write.
+  useEffect(() => {
+    if (sectionFlag || sectionChildren.length === 0) return;
+    updateBlockProps({
+      componentId: node.id,
+      propsJson: headingPropsJson(level, {
+        textAlign,
+        collapsed,
+        section: true,
+      }),
+    });
+  }, [
+    sectionFlag,
+    sectionChildren.length,
+    level,
+    textAlign,
+    collapsed,
+    node.id,
+    updateBlockProps,
+  ]);
 
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [inViewport, setInViewport] = useState(true);
@@ -385,6 +431,7 @@ export function HeadingRenderer({ node, tree, children }: BlockRendererProps) {
               onOutdent={onOutdent}
               bindFocus={bindFocus}
               blockActions={blockActions}
+              onEscape={onEscape}
             />
           ) : (
             <div

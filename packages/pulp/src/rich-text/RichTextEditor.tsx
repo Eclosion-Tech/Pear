@@ -48,6 +48,15 @@ import {
   inlineMarksDisabled,
   type EditorSurfaceMode,
 } from "./richTextKeymap";
+import {
+  markdownShortcutPlugin,
+  type MarkdownShortcut,
+} from "./markdownInputRules";
+import {
+  slashMenuPlugin,
+  type SlashSession,
+} from "./slashMenuPlugin";
+import type { SlashMenuItem } from "../SlashMenu";
 
 export type { EditorSurfaceMode } from "./richTextKeymap";
 
@@ -101,7 +110,10 @@ export function RichTextEditor({
   onSplit,
   onDeleteSelf,
   onMergeWithPrev,
-  onSlashTrigger,
+  onSlashSessionChange,
+  onSlashNavigate,
+  onSlashCommit,
+  onSlashDismiss,
   suppressSaveRef,
   onNavigatePrev,
   onNavigateNext,
@@ -109,6 +121,10 @@ export function RichTextEditor({
   onOutdent,
   bindFocus,
   blockActions,
+  markdownShortcuts,
+  onMarkdownShortcut,
+  onPaste,
+  onEscape,
 }: {
   doc: Y.Doc;
   componentId: bigint;
@@ -152,12 +168,19 @@ export function RichTextEditor({
    */
   onMergeWithPrev?: (view: EditorView) => boolean;
   /**
-   * Called when the user types `/` at the start of an empty doc. Caller
-   * receives the cursor's screen rect (for popover positioning) and is
-   * expected to render the `<SlashMenu>`. The `/` keystroke is
-   * suppressed when this fires — it does not enter the doc.
+   * Inline slash menu — fired when a `/` session opens / updates / closes.
+   * The `/` and query live in the doc; caller renders `<InlineSlashMenu>` at
+   * `rect` and filters by `query`. Null closes the menu.
    */
-  onSlashTrigger?: (cursorRect: DOMRect) => void;
+  onSlashSessionChange?: (
+    session: { query: string; from: number; rect: DOMRect } | null,
+  ) => void;
+  /** While the slash menu is open — move the highlighted item. */
+  onSlashNavigate?: (direction: 1 | -1) => void;
+  /** While the slash menu is open — commit the highlighted item. Returns true if claimed. */
+  onSlashCommit?: () => boolean;
+  /** While the slash menu is open — dismiss without inserting. */
+  onSlashDismiss?: () => void;
   /**
    * When true, skip Yjs persistence — the block is being soft-deleted and
    * `save_component_yjs_state` would reject a deleted node.
@@ -178,6 +201,18 @@ export function RichTextEditor({
   bindFocus?: (applyFocus: (placement: FocusPlacement) => void) => () => void;
   /** Block-level toolbar controls (type dropdown, nest/unnest). */
   blockActions?: BlockToolbarActions;
+  /** Markdown prefix → block-type conversions (`- `, `# `, `[] `, …). */
+  markdownShortcuts?: MarkdownShortcut[];
+  /** Fired when a markdown shortcut matches; caller converts the block type. */
+  onMarkdownShortcut?: (item: SlashMenuItem) => void;
+  /**
+   * Multi-block paste. Caller parses the clipboard and, if it splits into 2+
+   * blocks, inserts them and returns true (paste consumed). Returns false to
+   * fall through to ProseMirror's default inline paste (single block).
+   */
+  onPaste?: (data: { text: string; html: string }, view: EditorView) => boolean;
+  /** Escape with no slash menu open — caller selects this block (block selection). */
+  onEscape?: () => boolean;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -202,7 +237,12 @@ export function RichTextEditor({
   const onSplitRef = useRef(onSplit);
   const onDeleteSelfRef = useRef(onDeleteSelf);
   const onMergeWithPrevRef = useRef(onMergeWithPrev);
-  const onSlashTriggerRef = useRef(onSlashTrigger);
+  const onSlashSessionChangeRef = useRef(onSlashSessionChange);
+  const onSlashNavigateRef = useRef(onSlashNavigate);
+  const onSlashCommitRef = useRef(onSlashCommit);
+  const onSlashDismissRef = useRef(onSlashDismiss);
+  /** True while a slash session is open — gates arrow/enter/escape routing. */
+  const slashActiveRef = useRef(false);
   const onNavigatePrevRef = useRef(onNavigatePrev);
   const onNavigateNextRef = useRef(onNavigateNext);
   const onIndentRef = useRef(onIndent);
@@ -210,10 +250,17 @@ export function RichTextEditor({
   const shouldClaimFocusRef = useRef(shouldClaimFocus);
   const bindFocusRef = useRef(bindFocus);
   const surfaceModeRef = useRef(surfaceMode);
+  const markdownShortcutsRef = useRef(markdownShortcuts);
+  const onMarkdownShortcutRef = useRef(onMarkdownShortcut);
+  const onPasteRef = useRef(onPaste);
+  const onEscapeRef = useRef(onEscape);
   onSplitRef.current = onSplit;
   onDeleteSelfRef.current = onDeleteSelf;
   onMergeWithPrevRef.current = onMergeWithPrev;
-  onSlashTriggerRef.current = onSlashTrigger;
+  onSlashSessionChangeRef.current = onSlashSessionChange;
+  onSlashNavigateRef.current = onSlashNavigate;
+  onSlashCommitRef.current = onSlashCommit;
+  onSlashDismissRef.current = onSlashDismiss;
   onNavigatePrevRef.current = onNavigatePrev;
   onNavigateNextRef.current = onNavigateNext;
   onIndentRef.current = onIndent;
@@ -221,6 +268,10 @@ export function RichTextEditor({
   shouldClaimFocusRef.current = shouldClaimFocus;
   bindFocusRef.current = bindFocus;
   surfaceModeRef.current = surfaceMode;
+  markdownShortcutsRef.current = markdownShortcuts;
+  onMarkdownShortcutRef.current = onMarkdownShortcut;
+  onPasteRef.current = onPaste;
+  onEscapeRef.current = onEscape;
 
   useLayoutEffect(() => {
     if (!hostRef.current) return;
@@ -240,6 +291,33 @@ export function RichTextEditor({
       plugins: [
         ySyncPlugin(fragment),
         yUndoPlugin({ undoManager }),
+        markdownShortcutPlugin({
+          getShortcuts: () => markdownShortcutsRef.current ?? [],
+          onConvert: (item) => onMarkdownShortcutRef.current?.(item),
+          isDisabled: () => surfaceModeRef.current.kind === "heading",
+        }),
+        slashMenuPlugin({
+          isDisabled: () => surfaceModeRef.current.kind === "heading",
+          onSessionChange: (session: (SlashSession & { view: EditorView }) | null) => {
+            slashActiveRef.current = session != null;
+            if (!session) {
+              onSlashSessionChangeRef.current?.(null);
+              return;
+            }
+            const coords = session.view.coordsAtPos(session.from);
+            const rect = new DOMRect(
+              coords.left,
+              coords.top,
+              0,
+              coords.bottom - coords.top,
+            );
+            onSlashSessionChangeRef.current?.({
+              query: session.query,
+              from: session.from,
+              rect,
+            });
+          },
+        }),
         keymap({
           // Mod-Z / Mod-Shift-Z routed at surface level — § Cross-block undo.
           "Mod-b": (s, dispatch) => {
@@ -289,10 +367,20 @@ export function RichTextEditor({
           // Enter is intercepted earlier as hard_break and never
           // reaches this handler.
           Enter: (s) => {
+            if (slashActiveRef.current) {
+              return onSlashCommitRef.current?.() ?? false;
+            }
             focusDebug("Enter key → onSplit", { componentId: idStr(componentId) });
             return handleRichTextEnter(s, viewRef.current, {
               onSplit: onSplitRef.current,
             });
+          },
+          Escape: () => {
+            if (slashActiveRef.current) {
+              onSlashDismissRef.current?.();
+              return true;
+            }
+            return onEscapeRef.current?.() ?? false;
           },
           Backspace: (s) => {
             return handleRichTextBackspace(s, viewRef.current, {
@@ -301,40 +389,29 @@ export function RichTextEditor({
             });
           },
           ArrowUp: (s) => {
-            return handleRichTextArrowUp(s, {
+            if (slashActiveRef.current) {
+              onSlashNavigateRef.current?.(-1);
+              return true;
+            }
+            return handleRichTextArrowUp(s, viewRef.current, {
               onNavigatePrev: onNavigatePrevRef.current,
             });
           },
           ArrowDown: (s) => {
-            return handleRichTextArrowDown(s, {
+            if (slashActiveRef.current) {
+              onSlashNavigateRef.current?.(1);
+              return true;
+            }
+            return handleRichTextArrowDown(s, viewRef.current, {
               onNavigateNext: onNavigateNextRef.current,
             });
           },
           Tab: () => handleRichTextTab({ onIndent: onIndentRef.current }),
           "Shift-Tab": () =>
             handleRichTextShiftTab({ onOutdent: onOutdentRef.current }),
-          // Slash menu trigger — only fires at the start of an empty
-          // doc, matching the ADR § Block chrome / Slash menu contract.
-          // Suppresses the "/" keystroke so it doesn't litter the doc
-          // when the user dismisses the menu. Editor.coordsAtPos gives
-          // us a viewport-relative cursor rect for popover anchoring.
-          "/": (s, _dispatch, view) => {
-            if (!view) return false;
-            if (!s.selection.empty) return false;
-            if (s.doc.textContent.length !== 0) return false;
-            if (s.selection.$head.pos !== 1) return false;
-            const trigger = onSlashTriggerRef.current;
-            if (!trigger) return false;
-            const coords = view.coordsAtPos(s.selection.from);
-            const rect = new DOMRect(
-              coords.left,
-              coords.top,
-              0,
-              coords.bottom - coords.top,
-            );
-            trigger(rect);
-            return true;
-          },
+          // The inline slash menu (`/`) is handled by `slashMenuPlugin` via
+          // `handleTextInput` — the keystroke enters the doc and forms the
+          // live query. Arrow/Enter/Escape above route to the open menu.
         }),
         keymap(baseKeymap),
       ],
@@ -347,6 +424,16 @@ export function RichTextEditor({
           "outline-none min-h-[1.5em] " +
           (placeholder ? `[&:empty]:before:content-[attr(data-placeholder)] ` : ""),
         "data-placeholder": placeholder ?? "",
+      },
+      handlePaste: (pasteView, event) => {
+        const fn = onPasteRef.current;
+        if (!fn) return false;
+        const cd = (event as ClipboardEvent).clipboardData;
+        if (!cd) return false;
+        return fn(
+          { text: cd.getData("text/plain"), html: cd.getData("text/html") },
+          pasteView,
+        );
       },
       handleDOMEvents: {
         click: (_view, event) => {
@@ -388,7 +475,7 @@ export function RichTextEditor({
     // gesture pulled them here.
     const focusSelf = (placement: FocusPlacement = "end") => {
       try {
-        applyEditorFocus(editorView, placement);
+        applyEditorFocus(editorView, placement, focus.consumeGoalX(componentId));
       } catch (err) {
         if (typeof console !== "undefined") {
           console.warn(

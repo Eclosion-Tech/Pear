@@ -1,4 +1,4 @@
-import { Selection } from "prosemirror-state";
+import { Selection, TextSelection } from "prosemirror-state";
 import type { EditorView } from "prosemirror-view";
 import * as Y from "yjs";
 import type { BlockId, BlockInsertEvent, BlockNode, BlockTree } from "../types";
@@ -22,12 +22,31 @@ export type ArmForInsertOpts = {
   knownSiblingIds?: readonly BlockId[];
 };
 
+/** One block in a batch insert (paste). Resolved FIFO as rows arrive. */
+export type BatchInsertEntry = {
+  parentId: BlockId;
+  afterSiblingId?: BlockId;
+  initialDoc?: Y.Doc;
+  /** Only one entry (the last block in document order) should claim focus. */
+  shouldFocus?: boolean;
+  focusAt?: FocusPlacement;
+  knownSiblingIds?: readonly BlockId[];
+};
+
 export type SurfaceFocusValue = {
   armForInsert: (
     parentId: BlockId,
     afterSiblingId?: BlockId,
     opts?: ArmForInsertOpts,
   ) => void;
+  /**
+   * Arm a batch of inserts (multi-block paste). Entries resolve FIFO in the
+   * order their rows arrive via `handleNodeInsert` — the caller inserts in the
+   * matching order. Each entry's `initialDoc` is stashed + persisted against
+   * the resolved row id; only the `shouldFocus` entry grabs focus. Isolated
+   * from the single-insert path.
+   */
+  armForInsertBatch: (entries: BatchInsertEntry[]) => void;
   /** True while an `armForInsert` is waiting for the new row to mount. */
   isAwaitingInsert: () => boolean;
   /** True while this block split and the new sibling has not yet taken focus. */
@@ -46,10 +65,16 @@ export type SurfaceFocusValue = {
     saveYjsState?: SaveYjsFn,
   ) => FocusPlacement | null;
   registerFocusable: (nodeId: BlockId, focusFn: FocusFn) => () => void;
-  requestFocus: (nodeId: BlockId, placement?: FocusPlacement) => void;
+  requestFocus: (
+    nodeId: BlockId,
+    placement?: FocusPlacement,
+    goalX?: number,
+  ) => void;
   registerEditor: (nodeId: BlockId, view: EditorView) => () => void;
   getEditor: (nodeId: BlockId) => EditorView | undefined;
   consumeInitialDoc: (nodeId: BlockId) => Y.Doc | undefined;
+  /** Read+clear a pending goal-column x for cross-block arrow navigation. */
+  consumeGoalX: (nodeId: BlockId) => number | undefined;
 };
 
 type FocusFn = (placement?: FocusPlacement) => void;
@@ -76,12 +101,26 @@ function idKey(id: BlockId): string {
   return id.toString();
 }
 
+type BatchEntry = {
+  parentId: BlockId;
+  afterSiblingId?: BlockId;
+  initialDoc?: Y.Doc;
+  shouldFocus: boolean;
+  focusAt: FocusPlacement;
+  knownSiblingIds: Set<BlockId>;
+};
+
 export class SurfaceFocusCoordinator {
   private pendingRef: PendingInsert | null = null;
+  /** FIFO batch-insert queue (paste). Resolved as rows arrive; separate from `pendingRef`. */
+  private pendingBatch: BatchEntry[] = [];
+  private batchResolvedIds = new Set<string>();
 
   /** String keys — avoids bigint map-key mismatches across substrate rows. */
   private focusPlacementRef = new Map<string, FocusPlacement>();
   private pendingInitialDocsRef = new Map<string, Y.Doc>();
+  /** Goal-column screen-x per node, set by arrow nav, consumed at focus apply. */
+  private pendingGoalXRef = new Map<string, number>();
   private editorsRef = new Map<string, EditorView>();
   private focusablesRef = new Map<string, FocusFn>();
   /** RichText that initiated the insert — blurred once the new block focuses. */
@@ -99,6 +138,8 @@ export class SurfaceFocusCoordinator {
     surfaceId: BlockId,
     saveYjsState?: SaveYjsFn,
   ): void {
+    if (this.tryResolveBatch(row, surfaceId, saveYjsState)) return;
+
     const pending = this.pendingRef;
     if (!pending) {
       focusDebug("handleNodeInsert: skip (no pending arm)", {
@@ -146,6 +187,8 @@ export class SurfaceFocusCoordinator {
    * Call from a host layout/effect whenever `BlockTree` updates.
    */
   syncTree(tree: BlockTree, saveYjsState?: SaveYjsFn): void {
+    this.syncBatch(tree, saveYjsState);
+
     const pending = this.pendingRef;
     if (!pending) return;
 
@@ -164,6 +207,78 @@ export class SurfaceFocusCoordinator {
       afterSibling: idStr(pending.afterSiblingId ?? null),
     });
     this.resolvePendingInsert(candidate.id, pending, saveYjsState);
+  }
+
+  /** Resolve the batch head against an arriving insert row (primary path). */
+  private tryResolveBatch(
+    row: BlockInsertEvent,
+    surfaceId: BlockId,
+    saveYjsState?: SaveYjsFn,
+  ): boolean {
+    if (this.pendingBatch.length === 0) return false;
+    if (row.surfaceId !== surfaceId || row.deletedAt != null) return false;
+    const head = this.pendingBatch[0];
+    if (!parentIdsMatch(row.parentId, head.parentId)) return false;
+    if (head.knownSiblingIds.has(row.id)) return false;
+    if (this.batchResolvedIds.has(idKey(row.id))) return false;
+
+    this.pendingBatch.shift();
+    this.batchResolvedIds.add(idKey(row.id));
+    this.resolveBatchEntry(head, row.id, saveYjsState);
+    if (this.pendingBatch.length === 0) this.batchResolvedIds.clear();
+    return true;
+  }
+
+  /**
+   * Fallback for batch resolution when an insert-row callback races React —
+   * only acts when exactly one unresolved candidate exists under the parent
+   * (unambiguous), otherwise waits for the per-row `handleNodeInsert`.
+   */
+  private syncBatch(tree: BlockTree, saveYjsState?: SaveYjsFn): void {
+    while (this.pendingBatch.length > 0) {
+      const head = this.pendingBatch[0];
+      const candidates = siblingsForParent(tree, head.parentId).filter(
+        (s) =>
+          !head.knownSiblingIds.has(s.id) &&
+          !this.batchResolvedIds.has(idKey(s.id)),
+      );
+      if (candidates.length !== 1) break;
+      const only = candidates[0];
+      this.pendingBatch.shift();
+      this.batchResolvedIds.add(idKey(only.id));
+      this.resolveBatchEntry(head, only.id, saveYjsState);
+    }
+    if (this.pendingBatch.length === 0) this.batchResolvedIds.clear();
+  }
+
+  private resolveBatchEntry(
+    entry: BatchEntry,
+    newId: BlockId,
+    saveYjsState?: SaveYjsFn,
+  ): void {
+    if (entry.initialDoc) {
+      this.pendingInitialDocsRef.set(idKey(newId), entry.initialDoc);
+      if (saveYjsState) {
+        try {
+          saveYjsState(newId, Y.encodeStateAsUpdate(entry.initialDoc));
+        } catch (err) {
+          if (typeof console !== "undefined") {
+            console.warn(
+              `[pulp/SurfaceFocus] failed to persist batch doc for ${newId}:`,
+              err,
+            );
+          }
+        }
+      }
+    }
+    if (entry.shouldFocus) {
+      this.insertHandoff = {
+        targetId: newId,
+        placement: entry.focusAt,
+        sourceId: null,
+      };
+      this.focusTarget(newId, entry.focusAt);
+    }
   }
 
   private matchPendingInsertForNode(
@@ -323,6 +438,18 @@ export class SurfaceFocusCoordinator {
           hasInitialDoc: opts?.initialDoc != null,
         });
       },
+      armForInsertBatch: (entries) => {
+        this.pendingBatch = entries.map((e) => ({
+          parentId: e.parentId,
+          afterSiblingId: e.afterSiblingId,
+          initialDoc: e.initialDoc,
+          shouldFocus: e.shouldFocus ?? false,
+          focusAt: e.focusAt ?? "end",
+          knownSiblingIds: new Set(e.knownSiblingIds ?? []),
+        }));
+        this.batchResolvedIds.clear();
+        focusDebug("armForInsertBatch", { count: entries.length });
+      },
       isAwaitingInsert: () => this.pendingRef != null,
       isHandoffSource: (nodeId) =>
         this.insertSourceId != null && idsMatch(this.insertSourceId, nodeId),
@@ -350,8 +477,11 @@ export class SurfaceFocusCoordinator {
           }
         };
       },
-      requestFocus: (nodeId, placement = "end") => {
+      requestFocus: (nodeId, placement = "end", goalX) => {
         focusDebug("requestFocus", { nodeId: idStr(nodeId), placement });
+        if (goalX != null) {
+          this.pendingGoalXRef.set(idKey(nodeId), goalX);
+        }
         this.focusTarget(nodeId, placement);
       },
       registerEditor: (nodeId, view) => {
@@ -395,6 +525,12 @@ export class SurfaceFocusCoordinator {
         };
       },
       getEditor: (nodeId) => this.editorsRef.get(idKey(nodeId)),
+      consumeGoalX: (nodeId) => {
+        const key = idKey(nodeId);
+        const x = this.pendingGoalXRef.get(key);
+        if (x != null) this.pendingGoalXRef.delete(key);
+        return x;
+      },
       consumeInitialDoc: (nodeId) => {
         const key = idKey(nodeId);
         const doc = this.pendingInitialDocsRef.get(key);
@@ -478,10 +614,16 @@ function describePendingInsertFailure(
   return { reason: "unknown", siblingIds };
 }
 
-/** Focus a live ProseMirror view and place the caret. */
+/**
+ * Focus a live ProseMirror view and place the caret. When `goalX` is given
+ * (cross-block arrow navigation) the caret lands on the entry line nearest
+ * that screen-x — preserving the horizontal column. Defensive: any failure of
+ * the layout-dependent coords APIs falls back to the plain start/end caret.
+ */
 export function applyEditorFocus(
   view: EditorView,
   placement: FocusPlacement,
+  goalX?: number,
 ): void {
   view.dom.focus({ preventScroll: false });
   view.focus();
@@ -489,8 +631,24 @@ export function applyEditorFocus(
     placement === "start"
       ? Selection.atStart(view.state.doc)
       : Selection.atEnd(view.state.doc);
-  const tr = view.state.tr.setSelection(sel).scrollIntoView();
-  view.dispatch(tr);
+  view.dispatch(view.state.tr.setSelection(sel).scrollIntoView());
+
+  if (goalX != null && typeof view.posAtCoords === "function") {
+    try {
+      const lineCoords = view.coordsAtPos(view.state.selection.head);
+      const found = view.posAtCoords({
+        left: goalX,
+        top: (lineCoords.top + lineCoords.bottom) / 2,
+      });
+      if (found) {
+        const $pos = view.state.doc.resolve(found.pos);
+        view.dispatch(view.state.tr.setSelection(TextSelection.near($pos)));
+      }
+    } catch {
+      /* keep the start/end caret */
+    }
+  }
+
   view.dom.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
@@ -504,6 +662,7 @@ export function editorHasFocus(view: EditorView): boolean {
 
 export const NOOP_SURFACE_FOCUS: SurfaceFocusValue = {
   armForInsert: () => {},
+  armForInsertBatch: () => {},
   isAwaitingInsert: () => false,
   isHandoffSource: () => false,
   claimFocus: () => null,
@@ -514,4 +673,5 @@ export const NOOP_SURFACE_FOCUS: SurfaceFocusValue = {
   registerEditor: () => () => {},
   getEditor: () => undefined,
   consumeInitialDoc: () => undefined,
+  consumeGoalX: () => undefined,
 };

@@ -54,6 +54,10 @@ export function deepestNestableBlock(
   const children = tree.byParent.get(node.id) ?? [];
   if (children.length === 0) return node;
   const last = children[children.length - 1]!;
+  const lastDef = tree.defs.get(last.componentType);
+  // Only descend into children that themselves accept nesting — e.g. stop at
+  // RichText rows inside list items / headings (nest as sibling after them).
+  if (!lastDef?.acceptsChildren) return node;
   return deepestNestableBlock(last, tree);
 }
 

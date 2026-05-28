@@ -22,13 +22,14 @@ export function normalizeTextAlign(raw: unknown): TextAlign {
 
 export function headingPropsJson(
   level: number,
-  opts: { textAlign?: TextAlign; collapsed?: boolean } = {},
+  opts: { textAlign?: TextAlign; collapsed?: boolean; section?: boolean } = {},
 ): string {
   const textAlign = opts.textAlign ?? "left";
   return JSON.stringify({
     level,
     ...(textAlign !== "left" ? { textAlign } : {}),
     ...(opts.collapsed ? { collapsed: true } : {}),
+    ...(opts.section ? { section: true } : {}),
   });
 }
 

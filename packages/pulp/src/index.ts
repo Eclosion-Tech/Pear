@@ -144,3 +144,12 @@ export { yDocToPlainText } from "./rich-text/yjsToHtml";
 
 // Cross-block keyboard navigation
 export { getBlockSibling, getDocumentPrevBlock, getDocumentNextBlock } from "./navigation/blockNavigation";
+
+// Block-level selection (marquee / cross-block drag / keyboard)
+export {
+  SurfaceSelectionProvider,
+  useSurfaceSelection,
+  useSurfaceSelectionOptional,
+} from "./selection/SurfaceSelectionProvider";
+export type { SurfaceSelectionValue } from "./selection/SurfaceSelectionProvider";
+export { SurfaceSelectionController } from "./selection/SurfaceSelectionController";

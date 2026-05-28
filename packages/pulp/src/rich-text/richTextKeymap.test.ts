@@ -87,25 +87,56 @@ describe("handleRichTextBackspace", () => {
 });
 
 describe("handleRichTextArrowUp / ArrowDown", () => {
-  it("navigates at doc boundaries only", () => {
+  it("navigates at doc boundaries only (position fallback without a live view)", () => {
     const onNavigatePrev = vi.fn(() => true);
     const onNavigateNext = vi.fn(() => true);
     const start = docState("Hi", "start");
     const end = docState("Hi", "end");
 
-    expect(handleRichTextArrowUp(start, { onNavigatePrev })).toBe(true);
-    expect(handleRichTextArrowDown(end, { onNavigateNext })).toBe(true);
-    expect(handleRichTextArrowUp(end, { onNavigatePrev })).toBe(false);
-    expect(handleRichTextArrowDown(start, { onNavigateNext })).toBe(false);
+    expect(
+      handleRichTextArrowUp(start, mockEditorView(start), { onNavigatePrev }),
+    ).toBe(true);
+    expect(
+      handleRichTextArrowDown(end, mockEditorView(end), { onNavigateNext }),
+    ).toBe(true);
+    expect(
+      handleRichTextArrowUp(end, mockEditorView(end), { onNavigatePrev }),
+    ).toBe(false);
+    expect(
+      handleRichTextArrowDown(start, mockEditorView(start), { onNavigateNext }),
+    ).toBe(false);
+  });
+
+  it("uses endOfTextblock for visual-line detection when a live view supports it", () => {
+    const onNavigatePrev = vi.fn(() => true);
+    // Caret at doc end, but endOfTextblock("up") reports first visual line.
+    const end = docState("multi line wrapped", "end");
+    const view = {
+      ...mockEditorView(end),
+      endOfTextblock: (dir: string) => dir === "up",
+      coordsAtPos: () => ({ left: 42, top: 0, bottom: 10, right: 42 }),
+    } as unknown as Parameters<typeof handleRichTextArrowUp>[1];
+
+    expect(handleRichTextArrowUp(end, view, { onNavigatePrev })).toBe(true);
+    expect(onNavigatePrev).toHaveBeenCalledWith(42);
   });
 });
 
 describe("handleRichTextTab", () => {
-  it("delegates indent/outdent handlers", () => {
-    const onIndent = vi.fn(() => true);
-    const onOutdent = vi.fn(() => true);
+  it("always delegates indent/outdent regardless of caret position", () => {
+    const onIndent = vi.fn(() => false);
+    const onOutdent = vi.fn(() => false);
+    const mid = docState("Hello", "end");
+
     expect(handleRichTextTab({ onIndent })).toBe(true);
     expect(handleRichTextShiftTab({ onOutdent })).toBe(true);
+    expect(onIndent).toHaveBeenCalledOnce();
+    expect(onOutdent).toHaveBeenCalledOnce();
+
+    // Still consumes Tab even when nest/unnest is a no-op (prevents focus escape).
+    expect(handleRichTextTab({ onIndent: () => false })).toBe(true);
+    expect(handleRichTextTab({})).toBe(false);
+    expect(handleRichTextEnter(mid, mockEditorView(mid), {})).toBe(false);
   });
 });
 

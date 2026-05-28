@@ -10,27 +10,21 @@ import {
 import { createPortal } from "react-dom";
 
 /**
- * Slash-menu popover — opened by `<RichText>` when the user types `/`
- * at the start of an empty doc. Patterned after Notion / BlockNote.
+ * Slash-menu popover. Two presentations share one item list:
  *
- * **Item set.** Sprint 3b ships a curated list pinned to the
- * non-data-bound built-ins that have working sprint 1/2/3a renderers.
- * Form / Input / Button require data bindings the slash menu doesn't
- * have a picker for yet — they're deferred. Image needs an attachment
- * picker; also deferred. The registry has all types, but slash-menu
- * visibility is a *curation* concern, not a registry concern — see
- * `docs/PEAR_WEB_RENDERER.md` § Open question #1 (menu-visibility
- * capability on ComponentTypeDefinition).
+ *   - `<SlashMenu>` — a standalone, self-filtering picker with its own search
+ *     input and keyboard handling. Used by `<BlockMenu>`'s "Turn into…" entry.
+ *   - `<InlineSlashMenu>` (rich-text/) — driven by the editor: the query lives
+ *     in the document and arrow/enter/escape come from the ProseMirror keymap.
  *
- * **Selection contract.** On select, the parent calls back with the
- * chosen `componentType` and `defaultProps`. The parent owns the
- * insert-and-replace dispatch — slash menu stays UI-only so we can
- * reuse it (post-sprint-3b) for the BlockMenu's "Turn into…" entry.
+ * Both render `<SlashMenuList>` for the sectioned option list.
  *
- * **Focus.** Menu opens with the filter input autofocused. Arrow keys
- * navigate, Enter selects, Escape closes. The filter is a `<input>`
- * not a contenteditable — keeps the popover keyboard contract simple
- * and lets the browser handle composition events normally.
+ * **Item set.** The curated default below pins to the non-data-bound built-ins
+ * with working renderers. The host (Pear) extends it via `config.slashItems`.
+ *
+ * **Selection contract.** On select, the parent receives the chosen
+ * `componentType` + `defaultProps` and owns the insert/turn-into dispatch —
+ * the menu stays UI-only.
  */
 export type SlashMenuItem = {
   id: string;
@@ -97,6 +91,22 @@ export const SPRINT_3B_SLASH_ITEMS: SlashMenuItem[] = [
   },
 ];
 
+/** Filter the item list by a free-text query (label / section / tokens). */
+export function filterSlashItems(
+  items: SlashMenuItem[],
+  query: string,
+): SlashMenuItem[] {
+  const q = query.trim().toLowerCase();
+  if (q === "") return items;
+  return items.filter(
+    (i) =>
+      i.label.toLowerCase().includes(q) ||
+      i.section?.toLowerCase().includes(q) ||
+      i.searchTokens.some((t) => t.includes(q)),
+  );
+}
+
+/** Standalone, self-filtering picker (BlockMenu "Turn into…"). */
 export function SlashMenu({
   anchorRect,
   onSelect,
@@ -113,16 +123,7 @@ export function SlashMenu({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (q === "") return items;
-    return items.filter(
-      (i) =>
-        i.label.toLowerCase().includes(q) ||
-        i.section?.toLowerCase().includes(q) ||
-        i.searchTokens.some((t) => t.includes(q)),
-    );
-  }, [items, query]);
+  const filtered = useMemo(() => filterSlashItems(items, query), [items, query]);
 
   // Reset active index whenever the filtered list shape changes —
   // otherwise activeIndex can stay pointing past the end.
@@ -160,7 +161,7 @@ export function SlashMenu({
     };
   }, [onClose]);
 
-  const position = useMemo(() => computePosition(anchorRect), [anchorRect]);
+  const position = useMemo(() => computeSlashMenuPosition(anchorRect), [anchorRect]);
 
   return createPortal(
     <div
@@ -200,61 +201,90 @@ export function SlashMenu({
                    outline-none placeholder:text-neutral-400
                    dark:placeholder:text-neutral-500"
       />
-      <div className="max-h-[280px] overflow-y-auto py-1" role="listbox">
-        {filtered.length === 0 ? (
-          <div className="px-3 py-2 text-xs text-neutral-400 dark:text-neutral-500">
-            No matching blocks
-          </div>
-        ) : (
-          filtered.map((item, idx) => {
-            const section = normalizedSection(item);
-            const previousSection =
-              idx > 0 ? normalizedSection(filtered[idx - 1]) : null;
-            const showSection = section != null && section !== previousSection;
-
-            return (
-              <Fragment key={item.id}>
-                {showSection ? (
-                  <div
-                    role="presentation"
-                    className="px-3 pb-1 pt-2 text-[11px] font-medium uppercase
-                               text-neutral-500 dark:text-neutral-400"
-                  >
-                    {section}
-                  </div>
-                ) : null}
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={idx === activeIndex}
-                  onMouseEnter={() => setActiveIndex(idx)}
-                  onClick={() => onSelect(item)}
-                  className={`flex w-full flex-col items-start gap-0.5 px-3 py-1.5 text-left
-                              transition-colors
-                              ${
-                                idx === activeIndex
-                                  ? "bg-neutral-100 dark:bg-neutral-800"
-                                  : "hover:bg-neutral-50 dark:hover:bg-neutral-800/60"
-                              }`}
-                >
-                  <span className="text-sm text-neutral-900 dark:text-neutral-100">
-                    {item.label}
-                  </span>
-                  <span className="text-xs text-neutral-500 dark:text-neutral-400">
-                    {item.description}
-                  </span>
-                </button>
-              </Fragment>
-            );
-          })
-        )}
-      </div>
+      <SlashMenuList
+        items={filtered}
+        activeIndex={activeIndex}
+        onHover={setActiveIndex}
+        onSelect={onSelect}
+      />
     </div>,
     document.body,
   );
 }
 
-function computePosition(anchor: DOMRect): { top: number; left: number } {
+/** Presentational, sectioned option list. Shared by both presentations. */
+export function SlashMenuList({
+  items,
+  activeIndex,
+  onHover,
+  onSelect,
+}: {
+  items: SlashMenuItem[];
+  activeIndex: number;
+  onHover: (index: number) => void;
+  onSelect: (item: SlashMenuItem) => void;
+}) {
+  return (
+    <div className="max-h-[280px] overflow-y-auto py-1" role="listbox">
+      {items.length === 0 ? (
+        <div className="px-3 py-2 text-xs text-neutral-400 dark:text-neutral-500">
+          No matching blocks
+        </div>
+      ) : (
+        items.map((item, idx) => {
+          const section = normalizedSection(item);
+          const previousSection =
+            idx > 0 ? normalizedSection(items[idx - 1]) : null;
+          const showSection = section != null && section !== previousSection;
+
+          return (
+            <Fragment key={item.id}>
+              {showSection ? (
+                <div
+                  role="presentation"
+                  className="px-3 pb-1 pt-2 text-[11px] font-medium uppercase
+                             text-neutral-500 dark:text-neutral-400"
+                >
+                  {section}
+                </div>
+              ) : null}
+              <button
+                type="button"
+                role="option"
+                aria-selected={idx === activeIndex}
+                onMouseEnter={() => onHover(idx)}
+                onMouseDown={(e) => {
+                  // Keep editor focus (inline menu) — selection runs on click.
+                  e.preventDefault();
+                }}
+                onClick={() => onSelect(item)}
+                className={`flex w-full flex-col items-start gap-0.5 px-3 py-1.5 text-left
+                            transition-colors
+                            ${
+                              idx === activeIndex
+                                ? "bg-neutral-100 dark:bg-neutral-800"
+                                : "hover:bg-neutral-50 dark:hover:bg-neutral-800/60"
+                            }`}
+              >
+                <span className="text-sm text-neutral-900 dark:text-neutral-100">
+                  {item.label}
+                </span>
+                <span className="text-xs text-neutral-500 dark:text-neutral-400">
+                  {item.description}
+                </span>
+              </button>
+            </Fragment>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+export function computeSlashMenuPosition(anchor: DOMRect): {
+  top: number;
+  left: number;
+} {
   const top = anchor.bottom + 4;
   const desiredLeft = anchor.left;
   const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1024;
@@ -263,7 +293,7 @@ function computePosition(anchor: DOMRect): { top: number; left: number } {
   return { top, left };
 }
 
-function normalizedSection(item: SlashMenuItem): string | null {
-  const section = item.section?.trim();
+function normalizedSection(item: SlashMenuItem | undefined): string | null {
+  const section = item?.section?.trim();
   return section && section.length > 0 ? section : null;
 }

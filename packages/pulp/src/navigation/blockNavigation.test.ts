@@ -91,7 +91,19 @@ describe("resolveNestTarget", () => {
     expect(target?.id).toBe(2n);
   });
 
-  it("nests under deepest point of previous list stack", () => {
+  it("nests into heading after existing section content", () => {
+    const tree = makeTree([
+      { id: 1, type: "Container", parent: null },
+      { id: 2, type: "Heading", parent: 1 },
+      { id: 3, type: "RichText", parent: 2 },
+      { id: 4, type: "RichText", parent: 1 },
+    ]);
+
+    expect(deepestNestableBlock(node(tree, 2), tree).id).toBe(2n);
+    expect(resolveNestTarget(node(tree, 4), tree)?.id).toBe(2n);
+  });
+
+  it("nests under list item when previous row has a RichText child", () => {
     const tree = makeTree([
       { id: 1, type: "Container", parent: null },
       { id: 2, type: "BulletListItem", parent: 1 },
@@ -99,9 +111,20 @@ describe("resolveNestTarget", () => {
       { id: 4, type: "BulletListItem", parent: 1 },
     ]);
 
+    expect(deepestNestableBlock(node(tree, 2), tree).id).toBe(2n);
+    expect(resolveNestTarget(node(tree, 4), tree)?.id).toBe(2n);
+  });
+
+  it("nests under deepest nested list item in a stack", () => {
+    const tree = makeTree([
+      { id: 1, type: "Container", parent: null },
+      { id: 2, type: "BulletListItem", parent: 1 },
+      { id: 3, type: "BulletListItem", parent: 2 },
+      { id: 4, type: "BulletListItem", parent: 1 },
+    ]);
+
     expect(deepestNestableBlock(node(tree, 2), tree).id).toBe(3n);
-    const target = resolveNestTarget(node(tree, 4), tree);
-    expect(target?.id).toBe(3n);
+    expect(resolveNestTarget(node(tree, 4), tree)?.id).toBe(3n);
   });
 });
 

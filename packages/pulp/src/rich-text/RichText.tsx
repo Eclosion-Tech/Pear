@@ -11,23 +11,31 @@ import {
 } from "react";
 import * as Y from "yjs";
 import type { EditorView } from "prosemirror-view";
-import { splitBlock } from "prosemirror-commands";
-import { prosemirrorToYDoc } from "y-prosemirror";
 import { yDocToHtml } from "./yjsToHtml";
 import { usePulp } from "../context/PulpProvider";
 import { useSurfaceFocus } from "../focus/SurfaceFocusProvider";
-import { PROSEMIRROR_FRAGMENT_KEY } from "./richTextSchema";
+import { useSurfaceSelectionOptional } from "../selection/SurfaceSelectionProvider";
+import { splitEditorAtCaret } from "./splitEditorAtCaret";
 import type { BlockRendererProps } from "../registry";
 import type { BlockId } from "../types";
 import { RichTextEditor } from "./RichTextEditor";
-import { SlashMenu, SPRINT_3B_SLASH_ITEMS, type SlashMenuItem } from "../SlashMenu";
+import {
+  SPRINT_3B_SLASH_ITEMS,
+  filterSlashItems,
+  type SlashMenuItem,
+} from "../SlashMenu";
+import { InlineSlashMenu } from "./InlineSlashMenu";
+import { closeSlashSession } from "./slashMenuPlugin";
+import { parseClipboardToBlocks } from "./pasteToBlocks";
 import { turnIntoToolbarItems } from "../toolbarTurnIntoItems";
+import { buildMarkdownShortcuts } from "./markdownInputRules";
 import { knownSiblingIdsForParent, siblingsForParent, idsMatch } from "../focus/insertFocusHelpers";
 import type { FocusPlacement } from "../focus/SurfaceFocusCoordinator";
 import { focusDebug, idStr } from "../focus/focusDebug";
 import { getDocumentPrevBlock, getDocumentNextBlock } from "../navigation/blockNavigation";
 import {
   exitEmptyListItemToRichText,
+  unlistToRichText,
   isDocumentListItemType,
   nestBlockUnderPreviousSibling,
   unnestBlock,
@@ -36,6 +44,7 @@ import {
   canUnnestBlock,
   deleteEmptyBlockAndFocusDocumentPrev,
   mergeBlockIntoDocumentPrev,
+  insertBlocksAfter,
 } from "../blockActions";
 
 /**
@@ -89,6 +98,7 @@ export function RichTextRenderer({
   const state = tree.yjs.get(node.id);
   const { insertBlock, deleteBlock, moveBlock, saveYjsState, config, updateBlockProps } = usePulp();
   const focus = useSurfaceFocus();
+  const selection = useSurfaceSelectionOptional();
   /** Set before intentional soft-delete so unmount flush skips save. */
   const suppressSaveRef = useRef(false);
   const editorApplyFocusRef = useRef<((placement: FocusPlacement) => void) | null>(
@@ -108,17 +118,17 @@ export function RichTextRenderer({
     deleteBlock({ componentId: node.id });
   };
 
-  const onNavigatePrev = useCallback((): boolean => {
+  const onNavigatePrev = useCallback((goalX?: number): boolean => {
     const prev = getDocumentPrevBlock(tree, node.id);
     if (!prev) return false;
-    focus.requestFocus(prev.id, "end");
+    focus.requestFocus(prev.id, "end", goalX);
     return true;
   }, [tree, node.id, focus]);
 
-  const onNavigateNext = useCallback((): boolean => {
+  const onNavigateNext = useCallback((goalX?: number): boolean => {
     const next = getDocumentNextBlock(tree, node.id);
     if (!next) return false;
-    focus.requestFocus(next.id, "start");
+    focus.requestFocus(next.id, "start", goalX);
     return true;
   }, [tree, node.id, focus]);
 
@@ -186,30 +196,12 @@ export function RichTextRenderer({
       );
     }
 
-    // Apply ProseMirror's built-in splitBlock — handles all positions
-    // (start / middle / end of a paragraph, at boundaries between
-    // paragraphs) and produces a clean paragraph structure. If
-    // splitBlock can't apply at the current cursor (e.g. inside a
-    // node that doesn't allow splits), fall through to default Enter
-    // behaviour so the user isn't stuck.
-    const splitWorked = splitBlock(view.state, view.dispatch);
-    if (!splitWorked) return false;
-
-    const afterState = view.state;
-    const cursorAfterSplit = afterState.selection.from;
-    // boundary = doc-level position of the new paragraph's opening tag.
-    const boundary = cursorAfterSplit - 1;
-    const docEnd = afterState.doc.content.size;
-    if (boundary < 0 || boundary > docEnd) return false;
-
-    // Extract suffix as a clean doc node (boundaries are at paragraph
-    // openings/closings, so `Node.cut` returns full paragraphs).
-    const suffixDoc = afterState.doc.cut(boundary, docEnd);
-    const initialDoc = prosemirrorToYDoc(suffixDoc, PROSEMIRROR_FRAGMENT_KEY);
-
-    // Truncate this doc — drop everything from the new-paragraph
-    // boundary to end. Single transaction, single Yjs update.
-    view.dispatch(afterState.tr.delete(boundary, docEnd));
+    // Split the doc at the caret — prefix stays here, suffix seeds the new
+    // sibling (marks carried). Handles start / middle / end uniformly; at-end
+    // is just an empty suffix. Null → splitBlock couldn't apply, fall through
+    // to default Enter so the user isn't stuck.
+    const initialDoc = splitEditorAtCaret(view);
+    if (!initialDoc) return false;
 
     focus.armForInsert(node.parentId, node.id, {
       initialDoc,
@@ -259,6 +251,68 @@ export function RichTextRenderer({
     [config.slashItems, tree.defs],
   );
 
+  // Markdown prefix shortcuts (`- `, `# `, `[] `, …) — derived from the same
+  // curated turn-into set so unregistered types are skipped automatically.
+  const markdownShortcuts = useMemo(
+    () => buildMarkdownShortcuts(turnIntoItems),
+    [turnIntoItems],
+  );
+  const onMarkdownShortcut = useCallback(
+    (item: SlashMenuItem) => {
+      turnIntoBlock(
+        node,
+        tree,
+        item,
+        { insertBlock, deleteBlock, moveBlock, updateBlockProps, saveYjsState },
+        focus,
+      );
+    },
+    [
+      node,
+      tree,
+      insertBlock,
+      deleteBlock,
+      moveBlock,
+      updateBlockProps,
+      saveYjsState,
+      focus,
+    ],
+  );
+
+  // Multi-block paste — split a markdown / multi-paragraph / HTML clipboard
+  // into sibling blocks below this one. Single-block pastes fall through to
+  // ProseMirror's default inline paste (which preserves marks in place).
+  const onPaste = (
+    data: { text: string; html: string },
+    view: EditorView,
+  ): boolean => {
+    if (node.parentId == null) return false;
+    const availableTypes = new Set(tree.defs.keys());
+    const blocks = parseClipboardToBlocks(data, {
+      shortcuts: markdownShortcuts,
+      availableTypes,
+    });
+    if (blocks.length < 2) return false;
+
+    const hostEmpty = view.state.doc.textContent.trim().length === 0;
+    insertBlocksAfter(node, blocks, { insertBlock }, focus, tree);
+
+    // Pasting into an empty line with siblings: drop the empty host so the
+    // pasted blocks take its place (mirrors the slash-insert behavior).
+    const siblingCount = tree.byParent.get(node.parentId)?.length ?? 0;
+    if (hostEmpty && siblingCount > 1) removeSelf();
+    return true;
+  };
+
+  // Escape with no slash menu open — promote to whole-block selection and
+  // blur the editor so surface-level keys (Backspace/Escape) take over.
+  const onEscape = (): boolean => {
+    if (!selection) return false;
+    selection.controller.selectOnly(node.id);
+    focus.getEditor(node.id)?.dom.blur();
+    return true;
+  };
+
   const blockActions = useMemo(
     () => ({
       componentType: node.componentType,
@@ -301,19 +355,13 @@ export function RichTextRenderer({
   // previous block (parent list item when nested — not unnest-to-root).
   const onDeleteSelf = useCallback(() => {
     suppressSaveRef.current = true;
-    if (
-      deleteEmptyBlockAndFocusDocumentPrev(node, tree, focus, deleteBlock)
-    ) {
+    // List item → un-list to a paragraph first (Notion/BlockNote); a second
+    // Backspace on the resulting empty RichText then deletes/merges.
+    if (isDocumentListItemType(node.componentType)) {
+      unlistToRichText(node, tree, { insertBlock, deleteBlock }, focus);
       return;
     }
-    if (isDocumentListItemType(node.componentType)) {
-      exitEmptyListItemToRichText(
-        node,
-        tree,
-        { insertBlock, deleteBlock },
-        focus,
-      );
-    }
+    deleteEmptyBlockAndFocusDocumentPrev(node, tree, focus, deleteBlock);
   }, [node, tree, focus, deleteBlock, insertBlock]);
 
   const canBackspaceDeleteEmpty =
@@ -323,6 +371,11 @@ export function RichTextRenderer({
 
   const onMergeWithPrev = (view: EditorView): boolean => {
     suppressSaveRef.current = true;
+    // List item → un-list before merging (Notion/BlockNote): the first
+    // Backspace at the start of a list row converts it to a paragraph.
+    if (isDocumentListItemType(node.componentType)) {
+      return unlistToRichText(node, tree, { insertBlock, deleteBlock }, focus);
+    }
     return mergeBlockIntoDocumentPrev(
       node,
       view,
@@ -333,45 +386,98 @@ export function RichTextRenderer({
     );
   };
 
-  // Slash-menu state — when the user types `/` at start of empty doc,
-  // RichTextEditor calls onSlashTrigger with the cursor rect; we open the
-  // popover at that anchor. On select we *replace* this empty RichText
-  // with the chosen block type (insert new at this position, then delete
-  // this one). Two reducer calls, both fire-and-forget; the subscription
-  // delivers both deltas atomically from the user's perspective.
-  const [slashAnchor, setSlashAnchor] = useState<DOMRect | null>(null);
-  const onSlashTrigger = (cursorRect: DOMRect) => setSlashAnchor(cursorRect);
-  const onSlashSelect = (item: SlashMenuItem) => {
-    setSlashAnchor(null);
+  // Inline slash menu — `/` opens a session in the editor (slashMenuPlugin);
+  // the query lives in the doc and filters live. We mirror the session here to
+  // render <InlineSlashMenu> and own the commit/dismiss.
+  const slashItems = config.slashItems ?? SPRINT_3B_SLASH_ITEMS;
+  const [slashSession, setSlashSession] = useState<{
+    query: string;
+    from: number;
+    rect: DOMRect;
+  } | null>(null);
+  const [slashActiveIndex, setSlashActiveIndex] = useState(0);
+  const slashFiltered = useMemo(
+    () => (slashSession ? filterSlashItems(slashItems, slashSession.query) : []),
+    [slashItems, slashSession],
+  );
+
+  const dismissSlash = () => {
+    const view = focus.getEditor(node.id);
+    if (view) closeSlashSession(view);
+    setSlashSession(null);
+  };
+
+  const navigateSlash = (direction: 1 | -1) => {
+    setSlashActiveIndex((i) => {
+      const n = slashFiltered.length;
+      if (n === 0) return 0;
+      return (i + direction + n) % n;
+    });
+  };
+
+  // Insert the chosen block. When the host RichText is empty after the
+  // `/query` is removed, the new block takes its slot (replace, mirroring
+  // BlockNote's only-child keep-the-line behavior); otherwise it lands as a
+  // sibling immediately below and the host keeps its content.
+  const insertChosenBlock = (item: SlashMenuItem, hostNowEmpty: boolean) => {
     if (node.parentId == null) return;
-    // The new block lands where this RichText currently is. Compute the
-    // predecessor in the parent's child list; that's the afterSiblingId
-    // for the insert. Empty siblings array → undefined → first child.
     const parentSiblings = tree.byParent.get(node.parentId) ?? [];
+    const propsJson = JSON.stringify(item.defaultProps);
+
+    if (!hostNowEmpty) {
+      focus.armForInsert(node.parentId, node.id, {
+        knownSiblingIds: knownSiblingIdsForParent(tree, node.parentId),
+      });
+      insertBlock({
+        parentId: node.parentId,
+        componentType: item.componentType,
+        propsJson,
+        afterSiblingId: node.id,
+      });
+      return;
+    }
+
     const myIdx = parentSiblings.findIndex((s) => s.id === node.id);
-    const predecessor =
-      myIdx > 0 ? parentSiblings[myIdx - 1]?.id : undefined;
+    const predecessor = myIdx > 0 ? parentSiblings[myIdx - 1]?.id : undefined;
     focus.armForInsert(node.parentId, predecessor, {
       knownSiblingIds: knownSiblingIdsForParent(tree, node.parentId),
     });
     insertBlock({
       parentId: node.parentId,
       componentType: item.componentType,
-      propsJson: JSON.stringify(item.defaultProps),
+      propsJson,
       afterSiblingId: predecessor,
     });
-    // Only delete the host RichText when it has at least one sibling —
-    // otherwise the parent Container would be left empty (briefly) and
-    // the user would see the empty-state affordance flash. With siblings
-    // present, the new block visually takes this block's slot.
-    if (parentSiblings.length > 1) {
-      removeSelf();
-    } else {
-      // Only-child case: keep the empty RichText so the Container isn't
-      // empty-state. The user can Backspace to clean up later once the
-      // new block has content. This matches BlockNote's "the original
-      // line stays until you type" feel and avoids the parent flicker.
+    // With siblings present the new block visually takes this slot; for an
+    // only child keep the empty RichText so the Container isn't empty-state.
+    if (parentSiblings.length > 1) removeSelf();
+  };
+
+  const commitSlash = (explicit?: SlashMenuItem): boolean => {
+    if (!slashSession) return false;
+    const item = explicit ?? slashFiltered[slashActiveIndex];
+    if (!item) {
+      dismissSlash();
+      return true;
     }
+    let hostNowEmpty = true;
+    const view = focus.getEditor(node.id);
+    if (view) {
+      const to = view.state.selection.head;
+      const tr = view.state.tr.delete(slashSession.from, to);
+      view.dispatch(tr);
+      hostNowEmpty = tr.doc.textContent.trim().length === 0;
+    }
+    setSlashSession(null);
+    insertChosenBlock(item, hostNowEmpty);
+    return true;
+  };
+
+  const onSlashSessionChange = (
+    session: { query: string; from: number; rect: DOMRect } | null,
+  ) => {
+    setSlashSession(session);
+    setSlashActiveIndex(0);
   };
 
   // One stable Y.Doc per RichText instance. Lives as long as this React
@@ -584,7 +690,10 @@ export function RichTextRenderer({
           onSplit={onSplit}
           onDeleteSelf={canBackspaceDeleteEmpty ? onDeleteSelf : undefined}
           onMergeWithPrev={onMergeWithPrev}
-          onSlashTrigger={onSlashTrigger}
+          onSlashSessionChange={onSlashSessionChange}
+          onSlashNavigate={navigateSlash}
+          onSlashCommit={commitSlash}
+          onSlashDismiss={dismissSlash}
           suppressSaveRef={suppressSaveRef}
           onNavigatePrev={onNavigatePrev}
           onNavigateNext={onNavigateNext}
@@ -592,6 +701,10 @@ export function RichTextRenderer({
           onOutdent={onOutdent}
           bindFocus={bindFocus}
           blockActions={blockActions}
+          markdownShortcuts={markdownShortcuts}
+          onMarkdownShortcut={onMarkdownShortcut}
+          onPaste={onPaste}
+          onEscape={onEscape}
         />
       ) : (
         <StaticBody
@@ -600,12 +713,14 @@ export function RichTextRenderer({
           textDensity={textDensity}
         />
       )}
-      {slashAnchor != null && (
-        <SlashMenu
-          anchorRect={slashAnchor}
-          onSelect={onSlashSelect}
-          onClose={() => setSlashAnchor(null)}
-          items={config.slashItems}
+      {slashSession != null && (
+        <InlineSlashMenu
+          anchorRect={slashSession.rect}
+          items={slashFiltered}
+          activeIndex={slashActiveIndex}
+          onHover={setSlashActiveIndex}
+          onSelect={(item) => commitSlash(item)}
+          onClose={dismissSlash}
         />
       )}
     </div>

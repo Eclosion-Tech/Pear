@@ -8,6 +8,7 @@ import { resolveNestTarget, getDocumentPrevBlock } from "./navigation/blockNavig
 import type { SlashMenuItem } from "./SlashMenu";
 import { normalizeTextAlign, headingPropsJson } from "./rich-text/richTextFormatting";
 import type { BlockNode, BlockTree, PulpMutations } from "./types";
+import type { PastedBlock } from "./rich-text/pasteToBlocks";
 import { yDocToPlainText } from "./rich-text/yjsToHtml";
 import {
   PROSEMIRROR_FRAGMENT_KEY,
@@ -83,6 +84,42 @@ export function exitEmptyListItemToRichText(
   const predecessor = myIdx > 0 ? parentSiblings[myIdx - 1]?.id : undefined;
 
   focus.armForInsert(node.parentId, predecessor, {
+    focusAt: "start",
+    knownSiblingIds: knownSiblingIdsForParent(tree, node.parentId),
+  });
+  mutations.insertBlock({
+    parentId: node.parentId,
+    componentType: "RichText",
+    propsJson: "{}",
+    afterSiblingId: predecessor,
+  });
+  mutations.deleteBlock({ componentId: node.id });
+  return true;
+}
+
+/**
+ * Convert a document list item back to a plain `RichText` in place, preserving
+ * its content (marks included). Notion / BlockNote un-list on the first
+ * Backspace at the start of a list item — before any delete or merge. The new
+ * RichText lands in the list item's slot (after the same predecessor).
+ */
+export function unlistToRichText(
+  node: BlockNode,
+  tree: BlockTree,
+  mutations: Pick<PulpMutations, "insertBlock" | "deleteBlock">,
+  focus: SurfaceFocusValue,
+): boolean {
+  if (node.parentId == null) return false;
+  if (!isDocumentListItemType(node.componentType)) return false;
+
+  const parentSiblings = tree.byParent.get(node.parentId) ?? [];
+  const myIdx = parentSiblings.findIndex((s) => s.id === node.id);
+  const predecessor = myIdx > 0 ? parentSiblings[myIdx - 1]?.id : undefined;
+
+  const initialDoc = extractCarryDoc(node, tree, focus);
+
+  focus.armForInsert(node.parentId, predecessor, {
+    ...(initialDoc ? { initialDoc } : {}),
     focusAt: "start",
     knownSiblingIds: knownSiblingIdsForParent(tree, node.parentId),
   });
@@ -245,6 +282,57 @@ export function mergeBlockIntoDocumentPrev(
   return true;
 }
 
+/**
+ * Insert parsed paste blocks as new siblings after `node`, in document order.
+ *
+ * The reducer inserts each new node immediately after `after_sibling_id`, so
+ * repeated inserts after the same anchor reverse — we therefore insert (and
+ * arm the focus batch) in reverse, yielding `node, b0, b1, …`. Each block's
+ * Y.Doc is handed off via `armForInsertBatch`; the last block in document
+ * order claims focus (caret at the end of the paste).
+ */
+export function insertBlocksAfter(
+  node: BlockNode,
+  blocks: PastedBlock[],
+  mutations: Pick<PulpMutations, "insertBlock">,
+  focus: SurfaceFocusValue,
+  tree: BlockTree,
+): boolean {
+  if (node.parentId == null || blocks.length === 0) return false;
+  const parentId = node.parentId;
+  const knownSiblingIds = knownSiblingIdsForParent(tree, parentId);
+
+  const reversed = [...blocks].reverse();
+  focus.armForInsertBatch(
+    reversed.map((b, i) => ({
+      parentId,
+      afterSiblingId: node.id,
+      initialDoc: b.doc,
+      // reversed[0] is the last block in document order → it gets focus.
+      shouldFocus: i === 0,
+      focusAt: "end" as const,
+      knownSiblingIds,
+    })),
+  );
+  for (const b of reversed) {
+    mutations.insertBlock({
+      parentId,
+      componentType: b.componentType,
+      propsJson: JSON.stringify(b.props),
+      afterSiblingId: node.id,
+    });
+  }
+  return true;
+}
+
+/** Delete every block in a block selection (multi-block Backspace/Delete). */
+export function deleteBlocks(
+  ids: readonly BlockNode["id"][],
+  deleteBlock: PulpMutations["deleteBlock"],
+): void {
+  for (const id of ids) deleteBlock({ componentId: id });
+}
+
 /** Clone a block as a new sibling immediately below. Shallow — children are not copied. */
 export function duplicateBlock(
   node: BlockNode,
@@ -307,6 +395,7 @@ export function turnIntoBlock(
       propsJson: headingPropsJson(item.defaultProps.level, {
         textAlign: normalizeTextAlign(current.textAlign),
         collapsed: current.collapsed === true,
+        section: current.section === true,
       }),
     });
     return;
@@ -319,13 +408,14 @@ export function turnIntoBlock(
     return;
   }
 
-  const carryText = extractCarryText(node, tree, focus);
-  const props = buildTurnIntoProps(item, node, carryText);
+  const props = buildTurnIntoProps(item, node);
   const targetDef = tree.defs.get(item.componentType);
-  const initialDoc =
-    targetDef?.hasYjsState && carryText
-      ? plainTextToYDoc(carryText)
-      : undefined;
+  // Carry the full Y.Doc (marks intact) rather than plain text — Notion /
+  // BlockNote preserve inline formatting across a type change. Only when the
+  // target stores Yjs state; otherwise the content has nowhere to land.
+  const initialDoc = targetDef?.hasYjsState
+    ? extractCarryDoc(node, tree, focus)
+    : undefined;
 
   const parentSiblings = tree.byParent.get(node.parentId) ?? [];
   const myIdx = parentSiblings.findIndex((s) => s.id === node.id);
@@ -346,29 +436,43 @@ export function turnIntoBlock(
   mutations.deleteBlock({ componentId: node.id });
 }
 
-function extractCarryText(
+/**
+ * Build a Y.Doc carrying this block's rich content (marks included) for the
+ * turn-into target. Live view → clone the editor doc; otherwise rehydrate the
+ * stored Yjs blob. Returns undefined for empty / non-text blocks so an empty
+ * conversion (e.g. a markdown shortcut on a blank line) doesn't hand off a
+ * doc. Mirrors the doc-clone in `duplicateBlock`.
+ */
+function extractCarryDoc(
   node: BlockNode,
   tree: BlockTree,
   focus: SurfaceFocusValue,
-): string {
+): Y.Doc | undefined {
   const def = tree.defs.get(node.componentType);
-  if (def?.hasYjsState) {
-    const view = focus.getEditor(node.id);
-    if (view) return view.state.doc.textContent;
-    const yjs = tree.yjs.get(node.id);
-    if (yjs?.data && yjs.data.byteLength > 0) {
-      const doc = new Y.Doc();
-      Y.applyUpdate(doc, yjs.data);
-      return yDocToPlainText(doc);
-    }
+  if (!def?.hasYjsState) return undefined;
+
+  const view = focus.getEditor(node.id);
+  if (view) {
+    if (view.state.doc.textContent.length === 0) return undefined;
+    return prosemirrorToYDoc(view.state.doc, PROSEMIRROR_FRAGMENT_KEY);
   }
-  return "";
+
+  const yjs = tree.yjs.get(node.id);
+  if (yjs?.data && yjs.data.byteLength > 0) {
+    const doc = new Y.Doc();
+    Y.applyUpdate(doc, yjs.data);
+    if (yDocToPlainText(doc).length === 0) {
+      doc.destroy();
+      return undefined;
+    }
+    return doc;
+  }
+  return undefined;
 }
 
 function buildTurnIntoProps(
   item: SlashMenuItem,
   node: BlockNode,
-  carryText: string,
 ): Record<string, unknown> {
   if (item.componentType === "Heading") {
     const current =

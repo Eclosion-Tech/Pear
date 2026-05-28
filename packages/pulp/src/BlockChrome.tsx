@@ -2,6 +2,7 @@
 
 import {
   useCallback,
+  useEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -11,6 +12,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { usePulp } from "./context/PulpProvider";
 import { useSurfaceFocus } from "./focus/SurfaceFocusProvider";
+import { useSurfaceSelectionOptional } from "./selection/SurfaceSelectionProvider";
 import { knownSiblingIdsForParent } from "./focus/insertFocusHelpers";
 import type { BlockNode } from "./types";
 import { BlockMenu } from "./BlockMenu";
@@ -38,8 +40,21 @@ export function BlockChrome({
 }) {
   const { insertBlock, tree } = usePulp();
   const focus = useSurfaceFocus();
+  const selection = useSurfaceSelectionOptional();
   const [menuRect, setMenuRect] = useState<DOMRect | null>(null);
   const gripRef = useRef<HTMLButtonElement | null>(null);
+  const wrapperElRef = useRef<HTMLDivElement | null>(null);
+
+  // Register this block's live rect so the marquee can hit-test it, and reflect
+  // block-selection as a highlight ring.
+  const selected = selection?.isSelected(node.id) ?? false;
+  useEffect(() => {
+    if (!selection) return;
+    return selection.registerRect(
+      node.id,
+      () => wrapperElRef.current?.getBoundingClientRect() ?? null,
+    );
+  }, [selection, node.id]);
 
   const sortable = useSortable({ id: node.id.toString() });
   const {
@@ -85,6 +100,14 @@ export function BlockChrome({
     [setActivatorNodeRef],
   );
 
+  const bindWrapper = useCallback(
+    (el: HTMLDivElement | null) => {
+      setNodeRef(el);
+      wrapperElRef.current = el;
+    },
+    [setNodeRef],
+  );
+
   const gripProps: BlockChromeGripProps = {
     ...attributes,
     ...listeners,
@@ -123,10 +146,13 @@ export function BlockChrome({
     >
       <div
         id={`block-${node.id}`}
-        ref={setNodeRef}
+        ref={bindWrapper}
         style={wrapperStyle}
         data-block-chrome
-        className="relative scroll-mt-24"
+        data-selected={selected ? "true" : undefined}
+        className={`relative scroll-mt-24 ${
+          selected ? "rounded-sm bg-blue-400/10 ring-2 ring-blue-400/50" : ""
+        }`}
         onMouseEnter={showSideGutter ? revealGutter : undefined}
         onMouseLeave={
           showSideGutter

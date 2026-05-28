@@ -1,5 +1,9 @@
 import type { EditorView } from "prosemirror-view";
-import type { SurfaceFocusValue, FocusPlacement } from "../focus/SurfaceFocusCoordinator";
+import type {
+  SurfaceFocusValue,
+  FocusPlacement,
+  BatchInsertEntry,
+} from "../focus/SurfaceFocusCoordinator";
 import type { BlockId, BlockNode, BlockTree, BlockTypeDefinition, PulpMutations } from "../types";
 
 /** Default registry defs for editor behavior tests. */
@@ -115,17 +119,25 @@ export type MockFocusCalls = {
     afterSiblingId?: BlockId;
     opts?: Parameters<SurfaceFocusValue["armForInsert"]>[2];
   }>;
+  armForInsertBatch: BatchInsertEntry[][];
 };
 
 export function createMockFocus(
   editors: Map<BlockId, EditorView> = new Map(),
 ): SurfaceFocusValue & { calls: MockFocusCalls } {
-  const calls: MockFocusCalls = { requestFocus: [], armForInsert: [] };
+  const calls: MockFocusCalls = {
+    requestFocus: [],
+    armForInsert: [],
+    armForInsertBatch: [],
+  };
 
   return {
     calls,
     armForInsert(parentId, afterSiblingId, opts) {
       calls.armForInsert.push({ parentId, afterSiblingId, opts });
+    },
+    armForInsertBatch(entries) {
+      calls.armForInsertBatch.push(entries);
     },
     isAwaitingInsert: () => false,
     isHandoffSource: () => false,
@@ -139,6 +151,7 @@ export function createMockFocus(
     registerEditor: () => () => {},
     getEditor: (id) => editors.get(id),
     consumeInitialDoc: () => undefined,
+    consumeGoalX: () => undefined,
   };
 }
 
