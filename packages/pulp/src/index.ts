@@ -60,8 +60,11 @@ export {
 
 // Rich text
 export { RichTextRenderer } from "./rich-text/RichText";
+export type { RichTextTextDensity } from "./rich-text/RichText";
 export { RichTextEditor } from "./rich-text/RichTextEditor";
 export { FormattingToolbar } from "./rich-text/FormattingToolbar";
+export type { BlockToolbarActions } from "./rich-text/FormattingToolbar";
+export { turnIntoToolbarItems, labelForBlock } from "./toolbarTurnIntoItems";
 export {
   richTextSchema,
   PROSEMIRROR_FRAGMENT_KEY,
@@ -97,9 +100,13 @@ export {
 export {
   duplicateBlock,
   mergePlainTextIntoRichText,
+  mergeBlockIntoDocumentPrev,
+  deleteEmptyBlockAndFocusDocumentPrev,
   turnIntoBlock,
   nestBlockUnderPreviousSibling,
   unnestBlock,
+  canNestBlock,
+  canUnnestBlock,
   isDocumentListItemType,
   DOCUMENT_LIST_ITEM_TYPES,
 } from "./blockActions";
@@ -113,4 +120,4 @@ export {
 export { yDocToPlainText } from "./rich-text/yjsToHtml";
 
 // Cross-block keyboard navigation
-export { getBlockSibling } from "./navigation/blockNavigation";
+export { getBlockSibling, getDocumentPrevBlock, getDocumentNextBlock } from "./navigation/blockNavigation";

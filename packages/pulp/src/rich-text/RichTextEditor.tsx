@@ -38,10 +38,16 @@ import {
 import { focusDebug, idStr } from "../focus/focusDebug";
 import { isAtDocEnd, isAtDocStart } from "../navigation/blockNavigation";
 import { useSurfaceUndo } from "../undo/SurfaceUndoProvider";
-import { FormattingToolbar } from "./FormattingToolbar";
+import { FormattingToolbar, type BlockToolbarActions } from "./FormattingToolbar";
 
 /** Cadence — see `docs/PEAR_WEB_RENDERER.md` § Editor stack — Save cycle. */
 const SAVE_INTERVAL_MS = 30_000;
+
+const EDITOR_PROSE_DEFAULT =
+  "my-2 text-neutral-900 dark:text-neutral-100 leading-relaxed [&_.ProseMirror]:outline-none [&_.ProseMirror_p]:my-2 [&_.ProseMirror_a]:underline [&_.ProseMirror_code]:rounded [&_.ProseMirror_code]:bg-neutral-100 dark:[&_.ProseMirror_code]:bg-neutral-800 [&_.ProseMirror_code]:px-1 [&_.ProseMirror_code]:py-0.5 [&_.ProseMirror_strong]:font-semibold [&_.ProseMirror_em]:italic [&_.ProseMirror_u]:underline [&_.ProseMirror_s]:line-through";
+
+const EDITOR_PROSE_LIST_ITEM =
+  "my-0 text-neutral-900 dark:text-neutral-100 leading-normal [&_.ProseMirror]:outline-none [&_.ProseMirror_p]:my-0 [&_.ProseMirror_a]:underline [&_.ProseMirror_code]:rounded [&_.ProseMirror_code]:bg-neutral-100 dark:[&_.ProseMirror_code]:bg-neutral-800 [&_.ProseMirror_code]:px-1 [&_.ProseMirror_code]:py-0.5 [&_.ProseMirror_strong]:font-semibold [&_.ProseMirror_em]:italic [&_.ProseMirror_u]:underline [&_.ProseMirror_s]:line-through";
 
 /**
  * Live `RichText` editor — sprint 2 of the web renderer.
@@ -67,6 +73,7 @@ export function RichTextEditor({
   doc,
   componentId,
   placeholder,
+  textDensity = "default",
   shouldClaimFocus,
   onFocus,
   onBlur,
@@ -80,10 +87,13 @@ export function RichTextEditor({
   onIndent,
   onOutdent,
   bindFocus,
+  blockActions,
 }: {
   doc: Y.Doc;
   componentId: bigint;
   placeholder?: string;
+  /** Compact prose for list-item rows (no paragraph margins). */
+  textDensity?: "default" | "listItem";
   /**
    * Called once on editor mount to claim autofocus after an insert.
    * Returns caret placement when this block was the insert target.
@@ -143,6 +153,8 @@ export function RichTextEditor({
    * applyFocus fn — keeps static→live transitions able to reach a live view.
    */
   bindFocus?: (applyFocus: (placement: FocusPlacement) => void) => () => void;
+  /** Block-level toolbar controls (type dropdown, nest/unnest). */
+  blockActions?: BlockToolbarActions;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -493,25 +505,13 @@ export function RichTextEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc, componentId, idbPrefix]);
 
+  const proseClass =
+    textDensity === "listItem" ? EDITOR_PROSE_LIST_ITEM : EDITOR_PROSE_DEFAULT;
+
   return (
     <>
-      <div
-        ref={hostRef}
-        className="my-2 text-neutral-900 dark:text-neutral-100 leading-relaxed
-                   [&_.ProseMirror]:outline-none
-                   [&_.ProseMirror_p]:my-2
-                   [&_.ProseMirror_a]:underline
-                   [&_.ProseMirror_code]:rounded
-                   [&_.ProseMirror_code]:bg-neutral-100
-                   dark:[&_.ProseMirror_code]:bg-neutral-800
-                   [&_.ProseMirror_code]:px-1
-                   [&_.ProseMirror_code]:py-0.5
-                   [&_.ProseMirror_strong]:font-semibold
-                   [&_.ProseMirror_em]:italic
-                   [&_.ProseMirror_u]:underline
-                   [&_.ProseMirror_s]:line-through"
-      />
-      <FormattingToolbar view={view} linkRequest={linkRequest} />
+      <div ref={hostRef} className={proseClass} />
+      <FormattingToolbar view={view} linkRequest={linkRequest} blockActions={blockActions} />
     </>
   );
 }

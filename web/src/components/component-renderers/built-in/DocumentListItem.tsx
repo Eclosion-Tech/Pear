@@ -7,8 +7,9 @@ import {
   type BlockRendererProps,
 } from "@eclosion-tech/pulp";
 
-/** Align list markers with the first line of editable text (matches RichText min-height). */
-const MARKER_ROW = "flex h-[1.5em] shrink-0 items-center";
+/** First-line row: marker sits in a one-line box aligned with text cap height. */
+const LIST_ROW = "grid grid-cols-[auto_1fr] gap-x-2 items-start";
+const MARKER_CELL = "flex h-[1lh] shrink-0 items-center";
 
 type ChecklistProps = {
   checked?: boolean;
@@ -16,12 +17,12 @@ type ChecklistProps = {
 
 export function BulletListItemRenderer(props: BlockRendererProps) {
   return (
-    <div className="flex items-start gap-2">
-      <span className={`${MARKER_ROW} w-4 justify-center`} aria-hidden>
+    <div className={LIST_ROW}>
+      <span className={`${MARKER_CELL} w-4 justify-center`} aria-hidden>
         <span className="h-1.5 w-1.5 rounded-full bg-neutral-500 dark:bg-neutral-400" />
       </span>
-      <div className="min-w-0 flex-1">
-        <RichTextRenderer {...props} />
+      <div className="min-w-0">
+        <RichTextRenderer {...props} textDensity="listItem" />
         <NestedListChildren>{props.children}</NestedListChildren>
       </div>
     </div>
@@ -32,14 +33,14 @@ export function NumberedListItemRenderer(props: BlockRendererProps) {
   const index = useMemo(() => contiguousNumberFor(props), [props]);
 
   return (
-    <div className="flex items-start gap-2">
+    <div className={LIST_ROW}>
       <span
-        className={`${MARKER_ROW} min-w-5 justify-end text-sm tabular-nums text-neutral-500 dark:text-neutral-400`}
+        className={`${MARKER_CELL} min-w-5 justify-end text-sm tabular-nums text-neutral-500 dark:text-neutral-400`}
       >
         {index}.
       </span>
-      <div className="min-w-0 flex-1">
-        <RichTextRenderer {...props} />
+      <div className="min-w-0">
+        <RichTextRenderer {...props} textDensity="listItem" />
         <NestedListChildren>{props.children}</NestedListChildren>
       </div>
     </div>
@@ -52,8 +53,8 @@ export function ChecklistItemRenderer(props: BlockRendererProps) {
   const checked = parsed.checked ?? false;
 
   return (
-    <div className="flex items-start gap-2">
-      <span className={`${MARKER_ROW} w-4 justify-center`}>
+    <div className={LIST_ROW}>
+      <span className={`${MARKER_CELL} w-4 justify-center`}>
         <button
           type="button"
           aria-pressed={checked}
@@ -73,8 +74,14 @@ export function ChecklistItemRenderer(props: BlockRendererProps) {
           <CheckIcon />
         </button>
       </span>
-      <div className={`min-w-0 flex-1 ${checked ? "opacity-60 line-through" : ""}`}>
-        <RichTextRenderer {...props} />
+      <div
+        className={`min-w-0 ${
+          checked
+            ? "opacity-60 [&_p]:line-through [&_.ProseMirror_p]:line-through"
+            : ""
+        }`}
+      >
+        <RichTextRenderer {...props} textDensity="listItem" />
         <NestedListChildren>{props.children}</NestedListChildren>
       </div>
     </div>

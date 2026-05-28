@@ -10,7 +10,6 @@ import {
   type CSSProperties,
 } from "react";
 import * as Y from "yjs";
-import { Selection } from "prosemirror-state";
 import type { EditorView } from "prosemirror-view";
 import { splitBlock } from "prosemirror-commands";
 import { prosemirrorToYDoc } from "y-prosemirror";
@@ -21,16 +20,22 @@ import { PROSEMIRROR_FRAGMENT_KEY } from "./richTextSchema";
 import type { BlockRendererProps } from "../registry";
 import type { BlockId } from "../types";
 import { RichTextEditor } from "./RichTextEditor";
-import { SlashMenu, type SlashMenuItem } from "../SlashMenu";
+import { SlashMenu, SPRINT_3B_SLASH_ITEMS, type SlashMenuItem } from "../SlashMenu";
+import { turnIntoToolbarItems } from "../toolbarTurnIntoItems";
 import { knownSiblingIdsForParent, siblingsForParent, idsMatch } from "../focus/insertFocusHelpers";
 import type { FocusPlacement } from "../focus/SurfaceFocusCoordinator";
 import { focusDebug, idStr } from "../focus/focusDebug";
-import { getBlockSibling } from "../navigation/blockNavigation";
+import { getDocumentPrevBlock, getDocumentNextBlock } from "../navigation/blockNavigation";
 import {
   exitEmptyListItemToRichText,
   isDocumentListItemType,
   nestBlockUnderPreviousSibling,
   unnestBlock,
+  turnIntoBlock,
+  canNestBlock,
+  canUnnestBlock,
+  deleteEmptyBlockAndFocusDocumentPrev,
+  mergeBlockIntoDocumentPrev,
 } from "../blockActions";
 
 /**
@@ -67,10 +72,22 @@ type RichTextProps = {
   markWhitelist?: string[];
 };
 
-export function RichTextRenderer({ node, tree }: BlockRendererProps) {
+export type RichTextTextDensity = "default" | "listItem";
+
+const STATIC_PROSE_DEFAULT =
+  "my-2 text-neutral-900 dark:text-neutral-100 leading-relaxed [&_p]:my-2 [&_a]:underline [&_code]:rounded [&_code]:bg-neutral-100 [&_code]:dark:bg-neutral-800 [&_code]:px-1 [&_code]:py-0.5 [&_strong]:font-semibold [&_em]:italic [&_u]:underline [&_s]:line-through";
+
+const STATIC_PROSE_LIST_ITEM =
+  "my-0 text-neutral-900 dark:text-neutral-100 leading-normal [&_p]:my-0 [&_a]:underline [&_code]:rounded [&_code]:bg-neutral-100 [&_code]:dark:bg-neutral-800 [&_code]:px-1 [&_code]:py-0.5 [&_strong]:font-semibold [&_em]:italic [&_u]:underline [&_s]:line-through";
+
+export function RichTextRenderer({
+  node,
+  tree,
+  textDensity = "default",
+}: BlockRendererProps & { textDensity?: RichTextTextDensity }) {
   const props = useMemo<RichTextProps>(() => safeParse(node.props), [node.props]);
   const state = tree.yjs.get(node.id);
-  const { insertBlock, deleteBlock, moveBlock, saveYjsState, config } = usePulp();
+  const { insertBlock, deleteBlock, moveBlock, saveYjsState, config, updateBlockProps } = usePulp();
   const focus = useSurfaceFocus();
   /** Set before intentional soft-delete so unmount flush skips save. */
   const suppressSaveRef = useRef(false);
@@ -92,14 +109,14 @@ export function RichTextRenderer({ node, tree }: BlockRendererProps) {
   };
 
   const onNavigatePrev = useCallback((): boolean => {
-    const prev = getBlockSibling(tree, node.id, "prev");
+    const prev = getDocumentPrevBlock(tree, node.id);
     if (!prev) return false;
     focus.requestFocus(prev.id, "end");
     return true;
   }, [tree, node.id, focus]);
 
   const onNavigateNext = useCallback((): boolean => {
-    const next = getBlockSibling(tree, node.id, "next");
+    const next = getDocumentNextBlock(tree, node.id);
     if (!next) return false;
     focus.requestFocus(next.id, "start");
     return true;
@@ -223,12 +240,6 @@ export function RichTextRenderer({ node, tree }: BlockRendererProps) {
 
   const siblings = node.parentId != null ? tree.byParent.get(node.parentId) ?? [] : [];
   const canDelete = siblings.length > 1;
-  const canUnnest =
-    node.parentId != null &&
-    (() => {
-      const parent = tree.byId.get(node.parentId!);
-      return Boolean(parent?.parentId != null);
-    })();
 
   const onIndent = useCallback((): boolean => {
     return nestBlockUnderPreviousSibling(
@@ -243,88 +254,83 @@ export function RichTextRenderer({ node, tree }: BlockRendererProps) {
     return unnestBlock(node, tree, { moveBlock }, focus);
   }, [node, tree, moveBlock, focus]);
 
-  // Backspace-on-empty deletes this block AND moves focus to a neighbour,
-  // matching Notion/BlockNote: the previous sibling (caret at end), or
-  // the next sibling if this is the first child. Nested empty list items
-  // outdent first (BlockNote Shift+Tab / Backspace at start semantics).
-  const onDeleteSelf =
-    canDelete || canUnnest
-      ? () => {
-          if (isDocumentListItemType(node.componentType) && canUnnest) {
-            if (unnestBlock(node, tree, { moveBlock }, focus)) return;
-          }
-          if (!canDelete) return;
-          const myIdx = siblings.findIndex((s) => s.id === node.id);
-          const neighbour =
-            myIdx > 0 ? siblings[myIdx - 1] : siblings[myIdx + 1];
-          if (neighbour) focus.requestFocus(neighbour.id, "end");
-          removeSelf();
-        }
-      : undefined;
+  const turnIntoItems = useMemo(
+    () => turnIntoToolbarItems(config.slashItems ?? SPRINT_3B_SLASH_ITEMS, tree.defs),
+    [config.slashItems, tree.defs],
+  );
 
-  // Backspace-at-start-of-non-empty merge: take this block's full
-  // content, splice it into the previous sibling's RichText editor as
-  // an "open-open" slice (so PM joins this doc's first paragraph onto
-  // prev's last paragraph instead of stacking them as separate
-  // blocks), then delete this block. Caret lands at the merge point
-  // — the position in prev that was previously its end-of-content,
-  // which is now where the typed-in text starts.
-  //
-  // **Why we mutate prev's live view directly** instead of dispatching
-  // an `update_component_yjs_state` reducer: the merge needs to land
-  // on prev's *editor* (so its undo stack records it, so its
-  // selection mapping is in sync, so its IndexedDB persistence picks
-  // it up). Going through the substrate would round-trip on the
-  // network and create a flicker. Per ADR § Block chrome / Enter &
-  // Backspace, the structural side is `delete_component(this)`; the
-  // Yjs-content side stays local to this client and is replicated to
-  // peers by prev's normal save loop.
-  //
-  // **Constraints.** Prev must be a `RichText` (text-into-text only at
-  // v1) and must be currently *live* (its editor mounted). If prev is
-  // a different component type (Heading, Image, …), we fall back to
-  // moving focus there — caller's Backspace still feels responsive,
-  // and the ADR's "selection-of-block UX" for non-text prevs lands
-  // when sprint 3c.5 ships multi-block selection. If prev exists but
-  // is in viewport-static mode (off-screen), we no-op the merge so
-  // the user doesn't lose content; they can scroll prev into view and
-  // try again. In practice prev is almost always live because the
-  // user is editing this block and prev is right above it.
+  const blockActions = useMemo(
+    () => ({
+      componentType: node.componentType,
+      propsJson: node.props,
+      canNest: canNestBlock(node, tree),
+      canUnnest: canUnnestBlock(node, tree),
+      turnIntoItems,
+      onTurnInto: (item: SlashMenuItem) => {
+        turnIntoBlock(
+          node,
+          tree,
+          item,
+          { insertBlock, deleteBlock, moveBlock, updateBlockProps, saveYjsState },
+          focus,
+        );
+      },
+      onNest: () => {
+        onIndent();
+      },
+      onOutdent: () => {
+        onOutdent();
+      },
+    }),
+    [
+      node,
+      tree,
+      turnIntoItems,
+      insertBlock,
+      deleteBlock,
+      moveBlock,
+      updateBlockProps,
+      saveYjsState,
+      focus,
+      onIndent,
+      onOutdent,
+    ],
+  );
+
+  // Backspace-on-empty: delete this row and focus the document-order
+  // previous block (parent list item when nested — not unnest-to-root).
+  const onDeleteSelf = useCallback(() => {
+    suppressSaveRef.current = true;
+    if (
+      deleteEmptyBlockAndFocusDocumentPrev(node, tree, focus, deleteBlock)
+    ) {
+      return;
+    }
+    if (isDocumentListItemType(node.componentType)) {
+      exitEmptyListItemToRichText(
+        node,
+        tree,
+        { insertBlock, deleteBlock },
+        focus,
+      );
+    }
+  }, [node, tree, focus, deleteBlock, insertBlock]);
+
+  const canBackspaceDeleteEmpty =
+    getDocumentPrevBlock(tree, node.id) != null ||
+    canDelete ||
+    isDocumentListItemType(node.componentType);
+
   const onMergeWithPrev = (view: EditorView): boolean => {
-    if (node.parentId == null) return false;
-    const myIdx = siblings.findIndex((s) => s.id === node.id);
-    if (myIdx <= 0) return false;
-    const prev = siblings[myIdx - 1];
-
-    const prevDef = tree.defs.get(prev.componentType);
-    if (!prevDef?.hasYjsState) {
-      focus.requestFocus(prev.id);
-      return true;
-    }
-    const prevView = focus.getEditor(prev.id);
-    if (!prevView) {
-      focus.requestFocus(prev.id);
-      return false;
-    }
-
-    const prevDocSize = prevView.state.doc.content.size;
-    // Merge point in prev = inside the last paragraph at end of content.
-    const mergePoint = prevDocSize - 1;
-    const myDocSize = view.state.doc.content.size;
-    // Slice with both ends "open at depth 1" — strips the outer
-    // paragraph wrappers so PM joins boundaries instead of stacking
-    // separate paragraphs. For a multi-paragraph current, only the
-    // first paragraph joins prev's last; the rest become new
-    // paragraphs after.
-    const sliceToMerge = view.state.doc.slice(1, myDocSize - 1, true);
-
-    const tr = prevView.state.tr.replace(mergePoint, mergePoint, sliceToMerge);
-    tr.setSelection(Selection.near(tr.doc.resolve(mergePoint)));
-    prevView.dispatch(tr);
-    prevView.focus();
-
-    removeSelf();
-    return true;
+    suppressSaveRef.current = true;
+    return mergeBlockIntoDocumentPrev(
+      node,
+      view,
+      tree,
+      focus,
+      saveYjsState,
+      removeSelf,
+    );
   };
 
   // Slash-menu state — when the user types `/` at start of empty doc,
@@ -571,11 +577,12 @@ export function RichTextRenderer({ node, tree }: BlockRendererProps) {
           doc={doc}
           componentId={node.id}
           placeholder={props.placeholder}
+          textDensity={textDensity}
           shouldClaimFocus={claimInsertFocus}
           onFocus={() => setHasFocus(true)}
           onBlur={() => setHasFocus(false)}
           onSplit={onSplit}
-          onDeleteSelf={onDeleteSelf}
+          onDeleteSelf={canBackspaceDeleteEmpty ? onDeleteSelf : undefined}
           onMergeWithPrev={onMergeWithPrev}
           onSlashTrigger={onSlashTrigger}
           suppressSaveRef={suppressSaveRef}
@@ -584,9 +591,14 @@ export function RichTextRenderer({ node, tree }: BlockRendererProps) {
           onIndent={onIndent}
           onOutdent={onOutdent}
           bindFocus={bindFocus}
+          blockActions={blockActions}
         />
       ) : (
-        <StaticBody html={html} placeholder={props.placeholder ?? ""} />
+        <StaticBody
+          html={html}
+          placeholder={props.placeholder ?? ""}
+          textDensity={textDensity}
+        />
       )}
       {slashAnchor != null && (
         <SlashMenu
@@ -605,13 +617,24 @@ const STATIC_BODY_STYLE: CSSProperties = {};
 function StaticBody({
   html,
   placeholder,
+  textDensity = "default",
 }: {
   html: string;
   placeholder: string;
+  textDensity?: RichTextTextDensity;
 }) {
+  const proseClass =
+    textDensity === "listItem" ? STATIC_PROSE_LIST_ITEM : STATIC_PROSE_DEFAULT;
+
   if (!html) {
     return (
-      <p className="my-2 text-neutral-400 dark:text-neutral-600 italic">
+      <p
+        className={
+          textDensity === "listItem"
+            ? "my-0 text-neutral-400 dark:text-neutral-600 italic"
+            : "my-2 text-neutral-400 dark:text-neutral-600 italic"
+        }
+      >
         {placeholder}
       </p>
     );
@@ -619,14 +642,7 @@ function StaticBody({
   return (
     <div
       style={STATIC_BODY_STYLE}
-      className="my-2 text-neutral-900 dark:text-neutral-100 leading-relaxed
-                 [&_p]:my-2 [&_a]:underline [&_code]:rounded
-                 [&_code]:bg-neutral-100 [&_code]:dark:bg-neutral-800
-                 [&_code]:px-1 [&_code]:py-0.5
-                 [&_strong]:font-semibold
-                 [&_em]:italic
-                 [&_u]:underline
-                 [&_s]:line-through"
+      className={proseClass}
       // Same rationale as sprint 1 — yDocToHtml escapes everything; the
       // Y.Doc contents come from a trust boundary we control end-to-end.
       dangerouslySetInnerHTML={{ __html: html }}

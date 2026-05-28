@@ -1,9 +1,10 @@
+import type { EditorView } from "prosemirror-view";
 import { Selection } from "prosemirror-state";
 import * as Y from "yjs";
 import { prosemirrorToYDoc } from "y-prosemirror";
 import type { SurfaceFocusValue } from "./focus/SurfaceFocusCoordinator";
 import { knownSiblingIdsForParent } from "./focus/insertFocusHelpers";
-import { getBlockSibling } from "./navigation/blockNavigation";
+import { resolveNestTarget, getDocumentPrevBlock } from "./navigation/blockNavigation";
 import type { SlashMenuItem } from "./SlashMenu";
 import type { BlockNode, BlockTree, PulpMutations } from "./types";
 import { yDocToPlainText } from "./rich-text/yjsToHtml";
@@ -95,8 +96,8 @@ export function exitEmptyListItemToRichText(
 }
 
 /**
- * Nest this block under its previous sibling (BlockNote Tab / list indent).
- * The previous sibling's type must accept children (`Container`, list items, …).
+ * Nest this block (BlockNote Tab) — under previous sibling's deepest nest
+ * point, or backward in document order for multi-level list indent.
  */
 export function nestBlockUnderPreviousSibling(
   node: BlockNode,
@@ -106,19 +107,20 @@ export function nestBlockUnderPreviousSibling(
 ): boolean {
   if (node.parentId == null) return false;
 
-  const prev = getBlockSibling(tree, node.id, "prev");
-  if (!prev) return false;
+  const target = resolveNestTarget(node, tree);
+  if (!target) return false;
 
-  const prevDef = tree.defs.get(prev.componentType);
-  if (!prevDef?.acceptsChildren) return false;
+  const targetChildren = tree.byParent.get(target.id) ?? [];
+  const lastChild = targetChildren[targetChildren.length - 1];
+  const afterSiblingId =
+    lastChild && lastChild.id !== node.id ? lastChild.id : undefined;
 
-  const prevChildren = tree.byParent.get(prev.id) ?? [];
-  const lastChild = prevChildren[prevChildren.length - 1];
+  if (node.parentId === target.id && afterSiblingId == null) return false;
 
   mutations.moveBlock({
     componentId: node.id,
-    newParentId: prev.id,
-    afterSiblingId: lastChild?.id,
+    newParentId: target.id,
+    afterSiblingId,
   });
   focus.requestFocus(node.id, "start");
   return true;
@@ -145,6 +147,100 @@ export function unnestBlock(
     afterSiblingId: parent.id,
   });
   focus.requestFocus(node.id, "start");
+  return true;
+}
+
+export function canNestBlock(node: BlockNode, tree: BlockTree): boolean {
+  if (node.parentId == null) return false;
+  return resolveNestTarget(node, tree) != null;
+}
+
+export function canUnnestBlock(node: BlockNode, tree: BlockTree): boolean {
+  if (node.parentId == null) return false;
+  const parent = tree.byId.get(node.parentId);
+  return Boolean(parent?.parentId != null);
+}
+
+/**
+ * Backspace on an empty block — delete and focus the previous block in
+ * document order (parent list item when nested, not unnest-to-root).
+ */
+export function deleteEmptyBlockAndFocusDocumentPrev(
+  node: BlockNode,
+  tree: BlockTree,
+  focus: SurfaceFocusValue,
+  deleteBlock: PulpMutations["deleteBlock"],
+): boolean {
+  if (node.parentId == null) return false;
+
+  const docPrev = getDocumentPrevBlock(tree, node.id);
+  if (docPrev) {
+    focus.requestFocus(docPrev.id, "end");
+    deleteBlock({ componentId: node.id });
+    return true;
+  }
+
+  const parentSiblings = tree.byParent.get(node.parentId) ?? [];
+  if (parentSiblings.length <= 1) return false;
+
+  const myIdx = parentSiblings.findIndex((s) => s.id === node.id);
+  const neighbour =
+    myIdx > 0 ? parentSiblings[myIdx - 1] : parentSiblings[myIdx + 1];
+  if (neighbour) focus.requestFocus(neighbour.id, "end");
+  deleteBlock({ componentId: node.id });
+  return true;
+}
+
+/**
+ * Backspace at doc start with content — merge into the document-order
+ * previous Yjs block (includes parent list item when this is a nested row).
+ */
+export function mergeBlockIntoDocumentPrev(
+  node: BlockNode,
+  view: EditorView,
+  tree: BlockTree,
+  focus: SurfaceFocusValue,
+  saveYjsState: PulpMutations["saveYjsState"],
+  onRemoveSelf: () => void,
+): boolean {
+  const prev = getDocumentPrevBlock(tree, node.id);
+  if (!prev) return false;
+
+  const prevDef = tree.defs.get(prev.componentType);
+  if (!prevDef?.hasYjsState) {
+    focus.requestFocus(prev.id, "end");
+    onRemoveSelf();
+    return true;
+  }
+
+  const prevView = focus.getEditor(prev.id);
+  if (prevView) {
+    const prevDocSize = prevView.state.doc.content.size;
+    const mergePoint = prevDocSize - 1;
+    const myDocSize = view.state.doc.content.size;
+    const sliceToMerge = view.state.doc.slice(1, myDocSize - 1, true);
+
+    const tr = prevView.state.tr.replace(mergePoint, mergePoint, sliceToMerge);
+    tr.setSelection(Selection.near(tr.doc.resolve(mergePoint)));
+    prevView.dispatch(tr);
+    prevView.focus();
+    onRemoveSelf();
+    return true;
+  }
+
+  const text = view.state.doc.textContent;
+  if (!text) return false;
+
+  const mergePoint = mergePlainTextIntoRichText(
+    prev.id,
+    text,
+    tree,
+    focus,
+    saveYjsState,
+  );
+  if (mergePoint == null) return false;
+  focus.requestFocus(prev.id, "end");
+  onRemoveSelf();
   return true;
 }
 

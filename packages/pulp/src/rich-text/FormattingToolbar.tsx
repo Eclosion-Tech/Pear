@@ -6,7 +6,20 @@ import type { EditorView } from "prosemirror-view";
 import type { MarkType } from "prosemirror-model";
 import { toggleMark } from "prosemirror-commands";
 import { usePulp } from "../context/PulpProvider";
+import type { SlashMenuItem } from "../SlashMenu";
+import { labelForBlock } from "../toolbarTurnIntoItems";
 import { richTextSchema } from "./richTextSchema";
+
+export type BlockToolbarActions = {
+  componentType: string;
+  propsJson: string;
+  canNest: boolean;
+  canUnnest: boolean;
+  turnIntoItems: SlashMenuItem[];
+  onTurnInto: (item: SlashMenuItem) => void;
+  onNest: () => void;
+  onOutdent: () => void;
+};
 
 /**
  * Floating bubble menu rendered above the user's selection inside a
@@ -33,7 +46,7 @@ type LinkEditorState = {
   href: string;
 };
 
-const TOOLBAR_ESTIMATED_HEIGHT = 40;
+const TOOLBAR_ESTIMATED_HEIGHT = 44;
 const TOOLBAR_SELECTION_GAP = 8;
 const LINK_POPOVER_ESTIMATED_HEIGHT = 300;
 const LINK_POPOVER_WIDTH = 320;
@@ -43,9 +56,11 @@ const VIEWPORT_EDGE_PADDING = 8;
 export function FormattingToolbar({
   view,
   linkRequest,
+  blockActions,
 }: {
   view: EditorView | null;
   linkRequest?: number;
+  blockActions?: BlockToolbarActions;
 }) {
   const { config } = usePulp();
   const [coords, setCoords] = useState<
@@ -157,6 +172,48 @@ export function FormattingToolbar({
         // the editor and leave us with no selection to act on.
         onMouseDown={(e) => e.preventDefault()}
       >
+        {blockActions && blockActions.turnIntoItems.length > 0 && (
+          <>
+            <BlockTypeDropdown
+              label={labelForBlock(
+                blockActions.componentType,
+                blockActions.propsJson,
+                blockActions.turnIntoItems,
+              )}
+              items={blockActions.turnIntoItems}
+              currentType={blockActions.componentType}
+              currentPropsJson={blockActions.propsJson}
+              onSelect={(item) => {
+                blockActions.onTurnInto(item);
+                view.focus();
+              }}
+            />
+            <ToolbarDivider />
+            <ToolbarButton
+              label="Nest"
+              shortcut="Tab"
+              icon="nest"
+              disabled={!blockActions.canNest}
+              active={false}
+              onClick={() => {
+                blockActions.onNest();
+                view.focus();
+              }}
+            />
+            <ToolbarButton
+              label="Unnest"
+              shortcut="⇧Tab"
+              icon="unnest"
+              disabled={!blockActions.canUnnest}
+              active={false}
+              onClick={() => {
+                blockActions.onOutdent();
+                view.focus();
+              }}
+            />
+            <ToolbarDivider />
+          </>
+        )}
         {MARK_ORDER.map((name) => (
           <ToolbarButton
             key={name}
@@ -357,49 +414,230 @@ function LinkEditorPopover({
   );
 }
 
+function ToolbarDivider() {
+  return (
+    <div
+      className="mx-0.5 h-5 w-px shrink-0 bg-neutral-200 dark:bg-neutral-700"
+      aria-hidden
+    />
+  );
+}
+
+function BlockTypeDropdown({
+  label,
+  items,
+  currentType,
+  currentPropsJson,
+  onSelect,
+}: {
+  label: string;
+  items: SlashMenuItem[];
+  currentType: string;
+  currentPropsJson: string;
+  onSelect: (item: SlashMenuItem) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onPointerDown(e: PointerEvent) {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  const currentLevel =
+    currentType === "Heading"
+      ? (safeParseProps(currentPropsJson).level as number | undefined)
+      : undefined;
+
+  function isCurrent(item: SlashMenuItem): boolean {
+    if (item.componentType !== currentType) return false;
+    if (currentType === "Heading") {
+      return item.defaultProps.level === currentLevel;
+    }
+    return true;
+  }
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title="Change block type"
+        className="flex max-w-[120px] items-center gap-1 rounded px-1.5 py-1 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800"
+      >
+        <span className="truncate">{label}</span>
+        <ChevronDownIcon />
+      </button>
+      {open && (
+        <div
+          className="absolute left-0 top-full z-[70] mt-1 min-w-[160px] overflow-hidden rounded-md border border-neutral-200 bg-white py-1 shadow-lg dark:border-neutral-700 dark:bg-neutral-900"
+          role="menu"
+        >
+          {items.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                onSelect(item);
+                setOpen(false);
+              }}
+              className={`flex w-full items-center justify-between px-3 py-1.5 text-left text-sm transition-colors ${
+                isCurrent(item)
+                  ? "bg-neutral-100 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100"
+                  : "text-neutral-700 hover:bg-neutral-50 dark:text-neutral-200 dark:hover:bg-neutral-800"
+              }`}
+            >
+              <span>{item.label}</span>
+              {isCurrent(item) ? (
+                <span className="text-xs text-neutral-400">✓</span>
+              ) : null}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChevronDownIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      className="shrink-0 opacity-60"
+    >
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+
 function ToolbarButton({
   label,
   shortcut,
   active,
+  disabled,
+  icon,
   onClick,
 }: {
   label: string;
   shortcut: string;
   active: boolean;
+  disabled?: boolean;
+  icon?: "nest" | "unnest";
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      title={shortcut}
-      className={`min-w-[28px] rounded px-1.5 py-1 text-xs font-medium
-                  transition-colors
-                  ${
-                    active
-                      ? "bg-neutral-200 dark:bg-neutral-700 text-neutral-900 dark:text-white"
-                      : "text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-                  }`}
+      disabled={disabled}
+      title={`${label} (${shortcut})`}
+      aria-label={label}
+      className={`min-w-[28px] rounded px-1.5 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+        active
+          ? "bg-neutral-200 text-neutral-900 dark:bg-neutral-700 dark:text-white"
+          : "text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800"
+      }`}
     >
-      <span
-        className={
-          label === "B"
-            ? "font-bold"
-            : label === "I"
-              ? "italic"
-              : label === "U"
-                ? "underline"
-                : label === "S"
-                  ? "line-through"
-                  : label === "</>"
-                    ? "font-mono"
-                    : ""
-        }
-      >
-        {label}
-      </span>
+      {icon === "nest" ? (
+        <NestIcon />
+      ) : icon === "unnest" ? (
+        <UnnestIcon />
+      ) : (
+        <span
+          className={
+            label === "B"
+              ? "font-bold"
+              : label === "I"
+                ? "italic"
+                : label === "U"
+                  ? "underline"
+                  : label === "S"
+                    ? "line-through"
+                    : label === "</>"
+                      ? "font-mono"
+                      : ""
+          }
+        >
+          {label}
+        </span>
+      )}
     </button>
   );
+}
+
+function NestIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M3 8h12" />
+      <path d="M3 12h8" />
+      <path d="M3 16h4" />
+      <path d="m15 12 4-4 4 4" />
+      <path d="M19 8v8" />
+    </svg>
+  );
+}
+
+function UnnestIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M7 8h14" />
+      <path d="M11 12h10" />
+      <path d="M15 16h6" />
+      <path d="m7 12-4-4-4 4" />
+      <path d="M3 8v8" />
+    </svg>
+  );
+}
+
+function safeParseProps(s: string): Record<string, unknown> {
+  try {
+    return JSON.parse(s) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
 }
 
 /**
