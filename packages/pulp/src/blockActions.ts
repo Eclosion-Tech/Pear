@@ -3,6 +3,7 @@ import * as Y from "yjs";
 import { prosemirrorToYDoc } from "y-prosemirror";
 import type { SurfaceFocusValue } from "./focus/SurfaceFocusCoordinator";
 import { knownSiblingIdsForParent } from "./focus/insertFocusHelpers";
+import { getBlockSibling } from "./navigation/blockNavigation";
 import type { SlashMenuItem } from "./SlashMenu";
 import type { BlockNode, BlockTree, PulpMutations } from "./types";
 import { yDocToPlainText } from "./rich-text/yjsToHtml";
@@ -49,6 +50,102 @@ export function mergePlainTextIntoRichText(
     data: Y.encodeStateAsUpdate(plainTextToYDoc(existing + text)),
   });
   return mergePoint;
+}
+
+/** Document list block types (distinct from data-bound substrate `List`). */
+export const DOCUMENT_LIST_ITEM_TYPES = new Set([
+  "BulletListItem",
+  "NumberedListItem",
+  "ChecklistItem",
+]);
+
+export function isDocumentListItemType(componentType: string): boolean {
+  return DOCUMENT_LIST_ITEM_TYPES.has(componentType);
+}
+
+/**
+ * Exit an empty document list item back to plain `RichText` — BlockNote /
+ * Notion semantics for Enter on an empty list row.
+ */
+export function exitEmptyListItemToRichText(
+  node: BlockNode,
+  tree: BlockTree,
+  mutations: Pick<PulpMutations, "insertBlock" | "deleteBlock">,
+  focus: SurfaceFocusValue,
+): boolean {
+  if (node.parentId == null) return false;
+  if (!isDocumentListItemType(node.componentType)) return false;
+
+  const parentSiblings = tree.byParent.get(node.parentId) ?? [];
+  const myIdx = parentSiblings.findIndex((s) => s.id === node.id);
+  const predecessor = myIdx > 0 ? parentSiblings[myIdx - 1]?.id : undefined;
+
+  focus.armForInsert(node.parentId, predecessor, {
+    focusAt: "start",
+    knownSiblingIds: knownSiblingIdsForParent(tree, node.parentId),
+  });
+  mutations.insertBlock({
+    parentId: node.parentId,
+    componentType: "RichText",
+    propsJson: "{}",
+    afterSiblingId: predecessor,
+  });
+  mutations.deleteBlock({ componentId: node.id });
+  return true;
+}
+
+/**
+ * Nest this block under its previous sibling (BlockNote Tab / list indent).
+ * The previous sibling's type must accept children (`Container`, list items, …).
+ */
+export function nestBlockUnderPreviousSibling(
+  node: BlockNode,
+  tree: BlockTree,
+  mutations: Pick<PulpMutations, "moveBlock">,
+  focus: SurfaceFocusValue,
+): boolean {
+  if (node.parentId == null) return false;
+
+  const prev = getBlockSibling(tree, node.id, "prev");
+  if (!prev) return false;
+
+  const prevDef = tree.defs.get(prev.componentType);
+  if (!prevDef?.acceptsChildren) return false;
+
+  const prevChildren = tree.byParent.get(prev.id) ?? [];
+  const lastChild = prevChildren[prevChildren.length - 1];
+
+  mutations.moveBlock({
+    componentId: node.id,
+    newParentId: prev.id,
+    afterSiblingId: lastChild?.id,
+  });
+  focus.requestFocus(node.id, "start");
+  return true;
+}
+
+/**
+ * Unnest this block — move it to the grandparent, immediately after its
+ * current parent (BlockNote Shift+Tab / list outdent).
+ */
+export function unnestBlock(
+  node: BlockNode,
+  tree: BlockTree,
+  mutations: Pick<PulpMutations, "moveBlock">,
+  focus: SurfaceFocusValue,
+): boolean {
+  if (node.parentId == null) return false;
+
+  const parent = tree.byId.get(node.parentId);
+  if (!parent || parent.parentId == null) return false;
+
+  mutations.moveBlock({
+    componentId: node.id,
+    newParentId: parent.parentId,
+    afterSiblingId: parent.id,
+  });
+  focus.requestFocus(node.id, "start");
+  return true;
 }
 
 /** Clone a block as a new sibling immediately below. Shallow — children are not copied. */
@@ -127,8 +224,9 @@ export function turnIntoBlock(
 
   const carryText = extractCarryText(node, tree, focus);
   const props = buildTurnIntoProps(item, node, carryText);
+  const targetDef = tree.defs.get(item.componentType);
   const initialDoc =
-    item.componentType === "RichText" && carryText
+    targetDef?.hasYjsState && carryText
       ? plainTextToYDoc(carryText)
       : undefined;
 
@@ -148,9 +246,7 @@ export function turnIntoBlock(
     afterSiblingId: predecessor,
   });
 
-  if (parentSiblings.length > 1) {
-    mutations.deleteBlock({ componentId: node.id });
-  }
+  mutations.deleteBlock({ componentId: node.id });
 }
 
 function extractCarryText(
@@ -162,7 +258,9 @@ function extractCarryText(
     const props = safeParseProps(node.props);
     return typeof props.text === "string" ? props.text : "";
   }
-  if (node.componentType === "RichText") {
+
+  const def = tree.defs.get(node.componentType);
+  if (def?.hasYjsState) {
     const view = focus.getEditor(node.id);
     if (view) return view.state.doc.textContent;
     const yjs = tree.yjs.get(node.id);
@@ -187,6 +285,9 @@ function buildTurnIntoProps(
     };
   }
   if (item.componentType === "RichText") {
+    return { ...item.defaultProps };
+  }
+  if (isDocumentListItemType(item.componentType)) {
     return { ...item.defaultProps };
   }
   if (node.componentType === item.componentType) {

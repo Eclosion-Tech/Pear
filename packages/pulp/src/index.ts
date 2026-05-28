@@ -98,6 +98,10 @@ export {
   duplicateBlock,
   mergePlainTextIntoRichText,
   turnIntoBlock,
+  nestBlockUnderPreviousSibling,
+  unnestBlock,
+  isDocumentListItemType,
+  DOCUMENT_LIST_ITEM_TYPES,
 } from "./blockActions";
 export {
   blockLinkHash,

@@ -26,6 +26,12 @@ import { knownSiblingIdsForParent, siblingsForParent, idsMatch } from "../focus/
 import type { FocusPlacement } from "../focus/SurfaceFocusCoordinator";
 import { focusDebug, idStr } from "../focus/focusDebug";
 import { getBlockSibling } from "../navigation/blockNavigation";
+import {
+  exitEmptyListItemToRichText,
+  isDocumentListItemType,
+  nestBlockUnderPreviousSibling,
+  unnestBlock,
+} from "../blockActions";
 
 /**
  * Built-in `RichText` component — viewport-aware switcher.
@@ -64,7 +70,7 @@ type RichTextProps = {
 export function RichTextRenderer({ node, tree }: BlockRendererProps) {
   const props = useMemo<RichTextProps>(() => safeParse(node.props), [node.props]);
   const state = tree.yjs.get(node.id);
-  const { insertBlock, deleteBlock, saveYjsState, config } = usePulp();
+  const { insertBlock, deleteBlock, moveBlock, saveYjsState, config } = usePulp();
   const focus = useSurfaceFocus();
   /** Set before intentional soft-delete so unmount flush skips save. */
   const suppressSaveRef = useRef(false);
@@ -146,6 +152,23 @@ export function RichTextRenderer({ node, tree }: BlockRendererProps) {
       return true;
     }
 
+    if (
+      view.state.doc.textContent.length === 0 &&
+      isDocumentListItemType(node.componentType)
+    ) {
+      focusDebug("onSplit: exit empty list item → RichText", {
+        nodeId: idStr(node.id),
+        componentType: node.componentType,
+      });
+      suppressSaveRef.current = true;
+      return exitEmptyListItemToRichText(
+        node,
+        tree,
+        { insertBlock, deleteBlock },
+        focus,
+      );
+    }
+
     // Apply ProseMirror's built-in splitBlock — handles all positions
     // (start / middle / end of a paragraph, at boundaries between
     // paragraphs) and produces a clean paragraph structure. If
@@ -200,20 +223,44 @@ export function RichTextRenderer({ node, tree }: BlockRendererProps) {
 
   const siblings = node.parentId != null ? tree.byParent.get(node.parentId) ?? [] : [];
   const canDelete = siblings.length > 1;
+  const canUnnest =
+    node.parentId != null &&
+    (() => {
+      const parent = tree.byId.get(node.parentId!);
+      return Boolean(parent?.parentId != null);
+    })();
+
+  const onIndent = useCallback((): boolean => {
+    return nestBlockUnderPreviousSibling(
+      node,
+      tree,
+      { moveBlock },
+      focus,
+    );
+  }, [node, tree, moveBlock, focus]);
+
+  const onOutdent = useCallback((): boolean => {
+    return unnestBlock(node, tree, { moveBlock }, focus);
+  }, [node, tree, moveBlock, focus]);
+
   // Backspace-on-empty deletes this block AND moves focus to a neighbour,
   // matching Notion/BlockNote: the previous sibling (caret at end), or
-  // the next sibling if this is the first child. Without the focus
-  // handoff, the user has to click into the next block — small but
-  // continually-occurring friction during normal editing flow.
-  const onDeleteSelf = canDelete
-    ? () => {
-        const myIdx = siblings.findIndex((s) => s.id === node.id);
-        const neighbour =
-          myIdx > 0 ? siblings[myIdx - 1] : siblings[myIdx + 1];
-        if (neighbour) focus.requestFocus(neighbour.id, "end");
-        removeSelf();
-      }
-    : undefined;
+  // the next sibling if this is the first child. Nested empty list items
+  // outdent first (BlockNote Shift+Tab / Backspace at start semantics).
+  const onDeleteSelf =
+    canDelete || canUnnest
+      ? () => {
+          if (isDocumentListItemType(node.componentType) && canUnnest) {
+            if (unnestBlock(node, tree, { moveBlock }, focus)) return;
+          }
+          if (!canDelete) return;
+          const myIdx = siblings.findIndex((s) => s.id === node.id);
+          const neighbour =
+            myIdx > 0 ? siblings[myIdx - 1] : siblings[myIdx + 1];
+          if (neighbour) focus.requestFocus(neighbour.id, "end");
+          removeSelf();
+        }
+      : undefined;
 
   // Backspace-at-start-of-non-empty merge: take this block's full
   // content, splice it into the previous sibling's RichText editor as
@@ -534,6 +581,8 @@ export function RichTextRenderer({ node, tree }: BlockRendererProps) {
           suppressSaveRef={suppressSaveRef}
           onNavigatePrev={onNavigatePrev}
           onNavigateNext={onNavigateNext}
+          onIndent={onIndent}
+          onOutdent={onOutdent}
           bindFocus={bindFocus}
         />
       ) : (

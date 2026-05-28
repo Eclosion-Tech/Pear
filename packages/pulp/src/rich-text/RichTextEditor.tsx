@@ -77,6 +77,8 @@ export function RichTextEditor({
   suppressSaveRef,
   onNavigatePrev,
   onNavigateNext,
+  onIndent,
+  onOutdent,
   bindFocus,
 }: {
   doc: Y.Doc;
@@ -132,6 +134,10 @@ export function RichTextEditor({
   onNavigatePrev?: () => boolean;
   /** ArrowDown at doc end — focus next sibling (caret at start). */
   onNavigateNext?: () => boolean;
+  /** Tab — nest block under previous sibling when supported. */
+  onIndent?: () => boolean;
+  /** Shift+Tab — unnest block to grandparent. */
+  onOutdent?: () => boolean;
   /**
    * Parent registers the surface focus coordinator against this editor's
    * applyFocus fn — keeps static→live transitions able to reach a live view.
@@ -164,6 +170,8 @@ export function RichTextEditor({
   const onSlashTriggerRef = useRef(onSlashTrigger);
   const onNavigatePrevRef = useRef(onNavigatePrev);
   const onNavigateNextRef = useRef(onNavigateNext);
+  const onIndentRef = useRef(onIndent);
+  const onOutdentRef = useRef(onOutdent);
   const shouldClaimFocusRef = useRef(shouldClaimFocus);
   const bindFocusRef = useRef(bindFocus);
   onSplitRef.current = onSplit;
@@ -172,6 +180,8 @@ export function RichTextEditor({
   onSlashTriggerRef.current = onSlashTrigger;
   onNavigatePrevRef.current = onNavigatePrev;
   onNavigateNextRef.current = onNavigateNext;
+  onIndentRef.current = onIndent;
+  onOutdentRef.current = onOutdent;
   shouldClaimFocusRef.current = shouldClaimFocus;
   bindFocusRef.current = bindFocus;
 
@@ -275,6 +285,16 @@ export function RichTextEditor({
             if (!isAtDocEnd(docEnd, s.selection.head)) return false;
             const nav = onNavigateNextRef.current;
             return nav?.() ?? false;
+          },
+          Tab: () => {
+            const handler = onIndentRef.current;
+            if (!handler) return false;
+            return handler();
+          },
+          "Shift-Tab": () => {
+            const handler = onOutdentRef.current;
+            if (!handler) return false;
+            return handler();
           },
           // Slash menu trigger — only fires at the start of an empty
           // doc, matching the ADR § Block chrome / Slash menu contract.

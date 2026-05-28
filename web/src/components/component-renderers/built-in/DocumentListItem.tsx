@@ -7,6 +7,9 @@ import {
   type BlockRendererProps,
 } from "@eclosion-tech/pulp";
 
+/** Align list markers with the first line of editable text (matches RichText min-height). */
+const MARKER_ROW = "flex h-[1.5em] shrink-0 items-center";
+
 type ChecklistProps = {
   checked?: boolean;
 };
@@ -14,10 +17,9 @@ type ChecklistProps = {
 export function BulletListItemRenderer(props: BlockRendererProps) {
   return (
     <div className="flex items-start gap-2">
-      <span
-        className="mt-[0.85rem] h-1.5 w-1.5 shrink-0 rounded-full bg-neutral-500 dark:bg-neutral-400"
-        aria-hidden
-      />
+      <span className={`${MARKER_ROW} w-4 justify-center`} aria-hidden>
+        <span className="h-1.5 w-1.5 rounded-full bg-neutral-500 dark:bg-neutral-400" />
+      </span>
       <div className="min-w-0 flex-1">
         <RichTextRenderer {...props} />
         <NestedListChildren>{props.children}</NestedListChildren>
@@ -31,7 +33,9 @@ export function NumberedListItemRenderer(props: BlockRendererProps) {
 
   return (
     <div className="flex items-start gap-2">
-      <span className="mt-[0.45rem] min-w-5 shrink-0 text-right text-sm tabular-nums text-neutral-500 dark:text-neutral-400">
+      <span
+        className={`${MARKER_ROW} min-w-5 justify-end text-sm tabular-nums text-neutral-500 dark:text-neutral-400`}
+      >
         {index}.
       </span>
       <div className="min-w-0 flex-1">
@@ -49,24 +53,26 @@ export function ChecklistItemRenderer(props: BlockRendererProps) {
 
   return (
     <div className="flex items-start gap-2">
-      <button
-        type="button"
-        aria-pressed={checked}
-        aria-label={checked ? "Mark incomplete" : "Mark complete"}
-        className={`mt-[0.45rem] flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors ${
-          checked
-            ? "border-neutral-900 bg-neutral-900 text-white dark:border-neutral-100 dark:bg-neutral-100 dark:text-neutral-900"
-            : "border-neutral-300 bg-transparent text-transparent hover:border-neutral-500 dark:border-neutral-600 dark:hover:border-neutral-300"
-        }`}
-        onClick={() => {
-          updateBlockProps({
-            componentId: props.node.id,
-            propsJson: JSON.stringify({ ...parsed, checked: !checked }),
-          });
-        }}
-      >
-        <CheckIcon />
-      </button>
+      <span className={`${MARKER_ROW} w-4 justify-center`}>
+        <button
+          type="button"
+          aria-pressed={checked}
+          aria-label={checked ? "Mark incomplete" : "Mark complete"}
+          className={`flex h-4 w-4 items-center justify-center rounded border transition-colors ${
+            checked
+              ? "border-neutral-900 bg-neutral-900 text-white dark:border-neutral-100 dark:bg-neutral-100 dark:text-neutral-900"
+              : "border-neutral-300 bg-transparent text-transparent hover:border-neutral-500 dark:border-neutral-600 dark:hover:border-neutral-300"
+          }`}
+          onClick={() => {
+            updateBlockProps({
+              componentId: props.node.id,
+              propsJson: JSON.stringify({ ...parsed, checked: !checked }),
+            });
+          }}
+        >
+          <CheckIcon />
+        </button>
+      </span>
       <div className={`min-w-0 flex-1 ${checked ? "opacity-60 line-through" : ""}`}>
         <RichTextRenderer {...props} />
         <NestedListChildren>{props.children}</NestedListChildren>
