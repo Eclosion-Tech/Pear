@@ -8,6 +8,16 @@ import { toggleMark } from "prosemirror-commands";
 import { usePulp } from "../context/PulpProvider";
 import type { SlashMenuItem } from "../SlashMenu";
 import { labelForBlock } from "../toolbarTurnIntoItems";
+import {
+  applyColorMark,
+  getSelectionMarkColor,
+  getSelectionTextAlign,
+  setParagraphTextAlign,
+  TEXT_COLOR_SWATCHES,
+  BACKGROUND_COLOR_SWATCHES,
+  type TextAlign,
+} from "./richTextFormatting";
+import { AlignToolbarControls } from "./AlignToolbarControls";
 import { richTextSchema } from "./richTextSchema";
 
 export type BlockToolbarActions = {
@@ -19,6 +29,9 @@ export type BlockToolbarActions = {
   onTurnInto: (item: SlashMenuItem) => void;
   onNest: () => void;
   onOutdent: () => void;
+  /** Block-level alignment (Heading `props.textAlign`). */
+  textAlign?: TextAlign;
+  onTextAlignChange?: (align: TextAlign) => void;
 };
 
 /**
@@ -46,7 +59,7 @@ type LinkEditorState = {
   href: string;
 };
 
-const TOOLBAR_ESTIMATED_HEIGHT = 44;
+const TOOLBAR_ESTIMATED_HEIGHT = 48;
 const TOOLBAR_SELECTION_GAP = 8;
 const LINK_POPOVER_ESTIMATED_HEIGHT = 300;
 const LINK_POPOVER_WIDTH = 320;
@@ -68,10 +81,14 @@ export function FormattingToolbar({
         top: number;
         left: number;
         marks: Record<string, boolean>;
+        textAlign: TextAlign;
+        textColor: string | null;
+        backgroundColor: string | null;
       }
     | null
   >(null);
   const [linkEditor, setLinkEditor] = useState<LinkEditorState | null>(null);
+  const [colorEditorOpen, setColorEditorOpen] = useState(false);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const linkEditorRef = useRef<LinkEditorState | null>(null);
   linkEditorRef.current = linkEditor;
@@ -104,12 +121,28 @@ export function FormattingToolbar({
         if (markType) marks[name] = markActive(state, markType, anchorFrom, anchorTo);
       }
 
+      const textColorMark = richTextSchema.marks.textColor;
+      const bgColorMark = richTextSchema.marks.backgroundColor;
+
       setCoords({
         top: placeBelow
           ? rect.bottom + TOOLBAR_SELECTION_GAP
           : rect.top - TOOLBAR_ESTIMATED_HEIGHT - TOOLBAR_SELECTION_GAP,
         left: rect.left + rect.width / 2,
         marks,
+        textAlign: getSelectionTextAlign(state),
+        textColor: textColorMark
+          ? getSelectionMarkColor(state, textColorMark, "color", anchorFrom, anchorTo)
+          : null,
+        backgroundColor: bgColorMark
+          ? getSelectionMarkColor(
+              state,
+              bgColorMark,
+              "backgroundColor",
+              anchorFrom,
+              anchorTo,
+            )
+          : null,
       });
 
       if (openLinkEditor) {
@@ -158,19 +191,25 @@ export function FormattingToolbar({
 
   if (!coords || !view) return null;
 
+  const isHeading = blockActions?.componentType === "Heading";
+  const blockAlign = blockActions?.textAlign ?? coords.textAlign;
+
   return createPortal(
     <>
       <div
         ref={toolbarRef}
         style={{ top: coords.top, left: coords.left, transform: "translateX(-50%)" }}
-        className="fixed z-50 flex items-center gap-0.5 rounded-md border
+        className="fixed z-50 flex max-w-[min(100vw-16px,720px)] items-center gap-0.5 overflow-x-auto rounded-md border
                    border-neutral-200 dark:border-neutral-700
                    bg-white dark:bg-neutral-900 px-1 py-1 shadow-lg"
         // Prevent mousedown from collapsing the prosemirror selection before
         // the toggle command runs. ProseMirror's selection lives in DOM
         // focus + an internal state; clicking the toolbar's host would blur
         // the editor and leave us with no selection to act on.
-        onMouseDown={(e) => e.preventDefault()}
+        onMouseDown={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
       >
         {blockActions && blockActions.turnIntoItems.length > 0 && (
           <>
@@ -214,27 +253,67 @@ export function FormattingToolbar({
             <ToolbarDivider />
           </>
         )}
-        {MARK_ORDER.map((name) => (
-          <ToolbarButton
-            key={name}
-            label={MARK_LABEL[name]}
-            shortcut={MARK_SHORTCUT[name]}
-            active={coords.marks[name] ?? false}
-            onClick={() => {
-              if (name === "link") {
-                const next = buildLinkEditorState(view);
-                if (next) setLinkEditor(next);
-                return;
-              }
-              const markType = richTextSchema.marks[name];
-              if (!markType) return;
-              toggleMark(markType)(view.state, view.dispatch);
-              view.focus();
-            }}
-          />
-        ))}
+        {!isHeading &&
+          MARK_ORDER.map((name) => (
+            <ToolbarButton
+              key={name}
+              label={MARK_LABEL[name]}
+              shortcut={MARK_SHORTCUT[name]}
+              active={coords.marks[name] ?? false}
+              onClick={() => {
+                if (name === "link") {
+                  const next = buildLinkEditorState(view);
+                  if (next) setLinkEditor(next);
+                  return;
+                }
+                const markType = richTextSchema.marks[name];
+                if (!markType) return;
+                toggleMark(markType)(view.state, view.dispatch);
+                view.focus();
+              }}
+            />
+          ))}
+        {!isHeading && <ToolbarDivider />}
+        <AlignToolbarControls
+          align={blockAlign}
+          onAlignChange={(align) => {
+            if (isHeading && blockActions?.onTextAlignChange) {
+              blockActions.onTextAlignChange(align);
+            } else {
+              setParagraphTextAlign(view, align);
+            }
+            view.focus();
+          }}
+        />
+        {!isHeading && (
+          <>
+            <ToolbarDivider />
+            <ColorPickerButton
+              active={colorEditorOpen}
+              textColor={coords.textColor}
+              onClick={() => setColorEditorOpen((v) => !v)}
+            />
+          </>
+        )}
       </div>
-      {linkEditor && (
+      {!isHeading && colorEditorOpen && (
+        <ColorPickerPopover
+          top={coords.top + TOOLBAR_ESTIMATED_HEIGHT + TOOLBAR_SELECTION_GAP}
+          left={coords.left}
+          textColor={coords.textColor}
+          backgroundColor={coords.backgroundColor}
+          onSelectText={(color) => {
+            applyColorMark(view, "textColor", color);
+            setColorEditorOpen(false);
+          }}
+          onSelectBackground={(color) => {
+            applyColorMark(view, "backgroundColor", color);
+            setColorEditorOpen(false);
+          }}
+          onClose={() => setColorEditorOpen(false)}
+        />
+      )}
+      {!isHeading && linkEditor && (
         <LinkEditorPopover
           state={linkEditor}
           view={view}
@@ -410,6 +489,141 @@ function LinkEditorPopover({
           Apply
         </button>
       </div>
+    </div>
+  );
+}
+
+function ColorPickerButton({
+  active,
+  textColor,
+  onClick,
+}: {
+  active: boolean;
+  textColor: string | null;
+  onClick: () => void;
+}) {
+  const underline = textColor ?? "#171717";
+  return (
+    <button
+      type="button"
+      title="Text color"
+      aria-label="Text color"
+      aria-pressed={active}
+      onClick={onClick}
+      className={`min-w-[28px] rounded px-1.5 py-1 text-xs font-semibold transition-colors ${
+        active
+          ? "bg-neutral-200 dark:bg-neutral-700"
+          : "hover:bg-neutral-100 dark:hover:bg-neutral-800"
+      }`}
+    >
+      <span className="text-neutral-800 dark:text-neutral-100">A</span>
+      <span
+        className="mx-auto mt-0.5 block h-0.5 w-3.5 rounded-full"
+        style={{ backgroundColor: underline }}
+      />
+    </button>
+  );
+}
+
+function ColorPickerPopover({
+  top,
+  left,
+  textColor,
+  backgroundColor,
+  onSelectText,
+  onSelectBackground,
+  onClose,
+}: {
+  top: number;
+  left: number;
+  textColor: string | null;
+  backgroundColor: string | null;
+  onSelectText: (color: string | null) => void;
+  onSelectBackground: (color: string | null) => void;
+  onClose: () => void;
+}) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    function onPointerDown(e: PointerEvent) {
+      if (!rootRef.current?.contains(e.target as Node)) onClose();
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      ref={rootRef}
+      style={{ top, left, transform: "translateX(-50%)" }}
+      className="fixed z-[60] w-[220px] rounded-md border border-neutral-200 bg-white p-2 shadow-xl dark:border-neutral-700 dark:bg-neutral-900"
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400">
+        Text
+      </div>
+      <ColorSwatchRow
+        swatches={TEXT_COLOR_SWATCHES}
+        active={textColor}
+        onSelect={onSelectText}
+      />
+      <div className="mb-1 mt-2 text-[10px] font-medium uppercase tracking-wide text-neutral-400">
+        Background
+      </div>
+      <ColorSwatchRow
+        swatches={BACKGROUND_COLOR_SWATCHES}
+        active={backgroundColor}
+        onSelect={onSelectBackground}
+      />
+    </div>
+  );
+}
+
+function ColorSwatchRow({
+  swatches,
+  active,
+  onSelect,
+}: {
+  swatches: ReadonlyArray<{ label: string; value: string | null }>;
+  active: string | null;
+  onSelect: (color: string | null) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1">
+      {swatches.map((swatch) => {
+        const selected =
+          swatch.value == null ? active == null : active === swatch.value;
+        return (
+          <button
+            key={swatch.label}
+            type="button"
+            title={swatch.label}
+            aria-label={swatch.label}
+            onClick={() => onSelect(swatch.value)}
+            className={`flex h-6 w-6 items-center justify-center rounded border transition-transform hover:scale-105 ${
+              selected
+                ? "border-neutral-900 ring-1 ring-neutral-900 dark:border-neutral-100 dark:ring-neutral-100"
+                : "border-neutral-200 dark:border-neutral-600"
+            }`}
+          >
+            {swatch.value == null ? (
+              <span className="text-[10px] text-neutral-400">∅</span>
+            ) : (
+              <span
+                className="h-4 w-4 rounded-sm"
+                style={{ backgroundColor: swatch.value }}
+              />
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }

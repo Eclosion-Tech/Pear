@@ -6,6 +6,7 @@ import type { SurfaceFocusValue } from "./focus/SurfaceFocusCoordinator";
 import { knownSiblingIdsForParent } from "./focus/insertFocusHelpers";
 import { resolveNestTarget, getDocumentPrevBlock } from "./navigation/blockNavigation";
 import type { SlashMenuItem } from "./SlashMenu";
+import { normalizeTextAlign, headingPropsJson } from "./rich-text/richTextFormatting";
 import type { BlockNode, BlockTree, PulpMutations } from "./types";
 import { yDocToPlainText } from "./rich-text/yjsToHtml";
 import {
@@ -17,7 +18,7 @@ import {
  * Append plain text onto a `RichText` block — live editor when mounted,
  * otherwise rewrite the stored Y.Doc (plain-text merge only).
  * Returns the doc position where the inserted text begins (for caret
- * placement). Used when a non-Yjs block (Heading) backspaces into prev.
+ * placement).
  */
 export function mergePlainTextIntoRichText(
   prevId: BlockNode["id"],
@@ -303,9 +304,9 @@ export function turnIntoBlock(
     const current = safeParseProps(node.props);
     mutations.updateBlockProps({
       componentId: node.id,
-      propsJson: JSON.stringify({
-        ...current,
-        level: item.defaultProps.level,
+      propsJson: headingPropsJson(item.defaultProps.level, {
+        textAlign: normalizeTextAlign(current.textAlign),
+        collapsed: current.collapsed === true,
       }),
     });
     return;
@@ -350,11 +351,6 @@ function extractCarryText(
   tree: BlockTree,
   focus: SurfaceFocusValue,
 ): string {
-  if (node.componentType === "Heading") {
-    const props = safeParseProps(node.props);
-    return typeof props.text === "string" ? props.text : "";
-  }
-
   const def = tree.defs.get(node.componentType);
   if (def?.hasYjsState) {
     const view = focus.getEditor(node.id);
@@ -375,9 +371,12 @@ function buildTurnIntoProps(
   carryText: string,
 ): Record<string, unknown> {
   if (item.componentType === "Heading") {
+    const current =
+      node.componentType === "Heading" ? safeParseProps(node.props) : {};
+    const align = normalizeTextAlign(current.textAlign);
     return {
-      ...item.defaultProps,
-      text: carryText || (item.defaultProps.text ?? ""),
+      level: item.defaultProps.level ?? 1,
+      ...(align !== "left" ? { textAlign: align } : {}),
     };
   }
   if (item.componentType === "RichText") {

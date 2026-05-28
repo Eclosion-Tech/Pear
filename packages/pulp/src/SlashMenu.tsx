@@ -65,7 +65,7 @@ export const SPRINT_3B_SLASH_ITEMS: SlashMenuItem[] = [
     label: "Heading 1",
     description: "Large section title.",
     componentType: "Heading",
-    defaultProps: { level: 1, text: "" },
+    defaultProps: { level: 1 },
     searchTokens: ["h1", "heading", "title", "header"],
   },
   {
@@ -74,7 +74,7 @@ export const SPRINT_3B_SLASH_ITEMS: SlashMenuItem[] = [
     label: "Heading 2",
     description: "Medium section title.",
     componentType: "Heading",
-    defaultProps: { level: 2, text: "" },
+    defaultProps: { level: 2 },
     searchTokens: ["h2", "heading", "subheading"],
   },
   {
@@ -83,7 +83,7 @@ export const SPRINT_3B_SLASH_ITEMS: SlashMenuItem[] = [
     label: "Heading 3",
     description: "Small section title.",
     componentType: "Heading",
-    defaultProps: { level: 3, text: "" },
+    defaultProps: { level: 3 },
     searchTokens: ["h3", "heading", "subheading"],
   },
   {

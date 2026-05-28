@@ -14,6 +14,7 @@ use crate::automations::seed_automation_primitives_inner;
 use crate::harness::{harness_template, HarnessTemplate};
 use crate::module_install::ensure_publisher_identity_recorded;
 use crate::pages::components::seed_builtin_component_types;
+use crate::pages::components::migrate_heading_yjs_registry_v1;
 use crate::pages::{page, Page};
 use crate::sensors::seed_sensor_registry_inner;
 /// Records which one-shot data migrations have already run on this database.
@@ -148,6 +149,14 @@ pub fn run_pending_migrations(ctx: &ReducerContext) -> Result<(), String> {
         "component_type_document_lists_v1",
         |ctx: &ReducerContext| {
             seed_builtin_component_types(ctx);
+            Ok::<(), String>(())
+        }
+    );
+    run_step!(
+        ctx,
+        "component_heading_yjs_registry_v1",
+        |ctx: &ReducerContext| {
+            migrate_heading_yjs_registry_v1(ctx);
             Ok::<(), String>(())
         }
     );

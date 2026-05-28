@@ -2,7 +2,6 @@ import {
   registerRenderer,
 } from "@eclosion-tech/pulp";
 import { ContainerRenderer } from "./Container";
-import { HeadingRenderer } from "./Heading";
 import { ImageRenderer } from "./Image";
 import { ImageBlockRenderer } from "./ImageBlock";
 import { InputRenderer } from "./Input";
@@ -30,7 +29,6 @@ export function registerPearBuiltinRenderers(): void {
   registered = true;
 
   registerRenderer("Container", ContainerRenderer);
-  registerRenderer("Heading", HeadingRenderer);
   registerRenderer("Image", ImageRenderer);
   registerRenderer("ImageBlock", ImageBlockRenderer);
   registerRenderer("Input", InputRenderer);

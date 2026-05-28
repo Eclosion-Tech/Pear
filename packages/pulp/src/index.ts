@@ -62,14 +62,28 @@ export {
 export { RichTextRenderer } from "./rich-text/RichText";
 export type { RichTextTextDensity } from "./rich-text/RichText";
 export { RichTextEditor } from "./rich-text/RichTextEditor";
+export type { EditorSurfaceMode } from "./rich-text/RichTextEditor";
 export { FormattingToolbar } from "./rich-text/FormattingToolbar";
 export type { BlockToolbarActions } from "./rich-text/FormattingToolbar";
+export { HeadingRenderer } from "./heading/HeadingRenderer";
+export { AlignToolbarControls } from "./rich-text/AlignToolbarControls";
 export { turnIntoToolbarItems, labelForBlock } from "./toolbarTurnIntoItems";
 export {
   richTextSchema,
   PROSEMIRROR_FRAGMENT_KEY,
 } from "./rich-text/richTextSchema";
-export { yDocToHtml } from "./rich-text/yjsToHtml";
+export {
+  applyColorMark,
+  getSelectionMarkColor,
+  getSelectionTextAlign,
+  setParagraphTextAlign,
+  normalizeTextAlign,
+  headingPropsJson,
+  plainTextToYDoc,
+  TEXT_COLOR_SWATCHES,
+  BACKGROUND_COLOR_SWATCHES,
+} from "./rich-text/richTextFormatting";
+export type { TextAlign } from "./rich-text/richTextFormatting";
 
 export { validateComponentProps } from "./componentProps";
 export type { ValidationResult, ValidationError, JsonSchema } from "./componentProps";

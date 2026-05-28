@@ -49,6 +49,19 @@ const EDITOR_PROSE_DEFAULT =
 const EDITOR_PROSE_LIST_ITEM =
   "my-0 text-neutral-900 dark:text-neutral-100 leading-normal [&_.ProseMirror]:outline-none [&_.ProseMirror_p]:my-0 [&_.ProseMirror_a]:underline [&_.ProseMirror_code]:rounded [&_.ProseMirror_code]:bg-neutral-100 dark:[&_.ProseMirror_code]:bg-neutral-800 [&_.ProseMirror_code]:px-1 [&_.ProseMirror_code]:py-0.5 [&_.ProseMirror_strong]:font-semibold [&_.ProseMirror_em]:italic [&_.ProseMirror_u]:underline [&_.ProseMirror_s]:line-through";
 
+const HEADING_EDITOR_PROSE: Record<number, string> = {
+  1: "my-2 text-4xl font-bold leading-tight text-neutral-900 dark:text-neutral-100 [&_.ProseMirror]:outline-none [&_.ProseMirror_p]:my-0",
+  2: "my-2 text-3xl font-bold leading-tight text-neutral-900 dark:text-neutral-100 [&_.ProseMirror]:outline-none [&_.ProseMirror_p]:my-0",
+  3: "my-2 text-2xl font-semibold leading-tight text-neutral-900 dark:text-neutral-100 [&_.ProseMirror]:outline-none [&_.ProseMirror_p]:my-0",
+  4: "my-2 text-xl font-semibold leading-tight text-neutral-900 dark:text-neutral-100 [&_.ProseMirror]:outline-none [&_.ProseMirror_p]:my-0",
+  5: "my-2 text-lg font-medium leading-tight text-neutral-900 dark:text-neutral-100 [&_.ProseMirror]:outline-none [&_.ProseMirror_p]:my-0",
+  6: "my-2 text-base font-medium leading-tight text-neutral-900 dark:text-neutral-100 [&_.ProseMirror]:outline-none [&_.ProseMirror_p]:my-0",
+};
+
+export type EditorSurfaceMode =
+  | { kind: "body"; textDensity?: "default" | "listItem" }
+  | { kind: "heading"; level: 1 | 2 | 3 | 4 | 5 | 6 };
+
 /**
  * Live `RichText` editor — sprint 2 of the web renderer.
  *
@@ -74,6 +87,7 @@ export function RichTextEditor({
   componentId,
   placeholder,
   textDensity = "default",
+  surfaceMode = { kind: "body" },
   shouldClaimFocus,
   onFocus,
   onBlur,
@@ -94,6 +108,8 @@ export function RichTextEditor({
   placeholder?: string;
   /** Compact prose for list-item rows (no paragraph margins). */
   textDensity?: "default" | "listItem";
+  /** Body vs heading surface — headings use title typography and plain text only. */
+  surfaceMode?: EditorSurfaceMode;
   /**
    * Called once on editor mount to claim autofocus after an insert.
    * Returns caret placement when this block was the insert target.
@@ -186,6 +202,7 @@ export function RichTextEditor({
   const onOutdentRef = useRef(onOutdent);
   const shouldClaimFocusRef = useRef(shouldClaimFocus);
   const bindFocusRef = useRef(bindFocus);
+  const surfaceModeRef = useRef(surfaceMode);
   onSplitRef.current = onSplit;
   onDeleteSelfRef.current = onDeleteSelf;
   onMergeWithPrevRef.current = onMergeWithPrev;
@@ -196,6 +213,7 @@ export function RichTextEditor({
   onOutdentRef.current = onOutdent;
   shouldClaimFocusRef.current = shouldClaimFocus;
   bindFocusRef.current = bindFocus;
+  surfaceModeRef.current = surfaceMode;
 
   useLayoutEffect(() => {
     if (!hostRef.current) return;
@@ -217,12 +235,28 @@ export function RichTextEditor({
         yUndoPlugin({ undoManager }),
         keymap({
           // Mod-Z / Mod-Shift-Z routed at surface level — § Cross-block undo.
-          "Mod-b": toggleMark(richTextSchema.marks.bold),
-          "Mod-i": toggleMark(richTextSchema.marks.italic),
-          "Mod-u": toggleMark(richTextSchema.marks.underline),
-          "Mod-Shift-s": toggleMark(richTextSchema.marks.strike),
-          "Mod-`": toggleMark(richTextSchema.marks.code),
+          "Mod-b": (s, dispatch) => {
+            if (surfaceModeRef.current.kind === "heading") return false;
+            return toggleMark(richTextSchema.marks.bold)(s, dispatch);
+          },
+          "Mod-i": (s, dispatch) => {
+            if (surfaceModeRef.current.kind === "heading") return false;
+            return toggleMark(richTextSchema.marks.italic)(s, dispatch);
+          },
+          "Mod-u": (s, dispatch) => {
+            if (surfaceModeRef.current.kind === "heading") return false;
+            return toggleMark(richTextSchema.marks.underline)(s, dispatch);
+          },
+          "Mod-Shift-s": (s, dispatch) => {
+            if (surfaceModeRef.current.kind === "heading") return false;
+            return toggleMark(richTextSchema.marks.strike)(s, dispatch);
+          },
+          "Mod-`": (s, dispatch) => {
+            if (surfaceModeRef.current.kind === "heading") return false;
+            return toggleMark(richTextSchema.marks.code)(s, dispatch);
+          },
           "Mod-k": (s) => {
+            if (surfaceModeRef.current.kind === "heading") return false;
             if (s.selection.empty) return false;
             setLinkRequest((n) => n + 1);
             return true;
@@ -506,7 +540,11 @@ export function RichTextEditor({
   }, [doc, componentId, idbPrefix]);
 
   const proseClass =
-    textDensity === "listItem" ? EDITOR_PROSE_LIST_ITEM : EDITOR_PROSE_DEFAULT;
+    surfaceMode.kind === "heading"
+      ? HEADING_EDITOR_PROSE[surfaceMode.level]
+      : textDensity === "listItem"
+        ? EDITOR_PROSE_LIST_ITEM
+        : EDITOR_PROSE_DEFAULT;
 
   return (
     <>

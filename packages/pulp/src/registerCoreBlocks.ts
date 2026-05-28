@@ -1,5 +1,6 @@
 import { registerRenderer } from "./registry";
 import { RichTextRenderer } from "./rich-text/RichText";
+import { HeadingRenderer } from "./heading/HeadingRenderer";
 
 let registered = false;
 
@@ -8,4 +9,5 @@ export function registerCoreBlocks(): void {
   if (registered) return;
   registered = true;
   registerRenderer("RichText", RichTextRenderer);
+  registerRenderer("Heading", HeadingRenderer);
 }

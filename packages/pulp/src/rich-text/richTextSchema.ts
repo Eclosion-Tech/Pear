@@ -33,8 +33,24 @@ export const richTextSchema = new Schema({
     paragraph: {
       group: "block",
       content: "inline*",
-      parseDOM: [{ tag: "p" }],
-      toDOM: () => ["p", 0],
+      attrs: {
+        textAlign: { default: null as string | null },
+      },
+      parseDOM: [
+        {
+          tag: "p",
+          getAttrs: (dom) => ({
+            textAlign: readTextAlignAttr(dom as HTMLElement),
+          }),
+        },
+      ],
+      toDOM(node) {
+        const align = node.attrs.textAlign as string | null;
+        if (align && align !== "left") {
+          return ["p", { style: `text-align: ${align}` }, 0];
+        }
+        return ["p", 0];
+      },
     },
     text: {
       group: "inline",
@@ -106,8 +122,60 @@ export const richTextSchema = new Schema({
       parseDOM: [{ tag: "code" }],
       toDOM: () => codeDOM,
     },
+    textColor: {
+      attrs: { color: { default: "" } },
+      parseDOM: [
+        {
+          style: "color",
+          getAttrs: (value) =>
+            typeof value === "string" && value ? { color: value } : false,
+        },
+        {
+          tag: "span",
+          getAttrs: (dom) => {
+            const color = (dom as HTMLElement).style.color;
+            return color ? { color } : false;
+          },
+        },
+      ],
+      toDOM(mark) {
+        const color = mark.attrs.color as string;
+        return color ? ["span", { style: `color: ${color}` }, 0] : ["span", 0];
+      },
+    },
+    backgroundColor: {
+      attrs: { backgroundColor: { default: "" } },
+      parseDOM: [
+        {
+          style: "background-color",
+          getAttrs: (value) =>
+            typeof value === "string" && value
+              ? { backgroundColor: value }
+              : false,
+        },
+        {
+          tag: "span",
+          getAttrs: (dom) => {
+            const bg = (dom as HTMLElement).style.backgroundColor;
+            return bg ? { backgroundColor: bg } : false;
+          },
+        },
+      ],
+      toDOM(mark) {
+        const bg = mark.attrs.backgroundColor as string;
+        return bg
+          ? ["span", { style: `background-color: ${bg}` }, 0]
+          : ["span", 0];
+      },
+    },
   },
 });
+
+function readTextAlignAttr(el: HTMLElement): string | null {
+  const align = el.style.textAlign || el.getAttribute("data-text-align");
+  if (align === "center" || align === "right") return align;
+  return null;
+}
 
 /**
  * Yjs key the prosemirror plugin uses by default. Kept aligned with

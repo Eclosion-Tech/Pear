@@ -265,9 +265,11 @@ mod prop_schemas {
   "type": "object",
   "properties": {
     "level": { "type": "integer", "minimum": 1, "maximum": 6 },
-    "text": { "type": "string" }
+    "text": { "type": "string" },
+    "textAlign": { "enum": ["left", "center", "right"] },
+    "collapsed": { "type": "boolean" }
   },
-  "required": ["level", "text"]
+  "required": ["level"]
 }"#;
 
     pub const IMAGE: &str = r#"{
@@ -505,11 +507,11 @@ fn builtin_specs() -> Vec<BuiltinSpec> {
         BuiltinSpec {
             component_type: "Heading",
             display_name: "Heading",
-            description: "Heading with level + inline text. Not Yjs-backed at v1 — flip has_yjs_state if heading co-editing becomes a priority.",
+            description: "Heading with level + Yjs-backed title text. Optional section container when nested blocks are present; collapse via props.collapsed.",
             prop_schema: prop_schemas::HEADING,
             capabilities: vec![],
-            has_yjs_state: false,
-            accepts_children: false,
+            has_yjs_state: true,
+            accepts_children: true,
         },
         BuiltinSpec {
             component_type: "Image",
@@ -695,6 +697,32 @@ pub(crate) fn seed_builtin_component_types(ctx: &ReducerContext) {
                 created_at: ctx.timestamp,
             });
     }
+}
+
+/// Upgrade existing Heading registry rows after the Yjs + section-container
+/// unification (0.11.5). `seed_builtin_component_types` only inserts missing
+/// types — this patch updates the live Heading definition in place.
+pub(crate) fn migrate_heading_yjs_registry_v1(ctx: &ReducerContext) {
+    let Some(mut def) = ctx
+        .db
+        .component_type_definition()
+        .component_type()
+        .find("Heading".to_string())
+    else {
+        seed_builtin_component_types(ctx);
+        return;
+    };
+
+    def.description =
+        "Heading with level + Yjs-backed title text. Optional section container when nested blocks are present; collapse via props.collapsed."
+            .to_string();
+    def.prop_schema = prop_schemas::HEADING.to_string();
+    def.has_yjs_state = true;
+    def.accepts_children = true;
+    ctx.db
+        .component_type_definition()
+        .component_type()
+        .update(def);
 }
 
 // ============================================================

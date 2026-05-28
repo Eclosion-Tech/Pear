@@ -90,8 +90,14 @@ function renderXmlElement(el: Y.XmlElement): string {
   const children = el.toArray().map(renderNode).join("");
 
   switch (tag) {
-    case "paragraph":
-      return `<p>${children || "<br/>"}</p>`;
+    case "paragraph": {
+      const align = el.getAttribute("textAlign");
+      const style =
+        align === "center" || align === "right"
+          ? ` style="text-align:${escapeAttr(align)}"`
+          : "";
+      return `<p${style}>${children || "<br/>"}</p>`;
+    }
     // Heading levels — prosemirror schemas typically emit `heading` with a
     // level attr; some emit heading_1..heading_6. We accept both shapes.
     case "heading": {
@@ -187,9 +193,31 @@ function renderXmlText(node: Y.XmlText): string {
       open.push("<code>");
       close.unshift("</code>");
     }
+    const textColor = readColorMark(marks.textColor, "color");
+    if (textColor) {
+      open.push(`<span style="color:${escapeAttr(textColor)}">`);
+      close.unshift("</span>");
+    }
+    const bgColor = readColorMark(marks.backgroundColor, "backgroundColor");
+    if (bgColor) {
+      open.push(`<span style="background-color:${escapeAttr(bgColor)}">`);
+      close.unshift("</span>");
+    }
     out += open.join("") + escapeText(d.insert) + close.join("");
   }
   return out;
+}
+
+function readColorMark(
+  raw: unknown,
+  key: "color" | "backgroundColor",
+): string | null {
+  if (typeof raw === "string" && raw.length > 0) return raw;
+  if (raw && typeof raw === "object" && key in raw) {
+    const v = (raw as Record<string, unknown>)[key];
+    return typeof v === "string" && v.length > 0 ? v : null;
+  }
+  return null;
 }
 
 function clampHeadingLevel(raw: unknown): 1 | 2 | 3 | 4 | 5 | 6 {
