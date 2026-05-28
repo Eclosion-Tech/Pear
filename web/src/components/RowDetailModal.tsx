@@ -149,7 +149,11 @@ export function RowDetailModal({ page, parentPage, onClose }: RowDetailModalProp
               <PageEditorSurface
                 page={page}
                 content={content}
-                editorKeySuffix={content?.updatedAt?.microsSinceUnixEpoch ?? 0}
+                editorKeySuffix={
+                  content?.updatedAt?.microsSinceUnixEpoch != null
+                    ? String(content.updatedAt.microsSinceUnixEpoch)
+                    : 0
+                }
               />
             </div>
           </div>
