@@ -719,10 +719,7 @@ pub(crate) fn migrate_heading_yjs_registry_v1(ctx: &ReducerContext) {
     def.prop_schema = prop_schemas::HEADING.to_string();
     def.has_yjs_state = true;
     def.accepts_children = true;
-    ctx.db
-        .component_type_definition()
-        .component_type()
-        .update(def);
+    ctx.db.component_type_definition().id().update(def);
 }
 
 // ============================================================
