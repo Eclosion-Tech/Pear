@@ -267,7 +267,8 @@ mod prop_schemas {
     "level": { "type": "integer", "minimum": 1, "maximum": 6 },
     "text": { "type": "string" },
     "textAlign": { "enum": ["left", "center", "right"] },
-    "collapsed": { "type": "boolean" }
+    "collapsed": { "type": "boolean" },
+    "section": { "type": "boolean" }
   },
   "required": ["level"]
 }"#;
@@ -1119,6 +1120,204 @@ pub fn restore_component(ctx: &ReducerContext, component_id: u64) -> Result<(), 
 
     touch_page(ctx, page);
     Ok(())
+}
+
+// ============================================================
+// Reducers — BlockNote → ComponentTree migration
+// ============================================================
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BlockNoteMigrationPayload {
+    v: String,
+    components: Vec<BlockNoteMigrationComponent>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BlockNoteMigrationComponent {
+    source_block_id: String,
+    parent_source_block_id: Option<String>,
+    component_type: String,
+    props_json: String,
+    yjs_data_b64: Option<String>,
+    sibling_index: u32,
+}
+
+/// Atomically convert a `BlockNote`-format page to `ComponentTree`.
+///
+/// The client supplies a payload from `@eclosion-tech/pulp`'s
+/// `buildMigrationPayload` (version `blocknote_migration_v1`). The reducer:
+///
+/// 1. Validates the page is still `BlockNote` and has no live component rows.
+/// 2. Inserts a root `Container` plus the converted block tree.
+/// 3. Upserts `ComponentYjsState` for Yjs-backed nodes when `yjs_data_b64` is set.
+/// 4. Sets `Page.content_format = ComponentTree`.
+///
+/// Legacy `PageContent` and `PageYjsState` rows are retained as an audit trail
+/// until global BlockNote retirement.
+#[reducer]
+pub fn migrate_page_to_component_tree(
+    ctx: &ReducerContext,
+    page_id: u64,
+    payload_json: String,
+) -> Result<(), String> {
+    use base64::Engine;
+    use std::collections::HashMap;
+
+    let page = require_blocknote_page(ctx, page_id)?;
+    require_page_write(ctx, page_id)?;
+
+    if ctx.db.component_node().iter().any(|n| {
+        n.surface_id == page_id && n.deleted_at.is_none()
+    }) {
+        return Err(
+            "Page already has ComponentNode rows — refusing to migrate twice".to_string(),
+        );
+    }
+
+    let payload: BlockNoteMigrationPayload = serde_json::from_str(&payload_json)
+        .map_err(|e| format!("migration payload json: {e}"))?;
+    if payload.v != "blocknote_migration_v1" {
+        return Err(format!(
+            "Unknown migration payload version: {}",
+            payload.v
+        ));
+    }
+
+    let root_id = next_component_node_id(ctx);
+    ctx.db.component_node().insert(ComponentNode {
+        id: root_id,
+        surface_id: page_id,
+        parent_id: None,
+        component_type: "Container".to_string(),
+        props: r#"{"layout":"stack"}"#.to_string(),
+        order: 1000,
+        created_by: ActorType::Human,
+        updated_by: ActorType::Human,
+        created_at: ctx.timestamp,
+        updated_at: ctx.timestamp,
+        deleted_at: None,
+    });
+
+    let mut id_map: HashMap<String, u64> = HashMap::new();
+
+    if payload.components.is_empty() {
+        let empty_id = next_component_node_id(ctx);
+        ctx.db.component_node().insert(ComponentNode {
+            id: empty_id,
+            surface_id: page_id,
+            parent_id: Some(root_id),
+            component_type: "RichText".to_string(),
+            props: "{}".to_string(),
+            order: 1000,
+            created_by: ActorType::Human,
+            updated_by: ActorType::Human,
+            created_at: ctx.timestamp,
+            updated_at: ctx.timestamp,
+            deleted_at: None,
+        });
+    } else {
+        for row in &payload.components {
+            require_type_def(ctx, &row.component_type)?;
+
+            let parent_id = match row.parent_source_block_id.as_deref() {
+                None | Some("") => root_id,
+                Some(key) => *id_map.get(key).ok_or_else(|| {
+                    format!(
+                        "Component {} references unknown parent {}",
+                        row.source_block_id, key
+                    )
+                })?,
+            };
+
+            let parent_type = require_type_def(
+                ctx,
+                &ctx
+                    .db
+                    .component_node()
+                    .id()
+                    .find(parent_id)
+                    .ok_or("Migration parent node missing")?
+                    .component_type,
+            )?;
+            if !parent_type.accepts_children {
+                return Err(format!(
+                    "Parent type {:?} does not accept children (child {})",
+                    parent_type.component_type, row.source_block_id
+                ));
+            }
+
+            let new_id = next_component_node_id(ctx);
+            id_map.insert(row.source_block_id.clone(), new_id);
+            let order = (row.sibling_index + 1) * 1000;
+
+            ctx.db.component_node().insert(ComponentNode {
+                id: new_id,
+                surface_id: page_id,
+                parent_id: Some(parent_id),
+                component_type: row.component_type.clone(),
+                props: row.props_json.clone(),
+                order,
+                created_by: ActorType::Human,
+                updated_by: ActorType::Human,
+                created_at: ctx.timestamp,
+                updated_at: ctx.timestamp,
+                deleted_at: None,
+            });
+
+            if let Some(b64) = row.yjs_data_b64.as_deref() {
+                if b64.trim().is_empty() {
+                    continue;
+                }
+                let type_def = require_type_def(ctx, &row.component_type)?;
+                if !type_def.has_yjs_state {
+                    return Err(format!(
+                        "Component {} sent yjs_data_b64 but type {:?} is not Yjs-backed",
+                        row.source_block_id, row.component_type
+                    ));
+                }
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(b64.trim())
+                    .map_err(|e| {
+                        format!(
+                            "yjs_data_b64 decode for {}: {e}",
+                            row.source_block_id
+                        )
+                    })?;
+                ctx.db.component_yjs_state().insert(ComponentYjsState {
+                    component_node_id: new_id,
+                    data: bytes,
+                    updated_at: ctx.timestamp,
+                });
+            }
+        }
+    }
+
+    ctx.db.page().id().update(Page {
+        content_format: PageContentFormat::ComponentTree,
+        updated_at: ctx.timestamp,
+        ..page
+    });
+
+    enqueue_page_updated(ctx, page_id);
+    Ok(())
+}
+
+fn require_blocknote_page(ctx: &ReducerContext, page_id: u64) -> Result<Page, String> {
+    let page = ctx
+        .db
+        .page()
+        .id()
+        .find(page_id)
+        .ok_or("Page not found")?;
+    if page.deleted_at.is_some() {
+        return Err("Page is deleted".to_string());
+    }
+    if !matches!(page.content_format, PageContentFormat::BlockNote) {
+        return Err("Page is not BlockNote format — already migrated or wrong type".to_string());
+    }
+    Ok(page)
 }
 
 // ============================================================

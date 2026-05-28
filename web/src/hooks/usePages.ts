@@ -54,13 +54,9 @@ export function useCreatePage() {
 }
 
 /**
- * `create_component_tree_page` — creates a page whose content is a
- * `ComponentNode` tree (rendered by `<ComponentTreeRenderer>`) instead of
- * BlockNote JSON. See `docs/PEAR_WEB_RENDERER.md` § Dual-format coexistence.
- *
- * Until the BlockNote → ComponentTree migration ADR ships, this is the
- * only path that produces ComponentTree-format pages in the workspace.
- * Surfaced from the sidebar so sprints 2–4 are dogfoodable end-to-end.
+ * Alias for `create_component_tree_page`. New **Doc** pages created via
+ * `create_page` already seed a ComponentTree — use this only when you need
+ * the explicit reducer (e.g. legacy call sites).
  */
 export function useCreateComponentTreePage() {
   return useReducer(reducers.createComponentTreePage);

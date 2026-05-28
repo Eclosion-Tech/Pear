@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTable } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
-import { PearEditor } from "./PearEditor";
+import { PageEditorSurface } from "./PageEditorSurface";
 import { useUpdatePageTitle, useDeletePage } from "@/src/hooks/usePages";
 import type { PageRow } from "@/src/hooks/usePages";
 import { PageMoreMenu } from "./PageMoreMenu";
@@ -146,10 +146,10 @@ export function RowDetailModal({ page, parentPage, onClose }: RowDetailModalProp
 
             {/* Editor */}
             <div className="px-6 py-4">
-              <PearEditor
-                key={`${page.id}-${content?.updatedAt?.microsSinceUnixEpoch ?? 0}`}
-                pageId={page.id}
-                initialContent={content?.content ?? ""}
+              <PageEditorSurface
+                page={page}
+                content={content}
+                editorKeySuffix={content?.updatedAt?.microsSinceUnixEpoch ?? 0}
               />
             </div>
           </div>

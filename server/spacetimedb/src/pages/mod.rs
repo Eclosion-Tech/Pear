@@ -182,7 +182,10 @@ pub(crate) fn next_sort_order(ctx: &ReducerContext, parent_id: Option<u64>) -> u
         + 1000
 }
 
-/// Atomically creates a Page and its companion PageContent row.
+/// Atomically creates a Page. **Doc** pages are created as `ComponentTree`
+/// (root `Container` + default `RichText`). **Database** pages keep the
+/// legacy `BlockNote` + empty `PageContent` row until database surfaces
+/// migrate.
 #[reducer]
 pub fn create_page(
     ctx: &ReducerContext,
@@ -193,10 +196,13 @@ pub fn create_page(
     if title.trim().is_empty() {
         return Err("Title cannot be empty".to_string());
     }
-    // Creating a child page is a write to the parent — guard it.
     if let Some(pid) = parent_id {
         require_page_write(ctx, pid)?;
     }
+    if page_type == PageType::Doc {
+        return create_component_tree_page_inner(ctx, parent_id, page_type, title);
+    }
+
     let sort_order = next_sort_order(ctx, parent_id);
     let page = ctx.db.page().insert(Page {
         id: next_page_id(ctx),
@@ -226,40 +232,13 @@ pub fn create_page(
     Ok(())
 }
 
-/// Atomically create a `ComponentTree`-format Page with its initial root
-/// `ComponentNode`.
-///
-/// Unlike `create_page` (which creates `BlockNote` pages backed by
-/// `PageContent`), this reducer sets `content_format = ComponentTree` and
-/// inserts a single root `Container` node with `parent_id = None`. From
-/// that point forward the page is mutated exclusively through the
-/// component reducers (`insert_component`, `update_component_props`,
-/// `move_component`, `delete_component`, `restore_component`,
-/// `save_component_yjs_state`); the legacy `update_page_content` and
-/// `save_yjs_state` reducers reject it.
-///
-/// The root node is created as a `Container` because (a) it must be a
-/// type with `accepts_children = true`, and (b) `Container` is the
-/// most-permissive layout primitive in the built-in registry. Clients
-/// can `update_component_props` on the root id immediately if they want
-/// non-default layout settings.
-///
-/// `PageContent` is *not* created — `ComponentTree` pages don't use it.
-/// `PageYjsState` is *not* created — per-component Yjs state lives in
-/// `ComponentYjsState` written by `save_component_yjs_state`.
-#[reducer]
-pub fn create_component_tree_page(
+/// Shared body for `create_component_tree_page` and `create_page(Doc)`.
+fn create_component_tree_page_inner(
     ctx: &ReducerContext,
     parent_id: Option<u64>,
     page_type: PageType,
     title: String,
 ) -> Result<(), String> {
-    if title.trim().is_empty() {
-        return Err("Title cannot be empty".to_string());
-    }
-    if let Some(pid) = parent_id {
-        require_page_write(ctx, pid)?;
-    }
     let sort_order = next_sort_order(ctx, parent_id);
     let page = ctx.db.page().insert(Page {
         id: next_page_id(ctx),
@@ -278,13 +257,21 @@ pub fn create_component_tree_page(
         content_format: PageContentFormat::ComponentTree,
     });
 
-    // Seed the root node. parent_id: None is the single-root-per-surface
-    // invariant from § Integrity model. Props are a stack Container —
-    // clients can update_component_props on this id to set layout.
+    seed_default_component_tree(ctx, page.id);
+
+    if let Some(pid) = parent_id {
+        copy_page_access_rules_from_parent(ctx, pid, page.id);
+    }
+    enqueue_page_created(ctx, page.id);
+    Ok(())
+}
+
+/// Root `Container` + one empty `RichText` — fresh doc is immediately editable.
+fn seed_default_component_tree(ctx: &ReducerContext, surface_id: u64) {
     let root_id = next_component_node_id(ctx);
     ctx.db.component_node().insert(ComponentNode {
         id: root_id,
-        surface_id: page.id,
+        surface_id,
         parent_id: None,
         component_type: "Container".to_string(),
         props: r#"{"layout":"stack"}"#.to_string(),
@@ -296,17 +283,9 @@ pub fn create_component_tree_page(
         deleted_at: None,
     });
 
-    // Seed one default RichText under the root so the page lands as an
-    // immediately-editable surface — same UX shape as BlockNote/Notion,
-    // where a fresh page already has an editable first block. Users can
-    // delete this block or replace its layout via the (forthcoming sprint
-    // 3) block chrome and slash menu. No ComponentYjsState row is created
-    // until the editor saves; the client treats "missing yjs state" as
-    // "empty doc" per `pear/web/src/components/component-renderers/
-    // built-in/RichText.tsx`.
     ctx.db.component_node().insert(ComponentNode {
         id: next_component_node_id(ctx),
-        surface_id: page.id,
+        surface_id,
         parent_id: Some(root_id),
         component_type: "RichText".to_string(),
         props: "{}".to_string(),
@@ -317,12 +296,24 @@ pub fn create_component_tree_page(
         updated_at: ctx.timestamp,
         deleted_at: None,
     });
+}
 
-    if let Some(pid) = parent_id {
-        copy_page_access_rules_from_parent(ctx, pid, page.id);
+/// Explicit ComponentTree page creation. Prefer `create_page` with
+/// `PageType::Doc` — it now seeds the same tree by default.
+#[reducer]
+pub fn create_component_tree_page(
+    ctx: &ReducerContext,
+    parent_id: Option<u64>,
+    page_type: PageType,
+    title: String,
+) -> Result<(), String> {
+    if title.trim().is_empty() {
+        return Err("Title cannot be empty".to_string());
     }
-    enqueue_page_created(ctx, page.id);
-    Ok(())
+    if let Some(pid) = parent_id {
+        require_page_write(ctx, pid)?;
+    }
+    create_component_tree_page_inner(ctx, parent_id, page_type, title)
 }
 
 /// Moves a page to a new parent and/or position.

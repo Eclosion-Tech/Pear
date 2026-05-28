@@ -6,7 +6,8 @@
     "build": "next build",
     "start": "next start",
     "generate": "cd ../server && spacetime generate",
-    "smoke": "tsx scripts/component-tree-smoke.ts"
+    "smoke": "tsx scripts/component-tree-smoke.ts",
+    "migrate-blocknote": "tsx scripts/migrate-blocknote-pages.ts"
   },
   "dependencies": {
     "@eclosion-tech/pulp": "workspace:*",

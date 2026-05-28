@@ -160,6 +160,18 @@ pub fn run_pending_migrations(ctx: &ReducerContext) -> Result<(), String> {
             Ok::<(), String>(())
         }
     );
+    // Re-apply the current Heading definition so existing workspaces pick up
+    // the `section` prop added to `prop_schemas::HEADING` (collapsible-section
+    // headings). `migrate_heading_yjs_registry_v1` reassigns the live row to
+    // the current builtin schema — idempotent to re-run under a new step.
+    run_step!(
+        ctx,
+        "component_heading_section_prop_v1",
+        |ctx: &ReducerContext| {
+            migrate_heading_yjs_registry_v1(ctx);
+            Ok::<(), String>(())
+        }
+    );
     Ok(())
 }
 

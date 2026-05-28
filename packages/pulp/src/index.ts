@@ -153,3 +153,28 @@ export {
 } from "./selection/SurfaceSelectionProvider";
 export type { SurfaceSelectionValue } from "./selection/SurfaceSelectionProvider";
 export { SurfaceSelectionController } from "./selection/SurfaceSelectionController";
+
+// BlockNote → ComponentTree migration (DF-007 list rules + shared inline mapping)
+export {
+  convertBlockNoteDocument,
+  isBlockNoteListBlock,
+  blockNoteInlineToYDoc,
+  blockNoteInlineToYjsUpdate,
+} from "./migration/blockNoteToComponentTree";
+export type {
+  BlockNoteBlock,
+  ConvertedComponentNode,
+  ConvertBlockNoteOptions,
+} from "./migration/blockNoteToComponentTree";
+export type {
+  BlockNoteInlineNode,
+  BlockNoteInlineStyles,
+} from "./migration/blockNoteInline";
+export {
+  buildMigrationPayload,
+  parseBlockNotePageContent,
+} from "./migration/buildMigrationPayload";
+export type {
+  MigrationPayload,
+  MigrationComponentWire,
+} from "./migration/buildMigrationPayload";
