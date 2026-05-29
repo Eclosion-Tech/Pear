@@ -118,17 +118,42 @@ describe("deleteEmptyBlockAndFocusDocumentPrev", () => {
       { id: 3, type: "RichText", parent: 2 },
     ]);
     const focus = createMockFocus();
-    const deleteBlock = vi.fn();
+    const mutations = createMockMutations();
 
     deleteEmptyBlockAndFocusDocumentPrev(
       node(tree, 3),
       tree,
       focus,
-      deleteBlock,
+      mutations,
     );
 
     expect(focus.calls.requestFocus[0]).toEqual([2n, "end"]);
-    expect(deleteBlock).toHaveBeenCalledWith({ componentId: 3n });
+    expect(mutations.calls.deleteBlock[0]).toEqual({ componentId: 3n });
+  });
+
+  it("reparents section children before deleting an empty heading", () => {
+    const tree = makeTree([
+      { id: 1, type: "Container", parent: null },
+      { id: 2, type: "Heading", parent: 1 },
+      { id: 3, type: "RichText", parent: 2 },
+      { id: 4, type: "RichText", parent: 1 },
+    ]);
+    const focus = createMockFocus();
+    const mutations = createMockMutations();
+
+    deleteEmptyBlockAndFocusDocumentPrev(
+      node(tree, 2),
+      tree,
+      focus,
+      mutations,
+    );
+
+    expect(mutations.calls.moveBlock[0]).toEqual({
+      componentId: 3n,
+      newParentId: 1n,
+      afterSiblingId: 2n,
+    });
+    expect(mutations.calls.deleteBlock[0]).toEqual({ componentId: 2n });
   });
 });
 
@@ -308,7 +333,7 @@ describe("mergeBlockIntoDocumentPrev", () => {
       myView,
       tree,
       focus,
-      saveYjsState,
+      { saveYjsState, moveBlock: vi.fn() },
       onRemoveSelf,
     );
 
@@ -377,5 +402,25 @@ describe("unlistToRichText", () => {
 
     expect(unlistToRichText(node(tree, 2), tree, mutations, focus)).toBe(false);
     expect(mutations.calls.insertBlock).toHaveLength(0);
+  });
+
+  it("reparents nested rows before un-listing a list item", () => {
+    const tree = makeTree([
+      { id: 1, type: "Container", parent: null },
+      { id: 2, type: "BulletListItem", parent: 1 },
+      { id: 3, type: "RichText", parent: 2 },
+      { id: 4, type: "RichText", parent: 2 },
+    ]);
+    const focus = createMockFocus();
+    const mutations = createMockMutations();
+
+    unlistToRichText(node(tree, 2), tree, mutations, focus);
+
+    expect(mutations.calls.moveBlock).toEqual([
+      { componentId: 3n, newParentId: 1n, afterSiblingId: 2n },
+      { componentId: 4n, newParentId: 1n, afterSiblingId: 3n },
+    ]);
+    expect(mutations.calls.insertBlock[0]?.componentType).toBe("RichText");
+    expect(mutations.calls.deleteBlock[0]).toEqual({ componentId: 2n });
   });
 });

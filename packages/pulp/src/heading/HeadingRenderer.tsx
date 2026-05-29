@@ -286,8 +286,11 @@ export function HeadingRenderer({ node, tree, children }: BlockRendererProps) {
 
   const onDeleteSelf = useCallback(() => {
     suppressSaveRef.current = true;
-    deleteEmptyBlockAndFocusDocumentPrev(node, tree, focus, deleteBlock);
-  }, [node, tree, focus, deleteBlock]);
+    deleteEmptyBlockAndFocusDocumentPrev(node, tree, focus, {
+      deleteBlock,
+      moveBlock,
+    });
+  }, [node, tree, focus, deleteBlock, moveBlock]);
 
   const canBackspaceDeleteEmpty =
     getDocumentPrevBlock(tree, node.id) != null || canDelete;
@@ -300,11 +303,11 @@ export function HeadingRenderer({ node, tree, children }: BlockRendererProps) {
         view,
         tree,
         focus,
-        saveYjsState,
+        { saveYjsState, moveBlock },
         removeSelf,
       );
     },
-    [node, tree, focus, saveYjsState],
+    [node, tree, focus, saveYjsState, moveBlock],
   );
 
   const onEscape = useCallback((): boolean => {

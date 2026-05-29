@@ -191,7 +191,7 @@ export function RichTextRenderer({
       return exitEmptyListItemToRichText(
         node,
         tree,
-        { insertBlock, deleteBlock },
+        { insertBlock, deleteBlock, moveBlock },
         focus,
       );
     }
@@ -358,11 +358,14 @@ export function RichTextRenderer({
     // List item → un-list to a paragraph first (Notion/BlockNote); a second
     // Backspace on the resulting empty RichText then deletes/merges.
     if (isDocumentListItemType(node.componentType)) {
-      unlistToRichText(node, tree, { insertBlock, deleteBlock }, focus);
+      unlistToRichText(node, tree, { insertBlock, deleteBlock, moveBlock }, focus);
       return;
     }
-    deleteEmptyBlockAndFocusDocumentPrev(node, tree, focus, deleteBlock);
-  }, [node, tree, focus, deleteBlock, insertBlock]);
+    deleteEmptyBlockAndFocusDocumentPrev(node, tree, focus, {
+      deleteBlock,
+      moveBlock,
+    });
+  }, [node, tree, focus, deleteBlock, insertBlock, moveBlock]);
 
   const canBackspaceDeleteEmpty =
     getDocumentPrevBlock(tree, node.id) != null ||
@@ -374,14 +377,14 @@ export function RichTextRenderer({
     // List item → un-list before merging (Notion/BlockNote): the first
     // Backspace at the start of a list row converts it to a paragraph.
     if (isDocumentListItemType(node.componentType)) {
-      return unlistToRichText(node, tree, { insertBlock, deleteBlock }, focus);
+      return unlistToRichText(node, tree, { insertBlock, deleteBlock, moveBlock }, focus);
     }
     return mergeBlockIntoDocumentPrev(
       node,
       view,
       tree,
       focus,
-      saveYjsState,
+      { saveYjsState, moveBlock },
       removeSelf,
     );
   };

@@ -7,7 +7,7 @@ import { knownSiblingIdsForParent } from "./focus/insertFocusHelpers";
 import { resolveNestTarget, getDocumentPrevBlock } from "./navigation/blockNavigation";
 import type { SlashMenuItem } from "./SlashMenu";
 import { normalizeTextAlign, headingPropsJson } from "./rich-text/richTextFormatting";
-import type { BlockNode, BlockTree, PulpMutations } from "./types";
+import type { BlockId, BlockNode, BlockTree, PulpMutations } from "./types";
 import type { PastedBlock } from "./rich-text/pasteToBlocks";
 import { yDocToPlainText } from "./rich-text/yjsToHtml";
 import {
@@ -67,17 +67,45 @@ export function isDocumentListItemType(componentType: string): boolean {
 }
 
 /**
+ * Lift direct children to the block's parent, inserted immediately after
+ * `node`, preserving child order. Call before soft-deleting a block that
+ * still owns nested rows — the renderer hides any subtree whose ancestor
+ * chain includes a deleted node.
+ */
+export function reparentDirectChildrenBeforeRemoval(
+  node: BlockNode,
+  tree: BlockTree,
+  moveBlock: PulpMutations["moveBlock"],
+): void {
+  if (node.parentId == null) return;
+  const children = tree.byParent.get(node.id);
+  if (!children?.length) return;
+
+  let afterSiblingId: BlockId | undefined = node.id;
+  for (const child of children) {
+    moveBlock({
+      componentId: child.id,
+      newParentId: node.parentId,
+      afterSiblingId,
+    });
+    afterSiblingId = child.id;
+  }
+}
+
+/**
  * Exit an empty document list item back to plain `RichText` — BlockNote /
  * Notion semantics for Enter on an empty list row.
  */
 export function exitEmptyListItemToRichText(
   node: BlockNode,
   tree: BlockTree,
-  mutations: Pick<PulpMutations, "insertBlock" | "deleteBlock">,
+  mutations: Pick<PulpMutations, "insertBlock" | "deleteBlock" | "moveBlock">,
   focus: SurfaceFocusValue,
 ): boolean {
   if (node.parentId == null) return false;
   if (!isDocumentListItemType(node.componentType)) return false;
+
+  reparentDirectChildrenBeforeRemoval(node, tree, mutations.moveBlock);
 
   const parentSiblings = tree.byParent.get(node.parentId) ?? [];
   const myIdx = parentSiblings.findIndex((s) => s.id === node.id);
@@ -106,11 +134,13 @@ export function exitEmptyListItemToRichText(
 export function unlistToRichText(
   node: BlockNode,
   tree: BlockTree,
-  mutations: Pick<PulpMutations, "insertBlock" | "deleteBlock">,
+  mutations: Pick<PulpMutations, "insertBlock" | "deleteBlock" | "moveBlock">,
   focus: SurfaceFocusValue,
 ): boolean {
   if (node.parentId == null) return false;
   if (!isDocumentListItemType(node.componentType)) return false;
+
+  reparentDirectChildrenBeforeRemoval(node, tree, mutations.moveBlock);
 
   const parentSiblings = tree.byParent.get(node.parentId) ?? [];
   const myIdx = parentSiblings.findIndex((s) => s.id === node.id);
@@ -207,14 +237,16 @@ export function deleteEmptyBlockAndFocusDocumentPrev(
   node: BlockNode,
   tree: BlockTree,
   focus: SurfaceFocusValue,
-  deleteBlock: PulpMutations["deleteBlock"],
+  mutations: Pick<PulpMutations, "deleteBlock" | "moveBlock">,
 ): boolean {
   if (node.parentId == null) return false;
+
+  reparentDirectChildrenBeforeRemoval(node, tree, mutations.moveBlock);
 
   const docPrev = getDocumentPrevBlock(tree, node.id);
   if (docPrev) {
     focus.requestFocus(docPrev.id, "end");
-    deleteBlock({ componentId: node.id });
+    mutations.deleteBlock({ componentId: node.id });
     return true;
   }
 
@@ -225,7 +257,7 @@ export function deleteEmptyBlockAndFocusDocumentPrev(
   const neighbour =
     myIdx > 0 ? parentSiblings[myIdx - 1] : parentSiblings[myIdx + 1];
   if (neighbour) focus.requestFocus(neighbour.id, "end");
-  deleteBlock({ componentId: node.id });
+  mutations.deleteBlock({ componentId: node.id });
   return true;
 }
 
@@ -238,11 +270,13 @@ export function mergeBlockIntoDocumentPrev(
   view: EditorView,
   tree: BlockTree,
   focus: SurfaceFocusValue,
-  saveYjsState: PulpMutations["saveYjsState"],
+  mutations: Pick<PulpMutations, "saveYjsState" | "moveBlock">,
   onRemoveSelf: () => void,
 ): boolean {
   const prev = getDocumentPrevBlock(tree, node.id);
   if (!prev) return false;
+
+  reparentDirectChildrenBeforeRemoval(node, tree, mutations.moveBlock);
 
   const prevDef = tree.defs.get(prev.componentType);
   if (!prevDef?.hasYjsState) {
@@ -274,7 +308,7 @@ export function mergeBlockIntoDocumentPrev(
     text,
     tree,
     focus,
-    saveYjsState,
+    mutations.saveYjsState,
   );
   if (mergePoint == null) return false;
   focus.requestFocus(prev.id, "end");
@@ -416,6 +450,8 @@ export function turnIntoBlock(
   const initialDoc = targetDef?.hasYjsState
     ? extractCarryDoc(node, tree, focus)
     : undefined;
+
+  reparentDirectChildrenBeforeRemoval(node, tree, mutations.moveBlock);
 
   const parentSiblings = tree.byParent.get(node.parentId) ?? [];
   const myIdx = parentSiblings.findIndex((s) => s.id === node.id);
