@@ -7,6 +7,7 @@
  */
 
 import type Anthropic from "@anthropic-ai/sdk";
+import { writeComponentTreeDoc, readComponentTreeDoc } from "./component-authoring.js";
 // ConnLike avoids importing the full generated DbConnection class (whose
 // db/reducers properties are only resolved in the generated bindings context).
 export interface ConnLike {
@@ -781,6 +782,29 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
       required: ["page_id"],
     },
   },
+  {
+    name: "delegate",
+    description:
+      "Delegate a complex, multi-step subtask to a background orchestration job (a 'subagent'). " +
+      "Use this for work that benefits from being decomposed and run as its own task graph — e.g. " +
+      "'build a CRM database with these columns and seed rows', or any request spanning several pages " +
+      "or many steps. The job is planned and executed asynchronously by worker agents; its live " +
+      "progress and results render inline in this conversation. Prefer doing small, single-step " +
+      "actions yourself with the direct tools; reach for `delegate` when the task is large or open-ended. " +
+      "Returns a `job_id`. After delegating, tell the user you've started the job and that progress is shown below — do not claim the work is finished.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        description: {
+          type: "string",
+          description:
+            "A clear, self-contained description of the subtask to orchestrate. Include all specifics " +
+            "(titles, columns, values, target pages) — the background agent does not see this chat.",
+        },
+      },
+      required: ["description"],
+    },
+  },
 ];
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -1521,6 +1545,21 @@ export async function executeTool(
 
       case "update_page_content": {
         const pageId = BigInt(input.page_id as number);
+
+        // ComponentTree pages can't be written by the legacy BlockNote reducer
+        // (it's rejected server-side; and because reducer calls are
+        // fire-and-forget, that rejection would otherwise surface as a false
+        // positive — the reported "tool complete but nothing changed" bug,
+        // assessment #27/#31). Route these to the component-node authoring path.
+        const pageRow = conn.db.page?.id?.find?.(pageId) as
+          | { contentFormat?: { tag?: string } }
+          | undefined;
+        if (pageRow?.contentFormat?.tag === "ComponentTree") {
+          const md = (input.markdown ?? input.content) as string | undefined;
+          const result = await writeComponentTreeDoc(conn, pageId, md ?? "");
+          return JSON.stringify(result);
+        }
+
         // Accept either a `markdown` string (new) or a raw `content` JSON string (legacy).
         const raw = (input.markdown ?? input.content) as string | undefined;
         if (!raw) {
@@ -1755,8 +1794,18 @@ export async function executeTool(
         const page = [...(conn.db.page.iter() as Iterable<PageRow>)].find((p) => p.id === pageId);
         if (!page) return JSON.stringify({ ok: false, error: "Page not found" });
 
-        type ContentRow = { pageId: bigint; content: string };
-        const contentRow = [...(conn.db.page_content.iter() as Iterable<ContentRow>)].find((c) => c.pageId === pageId);
+        // ComponentTree pages keep no `page_content` blob — their text lives in
+        // ComponentNode rows + per-node Yjs state. Reconstruct from there; fall
+        // back to the legacy blob for BlockNote/Database pages (#27, read side).
+        const treeContent = readComponentTreeDoc(conn, pageId);
+        let content: string;
+        if (treeContent !== undefined) {
+          content = treeContent;
+        } else {
+          type ContentRow = { pageId: bigint; content: string };
+          const contentRow = [...(conn.db.page_content.iter() as Iterable<ContentRow>)].find((c) => c.pageId === pageId);
+          content = contentRow?.content ?? "";
+        }
 
         return JSON.stringify({
           ok: true,
@@ -1764,7 +1813,7 @@ export async function executeTool(
           title: page.title,
           page_type: page.pageType.tag,
           parent_id: page.parentId ? Number(page.parentId) : null,
-          content: contentRow?.content?.slice(0, 5000) || "",
+          content: content.slice(0, 5000),
         });
       }
 
@@ -1775,6 +1824,57 @@ export async function executeTool(
         );
         if (!row) return JSON.stringify({ ok: false, error: `No context value for key "${key}"` });
         return JSON.stringify({ ok: true, key, value: row.value });
+      }
+
+      case "delegate": {
+        const description = String((input.description as string) ?? "").trim();
+        if (!description) {
+          return JSON.stringify({ ok: false, error: "description is required" });
+        }
+        const userId = toolContext.aiIdentityHex ?? "";
+        type JobRow = { id: bigint; userId: string; prompt: string };
+        const existingJobIds = new Set(
+          [...(conn.db.orcha_job.iter() as Iterable<JobRow>)].map((j) => j.id),
+        );
+        const taskGraphJson = JSON.stringify([
+          {
+            description,
+            task_type: "orchestrate",
+            depends_on: [],
+            required_capabilities: ["orchestrate"],
+          },
+        ]);
+        try {
+          await conn.reducers.createJob({
+            userId,
+            prompt: description,
+            pageId: toolContext.currentPageId ?? undefined,
+            taskGraphJson,
+          });
+        } catch (err) {
+          return JSON.stringify({
+            ok: false,
+            error: `delegate failed: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+        // Reducers don't return ids — read back the job we just inserted.
+        const job = await waitFor(() =>
+          [...(conn.db.orcha_job.iter() as Iterable<JobRow>)].find(
+            (j) => !existingJobIds.has(j.id) && j.userId === userId && j.prompt === description,
+          ),
+        );
+        if (!job) {
+          return JSON.stringify({
+            ok: false,
+            error: "delegate: job did not appear — create may have been rejected server-side.",
+          });
+        }
+        return JSON.stringify({
+          ok: true,
+          job_id: Number(job.id),
+          next_step:
+            "The delegated job is now running in the background; its progress and results render inline in this conversation. Tell the user you've started it — do NOT claim the work is finished.",
+        });
       }
 
       case "web_search": {

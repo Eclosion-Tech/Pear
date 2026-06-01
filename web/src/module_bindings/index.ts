@@ -137,6 +137,7 @@ import SendMessageReducer from "./send_message_reducer";
 import SetAiUserApiKeyReducer from "./set_ai_user_api_key_reducer";
 import SetAiUserSerperApiKeyReducer from "./set_ai_user_serper_api_key_reducer";
 import SetAiUserToolSecretsJsonReducer from "./set_ai_user_tool_secrets_json_reducer";
+import SetAiUserWorkerTokenReducer from "./set_ai_user_worker_token_reducer";
 import SetAllowEvaluationSharingReducer from "./set_allow_evaluation_sharing_reducer";
 import SetAutomationLimitsReducer from "./set_automation_limits_reducer";
 import SetAutomationModeReducer from "./set_automation_mode_reducer";
@@ -1112,6 +1113,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_ai_user_api_key", SetAiUserApiKeyReducer),
   __reducerSchema("set_ai_user_serper_api_key", SetAiUserSerperApiKeyReducer),
   __reducerSchema("set_ai_user_tool_secrets_json", SetAiUserToolSecretsJsonReducer),
+  __reducerSchema("set_ai_user_worker_token", SetAiUserWorkerTokenReducer),
   __reducerSchema("set_allow_evaluation_sharing", SetAllowEvaluationSharingReducer),
   __reducerSchema("set_automation_limits", SetAutomationLimitsReducer),
   __reducerSchema("set_automation_mode", SetAutomationModeReducer),

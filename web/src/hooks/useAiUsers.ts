@@ -75,6 +75,16 @@ export function useSetAiUserApiKey() {
   return useReducer(reducers.setAiUserApiKey);
 }
 
+/**
+ * Persist the SpacetimeDB worker token for an AI user (keyed by identity) so
+ * the OSS worker can spawn an `AiUserWorker` that connects as the AI user. Only
+ * used on the self-hosted path; host-delegated deployments store the token
+ * server-side in their own lifecycle and never call this.
+ */
+export function useSetAiUserWorkerToken() {
+  return useReducer(reducers.setAiUserWorkerToken);
+}
+
 /** Set or clear the optional Serper API key for this AI user's `web_search` tool. */
 export function useSetAiUserSerperApiKey() {
   return useReducer(reducers.setAiUserSerperApiKey);

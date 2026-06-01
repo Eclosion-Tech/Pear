@@ -5,9 +5,7 @@ import { useRouter } from "next/navigation";
 import { useSpacetimeDB } from "spacetimedb/react";
 import Markdown from "react-markdown";
 import {
-  useOrchaJobsForPage,
   useOrchaTasksForJob,
-  useCreateJob,
   type OrchaJobRow,
 } from "@/src/hooks/useOrcha";
 import {
@@ -125,20 +123,26 @@ function JobCard({ job }: { job: OrchaJobRow }) {
   );
 }
 
-function InlineJobStatus({ jobId }: { jobId: bigint }) {
-  const tasks = useOrchaTasksForJob(jobId);
-  const done = tasks.filter((t) => t.status === "done").length;
-  const failed = tasks.filter((t) => t.status === "failed").length;
-  const total = tasks.length;
-  const isRunning = tasks.some((t) => t.status === "claimed" || t.status === "pending");
-
+/**
+ * A delegated Orcha job rendered inline in the conversation thread as a
+ * subagent-style card — the full expandable task breakdown (`JobCard`) framed
+ * so it reads as "this message spawned a background subagent."
+ */
+function InlineJobCard({ jobId }: { jobId: bigint }) {
+  const [jobs] = useTable(tables.orcha_job);
+  const job = jobs.find((j) => j.id === jobId);
+  if (!job) return null;
   return (
-    <div className="mt-1.5 flex items-center gap-2 text-xs">
-      {isRunning && <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />}
-      <span className="text-neutral-400">
-        {done}/{total} tasks done
-        {failed > 0 && <span className="text-red-400 ml-1">({failed} failed)</span>}
-      </span>
+    <div className="mt-2 pl-2.5 border-l-2 border-violet-300/60 dark:border-violet-600/40">
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-violet-500">
+          <rect x="3" y="11" width="18" height="10" rx="2" /><circle cx="12" cy="5" r="2" /><path d="M12 7v4M8 16h.01M16 16h.01" />
+        </svg>
+        <span className="text-[10px] font-medium uppercase tracking-wide text-violet-500/90">
+          Delegated subagent
+        </span>
+      </div>
+      <JobCard job={job} />
     </div>
   );
 }
@@ -454,7 +458,7 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
                 ) : (
                   <AiMessageContent msg={msg} aiName={aiName} />
                 )}
-                {msg.jobId != null && <InlineJobStatus jobId={msg.jobId} />}
+                {msg.jobId != null && <InlineJobCard jobId={msg.jobId} />}
               </div>
               {msg.linkedConversationId != null && (
                 <LinkedConversationCard linkedConversationId={msg.linkedConversationId} />
@@ -464,8 +468,9 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
         })}
       </div>
 
-      {/* Context bar — shows what the AI user can see for this turn. */}
-      {aiUser && conversation.pageId !== undefined && (
+      {/* Context bar — shows what the AI user can see, plus pending
+          write-access requests (which also arise in page-less AI DMs). */}
+      {aiUser && (
         <ContextBar
           pageId={conversation.pageId}
           aiUserIdentity={aiUser.identity}
@@ -844,7 +849,7 @@ function ConversationListItem({
 
 // ── Tab type ─────────────────────────────────────────────────────────────────
 
-type PanelTab = "conversations" | "jobs" | "members";
+type PanelTab = "conversations" | "members";
 
 /**
  * AI Users surfaced inside the right panel. This is the Phase A "Members"
@@ -1125,16 +1130,11 @@ export function AiPanel({ pageId, onClose, openConversationId }: AiPanelProps) {
   const { identity } = useSpacetimeDB();
   const { conversations: allConversations } = useConversations();
   const conversations = useInboxConversations(identity ?? undefined);
-  const { jobs } = useOrchaJobsForPage(pageId);
-  const createJob = useCreateJob();
 
   const [tab, setTab] = useState<PanelTab>("conversations");
   const [selectedConvId, setSelectedConvId] = useState<bigint | null>(
     openConversationId ?? null
   );
-  const [prompt, setPrompt] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (openConversationId == null) return;
@@ -1146,36 +1146,7 @@ export function AiPanel({ pageId, onClose, openConversationId }: AiPanelProps) {
     ? allConversations.find((c) => c.id === selectedConvId)
     : null;
 
-  const hasActiveJob = jobs.some((j) => j.status === "executing");
   const hasActiveConv = conversations.some((c) => c.status.tag === "Active");
-
-  async function handleSubmitJob(e: React.FormEvent) {
-    e.preventDefault();
-    if (!prompt.trim()) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      const taskGraphJson = JSON.stringify([
-        {
-          description: prompt.trim(),
-          task_type: "orchestrate",
-          depends_on: [],
-          required_capabilities: ["orchestrate"],
-        },
-      ]);
-      await createJob({
-        userId: identity?.toHexString() ?? "",
-        prompt: prompt.trim(),
-        pageId,
-        taskGraphJson,
-      });
-      setPrompt("");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSubmitting(false);
-    }
-  }
 
   if (selectedConv) {
     return (
@@ -1205,19 +1176,6 @@ export function AiPanel({ pageId, onClose, openConversationId }: AiPanelProps) {
             Conversations
             {hasActiveConv && (
               <span className="ml-1.5 w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
-            )}
-          </button>
-          <button
-            onClick={() => setTab("jobs")}
-            className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-              tab === "jobs"
-                ? "bg-neutral-100 dark:bg-neutral-800 text-neutral-800 dark:text-neutral-200"
-                : "text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300"
-            }`}
-          >
-            Jobs
-            {hasActiveJob && (
-              <span className="ml-1.5 w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse inline-block" />
             )}
           </button>
           <button
@@ -1266,53 +1224,8 @@ export function AiPanel({ pageId, onClose, openConversationId }: AiPanelProps) {
           </div>
         )}
 
-        {tab === "jobs" && (
-          <div className="px-4 py-3 space-y-2">
-            {jobs.length === 0 && (
-              <div className="text-center py-10">
-                <p className="text-sm text-neutral-400 dark:text-neutral-500">No AI jobs yet</p>
-                <p className="text-xs text-neutral-300 dark:text-neutral-600 mt-1">
-                  Use the prompt below to create one
-                </p>
-              </div>
-            )}
-            {jobs.map((job) => (
-              <JobCard key={String(job.id)} job={job} />
-            ))}
-          </div>
-        )}
-
         {tab === "members" && <MembersTab onOpenConversation={(id) => { setTab("conversations"); setSelectedConvId(id); }} />}
       </div>
-
-      {/* Job prompt — only on jobs tab */}
-      {tab === "jobs" && (
-        <form
-          onSubmit={handleSubmitJob}
-          className="flex-shrink-0 border-t border-neutral-200 dark:border-neutral-800 p-3 space-y-2"
-        >
-          <textarea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder="Describe what you want AI to do…"
-            rows={3}
-            className="w-full text-sm bg-neutral-50 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded-lg px-3 py-2 text-neutral-800 dark:text-neutral-200 placeholder:text-neutral-400 resize-none outline-none focus:ring-1 focus:ring-neutral-400 dark:focus:ring-neutral-600 transition-shadow"
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                handleSubmitJob(e as unknown as React.FormEvent);
-              }
-            }}
-          />
-          {error && <p className="text-xs text-red-500">{error}</p>}
-          <button
-            type="submit"
-            disabled={!prompt.trim() || submitting}
-            className="w-full py-1.5 rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 text-sm font-medium hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-40 transition-colors"
-          >
-            {submitting ? "Creating…" : "Create job  ⌘↵"}
-          </button>
-        </form>
-      )}
     </div>
   );
 }

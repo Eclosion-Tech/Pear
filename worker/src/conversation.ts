@@ -103,8 +103,11 @@ const THINKING_BUDGET = 5_000;
 const MAX_TOOL_ITERATIONS = 15;
 const RECENT_MESSAGE_MAX_AGE_MS = 5 * 60_000;
 
-function messageKey(convId: bigint, msgId: bigint): string {
-  return `${convId}:${msgId}`;
+function messageKey(convId: bigint, msgId: bigint, selfHex: string): string {
+  // Include the responder identity: multiple AI users share this module-level
+  // `processing` set, and two AI participants in the same conversation must be
+  // able to respond to the same message independently.
+  return `${selfHex}:${convId}:${msgId}`;
 }
 
 function messageAgeMs(msg: ConversationMessageRow): number {
@@ -186,6 +189,7 @@ async function flushMessage(
   status: string,
   thinking: string | undefined,
   toolCalls: ToolCallInfo[],
+  jobId?: bigint,
 ): Promise<void> {
   try {
     await conn.reducers.updateMessage({
@@ -195,6 +199,7 @@ async function flushMessage(
       thinking: thinking || undefined,
       toolCallsJson:
         toolCalls.length > 0 ? JSON.stringify(toolCalls) : undefined,
+      jobId,
     });
   } catch (err) {
     console.warn(
@@ -244,10 +249,88 @@ function fallbackTextWhenNoAssistantMessage(toolResultLog: string[]): string {
 
 function toolResultWasOk(result: string): boolean {
   try {
-    return JSON.parse(result).ok !== false;
+    const parsed = JSON.parse(result);
+    // A tool result that isn't a JSON object, or whose `ok` is explicitly
+    // false, is a failure. Fail closed: a non-object/garbage result must not
+    // render as a green "done" pill (assessment #31).
+    if (parsed === null || typeof parsed !== "object") return false;
+    return parsed.ok !== false;
   } catch {
-    return true;
+    // Non-JSON result — cannot confirm success. Fail closed.
+    return false;
   }
+}
+
+/**
+ * Read-only tools. Excluded from the action receipt (they don't represent a
+ * mutation the model could falsely claim it "did").
+ */
+const READ_ONLY_TOOLS = new Set([
+  "get_page",
+  "get_context",
+  "list_pages",
+  "list_databases",
+  "search_pages",
+  "query_database",
+  "fetch_url",
+  "web_search",
+  "read_memory",
+  "search_memory",
+]);
+
+/** One concise, system-verified line per result: page id, affected blocks, or error. */
+function summarizeToolResult(result: string | undefined): string {
+  if (!result) return "";
+  try {
+    const p = JSON.parse(result) as Record<string, unknown>;
+    if (p && typeof p === "object") {
+      if (p.ok === false) {
+        const err = typeof p.error === "string" ? p.error : "failed";
+        return err.length > 80 ? `${err.slice(0, 77)}…` : err;
+      }
+      const bits: string[] = [];
+      if (typeof p.job_id === "number") bits.push(`job ${p.job_id}`);
+      if (typeof p.page_id === "number") bits.push(`page ${p.page_id}`);
+      if (typeof p.property_definition_id === "number")
+        bits.push(`property ${p.property_definition_id}`);
+      if (Array.isArray(p.created_node_ids))
+        bits.push(`${p.created_node_ids.length} block(s)`);
+      return bits.join(", ");
+    }
+  } catch {
+    return "unverifiable result";
+  }
+  return "";
+}
+
+/**
+ * Deterministic "action receipt" appended to the finalized message, built from
+ * the *actual* tool-call outcomes — not the model's prose. Guarantees the user
+ * sees what really happened even if the model over-claims success (the
+ * "said it did something it didn't" failure mode). Returns "" when the turn
+ * performed no mutating actions.
+ */
+function buildActionReceipt(toolCalls: ToolCallInfo[]): string {
+  const actions = toolCalls.filter((t) => !READ_ONLY_TOOLS.has(t.name));
+  if (actions.length === 0) return "";
+  const lines = actions.map((t) => {
+    const icon = t.status === "done" ? "✓" : t.status === "error" ? "✗" : "…";
+    const label = t.name.replace(/_/g, " ");
+    const detail = summarizeToolResult(t.result);
+    return `- ${icon} ${label}${detail ? ` — ${detail}` : ""}`;
+  });
+  return `\n\n---\n_Actions this turn (system-verified):_\n${lines.join("\n")}`;
+}
+
+/** Extract the job id from a successful `delegate` tool result, if present. */
+function delegatedJobIdFromResult(result: string): bigint | undefined {
+  try {
+    const p = JSON.parse(result) as { ok?: boolean; job_id?: number };
+    if (p?.ok === true && typeof p.job_id === "number") return BigInt(p.job_id);
+  } catch {
+    /* not a delegate result */
+  }
+  return undefined;
 }
 
 /**
@@ -279,7 +362,7 @@ async function handleConversationMessage(
   selfHex: string,
   logTag: string,
 ): Promise<void> {
-  const key = messageKey(msg.conversationId, msg.id);
+  const key = messageKey(msg.conversationId, msg.id, selfHex);
   if (processing.has(key)) return;
   processing.add(key);
 
@@ -437,13 +520,37 @@ async function handleConversationMessage(
     const toolResultLog: string[] = [];
     let thinkingText = "";
     let responseText = "";
+    /** Text emitted in earlier tool iterations of this turn, preserved so the
+     * final message reflects the whole turn rather than just the last segment
+     * (assessment #30). */
+    let narration = "";
+    /** Set when the model stopped on `max_tokens` (#29) or we hit the tool-call
+     * iteration cap (#12) — surfaced to the user instead of finalizing silently. */
+    let truncated = false;
+    let toolLimitReached = false;
     let iterations = 0;
+    /** First Orcha job this turn spawned via `delegate`, linked to the message
+     * so the thread renders it inline as a subagent card. */
+    let spawnedJobId: bigint | undefined;
+
+    /** Append the current segment to `narration` before it is reset between
+     * tool iterations. */
+    const accrueNarration = () => {
+      const seg = responseText.trim();
+      if (seg) narration += (narration ? "\n\n" : "") + seg;
+      responseText = "";
+    };
 
     if (aiProvider.chatStream) {
+      let cleanFinish = false;
       while (iterations++ < MAX_TOOL_ITERATIONS) {
         let lastFlush = Date.now();
 
-        const effectiveMaxTokens = Math.max(maxTokens, THINKING_BUDGET + 4096);
+        // Extended thinking shares the `max_tokens` budget with the visible
+        // answer, so the thinking budget must be ADDED on top of the desired
+        // output budget — not max()'d with it, which left only ~4k tokens for
+        // the answer and truncated long replies (assessment #28).
+        const effectiveMaxTokens = maxTokens + THINKING_BUDGET;
         const streamReq: ChatStreamRequest = {
           model,
           maxTokens: effectiveMaxTokens,
@@ -504,16 +611,22 @@ async function handleConversationMessage(
           (b): b is ToolUseBlock => b.type === "tool_use",
         );
 
+        const stopReason = doneResponse.response.stopReason;
         if (
           toolBlocks.length === 0 ||
-          doneResponse.response.stopReason === "end_turn"
+          stopReason === "end_turn" ||
+          stopReason === "max_tokens"
         ) {
+          // `max_tokens` mid-tool-call can leave tool input JSON incomplete, so
+          // we stop here rather than execute a possibly-truncated call (#29).
           const textBlock = doneResponse.response.content.find(
             (b) => b.type === "text",
           );
           if (textBlock?.type === "text") {
             responseText = textBlock.text;
           }
+          if (stopReason === "max_tokens") truncated = true;
+          cleanFinish = true;
           break;
         }
 
@@ -549,6 +662,9 @@ async function handleConversationMessage(
             allToolCalls[idx].status = toolResultWasOk(result) ? "done" : "error";
             allToolCalls[idx].result = result.slice(0, 200);
           }
+          if (spawnedJobId === undefined && block.name === "delegate") {
+            spawnedJobId = delegatedJobIdFromResult(result);
+          }
           toolResults.push({
             type: "tool_result",
             tool_use_id: block.id,
@@ -563,12 +679,16 @@ async function handleConversationMessage(
           "ToolUse",
           thinkingText,
           allToolCalls,
+          spawnedJobId,
         );
         llmMessages.push({ role: "user", content: toolResults });
 
-        responseText = "";
+        // Preserve any prose emitted before these tool calls (#30).
+        accrueNarration();
       }
+      if (!cleanFinish) toolLimitReached = true;
     } else {
+      let cleanFinish = false;
       while (iterations++ < MAX_TOOL_ITERATIONS) {
         const response = await aiProvider.chat({
           model,
@@ -587,7 +707,15 @@ async function handleConversationMessage(
           responseText = textBlock.text;
         }
 
-        if (toolCalls.length === 0 || response.stopReason === "end_turn") break;
+        if (
+          toolCalls.length === 0 ||
+          response.stopReason === "end_turn" ||
+          response.stopReason === "max_tokens"
+        ) {
+          if (response.stopReason === "max_tokens") truncated = true;
+          cleanFinish = true;
+          break;
+        }
 
         llmMessages.push({ role: "assistant", content: response.content });
 
@@ -616,6 +744,9 @@ async function handleConversationMessage(
             status: toolResultWasOk(result) ? "done" : "error",
             result: result.slice(0, 200),
           };
+          if (spawnedJobId === undefined && block.name === "delegate") {
+            spawnedJobId = delegatedJobIdFromResult(result);
+          }
           toolResults.push({
             type: "tool_result",
             tool_use_id: block.id,
@@ -624,7 +755,17 @@ async function handleConversationMessage(
         }
 
         llmMessages.push({ role: "user", content: toolResults });
+
+        // Preserve prose emitted before these tool calls (#30).
+        accrueNarration();
       }
+      if (!cleanFinish) toolLimitReached = true;
+    }
+
+    // Compose the full turn: earlier-iteration narration + final segment (#30).
+    if (narration) {
+      const finalSeg = responseText.trim();
+      responseText = finalSeg ? `${narration}\n\n${finalSeg}` : narration;
     }
 
     const hadAssistantText = Boolean(responseText?.trim());
@@ -661,6 +802,25 @@ async function handleConversationMessage(
       }
     }
 
+    // Surface truncation rather than presenting a cut-off answer as a clean
+    // success (assessment #29 / #12).
+    if (truncated) {
+      console.warn(`${logTag} response truncated on max_tokens in conversation ${conv.id}`);
+      responseText =
+        `${responseText}\n\n_⚠️ This response was cut off at the length limit. Ask me to continue._`.trim();
+    } else if (toolLimitReached) {
+      console.warn(
+        `${logTag} hit tool-iteration cap (${MAX_TOOL_ITERATIONS}) in conversation ${conv.id}`,
+      );
+      responseText =
+        `${responseText}\n\n_⚠️ I stopped after ${MAX_TOOL_ITERATIONS} tool steps. Ask me to continue if the task isn't finished._`.trim();
+    }
+
+    // Append a deterministic, system-verified record of what the tools actually
+    // did, so the user sees ground truth regardless of how the model narrated
+    // it (prevents "claimed it did something it didn't").
+    responseText = `${responseText}${buildActionReceipt(allToolCalls)}`;
+
     await flushMessage(
       conn,
       aiMsgId,
@@ -668,10 +828,11 @@ async function handleConversationMessage(
       "Complete",
       thinkingText,
       allToolCalls,
+      spawnedJobId,
     );
 
     console.log(
-      `${logTag} responded in conversation ${conv.id} (${responseText.length} chars, thinking: ${thinkingText.length} chars, tools: ${allToolCalls.length})`,
+      `${logTag} responded in conversation ${conv.id} (${responseText.length} chars, thinking: ${thinkingText.length} chars, tools: ${allToolCalls.length}, truncated: ${truncated}, toolLimit: ${toolLimitReached})`,
     );
   } catch (err) {
     console.error(

@@ -5,31 +5,282 @@ import { useTable, useSpacetimeDB } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
 import {
   useAiUserProfiles,
+  useCreateAiUser,
+  useDeleteAiUser,
   useDisableAiUserMemory,
   usePatchAiUserProfileSettings,
   useProvisionAiUserMemory,
   useSetAiUserSerperApiKey,
+  useSetAiUserWorkerToken,
   useUpdateAiUserSystemPrompt,
   type AiUserProfileRow,
 } from "@/src/hooks/useAiUsers";
-import { isAiUserHostDelegated } from "@/src/lib/aiUserApi";
+import {
+  hostCreateAiUser,
+  hostDeleteAiUser,
+  identityFromHex,
+  isAiUserHostDelegated,
+  mintIdentity,
+  PROVIDER_OPTIONS,
+  providerDefaults,
+  providerNeedsEndpoint,
+  type ProviderTag,
+} from "@/src/lib/aiUserApi";
+import { resolveWorkspaceWsUri } from "@/src/lib/workspaceConnections";
+import { useWorkspace } from "@/src/providers/WorkspaceProvider";
 import { optionStringFromRow } from "@/src/lib/spacetime";
-import type { SetAiUserSerperApiKeyParams } from "@/src/module_bindings/types/reducers";
+import type {
+  CreateAiUserParams,
+  SetAiUserSerperApiKeyParams,
+  SetAiUserWorkerTokenParams,
+} from "@/src/module_bindings/types/reducers";
+
+function optionalString(value: string): string | undefined {
+  const trimmed = value.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
+/**
+ * Create a new AI user. Two paths, like the rest of AI-user management:
+ *  - host-delegated (`hostCreateAiUser`) when an external host owns the lifecycle;
+ *  - self-hosted: mint a SpacetimeDB identity in the browser, call `create_ai_user`,
+ *    then persist the minted token via `set_ai_user_worker_token` so the worker can
+ *    spawn an `AiUserWorker` that connects as this AI user. Without that last step
+ *    the AI user exists but never answers conversations.
+ */
+function CreateAiUserForm({ onDone }: { onDone: () => void }) {
+  const { identity } = useSpacetimeDB();
+  const { activeWorkspace } = useWorkspace();
+  const createAiUser = useCreateAiUser();
+  const setAiUserWorkerToken = useSetAiUserWorkerToken();
+  const hostDelegated = isAiUserHostDelegated();
+
+  const [displayName, setDisplayName] = useState("");
+  const [provider, setProvider] = useState<ProviderTag>("Anthropic");
+  const [model, setModel] = useState(providerDefaults("Anthropic").defaultModel);
+  const [endpoint, setEndpoint] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [systemPrompt, setSystemPrompt] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function handleProviderChange(next: ProviderTag) {
+    const prev = providerDefaults(provider);
+    const nextDefault = providerDefaults(next);
+    setProvider(next);
+    if (model.trim() === "" || model === prev.defaultModel) setModel(nextDefault.defaultModel);
+    if (endpoint.trim() === "" || endpoint === prev.defaultEndpoint) setEndpoint(nextDefault.defaultEndpoint);
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const name = displayName.trim();
+    const modelName = model.trim();
+    const endpointValue = optionalString(endpoint);
+    const apiKeyValue = optionalString(apiKey);
+    const systemPromptValue = optionalString(systemPrompt);
+
+    setError(null);
+    if (!name) return setError("Display name is required");
+    if (!modelName) return setError("Model is required");
+    if (providerNeedsEndpoint(provider) && !endpointValue) {
+      return setError("Endpoint is required for Ollama and OpenAI-compatible providers");
+    }
+
+    setBusy(true);
+    try {
+      if (hostDelegated) {
+        await hostCreateAiUser({
+          displayName: name,
+          provider,
+          model: modelName,
+          endpoint: endpointValue,
+          apiKey: apiKeyValue,
+          systemPrompt: systemPromptValue,
+          maxTokens: undefined,
+          avatarUrl: undefined,
+        });
+      } else {
+        if (!identity) throw new Error("Connect to the workspace before creating an AI user.");
+        if (!activeWorkspace) throw new Error("No active workspace connection is configured.");
+
+        const minted = await mintIdentity(resolveWorkspaceWsUri(activeWorkspace.wsUri));
+        const aiUserIdentity = await identityFromHex(minted.identity);
+
+        await createAiUser({
+          aiUserIdentity,
+          createdByIdentity: identity,
+          displayName: name,
+          provider: { tag: provider },
+          model: modelName,
+          endpoint: endpointValue,
+          apiKey: apiKeyValue,
+          systemPrompt: systemPromptValue,
+          maxTokens: undefined,
+          avatarUrl: undefined,
+        } as unknown as CreateAiUserParams);
+
+        await setAiUserWorkerToken({
+          aiUserIdentity,
+          workerToken: minted.token,
+        } as unknown as SetAiUserWorkerTokenParams);
+      }
+      setDisplayName("");
+      setApiKey("");
+      setSystemPrompt("");
+      onDone();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const inputCls =
+    "mt-1 w-full rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-950 px-3 py-2 text-sm text-neutral-900 dark:text-white disabled:opacity-50";
+
+  return (
+    <form
+      onSubmit={(e) => void handleSubmit(e)}
+      className="mb-6 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900/40 p-4 space-y-4"
+    >
+      <div>
+        <label className="block text-xs font-medium text-neutral-600 dark:text-neutral-400">Display name</label>
+        <input
+          autoFocus
+          type="text"
+          value={displayName}
+          onChange={(e) => setDisplayName(e.target.value)}
+          disabled={busy}
+          placeholder="e.g. Moss, Research Assistant"
+          className={inputCls}
+        />
+      </div>
+
+      <div>
+        <span className="block text-xs font-medium text-neutral-600 dark:text-neutral-400 mb-1.5">Provider</span>
+        <div className="flex flex-wrap gap-1.5">
+          {PROVIDER_OPTIONS.map((p) => (
+            <button
+              key={p.tag}
+              type="button"
+              onClick={() => handleProviderChange(p.tag)}
+              disabled={busy}
+              className={`px-3 py-1.5 rounded-lg text-sm transition-colors disabled:opacity-50 ${
+                provider === p.tag
+                  ? "bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900"
+                  : "bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-700"
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <label className="block">
+          <span className="text-xs font-medium text-neutral-600 dark:text-neutral-400">Model</span>
+          <input
+            type="text"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            disabled={busy}
+            placeholder="e.g. claude-haiku-4-5-20251001"
+            className={`${inputCls} font-mono`}
+          />
+        </label>
+
+        {providerNeedsEndpoint(provider) && (
+          <label className="block">
+            <span className="text-xs font-medium text-neutral-600 dark:text-neutral-400">Endpoint URL</span>
+            <input
+              type="url"
+              value={endpoint}
+              onChange={(e) => setEndpoint(e.target.value)}
+              disabled={busy}
+              placeholder={provider === "Ollama" ? "http://localhost:11434/v1" : "https://…"}
+              className={inputCls}
+            />
+          </label>
+        )}
+      </div>
+
+      <label className="block">
+        <span className="text-xs font-medium text-neutral-600 dark:text-neutral-400">
+          API key <span className="text-neutral-400 font-normal">(stored server-side; only the AI user and operators can read it)</span>
+        </span>
+        <input
+          type="password"
+          autoComplete="off"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          disabled={busy}
+          placeholder="sk-…"
+          className={`${inputCls} font-mono`}
+        />
+      </label>
+
+      <label className="block">
+        <span className="text-xs font-medium text-neutral-600 dark:text-neutral-400">
+          Assistant instructions <span className="text-neutral-400 font-normal">(optional)</span>
+        </span>
+        <textarea
+          value={systemPrompt}
+          onChange={(e) => setSystemPrompt(e.target.value)}
+          disabled={busy}
+          rows={3}
+          placeholder="Optional system prompt for this AI user"
+          className={`${inputCls} font-mono`}
+        />
+      </label>
+
+      {error && (
+        <p className="text-sm text-red-600 dark:text-red-400" role="alert">
+          {error}
+        </p>
+      )}
+
+      <div className="flex items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={onDone}
+          disabled={busy}
+          className="rounded-md border border-neutral-300 dark:border-neutral-700 px-3 py-1.5 text-sm text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-50"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={busy}
+          className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-3 py-1.5 text-sm font-medium text-white dark:text-neutral-900 hover:opacity-90 disabled:opacity-50"
+        >
+          {busy ? "Adding…" : "Add AI user"}
+        </button>
+      </div>
+    </form>
+  );
+}
 
 function AiUserRowEditor({
   profile,
   hasMemory,
   memoryBusy,
   onToggleMemory,
+  onDelete,
+  deleteBusy,
 }: {
   profile: AiUserProfileRow;
   hasMemory: boolean;
   memoryBusy: boolean;
   onToggleMemory: () => void;
+  onDelete: () => void;
+  deleteBusy: boolean;
 }) {
   const patchProfile = usePatchAiUserProfileSettings();
   const updateSystemPrompt = useUpdateAiUserSystemPrompt();
   const setSerperApiKey = useSetAiUserSerperApiKey();
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [displayName, setDisplayName] = useState(profile.displayName);
   const [systemPrompt, setSystemPrompt] = useState(() =>
     optionStringFromRow(profile.systemPrompt)
@@ -103,7 +354,7 @@ function AiUserRowEditor({
     }
   };
 
-  const rowBusy = busy || memoryBusy || serperBusy;
+  const rowBusy = busy || memoryBusy || serperBusy || deleteBusy;
 
   return (
     <li className="py-3 border-b border-neutral-200 dark:border-neutral-800 last:border-0">
@@ -216,6 +467,42 @@ function AiUserRowEditor({
           <span className="text-sm text-neutral-500 dark:text-neutral-400">
             {profile.providerName} · {profile.modelName}
           </span>
+
+          <span className="ml-auto" />
+          {confirmingDelete ? (
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-neutral-500 dark:text-neutral-400">Delete this AI user?</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmingDelete(false);
+                  onDelete();
+                }}
+                disabled={rowBusy}
+                className="px-2 py-1 rounded text-xs font-medium text-red-600 bg-red-50 dark:bg-red-900/20 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 disabled:opacity-50 transition-colors"
+              >
+                {deleteBusy ? "Deleting…" : "Confirm delete"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmingDelete(false)}
+                disabled={rowBusy}
+                className="px-2 py-1 rounded text-xs text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 disabled:opacity-50 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirmingDelete(true)}
+              disabled={rowBusy}
+              className="px-2.5 py-1 text-xs rounded border border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50 transition-colors"
+              title="Remove this AI user"
+            >
+              Remove
+            </button>
+          )}
         </div>
 
         {localErr ? (
@@ -267,10 +554,36 @@ export function AiUsersSettings() {
   const [memories] = useTable(tables.ai_user_memory);
   const provisionMemory = useProvisionAiUserMemory();
   const disableMemory = useDisableAiUserMemory();
+  const deleteAiUser = useDeleteAiUser();
+  const hostDelegated = isAiUserHostDelegated();
   const [busyId, setBusyId] = useState<bigint | null>(null);
+  const [deletingId, setDeletingId] = useState<bigint | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const memoryRowFor = (aiUserId: bigint) => memories.find((m) => m.aiUserId === aiUserId);
+
+  const onDelete = useCallback(
+    async (aiUserId: bigint) => {
+      setErr(null);
+      setDeletingId(aiUserId);
+      try {
+        // Deleting the config row drops its worker_token too; the worker's
+        // reconcile (on the ai_user_config delete event) tears down the
+        // AiUserWorker. Host-delegated path goes through lifecycle instead.
+        if (hostDelegated) {
+          await hostDeleteAiUser(aiUserId);
+        } else {
+          await deleteAiUser({ aiUserId });
+        }
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e));
+      } finally {
+        setDeletingId(null);
+      }
+    },
+    [deleteAiUser, hostDelegated],
+  );
 
   const onToggleMemory = useCallback(
     async (aiUserId: bigint, enable: boolean) => {
@@ -297,9 +610,23 @@ export function AiUsersSettings() {
 
   return (
     <section className="mb-10">
-      <h2 className="text-sm font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-4">
-        AI users
-      </h2>
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <h2 className="text-sm font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide">
+          AI users
+        </h2>
+        {isActive && !addOpen && (
+          <button
+            type="button"
+            onClick={() => {
+              setErr(null);
+              setAddOpen(true);
+            }}
+            className="rounded-md border border-neutral-200 dark:border-neutral-700 px-2.5 py-1 text-xs text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors"
+          >
+            Add AI user
+          </button>
+        )}
+      </div>
 
       {!isActive ? (
         <p className="text-sm text-neutral-600 dark:text-neutral-400">
@@ -307,11 +634,14 @@ export function AiUsersSettings() {
         </p>
       ) : (
         <>
+          {addOpen && <CreateAiUserForm onDone={() => setAddOpen(false)} />}
+
           {profiles.length === 0 ? (
-            <p className="text-sm text-neutral-600 dark:text-neutral-400">
-              No AI users in this workspace yet. Use Members → Add user and
-              turn on AI user to create one.
-            </p>
+            !addOpen && (
+              <p className="text-sm text-neutral-600 dark:text-neutral-400">
+                No AI users in this workspace yet. Use “Add AI user” to create one.
+              </p>
+            )
           ) : (
             <ul className="space-y-6">
               {profiles.map((p) => (
@@ -321,6 +651,8 @@ export function AiUsersSettings() {
                   hasMemory={memoryRowFor(p.aiUserId) !== undefined}
                   memoryBusy={busyId === p.aiUserId}
                   onToggleMemory={() => void onToggleMemory(p.aiUserId, !memoryRowFor(p.aiUserId))}
+                  onDelete={() => void onDelete(p.aiUserId)}
+                  deleteBusy={deletingId === p.aiUserId}
                 />
               ))}
             </ul>

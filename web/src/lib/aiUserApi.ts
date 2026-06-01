@@ -63,6 +63,28 @@ function hostUrl(path = ""): string {
 
 export type ProviderTag = "Anthropic" | "OpenAi" | "Ollama" | "OpenAiCompatible";
 
+/** Provider picker metadata shared by the AI-user create form(s). */
+export const PROVIDER_OPTIONS: Array<{
+  tag: ProviderTag;
+  label: string;
+  defaultModel: string;
+  defaultEndpoint: string;
+}> = [
+  { tag: "Anthropic", label: "Anthropic", defaultModel: "claude-haiku-4-5-20251001", defaultEndpoint: "" },
+  { tag: "OpenAi", label: "OpenAI", defaultModel: "gpt-4.1-mini", defaultEndpoint: "" },
+  { tag: "Ollama", label: "Ollama", defaultModel: "llama3.1", defaultEndpoint: "http://localhost:11434/v1" },
+  { tag: "OpenAiCompatible", label: "OpenAI-compatible", defaultModel: "gpt-4.1-mini", defaultEndpoint: "" },
+];
+
+export function providerDefaults(provider: ProviderTag) {
+  return PROVIDER_OPTIONS.find((p) => p.tag === provider) ?? PROVIDER_OPTIONS[0];
+}
+
+/** Providers that require an explicit endpoint URL. */
+export function providerNeedsEndpoint(provider: ProviderTag): boolean {
+  return provider === "Ollama" || provider === "OpenAiCompatible";
+}
+
 export interface AiUserCreateRequest {
   displayName: string;
   provider: ProviderTag;

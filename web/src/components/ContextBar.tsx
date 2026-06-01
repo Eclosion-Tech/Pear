@@ -41,7 +41,8 @@ export function ContextBar({
   activePageId,
   onFork,
 }: {
-  pageId: bigint;
+  /** Host page the conversation is attached to, if any. `undefined` for AI DMs. */
+  pageId?: bigint;
   aiUserIdentity: Identity;
   conversationId: bigint;
   activePageId?: bigint;
@@ -92,7 +93,7 @@ export function ContextBar({
   );
 
   const visibleGrantPageIds = new Set<bigint>([
-    pageId,
+    ...(pageId != null ? [pageId] : []),
     ...memoryPageIds,
     ...conversationGrantedPageIds,
     ...manualContextPageIds,
@@ -131,11 +132,11 @@ export function ContextBar({
 
   // Always include the host page implicitly so the chip set isn't empty
   // on first load — the AI user can always see the page they're talking on.
-  const hostPage = pages.find((p) => p.id === pageId);
+  const hostPage = pageId != null ? pages.find((p) => p.id === pageId) : undefined;
   const hostChip: ContextChip | null = hostPage
     ? {
         id: -1n,
-        pageId,
+        pageId: hostPage.id,
         permission: { tag: "Read" as const },
         implicit: true,
         title: hostPage.title || "Untitled",

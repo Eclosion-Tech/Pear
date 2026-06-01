@@ -382,6 +382,10 @@ pub fn update_message(
     output_tokens: Option<u32>,
     cache_creation_input_tokens: Option<u32>,
     cache_read_input_tokens: Option<u32>,
+    // Link this message to an Orcha job it spawned (e.g. an AI user delegating a
+    // multi-step subtask). `None` preserves any existing link. Rendered inline
+    // in the conversation thread as a subagent-style job card.
+    job_id: Option<u64>,
 ) -> Result<(), String> {
     let msg = ctx
         .db
@@ -432,6 +436,7 @@ pub fn update_message(
             cache_creation_input_tokens: cache_creation_input_tokens
                 .unwrap_or(msg.cache_creation_input_tokens),
             cache_read_input_tokens: cache_read_input_tokens.unwrap_or(msg.cache_read_input_tokens),
+            job_id: job_id.or(msg.job_id),
             ..msg
         });
 

@@ -86,11 +86,16 @@ export class DatabaseWorker {
 
   /** AI-user-scoped sub-workers, keyed by aiUserId. */
   private aiUserWorkers = new Map<bigint, AiUserWorker>();
+  /** Token last used to spawn each worker, so we can detect rotation. */
+  private aiUserTokens = new Map<bigint, string>();
 
   private sensors: StructuralSensorsScheduler | null = null;
 
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
+
+  /** Debounce for AI-user discovery so a burst of row events coalesces. */
+  private aiUserReconcileTimer: ReturnType<typeof setTimeout> | null = null;
 
   readonly uri: string;
   readonly dbName: string;
@@ -192,6 +197,10 @@ export class DatabaseWorker {
   async stop(): Promise<void> {
     this.stopped = true;
     this.clearReconnectTimer();
+    if (this.aiUserReconcileTimer !== null) {
+      clearTimeout(this.aiUserReconcileTimer);
+      this.aiUserReconcileTimer = null;
+    }
 
     if (this.sensors) {
       this.sensors.stop();
@@ -206,6 +215,7 @@ export class DatabaseWorker {
       ),
     );
     this.aiUserWorkers.clear();
+    this.aiUserTokens.clear();
     await Promise.all(aiStops);
 
     if (this.inFlight.size > 0) {
@@ -241,13 +251,17 @@ export class DatabaseWorker {
     const desired = new Map<bigint, AiUserDescriptor>();
     for (const d of descriptors) desired.set(d.aiUserId, d);
 
-    // Tear down workers no longer wanted.
+    // Tear down workers no longer wanted, or whose token has rotated (so the
+    // next loop respawns them with the new token).
     for (const [aiUserId, worker] of [...this.aiUserWorkers.entries()]) {
-      if (!desired.has(aiUserId)) {
+      const d = desired.get(aiUserId);
+      const rotated = d !== undefined && d.token !== this.aiUserTokens.get(aiUserId);
+      if (d === undefined || rotated) {
         console.log(
-          `[worker:${this.dbName}] Removing AI user worker (id=${aiUserId})`,
+          `[worker:${this.dbName}] ${rotated ? "Rotating" : "Removing"} AI user worker (id=${aiUserId})`,
         );
         this.aiUserWorkers.delete(aiUserId);
+        this.aiUserTokens.delete(aiUserId);
         await worker.stop().catch((e: unknown) =>
           console.warn(`[worker:${this.dbName}] AI worker stop failed:`, e),
         );
@@ -267,14 +281,83 @@ export class DatabaseWorker {
         label: d.label ?? `ai-${aiUserId}`,
       });
       this.aiUserWorkers.set(aiUserId, w);
+      this.aiUserTokens.set(aiUserId, d.token);
       w.start();
     }
+  }
+
+  /**
+   * Build the desired AI-user worker set from `ai_user_config`. Only rows that
+   * carry a `worker_token` are spawnable — the token is what lets us connect AS
+   * the AI user (so conversation reducers record `MessageSender::User(<ai>)`).
+   *
+   * This is the self-hosted/OSS discovery path: the admin (module-publisher)
+   * connection bypasses the `ai_user_config` RLS filter, so it reads every AI
+   * user's token here. pear-cloud's lifecycle can keep calling
+   * {@link reconcileAiUsers} directly with tokens fetched out-of-band — both
+   * paths funnel into the same reconcile.
+   */
+  private collectAiUserDescriptors(conn: DbConnection): AiUserDescriptor[] {
+    const db = conn.db as unknown as {
+      ai_user_config?: { iter(): Iterable<{ id: bigint; workerToken?: string }> };
+      ai_user_profile?: { iter(): Iterable<{ aiUserId: bigint; displayName?: string }> };
+    };
+    const configs = db.ai_user_config;
+    if (!configs) return [];
+
+    // Map aiUserId → display name for log labels (iterate rather than rely on
+    // the index-accessor name, which differs from the source column name).
+    const labels = new Map<bigint, string>();
+    for (const p of db.ai_user_profile?.iter() ?? []) {
+      if (p.displayName) labels.set(p.aiUserId, p.displayName);
+    }
+
+    const descriptors: AiUserDescriptor[] = [];
+    for (const cfg of configs.iter()) {
+      if (!cfg.workerToken) continue;
+      descriptors.push({
+        aiUserId: cfg.id,
+        token: cfg.workerToken,
+        label: labels.get(cfg.id),
+      });
+    }
+    return descriptors;
+  }
+
+  /** Debounced re-discovery of AI users from `ai_user_config`. */
+  private scheduleAiUserReconcile(conn: DbConnection): void {
+    if (this.stopped) return;
+    if (this.aiUserReconcileTimer !== null) clearTimeout(this.aiUserReconcileTimer);
+    this.aiUserReconcileTimer = setTimeout(() => {
+      this.aiUserReconcileTimer = null;
+      void this.reconcileAiUsers(this.collectAiUserDescriptors(conn)).catch(
+        (e: unknown) =>
+          console.warn(`[worker:${this.dbName}] AI-user reconcile failed:`, e),
+      );
+    }, 250);
   }
 
   private registerHandlers(conn: DbConnection): void {
     conn.db.orcha_task.onInsert((_ctx: EventContext, task: TaskRow) => {
       this.checkAndClaim(conn, task);
     });
+
+    // AI-user discovery: (re)spawn per-AI-user workers when a `worker_token`
+    // appears, is rotated, or is cleared. Uses `as any` for the table accessor
+    // because the AI-user tables are not part of the strongly-typed Orcha set
+    // this worker was built around.
+    const aiCfg = (conn.db as unknown as {
+      ai_user_config?: {
+        onInsert(cb: () => void): void;
+        onUpdate(cb: () => void): void;
+        onDelete(cb: () => void): void;
+      };
+    }).ai_user_config;
+    if (aiCfg) {
+      aiCfg.onInsert(() => this.scheduleAiUserReconcile(conn));
+      aiCfg.onUpdate(() => this.scheduleAiUserReconcile(conn));
+      aiCfg.onDelete(() => this.scheduleAiUserReconcile(conn));
+    }
 
     conn.db.orcha_task.onUpdate(
       (_ctx: EventContext, _old: TaskRow, task: TaskRow) => {
@@ -305,6 +388,9 @@ export class DatabaseWorker {
       for (const task of conn.db.orcha_task.iter() as Iterable<TaskRow>) {
         this.checkAndClaim(conn, task);
       }
+
+      // Spawn AI-user workers for any rows that already carry a worker_token.
+      this.scheduleAiUserReconcile(conn);
     });
   }
 
@@ -313,7 +399,8 @@ export class DatabaseWorker {
     if (this.inFlight.has(task.id)) return false;
 
     if (task.requiredCapabilities.length > 0) {
-      if (!CAPABILITIES.some((c) => task.requiredCapabilities.includes(c))) return false;
+      // We must satisfy every required capability. (A separate "has at least
+      // one" check would be redundant — `every` already implies it.)
       if (!task.requiredCapabilities.every((c) => CAPABILITIES.includes(c))) return false;
     }
 
