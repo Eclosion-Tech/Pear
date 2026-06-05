@@ -3,6 +3,7 @@ import {
   type Message,
   type ToolUseBlock,
   type ToolDef,
+  type TokenUsage,
   getDefaultProvider,
 } from "./providers.js";
 import { getPearTools, executeTool, type ConnLike } from "./tools.js";
@@ -150,13 +151,20 @@ function extractTextFromBlocks(blocks: unknown[]): string {
  * Accepts an optional provider + model override for per-AI-user routing.
  * Falls back to the default (env-var configured) provider when not specified.
  */
+/** Result of an Orcha `llm` task: the final text plus the real token usage
+ * summed across the tool loop, so `record_usage_event` gets true counts (#3). */
+export interface LlmResult {
+  text: string;
+  usage: TokenUsage;
+}
+
 export async function callLlm(
   taskDescription: string,
   conn: ConnLike,
   jobId: bigint,
   extraContext = "",
   overrides?: { provider: InferenceProvider; model: string; maxTokens?: number },
-): Promise<string> {
+): Promise<LlmResult> {
   const inf = overrides?.provider ?? defaults().provider;
   const model = overrides?.model ?? defaults().model;
   const maxTokens = overrides?.maxTokens ?? defaults().maxTokens;
@@ -171,6 +179,13 @@ export async function callLlm(
 
   const tools: ToolDef[] = getPearTools(conn, jobId) as ToolDef[];
 
+  const usage: TokenUsage = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheCreationInputTokens: 0,
+    cacheReadInputTokens: 0,
+  };
+
   let iterations = 0;
   const MAX_ITERATIONS = 10;
 
@@ -183,6 +198,13 @@ export async function callLlm(
       tools,
     });
 
+    if (response.usage) {
+      usage.inputTokens += response.usage.inputTokens;
+      usage.outputTokens += response.usage.outputTokens;
+      usage.cacheCreationInputTokens += response.usage.cacheCreationInputTokens;
+      usage.cacheReadInputTokens += response.usage.cacheReadInputTokens;
+    }
+
     const toolCalls = response.content.filter(
       (b): b is ToolUseBlock => b.type === "tool_use"
     );
@@ -191,7 +213,7 @@ export async function callLlm(
 
     if (toolCalls.length === 0 || response.stopReason === "end_turn") {
       const textBlock = response.content.find((b) => b.type === "text");
-      return textBlock?.type === "text" ? textBlock.text : "Done.";
+      return { text: textBlock?.type === "text" ? textBlock.text : "Done.", usage };
     }
 
     messages.push({ role: "assistant", content: response.content });
@@ -207,7 +229,7 @@ export async function callLlm(
     messages.push({ role: "user", content: toolResults });
   }
 
-  return "Reached maximum tool iterations.";
+  return { text: "Reached maximum tool iterations.", usage };
 }
 
 // ── Task planner ───────────────────────────────────────────────────────────────
@@ -224,9 +246,9 @@ ${PEAR_CONTEXT}
 
 You are the **task planner** for Pear's AI orchestration layer.
 
-Given a user request (and optional page context), decompose it into a small list of atomic, actionable subtasks that make sense inside Pear. Return ONLY a valid JSON array — no markdown, no explanation.
+Given a user request (and optional page context), decompose it into a small list of atomic, actionable subtasks that make sense inside Pear. Submit the result by calling the \`submit_plan\` tool exactly once with the full task list — do not reply in prose.
 
-Each element must be:
+Each task in the list is:
 { "description": string, "task_type": "llm" | "orchestrate", "depends_on": number[], "required_capabilities": string[] }
 
 Rules:
@@ -241,8 +263,85 @@ Rules:
 - If a later task genuinely needs a resource created by an earlier task (e.g. updating a page created in task 0), reference it as "look up page_id from shared context using key '<title>_page_id'" and set depends_on to that task's index.`;
 
 /**
+ * The planner's output contract, bound at the decoder rather than pleaded for in
+ * prose (#33). The model emits its task graph by *calling* this tool, so the
+ * shape is enforced by constrained decoding — a stray preamble or code fence
+ * can't collapse the whole plan to `[]`.
+ */
+const SUBMIT_PLAN_TOOL: ToolDef = {
+  name: "submit_plan",
+  description:
+    "Submit the decomposed task graph. Call this exactly once with the full list of subtasks.",
+  input_schema: {
+    type: "object",
+    properties: {
+      tasks: {
+        type: "array",
+        description: "Ordered list of subtasks (1–5).",
+        items: {
+          type: "object",
+          properties: {
+            description: { type: "string" },
+            task_type: { type: "string", enum: ["llm", "orchestrate"] },
+            depends_on: {
+              type: "array",
+              items: { type: "integer" },
+              description: "Zero-based indices of tasks in this list that must finish first.",
+            },
+            required_capabilities: {
+              type: "array",
+              items: { type: "string" },
+            },
+          },
+          required: ["description", "task_type", "depends_on", "required_capabilities"],
+        },
+      },
+    },
+    required: ["tasks"],
+  },
+};
+
+/** Validate + repair one candidate spec; returns null if it can't be salvaged. */
+function coerceTaskSpec(raw: unknown, index: number, total: number): TaskSpec | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const description = typeof r.description === "string" ? r.description.trim() : "";
+  if (!description) return null;
+  const task_type = r.task_type === "orchestrate" ? "orchestrate" : "llm";
+  const depends_on = Array.isArray(r.depends_on)
+    ? r.depends_on
+        .map((n) => Number(n))
+        .filter((n) => Number.isInteger(n) && n >= 0 && n < total && n !== index)
+    : [];
+  const required_capabilities = Array.isArray(r.required_capabilities)
+    ? r.required_capabilities.filter((c): c is string => typeof c === "string")
+    : [];
+  // Default the capability to match the task type if the planner omitted it.
+  if (required_capabilities.length === 0) {
+    required_capabilities.push(task_type === "orchestrate" ? "orchestrate" : "llm");
+  }
+  return { description, task_type, depends_on, required_capabilities };
+}
+
+export function validateTaskSpecs(arr: unknown): TaskSpec[] {
+  if (!Array.isArray(arr)) return [];
+  const out: TaskSpec[] = [];
+  for (let i = 0; i < arr.length; i++) {
+    const spec = coerceTaskSpec(arr[i], i, arr.length);
+    if (spec) out.push(spec);
+  }
+  return out;
+}
+
+/**
  * Decompose a user prompt into an ordered Pear-specific task graph.
- * Falls back to an empty array on parse failure — caller creates one fallback task.
+ *
+ * The planner emits its graph by calling the `submit_plan` tool (#33), so a
+ * malformed free-text response no longer silently degrades a multi-step plan
+ * into a single mega-task. We still accept a raw JSON array as a back-compat
+ * fallback (older/weaker models that answer in text). Returns `[]` only when no
+ * usable plan could be extracted — logged loudly so the degradation is visible;
+ * the caller then creates one explicit fallback task.
  */
 export async function planTasks(
   prompt: string,
@@ -261,19 +360,35 @@ export async function planTasks(
     maxTokens: 1024,
     system: PLANNER_SYSTEM,
     messages: [{ role: "user", content: userMessage }],
+    tools: [SUBMIT_PLAN_TOOL],
   });
 
-  const textBlock = response.content.find((b) => b.type === "text");
-  if (!textBlock || textBlock.type !== "text") return [];
-
-  try {
-    const raw = textBlock.text.replace(/```(?:json)?/gi, "").trim();
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed as TaskSpec[];
-  } catch (err) {
-    console.warn("[worker] planTasks: failed to parse task graph:", err);
-    console.warn("[worker] raw planner output:", textBlock.text.slice(0, 300));
-    return [];
+  // Preferred path: the model called submit_plan, so the shape is structurally
+  // guaranteed — just validate/repair the elements.
+  const planCall = response.content.find(
+    (b): b is ToolUseBlock => b.type === "tool_use" && b.name === "submit_plan",
+  );
+  if (planCall) {
+    const tasks = validateTaskSpecs((planCall.input as { tasks?: unknown }).tasks);
+    if (tasks.length > 0) return tasks;
+    console.warn("[worker] planTasks: submit_plan returned no valid tasks");
   }
+
+  // Fallback: a model that replied in text instead of calling the tool.
+  const textBlock = response.content.find((b) => b.type === "text");
+  if (textBlock?.type === "text") {
+    try {
+      const rawJson = textBlock.text.replace(/```(?:json)?/gi, "").trim();
+      const tasks = validateTaskSpecs(JSON.parse(rawJson));
+      if (tasks.length > 0) return tasks;
+    } catch (err) {
+      console.warn("[worker] planTasks: failed to parse fallback task graph:", err);
+      console.warn("[worker] raw planner output:", textBlock.text.slice(0, 300));
+    }
+  }
+
+  console.warn(
+    "[worker] planTasks: no usable plan — falling back to a single task (decomposition lost)",
+  );
+  return [];
 }

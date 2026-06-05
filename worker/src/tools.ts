@@ -8,6 +8,11 @@
 
 import type Anthropic from "@anthropic-ai/sdk";
 import { writeComponentTreeDoc, readComponentTreeDoc } from "./component-authoring.js";
+import { ssrfSafeFetch } from "./ssrf.js";
+import {
+  readAiUserMemoryPage,
+  searchAiUserMemory,
+} from "./workspace-context.js";
 // ConnLike avoids importing the full generated DbConnection class (whose
 // db/reducers properties are only resolved in the generated bindings context).
 export interface ConnLike {
@@ -26,6 +31,8 @@ export type ToolCallContext = {
   currentPageId?: bigint;
   /** Identity hex of the AI user executing this chat turn. */
   aiIdentityHex?: string;
+  /** Numeric id of the AI user executing this chat turn (for memory tools). */
+  aiUserId?: bigint;
 };
 
 function readOptionStringFromRow(v: unknown): string | null {
@@ -99,8 +106,40 @@ export function getPearTools(conn: ConnLike, jobId: bigint): Anthropic.Messages.
  * create pages, databases, add properties, etc. directly in chat.
  */
 export function getConversationTools(): Anthropic.Messages.Tool[] {
-  return [...PEAR_TOOLS, ...WEB_TOOLS];
+  return [...PEAR_TOOLS, ...WEB_TOOLS, ...MEMORY_TOOLS];
 }
+
+// ── Memory tools (on-demand private-memory access, assessment #19) ────────────
+
+const MEMORY_TOOLS: Anthropic.Messages.Tool[] = [
+  {
+    name: "read_memory",
+    description:
+      "Read the full body of one of your private memory pages by id. The memory index in your " +
+      "system prompt lists every page's id and a snippet; call this to open the full text of one. " +
+      "Only your own memory subtree is accessible.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        page_id: { type: "number", description: "The memory page id, from the index." },
+      },
+      required: ["page_id"],
+    },
+  },
+  {
+    name: "search_memory",
+    description:
+      "Search your private memory pages (titles + bodies) for a query string and return matching " +
+      "pages with snippets. Use before read_memory when you don't know which page holds something.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query: { type: "string", description: "Case-insensitive substring to find." },
+      },
+      required: ["query"],
+    },
+  },
+];
 
 // ── Web tools (search & fetch) ────────────────────────────────────────────────
 
@@ -137,19 +176,18 @@ const WEB_TOOLS: Anthropic.Messages.Tool[] = [
 /**
  * Fetch a URL and extract readable text from the HTML.
  * Strips tags, scripts, styles, and normalizes whitespace.
+ *
+ * Routed through `ssrfSafeFetch` so an AI user / injected content cannot reach
+ * cloud metadata, loopback, or internal services — including via DNS or a
+ * redirect into the private network (assessment #2).
  */
 async function fetchUrlContent(url: string): Promise<string> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15_000);
-
   try {
-    const res = await fetch(url, {
-      signal: controller.signal,
+    const res = await ssrfSafeFetch(url, {
       headers: {
         "User-Agent": "PearBot/1.0 (workspace assistant)",
         "Accept": "text/html,application/xhtml+xml,text/plain,application/json",
       },
-      redirect: "follow",
     });
 
     if (!res.ok) {
@@ -173,8 +211,6 @@ async function fetchUrlContent(url: string): Promise<string> {
       return "Error: Request timed out after 15 seconds";
     }
     return `Error: ${err instanceof Error ? err.message : String(err)}`;
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -1263,6 +1299,56 @@ async function maybeRequestWriteAccessAfterDenied(
   }
 }
 
+/**
+ * Take an automatic pre-edit snapshot of a page before an agent overwrites its
+ * content (assessment #4/#25). `take_snapshot` reads the live substrate and
+ * handles both BlockNote and ComponentTree formats, so one call captures a
+ * restorable point regardless of page format. We read the new snapshot row back
+ * to confirm the reducer actually committed — reducer calls are fire-and-forget
+ * (#31), so without the read-back a server-side failure would silently break the
+ * safety net the system prompt promises. Best-effort: a content edit is never
+ * blocked on snapshot failure, but the outcome is reported so the claim is honest.
+ */
+async function takePreEditSnapshot(
+  conn: ConnLike,
+  pageId: bigint,
+): Promise<{ taken: boolean; snapshot_id?: number }> {
+  type SnapRow = { id: bigint; pageId: bigint; snapshotType?: { tag?: string } };
+  const before = new Set(
+    [...(conn.db.page_snapshot.iter() as Iterable<SnapRow>)]
+      .filter((s) => String(s.pageId) === String(pageId))
+      .map((s) => String(s.id)),
+  );
+  try {
+    await conn.reducers.takeSnapshot({
+      pageId,
+      snapshotType: { tag: "PreAgentEdit" },
+    });
+  } catch (err) {
+    console.warn(
+      `[tools] pre-edit snapshot call failed for page ${pageId}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    return { taken: false };
+  }
+  const fresh = await waitFor(() =>
+    [...(conn.db.page_snapshot.iter() as Iterable<SnapRow>)].find(
+      (s) =>
+        String(s.pageId) === String(pageId) &&
+        !before.has(String(s.id)) &&
+        s.snapshotType?.tag === "PreAgentEdit",
+    ),
+  );
+  if (!fresh) {
+    console.warn(
+      `[tools] pre-edit snapshot for page ${pageId} was not confirmed (reducer may have failed server-side)`,
+    );
+    return { taken: false };
+  }
+  return { taken: true, snapshot_id: Number(fresh.id) };
+}
+
 export async function executeTool(
   conn: ConnLike,
   toolName: string,
@@ -1546,6 +1632,13 @@ export async function executeTool(
       case "update_page_content": {
         const pageId = BigInt(input.page_id as number);
 
+        // Automatic pre-edit snapshot so a destructive content overwrite is
+        // restorable (assessment #4/#25). Write grant has already been enforced
+        // by requireChatWriteGrant above, so we only snapshot edits we're about
+        // to actually attempt. Covers both page formats (take_snapshot reads the
+        // substrate). Never blocks the edit on snapshot failure.
+        const snap = await takePreEditSnapshot(conn, pageId);
+
         // ComponentTree pages can't be written by the legacy BlockNote reducer
         // (it's rejected server-side; and because reducer calls are
         // fire-and-forget, that rejection would otherwise surface as a false
@@ -1557,7 +1650,7 @@ export async function executeTool(
         if (pageRow?.contentFormat?.tag === "ComponentTree") {
           const md = (input.markdown ?? input.content) as string | undefined;
           const result = await writeComponentTreeDoc(conn, pageId, md ?? "");
-          return JSON.stringify(result);
+          return JSON.stringify({ ...result, snapshot_id: snap.snapshot_id });
         }
 
         // Accept either a `markdown` string (new) or a raw `content` JSON string (legacy).
@@ -1575,7 +1668,7 @@ export async function executeTool(
           }
         }
         await conn.reducers.updatePageContent({ pageId, content });
-        return JSON.stringify({ ok: true, page_id: Number(pageId) });
+        return JSON.stringify({ ok: true, page_id: Number(pageId), snapshot_id: snap.snapshot_id });
       }
 
       case "update_page_title": {
@@ -1889,6 +1982,40 @@ export async function executeTool(
         console.log(`[tools] fetch_url: "${url}"`);
         const content = await fetchUrlContent(url);
         return JSON.stringify({ ok: true, url, content });
+      }
+
+      case "read_memory": {
+        if (toolContext.aiUserId === undefined) {
+          return JSON.stringify({ ok: false, error: "Memory tools are only available in AI-user chat." });
+        }
+        const pageId = BigInt(input.page_id as number | string);
+        const found = readAiUserMemoryPage(conn, toolContext.aiUserId, pageId);
+        if (!found) {
+          return JSON.stringify({ ok: false, error: `No memory page ${pageId} in your memory subtree.` });
+        }
+        return JSON.stringify({
+          ok: true,
+          page_id: Number(pageId),
+          title: found.title,
+          content: found.content,
+        });
+      }
+
+      case "search_memory": {
+        if (toolContext.aiUserId === undefined) {
+          return JSON.stringify({ ok: false, error: "Memory tools are only available in AI-user chat." });
+        }
+        const query = input.query as string;
+        const results = searchAiUserMemory(conn, toolContext.aiUserId, query);
+        return JSON.stringify({
+          ok: true,
+          query,
+          matches: results.map((m) => ({
+            page_id: Number(m.pageId),
+            title: m.title,
+            snippet: m.snippet,
+          })),
+        });
       }
 
       default:

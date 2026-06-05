@@ -46,6 +46,20 @@ export type AssistantMessage = {
 };
 export type Message = UserMessage | AssistantMessage;
 
+/**
+ * A system-prompt segment. `cache: true` places a prompt-cache breakpoint at the
+ * end of this block (Anthropic only). Stable blocks come first so the cached
+ * prefix captures them; volatile content goes in a trailing block with no
+ * breakpoint. See assessment #8/#21/#22 and `SystemPromptBuilder.buildBlocks`.
+ */
+export type SystemBlock = { text: string; cache?: boolean };
+export type SystemPrompt = string | SystemBlock[];
+
+/** Flatten a structured system prompt to a plain string (providers without caching). */
+export function flattenSystem(system: SystemPrompt): string {
+  return typeof system === "string" ? system : system.map((b) => b.text).join("\n\n");
+}
+
 export type ToolDef = {
   name: string;
   description: string;
@@ -55,15 +69,31 @@ export type ToolDef = {
 export interface ChatRequest {
   model: string;
   maxTokens: number;
-  system: string;
+  system: SystemPrompt;
   messages: Message[];
   tools?: ToolDef[];
+}
+
+/**
+ * Real token usage for a single provider response, normalized across providers.
+ * `inputTokens`/`outputTokens` are the uncached prompt + completion counts;
+ * the cache fields are Anthropic-style (read = served from cache, creation =
+ * written to cache). OpenAI maps `cached_tokens` to `cacheReadInputTokens` and
+ * leaves creation at 0. All four feed `update_message` / `record_usage_event`
+ * so the per-AI-user spend surface reflects real consumption (assessment #3).
+ */
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens: number;
+  cacheReadInputTokens: number;
 }
 
 export interface ChatResponse {
   content: (TextBlock | ToolUseBlock)[];
   stopReason: string;
   thinking?: string;
+  usage?: TokenUsage;
 }
 
 export type StreamEvent =
@@ -83,6 +113,77 @@ export interface InferenceProvider {
 
 // ── Anthropic ───────────────────────────────────────────────────────────────────
 
+/**
+ * Convert our `SystemPrompt` to the Anthropic `system` param, attaching a
+ * `cache_control: {type:"ephemeral"}` breakpoint at the end of each block marked
+ * `cache: true`. Anthropic allows at most 4 breakpoints per request; the builder
+ * emits at most 2. A string passes through unchanged (no caching).
+ */
+function toAnthropicSystem(
+  system: SystemPrompt,
+): string | Anthropic.Messages.TextBlockParam[] {
+  if (typeof system === "string") return system;
+  return system.map((b) => ({
+    type: "text" as const,
+    text: b.text,
+    ...(b.cache ? { cache_control: { type: "ephemeral" as const } } : {}),
+  }));
+}
+
+/** Normalize an Anthropic `usage` object to our cross-provider `TokenUsage`. */
+function anthropicUsage(
+  usage:
+    | {
+        input_tokens?: number | null;
+        output_tokens?: number | null;
+        cache_creation_input_tokens?: number | null;
+        cache_read_input_tokens?: number | null;
+      }
+    | undefined,
+): TokenUsage | undefined {
+  if (!usage) return undefined;
+  return {
+    inputTokens: usage.input_tokens ?? 0,
+    outputTokens: usage.output_tokens ?? 0,
+    cacheCreationInputTokens: usage.cache_creation_input_tokens ?? 0,
+    cacheReadInputTokens: usage.cache_read_input_tokens ?? 0,
+  };
+}
+
+/** Normalize an OpenAI `usage` object to our cross-provider `TokenUsage`. */
+function openaiUsage(
+  usage:
+    | {
+        prompt_tokens?: number | null;
+        completion_tokens?: number | null;
+        prompt_tokens_details?: { cached_tokens?: number | null } | null;
+      }
+    | undefined,
+): TokenUsage | undefined {
+  if (!usage) return undefined;
+  return {
+    inputTokens: usage.prompt_tokens ?? 0,
+    outputTokens: usage.completion_tokens ?? 0,
+    cacheCreationInputTokens: 0,
+    cacheReadInputTokens: usage.prompt_tokens_details?.cached_tokens ?? 0,
+  };
+}
+
+/** Log cache read/write so a silent invalidator (zero reads) is visible (#21 verification). */
+function logCacheUsage(
+  tag: string,
+  usage: { cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null; input_tokens?: number | null } | undefined,
+): void {
+  if (!usage) return;
+  const read = usage.cache_read_input_tokens ?? 0;
+  const write = usage.cache_creation_input_tokens ?? 0;
+  if (read || write) {
+    console.log(
+      `[providers] ${tag} cache: read=${read} write=${write} uncached=${usage.input_tokens ?? 0}`,
+    );
+  }
+}
+
 class AnthropicProvider implements InferenceProvider {
   private client: Anthropic;
 
@@ -94,7 +195,7 @@ class AnthropicProvider implements InferenceProvider {
     const params: Anthropic.Messages.MessageCreateParams = {
       model: request.model,
       max_tokens: request.maxTokens,
-      system: request.system,
+      system: toAnthropicSystem(request.system),
       messages: request.messages as Anthropic.Messages.MessageParam[],
     };
     if (request.tools?.length) {
@@ -102,6 +203,7 @@ class AnthropicProvider implements InferenceProvider {
     }
 
     const response = await this.client.messages.create(params);
+    logCacheUsage("chat", response.usage);
 
     return {
       content: response.content.map((block) => {
@@ -116,6 +218,7 @@ class AnthropicProvider implements InferenceProvider {
         return { type: "text" as const, text: (block as Anthropic.Messages.TextBlock).text };
       }),
       stopReason: response.stop_reason ?? "end_turn",
+      usage: anthropicUsage(response.usage),
     };
   }
 
@@ -123,7 +226,7 @@ class AnthropicProvider implements InferenceProvider {
     const params: Anthropic.Messages.MessageStreamParams = {
       model: request.model,
       max_tokens: request.maxTokens,
-      system: request.system,
+      system: toAnthropicSystem(request.system),
       messages: request.messages as Anthropic.Messages.MessageParam[],
     };
     if (request.tools?.length) {
@@ -180,6 +283,7 @@ class AnthropicProvider implements InferenceProvider {
     }
 
     const finalMessage = await stream.finalMessage();
+    logCacheUsage("stream", finalMessage.usage);
     const finalContent: (TextBlock | ToolUseBlock)[] = [];
     for (const block of finalMessage.content) {
       if (block.type === "tool_use") {
@@ -200,6 +304,7 @@ class AnthropicProvider implements InferenceProvider {
         content: finalContent,
         stopReason: finalMessage.stop_reason ?? "end_turn",
         thinking: thinkingText || undefined,
+        usage: anthropicUsage(finalMessage.usage),
       },
     };
   }
@@ -216,7 +321,7 @@ class OpenAIProvider implements InferenceProvider {
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-      { role: "system", content: request.system },
+      { role: "system", content: flattenSystem(request.system) },
     ];
 
     for (const msg of request.messages) {
@@ -302,6 +407,7 @@ class OpenAIProvider implements InferenceProvider {
     return {
       content,
       stopReason: stopMap[choice.finish_reason ?? "stop"] ?? "end_turn",
+      usage: openaiUsage(response.usage),
     };
   }
 }

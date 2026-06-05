@@ -17,6 +17,7 @@
 
 import { DbConnection, type EventContext } from "./module_bindings/index.js";
 import { callLlm, planTasks, buildPageContext } from "./llm.js";
+import type { TokenUsage } from "./providers.js";
 import { AiUserWorker } from "./ai-user-worker.js";
 import { handleAiPrimitiveTask } from "./ai-primitive-task.js";
 import { StructuralSensorsScheduler } from "./structural-sensors.js";
@@ -410,6 +411,29 @@ export class DatabaseWorker {
     });
   }
 
+  /**
+   * Union of capabilities across all registered agents (`orcha_agent`). A
+   * planner subtask whose `required_capabilities` fall outside this set can
+   * never be claimed by anyone, so it would hang `pending` forever and block
+   * `check_orcha_job_completion` (assessment #6). We use it to repair such
+   * specs before they're inserted.
+   */
+  private claimableCapabilities(conn: DbConnection): Set<string> {
+    const caps = new Set<string>();
+    const table = (conn.db as unknown as {
+      orcha_agent?: { iter(): Iterable<{ capabilities: string[] }> };
+    }).orcha_agent;
+    if (table) {
+      for (const agent of table.iter()) {
+        for (const c of agent.capabilities) caps.add(c);
+      }
+    }
+    // Always include our own — we may read the table before our registration
+    // round-trips back.
+    for (const c of CAPABILITIES) caps.add(c);
+    return caps;
+  }
+
   private checkAndClaim(conn: DbConnection, task: TaskRow): void {
     if (this.stopped) return;
     if (this.isClaimable(task, conn)) {
@@ -437,6 +461,7 @@ export class DatabaseWorker {
 
     try {
       let result: string;
+      let usage: TokenUsage | undefined;
 
       switch (task.taskType) {
         case "orchestrate":
@@ -460,15 +485,18 @@ export class DatabaseWorker {
             `tool-bash backend "${SANDBOX_BACKEND}" recognised but not implemented yet`,
           );
         case "llm":
-        default:
-          result = await callLlm(task.description, conn, task.jobId);
+        default: {
+          const llmOut = await callLlm(task.description, conn, task.jobId);
+          result = llmOut.text;
+          usage = llmOut.usage;
           break;
+        }
       }
 
       await conn.reducers.submitResult({ agentId: this.agentId, taskId: task.id, result });
       console.log(`[worker:${this.dbName}] Completed task ${task.id} (${task.taskType})`);
 
-      this.recordUsage(conn, task, startMs);
+      this.recordUsage(conn, task, startMs, usage);
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       console.error(`[worker:${this.dbName}] Task ${task.id} failed: ${error}`);
@@ -514,6 +542,22 @@ export class DatabaseWorker {
       }
     }
 
+    // Repair specs that demand a capability no registered agent has — otherwise
+    // they'd hang `pending` forever and the job never completes (#6). Coerce to
+    // a plain `llm` task (the universal fallback) and log so the degradation is
+    // visible rather than silent.
+    const known = this.claimableCapabilities(conn);
+    for (const spec of taskSpecs) {
+      const missing = spec.required_capabilities.filter((c) => !known.has(c));
+      if (missing.length > 0) {
+        console.warn(
+          `[worker:${this.dbName}] job ${task.jobId}: subtask requires unsatisfiable capabilities [${missing.join(", ")}] — coercing to llm so the job can't hang (#6)`,
+        );
+        spec.task_type = "llm";
+        spec.required_capabilities = ["llm"];
+      }
+    }
+
     if (taskSpecs.length === 0) {
       const taskGraphJson = JSON.stringify([
         {
@@ -544,16 +588,28 @@ export class DatabaseWorker {
     return `Decomposed into ${taskSpecs.length} task${taskSpecs.length !== 1 ? "s" : ""}`;
   }
 
-  private recordUsage(conn: DbConnection, task: TaskRow, startMs: number): void {
+  private recordUsage(
+    conn: DbConnection,
+    task: TaskRow,
+    startMs: number,
+    usage?: TokenUsage,
+  ): void {
     const wallClockMs = Date.now() - startMs;
+    // Anthropic reports uncached input separately from cache reads; bill the
+    // full prompt (uncached + cache read) as tokens_in so the cap reflects
+    // real consumption (#3). Zero when the provider returned no usage.
+    const tokensIn = usage
+      ? BigInt(usage.inputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens)
+      : BigInt(0);
+    const tokensOut = usage ? BigInt(usage.outputTokens) : BigInt(0);
     conn.reducers
       .recordUsageEvent({
         taskId: task.id,
         taskType: task.taskType,
         agentId: this.agentId,
         aiUserId: undefined,
-        tokensIn: BigInt(0),
-        tokensOut: BigInt(0),
+        tokensIn,
+        tokensOut,
         wallClockMs: BigInt(wallClockMs),
       })
       .catch((err: unknown) => {

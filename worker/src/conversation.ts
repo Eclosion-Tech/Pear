@@ -32,6 +32,7 @@ import {
   type ToolDef,
   type StreamEvent,
   type ChatStreamRequest,
+  type TokenUsage,
   getProviderForAiUser,
 } from "./providers.js";
 import { buildPageContext } from "./llm.js";
@@ -43,7 +44,7 @@ import {
 import { SystemPromptBuilder } from "./prompt-builder.js";
 import {
   discoverInstructionPages,
-  discoverAiUserPrivatePages,
+  buildAiUserMemoryIndex,
   buildBreadcrumb,
   summarizePageHistory,
   todayIso8601,
@@ -53,6 +54,13 @@ import {
   loadCompactionSummary,
   reconstructSessionTail,
 } from "./session-reconstruct.js";
+import {
+  type StoredToolCall,
+  cap,
+  extractAffected,
+  MAX_STORED_INPUT_CHARS,
+  MAX_STORED_OUTPUT_CHARS,
+} from "./tool-call-record.js";
 
 type ConversationRow = {
   id: bigint;
@@ -101,20 +109,12 @@ const processing = new Set<string>();
 const FLUSH_INTERVAL_MS = 300;
 const THINKING_BUDGET = 5_000;
 const MAX_TOOL_ITERATIONS = 15;
-const RECENT_MESSAGE_MAX_AGE_MS = 5 * 60_000;
 
 function messageKey(convId: bigint, msgId: bigint, selfHex: string): string {
   // Include the responder identity: multiple AI users share this module-level
   // `processing` set, and two AI participants in the same conversation must be
   // able to respond to the same message independently.
   return `${selfHex}:${convId}:${msgId}`;
-}
-
-function messageAgeMs(msg: ConversationMessageRow): number {
-  return (
-    Number(BigInt(Date.now()) * 1000n - msg.createdAt.microsSinceUnixEpoch) /
-    1000
-  );
 }
 
 function identityHex(id: { toHexString(): string } | unknown): string {
@@ -142,44 +142,96 @@ function isFromOtherUser(
   return identityHex(msg.sender.value) !== selfHex;
 }
 
+/** Highest message id currently visible in `conversationId` (0 if none). Used
+ * as a correlation boundary: the placeholder we are about to post will have an
+ * id strictly greater than this. */
+function maxMessageId(conn: ConnLike, conversationId: bigint): bigint {
+  let max = 0n;
+  for (const m of conn.db.conversation_message.iter() as Iterable<ConversationMessageRow>) {
+    if (m.conversationId === conversationId && m.id > max) max = m.id;
+  }
+  return max;
+}
+
 /**
- * Find the AI message we just created by looking for the latest `Thinking`
- * message authored by *us* in this conversation.
+ * Find the placeholder we just created. Auto-inc ids are monotonic, so the row
+ * we posted has an id strictly greater than `afterId` (the max captured *before*
+ * posting). We return the smallest self-authored `Thinking` message with
+ * `id > afterId` — i.e. our own newly-created placeholder — rather than "latest
+ * Thinking by self," which could adopt a stale placeholder left by a crashed
+ * prior turn or swap placeholders between concurrent turns (assessment #9).
  */
 async function findAiMessageId(
   conn: ConnLike,
   conversationId: bigint,
   selfHex: string,
+  afterId: bigint,
   retries = 5,
 ): Promise<bigint | null> {
   for (let i = 0; i < retries; i++) {
-    const msgs = [
-      ...(conn.db.conversation_message.iter() as Iterable<ConversationMessageRow>),
-    ]
-      .filter(
-        (m) =>
-          m.conversationId === conversationId &&
-          isFromSelf(m, selfHex) &&
-          m.status?.tag === "Thinking",
-      )
-      .sort(
-        (a, b) =>
-          Number(
-            b.createdAt.microsSinceUnixEpoch -
-              a.createdAt.microsSinceUnixEpoch,
-          ),
-      );
-
-    if (msgs.length > 0) return msgs[0].id;
+    let best: bigint | null = null;
+    for (const m of conn.db.conversation_message.iter() as Iterable<ConversationMessageRow>) {
+      if (
+        m.conversationId === conversationId &&
+        m.id > afterId &&
+        isFromSelf(m, selfHex) &&
+        m.status?.tag === "Thinking" &&
+        (best === null || m.id < best)
+      ) {
+        best = m.id;
+      }
+    }
+    if (best !== null) return best;
     await new Promise((r) => setTimeout(r, 100));
   }
   return null;
 }
 
-interface ToolCallInfo {
-  name: string;
-  status: "executing" | "done" | "error";
-  result?: string;
+/**
+ * True if a *newer* message from another user exists in the conversation. Only
+ * the latest unanswered user message should trigger a reply — earlier ones are
+ * folded into its reconstructed context — so we skip a message superseded by a
+ * later one (prevents a backlog of replies on reconnect; pairs with #7).
+ */
+function hasLaterForeignMessage(
+  conn: ConnLike,
+  msg: ConversationMessageRow,
+  selfHex: string,
+): boolean {
+  for (const m of conn.db.conversation_message.iter() as Iterable<ConversationMessageRow>) {
+    if (
+      m.conversationId === msg.conversationId &&
+      isFromOtherUser(m, selfHex) &&
+      m.createdAt.microsSinceUnixEpoch > msg.createdAt.microsSinceUnixEpoch
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Mutable running total of token usage across a turn's LLM calls (#3). */
+function emptyUsage(): TokenUsage {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheCreationInputTokens: 0,
+    cacheReadInputTokens: 0,
+  };
+}
+
+function addUsage(total: TokenUsage, delta: TokenUsage | undefined): void {
+  if (!delta) return;
+  total.inputTokens += delta.inputTokens;
+  total.outputTokens += delta.outputTokens;
+  total.cacheCreationInputTokens += delta.cacheCreationInputTokens;
+  total.cacheReadInputTokens += delta.cacheReadInputTokens;
+}
+
+/** u32 columns — clamp the running totals so a long turn can't overflow. */
+const U32_MAX = 0xffffffff;
+function u32(n: number): number {
+  return Math.min(Math.max(0, Math.round(n)), U32_MAX);
 }
 
 async function flushMessage(
@@ -188,8 +240,9 @@ async function flushMessage(
   content: string,
   status: string,
   thinking: string | undefined,
-  toolCalls: ToolCallInfo[],
+  toolCalls: StoredToolCall[],
   jobId?: bigint,
+  usage?: TokenUsage,
 ): Promise<void> {
   try {
     await conn.reducers.updateMessage({
@@ -200,6 +253,12 @@ async function flushMessage(
       toolCallsJson:
         toolCalls.length > 0 ? JSON.stringify(toolCalls) : undefined,
       jobId,
+      inputTokens: usage ? u32(usage.inputTokens) : undefined,
+      outputTokens: usage ? u32(usage.outputTokens) : undefined,
+      cacheCreationInputTokens: usage
+        ? u32(usage.cacheCreationInputTokens)
+        : undefined,
+      cacheReadInputTokens: usage ? u32(usage.cacheReadInputTokens) : undefined,
     });
   } catch (err) {
     console.warn(
@@ -278,29 +337,31 @@ const READ_ONLY_TOOLS = new Set([
   "search_memory",
 ]);
 
-/** One concise, system-verified line per result: page id, affected blocks, or error. */
-function summarizeToolResult(result: string | undefined): string {
-  if (!result) return "";
-  try {
-    const p = JSON.parse(result) as Record<string, unknown>;
-    if (p && typeof p === "object") {
-      if (p.ok === false) {
-        const err = typeof p.error === "string" ? p.error : "failed";
-        return err.length > 80 ? `${err.slice(0, 77)}…` : err;
-      }
-      const bits: string[] = [];
-      if (typeof p.job_id === "number") bits.push(`job ${p.job_id}`);
-      if (typeof p.page_id === "number") bits.push(`page ${p.page_id}`);
-      if (typeof p.property_definition_id === "number")
-        bits.push(`property ${p.property_definition_id}`);
-      if (Array.isArray(p.created_node_ids))
-        bits.push(`${p.created_node_ids.length} block(s)`);
-      return bits.join(", ");
+/**
+ * One concise, system-verified line per call: page id, affected blocks, or
+ * error. Reads the structured `affected` refs (parsed from the *full* result at
+ * persist time, #32) rather than re-parsing a display-truncated snippet — so
+ * counts like "N block(s)" are accurate.
+ */
+function summarizeToolCall(t: StoredToolCall): string {
+  if (t.status === "error") {
+    let err = "failed";
+    try {
+      const p = JSON.parse(t.output ?? "") as Record<string, unknown>;
+      if (typeof p?.error === "string") err = p.error;
+    } catch {
+      /* keep generic */
     }
-  } catch {
-    return "unverifiable result";
+    return err.length > 80 ? `${err.slice(0, 77)}…` : err;
   }
-  return "";
+  const a = t.affected;
+  if (!a) return "";
+  const bits: string[] = [];
+  if (a.jobId !== undefined) bits.push(`job ${a.jobId}`);
+  if (a.pageId !== undefined) bits.push(`page ${a.pageId}`);
+  if (a.propertyDefinitionId !== undefined) bits.push(`property ${a.propertyDefinitionId}`);
+  if (a.createdNodeIds?.length) bits.push(`${a.createdNodeIds.length} block(s)`);
+  return bits.join(", ");
 }
 
 /**
@@ -310,13 +371,13 @@ function summarizeToolResult(result: string | undefined): string {
  * "said it did something it didn't" failure mode). Returns "" when the turn
  * performed no mutating actions.
  */
-function buildActionReceipt(toolCalls: ToolCallInfo[]): string {
+function buildActionReceipt(toolCalls: StoredToolCall[]): string {
   const actions = toolCalls.filter((t) => !READ_ONLY_TOOLS.has(t.name));
   if (actions.length === 0) return "";
   const lines = actions.map((t) => {
     const icon = t.status === "done" ? "✓" : t.status === "error" ? "✗" : "…";
     const label = t.name.replace(/_/g, " ");
-    const detail = summarizeToolResult(t.result);
+    const detail = summarizeToolCall(t);
     return `- ${icon} ${label}${detail ? ` — ${detail}` : ""}`;
   });
   return `\n\n---\n_Actions this turn (system-verified):_\n${lines.join("\n")}`;
@@ -367,8 +428,6 @@ async function handleConversationMessage(
   processing.add(key);
 
   try {
-    if (messageAgeMs(msg) > RECENT_MESSAGE_MAX_AGE_MS) return;
-
     const conv = conn.db.conversation.id.find(msg.conversationId) as
       | ConversationRow
       | undefined;
@@ -379,16 +438,28 @@ async function handleConversationMessage(
       return;
     }
 
-    // Respect ordering: if we already replied later than this message, skip.
-    const laterReplies = [
-      ...(conn.db.conversation_message.iter() as Iterable<ConversationMessageRow>),
-    ].filter(
-      (m) =>
+    // Durable inbox (assessment #7): respond based on a per-conversation reply
+    // watermark, not a wall-clock age window — so a message sent during an
+    // outage longer than the old 5-minute cap is still answered on reconnect.
+    //
+    // Two guards implement the watermark:
+    //   1. If we already replied *after* this message, it's handled — skip.
+    //   2. If a *newer* user message exists, that one will reply and carries
+    //      this message as context — skip, so a backlog doesn't fan out into
+    //      one reply per message.
+    let repliedAfter = false;
+    for (const m of conn.db.conversation_message.iter() as Iterable<ConversationMessageRow>) {
+      if (
         m.conversationId === msg.conversationId &&
         isFromSelf(m, selfHex) &&
-        m.createdAt.microsSinceUnixEpoch > msg.createdAt.microsSinceUnixEpoch,
-    );
-    if (laterReplies.length > 0) return;
+        m.createdAt.microsSinceUnixEpoch > msg.createdAt.microsSinceUnixEpoch
+      ) {
+        repliedAfter = true;
+        break;
+      }
+    }
+    if (repliedAfter) return;
+    if (hasLaterForeignMessage(conn, msg, selfHex)) return;
 
     const aiProfile = findOwnProfile(conn, selfHex);
     if (!aiProfile) {
@@ -403,7 +474,10 @@ async function handleConversationMessage(
         (conv.pageId !== undefined ? ` (page ${conv.pageId})` : ""),
     );
 
-    // Step 1: placeholder message (Thinking)
+    // Step 1: placeholder message (Thinking). Capture the id boundary first so
+    // we can correlate the row we're about to create (its id will exceed this)
+    // rather than guessing "latest Thinking" (#9).
+    const preMaxId = maxMessageId(conn, conv.id);
     await conn.reducers.sendMessage({
       conversationId: conv.id,
       content: "",
@@ -417,7 +491,7 @@ async function handleConversationMessage(
       cacheReadInputTokens: undefined,
     });
 
-    const aiMsgId = await findAiMessageId(conn, conv.id, selfHex);
+    const aiMsgId = await findAiMessageId(conn, conv.id, selfHex, preMaxId);
     if (!aiMsgId) {
       console.error(`${logTag} could not find placeholder AI message`);
       return;
@@ -465,16 +539,21 @@ async function handleConversationMessage(
       assistantParts.push(ownCfg.systemPrompt.trim());
     }
 
-    const privatePages = discoverAiUserPrivatePages(conn, aiProfile.aiUserId);
+    // Inject a compact index of the AI user's memory subtree (titles + snippets)
+    // rather than dumping ~12K tokens of full bodies each turn; the model opens
+    // what it needs via read_memory / search_memory (assessment #19).
+    const memoryIndex = buildAiUserMemoryIndex(conn, aiProfile.aiUserId);
 
     let builder = new SystemPromptBuilder()
       .withAiUserSystemPrompt(assistantParts.join("\n\n"))
-      .withAiUserPrivatePages(privatePages.pages, privatePages.truncated);
+      .withAiUserMemoryIndex(memoryIndex);
     if (workspaceCtx) builder = builder.withWorkspaceContext(workspaceCtx);
     if (compactionSummary) {
       builder = builder.withCompactionSummary(compactionSummary);
     }
-    const systemPrompt = builder.render();
+    // Cache-aware system blocks: stable prefix is cached, volatile content last
+    // (assessment #8/#21/#22). Providers without caching flatten it to a string.
+    const systemBlocks = builder.buildBlocks();
 
     // Reconstruct message tail (respects compaction floor). Filter out the
     // placeholder we just inserted (no content).
@@ -512,10 +591,11 @@ async function handleConversationMessage(
       conversationId: conv.id,
       currentPageId: conv.pageId,
       aiIdentityHex: selfHex,
+      aiUserId: aiProfile.aiUserId,
     };
 
     const tools: ToolDef[] = getConversationTools() as ToolDef[];
-    const allToolCalls: ToolCallInfo[] = [];
+    const allToolCalls: StoredToolCall[] = [];
     /** All raw tool result strings this turn — for assessing success when the model omits a text reply. */
     const toolResultLog: string[] = [];
     let thinkingText = "";
@@ -532,6 +612,9 @@ async function handleConversationMessage(
     /** First Orcha job this turn spawned via `delegate`, linked to the message
      * so the thread renders it inline as a subagent card. */
     let spawnedJobId: bigint | undefined;
+    /** Running token total across every LLM call this turn — persisted on the
+     * finalized message so the per-AI-user spend surface is real (#3). */
+    const turnUsage = emptyUsage();
 
     /** Append the current segment to `narration` before it is reset between
      * tool iterations. */
@@ -554,7 +637,7 @@ async function handleConversationMessage(
         const streamReq: ChatStreamRequest = {
           model,
           maxTokens: effectiveMaxTokens,
-          system: systemPrompt,
+          system: systemBlocks,
           messages: llmMessages,
           tools: tools.length > 0 ? tools : undefined,
           thinkingBudget: THINKING_BUDGET,
@@ -591,7 +674,14 @@ async function handleConversationMessage(
               lastFlush = Date.now();
             }
           } else if (event.type === "tool_use_start") {
-            allToolCalls.push({ name: event.block.name, status: "executing" });
+            // Emitted at content_block_stop, so id + input are already complete.
+            allToolCalls.push({
+              type: "tool_use",
+              id: event.block.id,
+              name: event.block.name,
+              input: cap(JSON.stringify(event.block.input ?? {}), MAX_STORED_INPUT_CHARS),
+              status: "executing",
+            });
             await flushMessage(
               conn,
               aiMsgId,
@@ -606,6 +696,8 @@ async function handleConversationMessage(
         }
 
         if (!doneResponse) break;
+
+        addUsage(turnUsage, doneResponse.response.usage);
 
         const toolBlocks = doneResponse.response.content.filter(
           (b): b is ToolUseBlock => b.type === "tool_use",
@@ -641,9 +733,7 @@ async function handleConversationMessage(
           content: string;
         }[] = [];
         for (const block of toolBlocks) {
-          const idx = allToolCalls.findIndex(
-            (tc) => tc.name === block.name && tc.status === "executing",
-          );
+          const idx = allToolCalls.findIndex((tc) => tc.id === block.id);
 
           console.log(
             `${logTag} tool call [${block.name}]: ${JSON.stringify(block.input).slice(0, 200)}`,
@@ -658,9 +748,12 @@ async function handleConversationMessage(
           console.log(`${logTag} tool result [${block.name}]: ${result.slice(0, 200)}`);
           toolResultLog.push(result);
 
+          const ok = toolResultWasOk(result);
           if (idx >= 0) {
-            allToolCalls[idx].status = toolResultWasOk(result) ? "done" : "error";
-            allToolCalls[idx].result = result.slice(0, 200);
+            allToolCalls[idx].status = ok ? "done" : "error";
+            allToolCalls[idx].output = cap(result, MAX_STORED_OUTPUT_CHARS);
+            allToolCalls[idx].isError = !ok;
+            allToolCalls[idx].affected = extractAffected(result);
           }
           if (spawnedJobId === undefined && block.name === "delegate") {
             spawnedJobId = delegatedJobIdFromResult(result);
@@ -693,10 +786,12 @@ async function handleConversationMessage(
         const response = await aiProvider.chat({
           model,
           maxTokens,
-          system: systemPrompt,
+          system: systemBlocks,
           messages: llmMessages,
           tools: tools.length > 0 ? tools : undefined,
         });
+
+        addUsage(turnUsage, response.usage);
 
         const toolCalls = response.content.filter(
           (b): b is ToolUseBlock => b.type === "tool_use",
@@ -725,7 +820,14 @@ async function handleConversationMessage(
           content: string;
         }[] = [];
         for (const block of toolCalls) {
-          allToolCalls.push({ name: block.name, status: "executing" });
+          const inputStr = cap(JSON.stringify(block.input), MAX_STORED_INPUT_CHARS);
+          allToolCalls.push({
+            type: "tool_use",
+            id: block.id,
+            name: block.name,
+            input: inputStr,
+            status: "executing",
+          });
           const tcIdx = allToolCalls.length - 1;
           console.log(
             `${logTag} tool call [${block.name}]: ${JSON.stringify(block.input).slice(0, 200)}`,
@@ -739,10 +841,16 @@ async function handleConversationMessage(
           );
           console.log(`${logTag} tool result [${block.name}]: ${result.slice(0, 200)}`);
           toolResultLog.push(result);
+          const ok = toolResultWasOk(result);
           allToolCalls[tcIdx] = {
+            type: "tool_use",
+            id: block.id,
             name: block.name,
-            status: toolResultWasOk(result) ? "done" : "error",
-            result: result.slice(0, 200),
+            input: inputStr,
+            status: ok ? "done" : "error",
+            output: cap(result, MAX_STORED_OUTPUT_CHARS),
+            isError: !ok,
+            affected: extractAffected(result),
           };
           if (spawnedJobId === undefined && block.name === "delegate") {
             spawnedJobId = delegatedJobIdFromResult(result);
@@ -829,10 +937,11 @@ async function handleConversationMessage(
       thinkingText,
       allToolCalls,
       spawnedJobId,
+      turnUsage,
     );
 
     console.log(
-      `${logTag} responded in conversation ${conv.id} (${responseText.length} chars, thinking: ${thinkingText.length} chars, tools: ${allToolCalls.length}, truncated: ${truncated}, toolLimit: ${toolLimitReached})`,
+      `${logTag} responded in conversation ${conv.id} (${responseText.length} chars, thinking: ${thinkingText.length} chars, tools: ${allToolCalls.length}, truncated: ${truncated}, toolLimit: ${toolLimitReached}, tokens: in=${turnUsage.inputTokens} out=${turnUsage.outputTokens} cacheRead=${turnUsage.cacheReadInputTokens})`,
     );
   } catch (err) {
     console.error(
@@ -869,32 +978,40 @@ export function registerConversationHandlers(
   console.log(`${logTag} handlers registered (self=${selfHex.slice(0, 12)}…)`);
 }
 
+/**
+ * Catch-up sweep on (re)connect. Instead of a wall-clock age filter (which
+ * dropped messages sent during an outage longer than 5 minutes, #7), we take
+ * the *latest* user message per conversation and let `handleConversationMessage`
+ * decide via the reply watermark whether it still needs an answer. Earlier
+ * messages are folded into that reply's reconstructed context, so we don't fan
+ * out one reply per backlog message.
+ */
 export async function processRecentConversationMessages(
   conn: ConnLike,
   selfIdentity: Identity,
   logTag = "[conversation]",
 ): Promise<void> {
   const selfHex = selfIdentity.toHexString();
-  const messages = [
-    ...(conn.db.conversation_message.iter() as Iterable<ConversationMessageRow>),
-  ]
-    .filter(
-      (msg) =>
-        isFromOtherUser(msg, selfHex) &&
-        messageAgeMs(msg) <= RECENT_MESSAGE_MAX_AGE_MS,
-    )
-    .sort((a, b) =>
-      a.createdAt.microsSinceUnixEpoch < b.createdAt.microsSinceUnixEpoch
-        ? -1
-        : a.createdAt.microsSinceUnixEpoch > b.createdAt.microsSinceUnixEpoch
-          ? 1
-          : 0,
-    );
 
-  if (messages.length === 0) return;
+  // Latest foreign message per conversation.
+  const latestByConv = new Map<bigint, ConversationMessageRow>();
+  for (const msg of conn.db.conversation_message.iter() as Iterable<ConversationMessageRow>) {
+    if (!isFromOtherUser(msg, selfHex)) continue;
+    const current = latestByConv.get(msg.conversationId);
+    if (
+      !current ||
+      msg.createdAt.microsSinceUnixEpoch > current.createdAt.microsSinceUnixEpoch
+    ) {
+      latestByConv.set(msg.conversationId, msg);
+    }
+  }
 
-  console.log(`${logTag} checking ${messages.length} recent visible user message(s)`);
-  for (const msg of messages) {
+  if (latestByConv.size === 0) return;
+
+  console.log(
+    `${logTag} catch-up: ${latestByConv.size} conversation(s) with a latest user message`,
+  );
+  for (const msg of latestByConv.values()) {
     await handleConversationMessage(conn, msg, selfHex, logTag);
   }
 }

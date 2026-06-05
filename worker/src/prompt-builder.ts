@@ -5,23 +5,25 @@
  * The injection defense block is mandatory and always the last section — it cannot
  * be suppressed by extension configuration or system prompt overrides.
  *
- * Section order (per PEAR_PROMPT_BUILDER.md):
- *   1.  Intro
- *   2.  Output style (if set)
- *   3.  System rules
- *   4.  Doing tasks
- *   5.  Executing actions with care
- *   6.  Environment context
- *   7.  Workspace context
- *   8.  AI user system prompt (if set)
- *   9.  Instruction pages (if any)
- *  10.  AI user private reference pages (hidden memory subtree, if any)
- *  11.  Compaction summary (if resuming a compacted session)
- *  12.  Additional appended sections
- *  13.  Injection defense block — ALWAYS LAST, NON-CONFIGURABLE
+ * Sections are grouped into cache-aware blocks (`buildBlocks`, assessment
+ * #8/#21/#22) so a prompt-cache prefix can capture the stable content:
+ *
+ *   Block 1 — cached, stable per AI-user config:
+ *     intro · output style · system rules · doing tasks · actions · AI-user prompt
+ *   Block 2 — cached, stable within a conversation:
+ *     instruction pages · AI-user private memory pages  (the #19/#20 bulk)
+ *   Block 3 — volatile, no breakpoint:
+ *     environment · workspace context · compaction summary · appended sections ·
+ *     injection-defense block (ALWAYS LAST, NON-CONFIGURABLE — must follow all
+ *     untrusted page content; small enough that leaving it uncached is negligible)
  */
 
-import type { WorkspaceContext, InstructionPage } from "./workspace-context.js";
+import type {
+  WorkspaceContext,
+  InstructionPage,
+  AiUserMemoryEntry,
+} from "./workspace-context.js";
+import type { SystemBlock } from "./providers.js";
 
 // ── Builder ───────────────────────────────────────────────────────────────────
 
@@ -33,9 +35,9 @@ export class SystemPromptBuilder {
   private installedExtensionId: bigint | undefined;
   /** Compaction summary from a prior session — injected after instruction pages. */
   private compactionSummary: string | undefined;
-  /** Pages under `ai_user_memory` (persona, notes); injected after workspace instructions. */
-  private aiUserPrivatePages: InstructionPage[] = [];
-  private aiUserPrivatePagesTruncated = false;
+  /** Compact index of `ai_user_memory` pages (persona, notes); the model opens
+   * bodies on demand via read_memory / search_memory rather than always-on (#19). */
+  private aiUserMemoryIndex: AiUserMemoryEntry[] = [];
   private appendSections: string[] = [];
 
   withWorkspaceContext(ctx: WorkspaceContext): this {
@@ -70,12 +72,12 @@ export class SystemPromptBuilder {
   }
 
   /**
-   * Hidden per-AI-user Doc subtree (`provision_ai_user_memory`). Content is
-   * merged into the system prompt so the model can use persona / long-term notes.
+   * Compact index of the hidden per-AI-user memory subtree
+   * (`provision_ai_user_memory`). Only titles + snippets are injected; the model
+   * pulls full bodies with the read_memory / search_memory tools (#19).
    */
-  withAiUserPrivatePages(pages: InstructionPage[], truncated = false): this {
-    this.aiUserPrivatePages = pages;
-    this.aiUserPrivatePagesTruncated = truncated;
+  withAiUserMemoryIndex(entries: AiUserMemoryEntry[]): this {
+    this.aiUserMemoryIndex = entries;
     return this;
   }
 
@@ -85,67 +87,58 @@ export class SystemPromptBuilder {
   }
 
   /**
-   * Build the system prompt as an array of section strings.
-   * Matches claw-code's Vec<String> output shape for direct use in API requests.
+   * Build the system prompt as cache-aware blocks (assessment #8/#21/#22).
+   * Stable content is grouped into cached blocks first, volatile content last,
+   * so the Anthropic prompt cache can reuse the prefix across turns/conversations.
+   * See the file header for the block layout.
    */
-  build(): string[] {
-    const sections: string[] = [];
-
-    sections.push(this.introSection());
-
+  buildBlocks(): SystemBlock[] {
+    // Block 1 — stable per AI-user config (shareable across this user's turns).
+    const stable: string[] = [this.introSection()];
     if (this.outputStyleName && this.outputStylePrompt) {
-      sections.push(`# Output Style: ${this.outputStyleName}\n${this.outputStylePrompt}`);
+      stable.push(`# Output Style: ${this.outputStyleName}\n${this.outputStylePrompt}`);
+    }
+    stable.push(systemRulesSection(), doingTasksSection(), actionsSection());
+    if (this.aiUserSystemPrompt) {
+      stable.push(`# Assistant Configuration\n${this.aiUserSystemPrompt}`);
     }
 
-    sections.push(systemRulesSection());
-    sections.push(doingTasksSection());
-    sections.push(actionsSection());
-    sections.push(this.environmentSection());
+    // Block 2 — stable within a conversation; the bulk per-turn payload (#19/#20).
+    const convStable: string[] = [];
+    if (this.workspaceContext && this.workspaceContext.instructionPages.length > 0) {
+      convStable.push(renderInstructionPages(this.workspaceContext.instructionPages));
+    }
+    if (this.aiUserMemoryIndex.length > 0) {
+      convStable.push(renderAiUserMemoryIndex(this.aiUserMemoryIndex));
+    }
 
+    // Block 3 — volatile, no cache breakpoint. Injection defense stays last.
+    const volatileParts: string[] = [this.environmentSection()];
     if (this.workspaceContext) {
       const ws = renderWorkspaceContext(this.workspaceContext);
-      if (ws) sections.push(ws);
+      if (ws) volatileParts.push(ws);
     }
-
-    if (this.aiUserSystemPrompt) {
-      sections.push(`# Assistant Configuration\n${this.aiUserSystemPrompt}`);
-    }
-
-    if (this.workspaceContext && this.workspaceContext.instructionPages.length > 0) {
-      sections.push(renderInstructionPages(this.workspaceContext.instructionPages));
-    }
-
-    if (this.aiUserPrivatePages.length > 0) {
-      sections.push(
-        renderAiUserPrivatePages(
-          this.aiUserPrivatePages,
-          this.aiUserPrivatePagesTruncated,
-        ),
-      );
-    }
-
     if (this.compactionSummary) {
-      sections.push(
+      volatileParts.push(
         `# Prior conversation summary\n` +
           `The following is a summary of earlier turns in this conversation that have been ` +
           `compacted to save context space. Treat this as background context — the conversation ` +
           `continues from the messages below.\n\n${this.compactionSummary}`,
       );
     }
-
-    for (const s of this.appendSections) {
-      sections.push(s);
-    }
-
+    for (const s of this.appendSections) volatileParts.push(s);
     // Injection defense — always last, never configurable (security P1, P4)
-    sections.push(injectionDefenseSection());
+    volatileParts.push(injectionDefenseSection());
 
-    return sections;
+    const blocks: SystemBlock[] = [{ text: stable.join("\n\n"), cache: true }];
+    if (convStable.length > 0) blocks.push({ text: convStable.join("\n\n"), cache: true });
+    blocks.push({ text: volatileParts.join("\n\n") });
+    return blocks;
   }
 
-  /** Build and join all sections into a single string. */
+  /** Join all blocks into a single string (no caching) — kept for callers that need a plain prompt. */
   render(): string {
-    return this.build().join("\n\n");
+    return this.buildBlocks().map((b) => b.text).join("\n\n");
   }
 
   private introSection(): string {
@@ -200,36 +193,63 @@ function renderWorkspaceContext(ctx: WorkspaceContext): string {
   return lines.join("\n");
 }
 
+/**
+ * Total character budget for instruction-page bodies injected each turn.
+ * Unlike private pages these previously had *no* cap (#20), so one large
+ * instruction page could balloon every request and dilute attention. We spend
+ * the budget across pages in order and truncate the body that overruns it,
+ * leaving a pointer so the model can open the full page with its tools.
+ */
+const INSTRUCTION_PAGES_CHAR_BUDGET = 24_000;
+
 function renderInstructionPages(pages: InstructionPage[]): string {
   const sections = ["# Workspace instructions"];
+  let remaining = INSTRUCTION_PAGES_CHAR_BUDGET;
+  let truncatedAny = false;
   for (const page of pages) {
+    const body = page.content.trim();
     sections.push(`## ${page.title} (page ${page.pageId})`);
-    sections.push(page.content.trim());
+    if (remaining <= 0) {
+      sections.push(
+        `_(omitted to fit the context budget — open page ${page.pageId} with \`get_page\` for its full text)_`,
+      );
+      truncatedAny = true;
+      continue;
+    }
+    if (body.length > remaining) {
+      sections.push(
+        `${body.slice(0, remaining)}\n_…truncated to fit the context budget — open page ${page.pageId} with \`get_page\` for the rest._`,
+      );
+      remaining = 0;
+      truncatedAny = true;
+    } else {
+      sections.push(body);
+      remaining -= body.length;
+    }
+  }
+  if (truncatedAny) {
+    sections.splice(
+      1,
+      0,
+      "_Some instruction text below was truncated to fit the context budget; open the referenced page for the full body._",
+    );
   }
   return sections.join("\n\n");
 }
 
-function renderAiUserPrivatePages(
-  pages: InstructionPage[],
-  truncated: boolean,
-): string {
+function renderAiUserMemoryIndex(entries: AiUserMemoryEntry[]): string {
   const lines: string[] = [
-    "# Your private reference pages",
-    "These Docs sit under your per-AI-user hidden memory subtree in the workspace (see `provision_ai_user_memory`). " +
-      "Use them for persona, long-term memory, style, and notes you want across conversations. " +
-      "You may add child pages and edit them with your usual page tools when you need more structure.",
+    "# Your private memory (index)",
+    "These pages sit under your per-AI-user hidden memory subtree (`provision_ai_user_memory`) and hold your " +
+      "persona, long-term memory, style, and cross-conversation notes. Only an index is shown here to save context — " +
+      "open a page's full text with `read_memory(page_id)`, or find something across them with `search_memory(query)`. " +
+      "You can still edit them with your usual page tools.",
+    "",
   ];
-  if (truncated) {
-    lines.push(
-      "Some text below was truncated to fit the context budget — open a page with tools if you need the full body.",
-    );
-  }
-  lines.push("");
-  for (const page of pages) {
-    const indent = "  ".repeat(Math.min(page.depth, 8));
-    lines.push(`${indent}## ${page.title} (page ${page.pageId})`);
-    lines.push(page.content.trim());
-    lines.push("");
+  for (const e of entries) {
+    const indent = "  ".repeat(Math.min(e.depth, 8));
+    const head = `${indent}- ${e.title} (page ${e.pageId}, ~${e.chars} chars)`;
+    lines.push(e.snippet ? `${head}: ${e.snippet}` : head);
   }
   return lines.join("\n").trimEnd();
 }
@@ -254,7 +274,7 @@ function doingTasksSection(): string {
     "Before writing, confirm the target page/row/property IDs are current when there is any ambiguity (duplicates, trash, renamed rows, or user correction).",
     "After a user says they still do not see a change, switch to read-back verification instead of repeating the same write blindly.",
     "Do not create pages or modify properties unless required to complete the task.",
-    "A pre-edit snapshot is taken automatically before destructive changes. Do not take manual snapshots unless asked.",
+    "A pre-edit snapshot of a page is taken automatically before you overwrite its content, so a destructive content edit can be restored. This does not cover property or row-value edits — those are not snapshotted, so treat them with care (see 'Executing actions with care').",
     "If an approach fails, diagnose the failure before switching tactics.",
     "Report outcomes faithfully: if verification fails or was not run, say so explicitly.",
   ];
