@@ -277,6 +277,7 @@ fn import_ai_user_profile(ctx: &ReducerContext, tables: &Value) -> Result<(), St
                 harness_template_id: None,
                 allow_evaluation_sharing: false,
                 tool_secrets_json: None,
+                worker_token: None,
             });
         }
         ctx.db.ai_user_profile().insert(p);
@@ -1163,6 +1164,8 @@ fn decode_orcha_task(v: &Value) -> Result<OrchaTask, String> {
             .collect::<Result<Vec<_>, String>>()?,
         assigned_to: opt_string_at(m, "assignedTo")?,
         result: opt_string_at(m, "result")?,
+        // v1 exports predate the claim lease; imported tasks start unclaimed.
+        claimed_at: None,
     })
 }
 

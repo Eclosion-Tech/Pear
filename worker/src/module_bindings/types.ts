@@ -84,6 +84,7 @@ export const AiUserConfig = __t.object("AiUserConfig", {
   harnessTemplateId: __t.option(__t.u64()),
   allowEvaluationSharing: __t.bool(),
   toolSecretsJson: __t.option(__t.string()),
+  workerToken: __t.option(__t.string()),
 });
 export type AiUserConfig = __Infer<typeof AiUserConfig>;
 

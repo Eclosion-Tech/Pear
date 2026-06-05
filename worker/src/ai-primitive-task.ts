@@ -222,11 +222,16 @@ export async function handleAiPrimitiveTask(
     throw new Error(`schema validation failed: ${validated.reason}`);
   }
 
-  // Token usage is approximated from the response; the provider abstraction
-  // does not yet surface real token counts uniformly. The cost cap layer
-  // can read these as best-effort estimates until that wire-up lands.
-  const inputTokens = Math.ceil((system.length + prompt.length) / 4);
-  const outputTokens = Math.ceil(outputText.length / 4);
+  // Prefer the provider's real token counts (#3/#14); fall back to a
+  // chars/4 estimate only when the provider returned no usage.
+  const inputTokens = response.usage
+    ? response.usage.inputTokens +
+      response.usage.cacheReadInputTokens +
+      response.usage.cacheCreationInputTokens
+    : Math.ceil((system.length + prompt.length) / 4);
+  const outputTokens = response.usage
+    ? response.usage.outputTokens
+    : Math.ceil(outputText.length / 4);
   // Cost is provider-specific; the dispatcher will fill this in via a
   // pricing table. Default to 0 so the schema is satisfied and the
   // workspace dashboard surfaces "unknown" rather than silently inflating.

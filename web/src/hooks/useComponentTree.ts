@@ -23,6 +23,20 @@ export type ComponentTree = BlockTree & {
 
 export type ComponentTreeNodeCallbacks = {
   onInsert?: (row: ComponentNode) => void;
+  /**
+   * Fires when a `component_node` row leaves the subscription — i.e. a true
+   * hard delete or loss of visibility, NOT a soft delete (which only sets
+   * `deletedAt`, keeping the row). Used to purge the node's local IndexedDB
+   * doc so removed/inaccessible content doesn't linger in the browser.
+   */
+  onDelete?: (row: ComponentNode) => void;
+  /**
+   * Fires on any row update. Used to catch the soft-delete transition
+   * (`deletedAt` null → set) — e.g. a reducer-driven content replace — so the
+   * removed node's local IndexedDB doc is purged too and can't resurface via a
+   * stale local↔server Yjs merge. (`onDelete` only covers hard deletes.)
+   */
+  onUpdate?: (oldRow: ComponentNode, newRow: ComponentNode) => void;
 };
 
 /**

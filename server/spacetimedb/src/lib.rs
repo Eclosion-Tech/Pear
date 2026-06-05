@@ -119,6 +119,7 @@ pub fn init(ctx: &ReducerContext) {
     seed_sensor_registry_inner(ctx);
     seed_automation_primitives_inner(ctx);
     seed_builtin_component_types(ctx);
+    crate::orcha::ensure_claim_reaper(ctx);
 }
 
 /// Called by SpacetimeDB whenever a client connects.

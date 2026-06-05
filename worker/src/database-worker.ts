@@ -17,6 +17,7 @@
 
 import { DbConnection, type EventContext } from "./module_bindings/index.js";
 import { callLlm, planTasks, buildPageContext } from "./llm.js";
+import type { TokenUsage } from "./providers.js";
 import { AiUserWorker } from "./ai-user-worker.js";
 import { handleAiPrimitiveTask } from "./ai-primitive-task.js";
 import { StructuralSensorsScheduler } from "./structural-sensors.js";
@@ -86,11 +87,16 @@ export class DatabaseWorker {
 
   /** AI-user-scoped sub-workers, keyed by aiUserId. */
   private aiUserWorkers = new Map<bigint, AiUserWorker>();
+  /** Token last used to spawn each worker, so we can detect rotation. */
+  private aiUserTokens = new Map<bigint, string>();
 
   private sensors: StructuralSensorsScheduler | null = null;
 
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
+
+  /** Debounce for AI-user discovery so a burst of row events coalesces. */
+  private aiUserReconcileTimer: ReturnType<typeof setTimeout> | null = null;
 
   readonly uri: string;
   readonly dbName: string;
@@ -192,6 +198,10 @@ export class DatabaseWorker {
   async stop(): Promise<void> {
     this.stopped = true;
     this.clearReconnectTimer();
+    if (this.aiUserReconcileTimer !== null) {
+      clearTimeout(this.aiUserReconcileTimer);
+      this.aiUserReconcileTimer = null;
+    }
 
     if (this.sensors) {
       this.sensors.stop();
@@ -206,6 +216,7 @@ export class DatabaseWorker {
       ),
     );
     this.aiUserWorkers.clear();
+    this.aiUserTokens.clear();
     await Promise.all(aiStops);
 
     if (this.inFlight.size > 0) {
@@ -241,13 +252,17 @@ export class DatabaseWorker {
     const desired = new Map<bigint, AiUserDescriptor>();
     for (const d of descriptors) desired.set(d.aiUserId, d);
 
-    // Tear down workers no longer wanted.
+    // Tear down workers no longer wanted, or whose token has rotated (so the
+    // next loop respawns them with the new token).
     for (const [aiUserId, worker] of [...this.aiUserWorkers.entries()]) {
-      if (!desired.has(aiUserId)) {
+      const d = desired.get(aiUserId);
+      const rotated = d !== undefined && d.token !== this.aiUserTokens.get(aiUserId);
+      if (d === undefined || rotated) {
         console.log(
-          `[worker:${this.dbName}] Removing AI user worker (id=${aiUserId})`,
+          `[worker:${this.dbName}] ${rotated ? "Rotating" : "Removing"} AI user worker (id=${aiUserId})`,
         );
         this.aiUserWorkers.delete(aiUserId);
+        this.aiUserTokens.delete(aiUserId);
         await worker.stop().catch((e: unknown) =>
           console.warn(`[worker:${this.dbName}] AI worker stop failed:`, e),
         );
@@ -267,14 +282,83 @@ export class DatabaseWorker {
         label: d.label ?? `ai-${aiUserId}`,
       });
       this.aiUserWorkers.set(aiUserId, w);
+      this.aiUserTokens.set(aiUserId, d.token);
       w.start();
     }
+  }
+
+  /**
+   * Build the desired AI-user worker set from `ai_user_config`. Only rows that
+   * carry a `worker_token` are spawnable — the token is what lets us connect AS
+   * the AI user (so conversation reducers record `MessageSender::User(<ai>)`).
+   *
+   * This is the self-hosted/OSS discovery path: the admin (module-publisher)
+   * connection bypasses the `ai_user_config` RLS filter, so it reads every AI
+   * user's token here. pear-cloud's lifecycle can keep calling
+   * {@link reconcileAiUsers} directly with tokens fetched out-of-band — both
+   * paths funnel into the same reconcile.
+   */
+  private collectAiUserDescriptors(conn: DbConnection): AiUserDescriptor[] {
+    const db = conn.db as unknown as {
+      ai_user_config?: { iter(): Iterable<{ id: bigint; workerToken?: string }> };
+      ai_user_profile?: { iter(): Iterable<{ aiUserId: bigint; displayName?: string }> };
+    };
+    const configs = db.ai_user_config;
+    if (!configs) return [];
+
+    // Map aiUserId → display name for log labels (iterate rather than rely on
+    // the index-accessor name, which differs from the source column name).
+    const labels = new Map<bigint, string>();
+    for (const p of db.ai_user_profile?.iter() ?? []) {
+      if (p.displayName) labels.set(p.aiUserId, p.displayName);
+    }
+
+    const descriptors: AiUserDescriptor[] = [];
+    for (const cfg of configs.iter()) {
+      if (!cfg.workerToken) continue;
+      descriptors.push({
+        aiUserId: cfg.id,
+        token: cfg.workerToken,
+        label: labels.get(cfg.id),
+      });
+    }
+    return descriptors;
+  }
+
+  /** Debounced re-discovery of AI users from `ai_user_config`. */
+  private scheduleAiUserReconcile(conn: DbConnection): void {
+    if (this.stopped) return;
+    if (this.aiUserReconcileTimer !== null) clearTimeout(this.aiUserReconcileTimer);
+    this.aiUserReconcileTimer = setTimeout(() => {
+      this.aiUserReconcileTimer = null;
+      void this.reconcileAiUsers(this.collectAiUserDescriptors(conn)).catch(
+        (e: unknown) =>
+          console.warn(`[worker:${this.dbName}] AI-user reconcile failed:`, e),
+      );
+    }, 250);
   }
 
   private registerHandlers(conn: DbConnection): void {
     conn.db.orcha_task.onInsert((_ctx: EventContext, task: TaskRow) => {
       this.checkAndClaim(conn, task);
     });
+
+    // AI-user discovery: (re)spawn per-AI-user workers when a `worker_token`
+    // appears, is rotated, or is cleared. Uses `as any` for the table accessor
+    // because the AI-user tables are not part of the strongly-typed Orcha set
+    // this worker was built around.
+    const aiCfg = (conn.db as unknown as {
+      ai_user_config?: {
+        onInsert(cb: () => void): void;
+        onUpdate(cb: () => void): void;
+        onDelete(cb: () => void): void;
+      };
+    }).ai_user_config;
+    if (aiCfg) {
+      aiCfg.onInsert(() => this.scheduleAiUserReconcile(conn));
+      aiCfg.onUpdate(() => this.scheduleAiUserReconcile(conn));
+      aiCfg.onDelete(() => this.scheduleAiUserReconcile(conn));
+    }
 
     conn.db.orcha_task.onUpdate(
       (_ctx: EventContext, _old: TaskRow, task: TaskRow) => {
@@ -305,6 +389,9 @@ export class DatabaseWorker {
       for (const task of conn.db.orcha_task.iter() as Iterable<TaskRow>) {
         this.checkAndClaim(conn, task);
       }
+
+      // Spawn AI-user workers for any rows that already carry a worker_token.
+      this.scheduleAiUserReconcile(conn);
     });
   }
 
@@ -313,7 +400,8 @@ export class DatabaseWorker {
     if (this.inFlight.has(task.id)) return false;
 
     if (task.requiredCapabilities.length > 0) {
-      if (!CAPABILITIES.some((c) => task.requiredCapabilities.includes(c))) return false;
+      // We must satisfy every required capability. (A separate "has at least
+      // one" check would be redundant — `every` already implies it.)
       if (!task.requiredCapabilities.every((c) => CAPABILITIES.includes(c))) return false;
     }
 
@@ -321,6 +409,29 @@ export class DatabaseWorker {
       const dep = conn.db.orcha_task.id.find(depId) as TaskRow | undefined;
       return dep?.status === "done";
     });
+  }
+
+  /**
+   * Union of capabilities across all registered agents (`orcha_agent`). A
+   * planner subtask whose `required_capabilities` fall outside this set can
+   * never be claimed by anyone, so it would hang `pending` forever and block
+   * `check_orcha_job_completion` (assessment #6). We use it to repair such
+   * specs before they're inserted.
+   */
+  private claimableCapabilities(conn: DbConnection): Set<string> {
+    const caps = new Set<string>();
+    const table = (conn.db as unknown as {
+      orcha_agent?: { iter(): Iterable<{ capabilities: string[] }> };
+    }).orcha_agent;
+    if (table) {
+      for (const agent of table.iter()) {
+        for (const c of agent.capabilities) caps.add(c);
+      }
+    }
+    // Always include our own — we may read the table before our registration
+    // round-trips back.
+    for (const c of CAPABILITIES) caps.add(c);
+    return caps;
   }
 
   private checkAndClaim(conn: DbConnection, task: TaskRow): void {
@@ -350,6 +461,7 @@ export class DatabaseWorker {
 
     try {
       let result: string;
+      let usage: TokenUsage | undefined;
 
       switch (task.taskType) {
         case "orchestrate":
@@ -373,15 +485,18 @@ export class DatabaseWorker {
             `tool-bash backend "${SANDBOX_BACKEND}" recognised but not implemented yet`,
           );
         case "llm":
-        default:
-          result = await callLlm(task.description, conn, task.jobId);
+        default: {
+          const llmOut = await callLlm(task.description, conn, task.jobId);
+          result = llmOut.text;
+          usage = llmOut.usage;
           break;
+        }
       }
 
       await conn.reducers.submitResult({ agentId: this.agentId, taskId: task.id, result });
       console.log(`[worker:${this.dbName}] Completed task ${task.id} (${task.taskType})`);
 
-      this.recordUsage(conn, task, startMs);
+      this.recordUsage(conn, task, startMs, usage);
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       console.error(`[worker:${this.dbName}] Task ${task.id} failed: ${error}`);
@@ -427,6 +542,22 @@ export class DatabaseWorker {
       }
     }
 
+    // Repair specs that demand a capability no registered agent has — otherwise
+    // they'd hang `pending` forever and the job never completes (#6). Coerce to
+    // a plain `llm` task (the universal fallback) and log so the degradation is
+    // visible rather than silent.
+    const known = this.claimableCapabilities(conn);
+    for (const spec of taskSpecs) {
+      const missing = spec.required_capabilities.filter((c) => !known.has(c));
+      if (missing.length > 0) {
+        console.warn(
+          `[worker:${this.dbName}] job ${task.jobId}: subtask requires unsatisfiable capabilities [${missing.join(", ")}] — coercing to llm so the job can't hang (#6)`,
+        );
+        spec.task_type = "llm";
+        spec.required_capabilities = ["llm"];
+      }
+    }
+
     if (taskSpecs.length === 0) {
       const taskGraphJson = JSON.stringify([
         {
@@ -457,16 +588,28 @@ export class DatabaseWorker {
     return `Decomposed into ${taskSpecs.length} task${taskSpecs.length !== 1 ? "s" : ""}`;
   }
 
-  private recordUsage(conn: DbConnection, task: TaskRow, startMs: number): void {
+  private recordUsage(
+    conn: DbConnection,
+    task: TaskRow,
+    startMs: number,
+    usage?: TokenUsage,
+  ): void {
     const wallClockMs = Date.now() - startMs;
+    // Anthropic reports uncached input separately from cache reads; bill the
+    // full prompt (uncached + cache read) as tokens_in so the cap reflects
+    // real consumption (#3). Zero when the provider returned no usage.
+    const tokensIn = usage
+      ? BigInt(usage.inputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens)
+      : BigInt(0);
+    const tokensOut = usage ? BigInt(usage.outputTokens) : BigInt(0);
     conn.reducers
       .recordUsageEvent({
         taskId: task.id,
         taskType: task.taskType,
         agentId: this.agentId,
         aiUserId: undefined,
-        tokensIn: BigInt(0),
-        tokensOut: BigInt(0),
+        tokensIn,
+        tokensOut,
         wallClockMs: BigInt(wallClockMs),
       })
       .catch((err: unknown) => {

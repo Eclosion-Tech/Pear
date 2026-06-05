@@ -106,6 +106,19 @@ pub struct AiUserConfig {
     /// publisher see the raw value. Use `set_ai_user_tool_secrets_json`.
     #[default(None::<String>)]
     pub tool_secrets_json: Option<String>,
+    /// SpacetimeDB JWT that authenticates *as this AI user's identity*, stored
+    /// so the worker can spawn an `AiUserWorker` that connects as the AI user
+    /// (required for `MessageSender::User(<ai>)` on conversation reducers).
+    ///
+    /// Self-hosted Pear mints this in the web client and writes it here via
+    /// `set_ai_user_worker_token`; pear-cloud's lifecycle stores it out-of-band
+    /// and may also write it here. Same visibility as `api_key` (publisher +
+    /// the AI user's own identity only) — never echoed to other members.
+    ///
+    /// Must remain last for schema migration (STDB only allows additive
+    /// changes at the end of a struct).
+    #[default(None::<String>)]
+    pub worker_token: Option<String>,
 }
 
 /// Distinguishes ordinary "do work" AI users from "review work" AI users.
@@ -231,6 +244,7 @@ pub fn create_ai_user(
         harness_template_id: None,
         allow_evaluation_sharing: false,
         tool_secrets_json: None,
+        worker_token: None,
     });
 
     ctx.db.ai_user_profile().insert(AiUserProfile {
@@ -404,6 +418,33 @@ pub fn set_ai_user_api_key(
             ..profile
         });
     }
+    Ok(())
+}
+
+/// Store (or clear) the SpacetimeDB worker token for an AI user, keyed by the
+/// AI user's identity (not its `id`, so self-hosted callers can set it right
+/// after `create_ai_user` without first reading back the auto-inc id). The
+/// worker reads this from its publisher connection to spawn an `AiUserWorker`
+/// that connects as the AI user. Same visibility posture as
+/// `set_ai_user_api_key` — RLS on `ai_user_config` keeps the secret off other
+/// members' subscriptions.
+#[reducer]
+pub fn set_ai_user_worker_token(
+    ctx: &ReducerContext,
+    ai_user_identity: Identity,
+    worker_token: Option<String>,
+) -> Result<(), String> {
+    let config = ctx
+        .db
+        .ai_user_config()
+        .identity()
+        .find(ai_user_identity)
+        .ok_or("AI user config not found for identity")?;
+    ctx.db.ai_user_config().id().update(AiUserConfig {
+        worker_token,
+        updated_at: ctx.timestamp,
+        ..config
+    });
     Ok(())
 }
 

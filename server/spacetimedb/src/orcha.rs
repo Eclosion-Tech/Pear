@@ -2,8 +2,10 @@
 //! usage events embedded directly in the Pear SpacetimeDB module so the
 //! coordination graph and the content graph share a substrate.
 
+use std::time::Duration;
+
 use serde::Deserialize;
-use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
+use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
 use crate::ai::ai_user_config;
 use crate::id_counters::alloc_id;
@@ -100,6 +102,13 @@ pub struct OrchaTask {
     pub assigned_to: Option<String>,
     /// Serialized result from the agent, or "ERROR: ..." on failure.
     pub result: Option<String>,
+    /// When the task was claimed, used by the stale-claim reaper to reclaim a
+    /// task whose worker died mid-execution (#6). `None` while pending/terminal.
+    ///
+    /// Must remain last for schema migration (STDB only allows additive
+    /// changes at the end of a struct).
+    #[default(None::<Timestamp>)]
+    pub claimed_at: Option<Timestamp>,
 }
 
 /// A registered worker that can claim and execute tasks.
@@ -194,6 +203,11 @@ pub fn create_job(
     let specs: Vec<TaskSpec> = serde_json::from_str(&task_graph_json)
         .map_err(|e| format!("Invalid task graph JSON: {}", e))?;
 
+    // Lazily ensure the stale-claim reaper is scheduled. `init` covers fresh
+    // databases; this covers an existing DB upgraded in place (where `init`
+    // does not re-run) the first time any job is created (#6).
+    ensure_claim_reaper(ctx);
+
     let job = ctx.db.orcha_job().insert(OrchaJob {
         id: next_orcha_job_id(ctx),
         user_id,
@@ -217,6 +231,7 @@ pub fn create_job(
             required_capabilities: spec.required_capabilities.clone(),
             assigned_to: None,
             result: None,
+            claimed_at: None,
         });
         task_ids.push(task.id);
     }
@@ -306,9 +321,21 @@ pub fn claim_task(ctx: &ReducerContext, agent_id: String, task_id: u64) -> Resul
             return Err(format!("Agent missing required capability: {}", cap));
         }
     }
+    // Cost cap (#3): refuse new work for an AI user already at its monthly token
+    // cap, the enforcement point the cap was always documented to use. The task
+    // stays `pending` (a budget pause) until the cap resets or is raised.
+    if let Some(ai_user_id) = job_ai_user_id(ctx, task.job_id) {
+        if ai_user_at_hard_cap(ctx, ai_user_id) {
+            return Err(format!(
+                "AI user {} is at its monthly token cap; refusing to claim new work",
+                ai_user_id
+            ));
+        }
+    }
     ctx.db.orcha_task().id().update(OrchaTask {
         assigned_to: Some(agent_id),
         status: "claimed".to_string(),
+        claimed_at: Some(ctx.timestamp),
         ..task
     });
     Ok(())
@@ -402,6 +429,7 @@ pub fn add_tasks_to_job(
             required_capabilities: spec.required_capabilities.clone(),
             assigned_to: None,
             result: None,
+            claimed_at: None,
         });
         new_task_ids.push(task.id);
     }
@@ -554,4 +582,96 @@ fn month_to_date_tokens(ctx: &ReducerContext, ai_user_id: u64) -> u64 {
         .filter(|e| e.created_at.to_micros_since_unix_epoch() >= month_start)
         .map(|e| e.tokens_in + e.tokens_out)
         .sum()
+}
+
+/// True if the AI user is at or over their hard monthly token cap. `None` cap
+/// (unlimited) or unknown user ⇒ never over. Shared with `claim_task` (#3).
+fn ai_user_at_hard_cap(ctx: &ReducerContext, ai_user_id: u64) -> bool {
+    let Some(cap) = ctx
+        .db
+        .ai_user_config()
+        .id()
+        .find(ai_user_id)
+        .and_then(|c| c.monthly_token_cap)
+    else {
+        return false;
+    };
+    month_to_date_tokens(ctx, ai_user_id) >= cap
+}
+
+/// Resolve the AI user that owns a job, by matching the job's `user_id`
+/// identity-hex against `ai_user_config.identity`. `None` for human-initiated
+/// jobs (no matching AI-user row), which are not per-AI-user capped.
+fn job_ai_user_id(ctx: &ReducerContext, job_id: u64) -> Option<u64> {
+    let job = ctx.db.orcha_job().id().find(job_id)?;
+    ctx.db
+        .ai_user_config()
+        .iter()
+        .find(|c| c.identity.to_hex().to_string() == job.user_id)
+        .map(|c| c.id)
+}
+
+// ── Stale-claim reaper (#6) ──────────────────────────────────────────────────
+
+/// A claimed task whose worker dies never reaches a terminal state, so the job
+/// hangs forever and `check_orcha_job_completion` never fires. The lease TTL
+/// after which a still-`claimed` task is reclaimed to `pending`.
+const CLAIM_LEASE_SECS: i64 = 600;
+
+#[table(accessor = orcha_claim_reaper, scheduled(reap_stale_orcha_claims))]
+pub struct OrchaClaimReaper {
+    #[primary_key]
+    #[auto_inc]
+    pub scheduled_id: u64,
+    pub scheduled_at: ScheduleAt,
+}
+
+/// Recurring tick: revert tasks that have been `claimed` longer than the lease
+/// back to `pending` so another agent re-claims them. Result double-commit is
+/// already prevented by `submit_result`/`fail_task`'s "claimed by this agent"
+/// ownership check, so a slow worker finishing after reclaim is simply ignored.
+#[reducer]
+pub fn reap_stale_orcha_claims(
+    ctx: &ReducerContext,
+    _tick: OrchaClaimReaper,
+) -> Result<(), String> {
+    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let ttl_micros = CLAIM_LEASE_SECS * 1_000_000;
+    let stale: Vec<OrchaTask> = ctx
+        .db
+        .orcha_task()
+        .iter()
+        .filter(|t| t.status == "claimed")
+        .filter(|t| match t.claimed_at {
+            Some(ts) => now.saturating_sub(ts.to_micros_since_unix_epoch()) > ttl_micros,
+            // Claimed before this column existed (legacy) — eligible to reclaim.
+            None => true,
+        })
+        .collect();
+    for task in stale {
+        log::warn!(
+            "Orcha: reclaiming stale task {} (job {}) from agent {:?}",
+            task.id,
+            task.job_id,
+            task.assigned_to
+        );
+        ctx.db.orcha_task().id().update(OrchaTask {
+            status: "pending".to_string(),
+            assigned_to: None,
+            claimed_at: None,
+            ..task
+        });
+    }
+    Ok(())
+}
+
+/// Ensure the reaper tick exists (idempotent). Called from module `init`.
+pub(crate) fn ensure_claim_reaper(ctx: &ReducerContext) {
+    if ctx.db.orcha_claim_reaper().iter().next().is_some() {
+        return;
+    }
+    ctx.db.orcha_claim_reaper().insert(OrchaClaimReaper {
+        scheduled_id: 0,
+        scheduled_at: Duration::from_secs(120).into(),
+    });
 }

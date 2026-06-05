@@ -12,7 +12,8 @@
  */
 
 import type { ConnLike } from "./tools.js";
-import type { Message, ToolResultBlock } from "./providers.js";
+import type { Message, ToolResultBlock, ToolUseBlock, TextBlock } from "./providers.js";
+import { isStoredToolCall } from "./tool-call-record.js";
 
 // ── Internal row type ─────────────────────────────────────────────────────────
 
@@ -24,27 +25,6 @@ type ConversationMessageRow = {
   toolCallsJson: string | undefined;
   status: { tag: string };
 };
-
-// ── Stored tool_calls_json block shapes ───────────────────────────────────────
-
-interface StoredToolUse {
-  type: "tool_use";
-  id: string;
-  name: string;
-  /** Raw input string passed to the executor — may be stringified JSON. */
-  input: string;
-  status: string;
-}
-
-interface StoredToolResult {
-  type: "tool_result";
-  tool_use_id: string;
-  tool_name: string;
-  output: string;
-  is_error: boolean;
-}
-
-type StoredBlock = StoredToolUse | StoredToolResult;
 
 function identityHex(value: unknown): string {
   if (value && typeof (value as { toHexString?: () => string }).toHexString === "function") {
@@ -87,9 +67,12 @@ export function loadCompactionSummary(
  *   - The tail (messages after the floor) is reconstructed into Message[].
  *   - System messages within the tail are skipped (handled as system prompt).
  *
- * tool_calls_json blocks are parsed and reconstructed as properly paired
+ * tool_calls_json records are parsed and reconstructed as properly paired
  * assistant (ToolUse) + user (ToolResult) messages so the Anthropic API
- * can correctly resume a mid-session conversation.
+ * can correctly resume a mid-session conversation. Legacy records that predate
+ * the unified `StoredToolCall` shape carry no tool_use id, so they can't be
+ * re-paired; for those the assistant text is preserved but the tool blocks are
+ * dropped (the same lossy behavior as before this fix).
  *
  * `assistantIdentityHex` must be the SpacetimeDB identity (hex) of the AI
  * user whose worker is reconstructing the thread. Human messages are every
@@ -154,62 +137,44 @@ export function reconstructSessionTail(
       continue;
     }
 
-    let blocks: StoredBlock[];
+    let records: unknown[];
     try {
-      blocks = JSON.parse(msg.toolCallsJson) as StoredBlock[];
+      const parsed = JSON.parse(msg.toolCallsJson);
+      records = Array.isArray(parsed) ? parsed : [];
     } catch {
-      if (msg.content) {
-        result.push({
-          role: "assistant",
-          content: [{ type: "text", text: msg.content }],
-        });
-      }
-      continue;
+      records = [];
     }
 
-    const toolUseBlocks = blocks.filter((b): b is StoredToolUse => b.type === "tool_use");
-    const toolResultBlocks = blocks.filter(
-      (b): b is StoredToolResult => b.type === "tool_result",
-    );
+    // Only the unified shape carries the tool_use id needed to pair an
+    // assistant call with its result; legacy records are dropped (text-only).
+    const toolCalls = records.filter(isStoredToolCall);
 
-    const assistantContent: Message["content"] = [];
+    const assistantContent: (TextBlock | ToolUseBlock)[] = [];
     if (msg.content) {
-      (assistantContent as { type: "text"; text: string }[]).push({
-        type: "text",
-        text: msg.content,
-      });
+      assistantContent.push({ type: "text", text: msg.content });
     }
-    for (const block of toolUseBlocks) {
+    for (const call of toolCalls) {
       let input: Record<string, unknown>;
       try {
-        input = JSON.parse(block.input) as Record<string, unknown>;
+        input = JSON.parse(call.input) as Record<string, unknown>;
       } catch {
-        input = { raw: block.input };
+        input = { raw: call.input };
       }
-      (
-        assistantContent as {
-          type: "tool_use";
-          id: string;
-          name: string;
-          input: Record<string, unknown>;
-        }[]
-      ).push({
-        type: "tool_use",
-        id: block.id,
-        name: block.name,
-        input,
-      });
+      assistantContent.push({ type: "tool_use", id: call.id, name: call.name, input });
     }
 
-    if ((assistantContent as unknown[]).length > 0) {
-      result.push({ role: "assistant", content: assistantContent as never });
+    if (assistantContent.length > 0) {
+      result.push({ role: "assistant", content: assistantContent });
     }
 
-    if (toolResultBlocks.length > 0) {
-      const userContent: ToolResultBlock[] = toolResultBlocks.map((r) => ({
+    // Every tool_use must be answered by a matching tool_result or the API
+    // rejects the resumed turn. A call with no recorded output (e.g. the prior
+    // turn crashed mid-flight) gets a placeholder so the pairing stays valid.
+    if (toolCalls.length > 0) {
+      const userContent: ToolResultBlock[] = toolCalls.map((call) => ({
         type: "tool_result",
-        tool_use_id: r.tool_use_id,
-        content: r.output,
+        tool_use_id: call.id,
+        content: call.output ?? "(no result recorded)",
       }));
       result.push({ role: "user", content: userContent });
     }

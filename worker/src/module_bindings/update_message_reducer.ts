@@ -26,4 +26,5 @@ export default {
   outputTokens: __t.option(__t.u32()),
   cacheCreationInputTokens: __t.option(__t.u32()),
   cacheReadInputTokens: __t.option(__t.u32()),
+  jobId: __t.option(__t.u64()),
 };

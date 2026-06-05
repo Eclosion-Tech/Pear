@@ -30,7 +30,17 @@ export function PageEditorSurface({
   const migration = useMigrateBlockNotePageOnOpen(page, content?.content);
 
   if (migration.showComponentTree) {
-    return <ComponentTreeRenderer surfaceId={page.id} />;
+    // `key` forces a fresh editor instance per page. Without it, navigating
+    // between ComponentTree pages reuses ComponentTreeRenderer's instance state
+    // — focus/undo coordinators (created once via useRef) and any in-flight
+    // optimistic blocks — which could carry one page's content/undo stack onto
+    // another. The PearEditor path below is keyed for the same reason.
+    return (
+      <ComponentTreeRenderer
+        key={`${page.id}-${editorKeySuffix}`}
+        surfaceId={page.id}
+      />
+    );
   }
 
   if (migration.showMigrating) {

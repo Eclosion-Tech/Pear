@@ -20,6 +20,7 @@ import {
 } from "@/src/hooks/useComponentTree";
 import {
   filterNavVisiblePages,
+  useChildPages,
   useDeleteComponent,
   useInsertComponent,
   useMoveComponent,
@@ -29,6 +30,7 @@ import {
   useUpdateComponentProps,
   type PageRow,
 } from "@/src/hooks/usePages";
+import { useSyncChildPageLinks } from "@/src/hooks/useSyncChildPageLinks";
 import { useWorkspace } from "@/src/providers/WorkspaceProvider";
 import { AudioAttachmentContext } from "@/src/components/AudioAttachmentContext";
 import { useCreateAttachment } from "@/src/hooks/usePages";
@@ -52,6 +54,7 @@ export function ComponentTreeRenderer({ surfaceId }: { surfaceId: bigint }) {
   const saveComponentYjsState = useSaveComponentYjsState();
   const createAttachment = useCreateAttachment();
   const { pages } = usePages();
+  const { children: childPages } = useChildPages(surfaceId);
 
   const focusCoordinatorRef = useRef<SurfaceFocusCoordinator | null>(null);
   if (focusCoordinatorRef.current == null) {
@@ -86,7 +89,47 @@ export function ComponentTreeRenderer({ surfaceId }: { surfaceId: bigint }) {
     [focusCoordinator, undoCoordinator],
   );
 
-  const tree = useComponentTree(surfaceId, { onInsert: onNodeInsert }) as BlockTree & {
+  // Purge a node's per-component IndexedDB doc so removed content can't linger
+  // locally or resurface via a stale local↔server Yjs merge. Keyed exactly as
+  // pulp's RichTextEditor persistence: `pear:{idbNamespace}:component:{id}`.
+  // Best-effort and idempotent. Restore is unaffected: the server keeps the
+  // node's authoritative `component_yjs_state`, so a re-shown block rehydrates
+  // from the server blob (RichText.tsx applies it with origin="remote").
+  const purgeComponentIdb = useCallback(
+    (componentId: bigint) => {
+      if (typeof indexedDB === "undefined") return;
+      try {
+        indexedDB.deleteDatabase(`pear:${idbNamespace}:component:${componentId}`);
+      } catch {
+        // local cleanup is best-effort; ignore failures
+      }
+    },
+    [idbNamespace],
+  );
+
+  // Hard delete / lost visibility: the row left the subscription entirely.
+  const onNodeDelete = useCallback(
+    (row: ComponentNode) => purgeComponentIdb(row.id),
+    [purgeComponentIdb],
+  );
+
+  // Soft delete: the row stays but gains `deletedAt` (e.g. the worker's
+  // reducer-driven content replace soft-deletes the old blocks). Purge on the
+  // null → set transition only.
+  const onNodeUpdate = useCallback(
+    (oldRow: ComponentNode, newRow: ComponentNode) => {
+      if (oldRow.deletedAt == null && newRow.deletedAt != null) {
+        purgeComponentIdb(newRow.id);
+      }
+    },
+    [purgeComponentIdb],
+  );
+
+  const tree = useComponentTree(surfaceId, {
+    onInsert: onNodeInsert,
+    onDelete: onNodeDelete,
+    onUpdate: onNodeUpdate,
+  }) as BlockTree & {
     loading: boolean;
   };
   useEnsureBuiltinComponentTypes(tree.defs, !tree.loading);
@@ -170,6 +213,37 @@ export function ComponentTreeRenderer({ surfaceId }: { surfaceId: bigint }) {
       undoCoordinator.wrapMutations(rawMutations, () => treeRef.current),
     [rawMutations, undoCoordinator],
   );
+
+  const insertPageLink = useCallback(
+    (args: {
+      parentId: bigint;
+      propsJson: string;
+      afterSiblingId?: bigint;
+    }) => {
+      insertComponent({
+        parentId: args.parentId,
+        componentType: "PageLink",
+        propsJson: args.propsJson,
+        afterSiblingId: args.afterSiblingId,
+      });
+    },
+    [insertComponent],
+  );
+
+  const deletePageLink = useCallback(
+    (componentId: bigint) => {
+      deleteComponent({ componentId });
+    },
+    [deleteComponent],
+  );
+
+  useSyncChildPageLinks({
+    surfaceId,
+    tree,
+    childPages,
+    insertPageLink,
+    deletePageLink,
+  });
 
   const config = useMemo(
     () => ({

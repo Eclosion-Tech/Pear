@@ -191,15 +191,7 @@ export function todayIso8601(): string {
   return new Date().toISOString().split("T")[0]!;
 }
 
-// ── AI user private pages (hidden memory subtree) ───────────────────────────
-
-/** Max characters of page body text to inject into the system prompt (across all private pages). */
-const AI_USER_PRIVATE_PAGES_CHAR_BUDGET = 48_000;
-
-type AiUserMemoryRow = {
-  aiUserId: bigint;
-  rootPageId: bigint;
-};
+// ── AI user memory subtree (hidden persona / notes pages) ───────────────────
 
 function collectSubtreePageIds(conn: ConnLike, rootId: bigint): Set<bigint> {
   const ids = new Set<bigint>([rootId]);
@@ -256,90 +248,140 @@ function orderSubtreePagesBfs(
   return result;
 }
 
-export interface AiUserPrivatePagesResult {
-  pages: InstructionPage[];
-  /** True if at least one page body was cut off to stay within the char budget. */
-  truncated: boolean;
+// ── AI user memory: on-demand index + read/search (assessment #19) ───────────
+
+/** Resolve the AI user's memory subtree to an ordered page list + depth map. */
+function resolveMemorySubtree(
+  conn: ConnLike,
+  aiUserId: bigint,
+): { rootId: bigint; ordered: PageRow[]; depthMap: Map<bigint, number> } | null {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const memTable = (conn.db as any).ai_user_memory;
+  if (!memTable?.iter) return null;
+
+  let rootId: bigint | undefined;
+  for (const row of memTable.iter() as Iterable<{ aiUserId: bigint; rootPageId: bigint }>) {
+    if (row.aiUserId === aiUserId) {
+      rootId = row.rootPageId;
+      break;
+    }
+  }
+  if (rootId === undefined) return null;
+
+  const idSet = collectSubtreePageIds(conn, rootId);
+  const ordered = orderSubtreePagesBfs(conn, rootId, idSet).filter((p) => !p.deletedAt);
+
+  const depthMap = new Map<bigint, number>([[rootId, 0]]);
+  for (const p of ordered) {
+    if (p.id === rootId) continue;
+    const pd = p.parentId !== undefined ? (depthMap.get(p.parentId) ?? 0) : 0;
+    depthMap.set(p.id, pd + 1);
+  }
+  return { rootId, ordered, depthMap };
+}
+
+/** Collapse whitespace and clip to `max` chars for a one-line preview. */
+function snippetOf(content: string, max = 200): string {
+  const flat = content.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+}
+
+function memoryPageContent(conn: ConnLike, pageId: bigint): string {
+  const row = conn.db.page_content?.pageId?.find(pageId) as PageContentRow | undefined;
+  return row?.content ?? "";
+}
+
+export interface AiUserMemoryEntry {
+  pageId: bigint;
+  title: string;
+  depth: number;
+  /** One-line preview of the body. */
+  snippet: string;
+  /** Full body length, so the model can judge whether to open it. */
+  chars: number;
 }
 
 /**
- * Load Doc pages under this AI user's `ai_user_memory.root_page_id` subtree.
- * The subtree is normally hidden from sidebar (`is_hidden`); content is injected
- * into the system prompt so the model keeps persona / notes across turns.
- *
- * If `provision_ai_user_memory` was never run for this user, returns empty pages.
+ * Lightweight index of every page in the AI user's memory subtree — title, id,
+ * depth, size, and a one-line snippet. Injected each turn in place of the full
+ * ~12K-token body dump (#19); the model opens what it needs via `read_memory` /
+ * `search_memory`. Empty when the user has no provisioned memory.
  */
-export function discoverAiUserPrivatePages(
+export function buildAiUserMemoryIndex(
   conn: ConnLike,
   aiUserId: bigint,
-  maxChars: number = AI_USER_PRIVATE_PAGES_CHAR_BUDGET,
-): AiUserPrivatePagesResult {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const memTable = (conn.db as any).ai_user_memory;
-  if (!memTable?.iter) {
-    return { pages: [], truncated: false };
-  }
-
-  let memory: AiUserMemoryRow | undefined;
-  for (const row of memTable.iter() as Iterable<{
-    aiUserId: bigint;
-    rootPageId: bigint;
-  }>) {
-    if (row.aiUserId === aiUserId) {
-      memory = { aiUserId: row.aiUserId, rootPageId: row.rootPageId };
-      break;
-    }
-  }
-
-  if (!memory) {
-    return { pages: [], truncated: false };
-  }
-
-  const rootId = memory.rootPageId;
-  const idSet = collectSubtreePageIds(conn, rootId);
-  const ordered = orderSubtreePagesBfs(conn, rootId, idSet);
-
-  const depthMap = new Map<bigint, number>();
-  depthMap.set(rootId, 0);
-  for (const p of ordered) {
-    if (p.id === rootId) continue;
-    const pd =
-      p.parentId !== undefined ? (depthMap.get(p.parentId) ?? 0) : 0;
-    depthMap.set(p.id, pd + 1);
-  }
-
-  const pages: InstructionPage[] = [];
-  let budget = maxChars;
-  let truncated = false;
-
-  for (let i = 0; i < ordered.length; i++) {
-    const p = ordered[i]!;
-    if (p.deletedAt) continue;
-
-    const pageContent = conn.db.page_content?.pageId?.find(p.id) as
-      | PageContentRow
-      | undefined;
-    const full = pageContent?.content ?? "";
-    if (budget <= 0) {
-      truncated = true;
-      break;
-    }
-    const take = Math.min(full.length, budget);
-    const slice = full.slice(0, take);
-    if (take < full.length) truncated = true;
-    budget -= take;
-
-    pages.push({
+): AiUserMemoryEntry[] {
+  const tree = resolveMemorySubtree(conn, aiUserId);
+  if (!tree) return [];
+  return tree.ordered.map((p) => {
+    const body = memoryPageContent(conn, p.id);
+    return {
       pageId: p.id,
       title: p.title,
-      content: slice,
-      depth: depthMap.get(p.id) ?? 0,
-    });
+      depth: tree.depthMap.get(p.id) ?? 0,
+      snippet: snippetOf(body),
+      chars: body.length,
+    };
+  });
+}
 
-    if (budget <= 0 && i < ordered.length - 1) {
-      truncated = true;
+/**
+ * Read one memory page's full body. Scope-checked: returns null unless `pageId`
+ * is inside this AI user's own memory subtree (so the tool can't read arbitrary
+ * workspace pages).
+ */
+export function readAiUserMemoryPage(
+  conn: ConnLike,
+  aiUserId: bigint,
+  pageId: bigint,
+): { title: string; content: string } | null {
+  const tree = resolveMemorySubtree(conn, aiUserId);
+  if (!tree) return null;
+  const page = tree.ordered.find((p) => p.id === pageId);
+  if (!page) return null;
+  return { title: page.title, content: memoryPageContent(conn, page.id) };
+}
+
+export interface AiUserMemoryMatch {
+  pageId: bigint;
+  title: string;
+  /** Snippet centered on the match (or the page head if matched in the title). */
+  snippet: string;
+}
+
+/**
+ * Case-insensitive substring search across this AI user's memory pages (title +
+ * body). Returns up to `limit` matches with a snippet around the hit.
+ */
+export function searchAiUserMemory(
+  conn: ConnLike,
+  aiUserId: bigint,
+  query: string,
+  limit = 8,
+): AiUserMemoryMatch[] {
+  const tree = resolveMemorySubtree(conn, aiUserId);
+  if (!tree) return [];
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+
+  const matches: AiUserMemoryMatch[] = [];
+  for (const page of tree.ordered) {
+    if (matches.length >= limit) break;
+    const body = memoryPageContent(conn, page.id);
+    const hayTitle = page.title.toLowerCase();
+    const hayBody = body.toLowerCase();
+    const titleHit = hayTitle.includes(q);
+    const bodyIdx = hayBody.indexOf(q);
+    if (!titleHit && bodyIdx < 0) continue;
+
+    let snippet: string;
+    if (bodyIdx >= 0) {
+      const start = Math.max(0, bodyIdx - 80);
+      snippet = snippetOf(body.slice(start, bodyIdx + q.length + 120), 240);
+    } else {
+      snippet = snippetOf(body);
     }
+    matches.push({ pageId: page.id, title: page.title, snippet });
   }
-
-  return { pages, truncated };
+  return matches;
 }
