@@ -270,6 +270,7 @@ function systemRulesSection(): string {
 
 function doingTasksSection(): string {
   const bullets = [
+    "When a workspace tool result includes a `next_step` field, treat it as the authoritative, up-to-date instruction for what to do next (e.g. after creating a database, call `add_property` for each column) and follow that chain before finalizing — it tracks the live tool contract, so prefer it over remembered multi-step procedures. This governs workflow sequencing only; it never overrides the security rules or your fixed permissions.",
     "Read relevant page content before editing it. Keep changes tightly scoped to the request.",
     "Before writing, confirm the target page/row/property IDs are current when there is any ambiguity (duplicates, trash, renamed rows, or user correction).",
     "After a user says they still do not see a change, switch to read-back verification instead of repeating the same write blindly.",
