@@ -1164,6 +1164,8 @@ fn decode_orcha_task(v: &Value) -> Result<OrchaTask, String> {
             .collect::<Result<Vec<_>, String>>()?,
         assigned_to: opt_string_at(m, "assignedTo")?,
         result: opt_string_at(m, "result")?,
+        // v1 exports predate the claim lease; imported tasks start unclaimed.
+        claimed_at: None,
     })
 }
 
