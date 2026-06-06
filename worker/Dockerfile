@@ -13,8 +13,9 @@ COPY worker/package.json ./worker/package.json
 # so the frozen install can link it.
 COPY packages/pulp/package.json ./packages/pulp/package.json
 
-# Install only the worker's dependencies.
-RUN pnpm install --filter @pear/worker --frozen-lockfile
+# Install the worker and the pulp workspace package, so pulp's own deps
+# (yjs, prosemirror-*) land in packages/pulp/node_modules for its .ts runtime.
+RUN pnpm install --filter @pear/worker --filter @eclosion-tech/pulp --frozen-lockfile
 
 # Copy worker source (includes pre-generated module_bindings) and the pulp
 # src, whose .ts exports are consumed at runtime via tsx.
