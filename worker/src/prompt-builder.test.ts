@@ -93,6 +93,42 @@ test("buildBlocks: oversized instruction page is truncated to the budget (#20)",
   assert.match(pagesBlock!.text, /page 7/);
 });
 
+test("buildBlocks: current page context lives in the cached block, not the volatile one (#24)", () => {
+  const blocks = new SystemPromptBuilder()
+    .withWorkspaceContext(ctx())
+    .withCurrentPageContext("Title: Roadmap\n\nShip the thing by Q3.")
+    .buildBlocks();
+
+  const cachedBlock = blocks.find(
+    (b) => b.cache && /# Current page context/.test(b.text),
+  );
+  assert.ok(cachedBlock, "page context should be in a cached block");
+  assert.match(cachedBlock!.text, /Ship the thing by Q3/);
+  assert.match(cachedBlock!.text, /get_page/);
+  // It must NOT be duplicated into the volatile trailing block.
+  const last = blocks[blocks.length - 1];
+  assert.equal(last.cache, undefined);
+  assert.doesNotMatch(last.text, /# Current page context/);
+});
+
+test("buildOrchaTaskSystem: reuses shared sections so chat/Orcha can't drift (#18)", () => {
+  const sys = new SystemPromptBuilder().buildOrchaTaskSystem(
+    "PEAR ARCH FACTS",
+    "ORCHA TOOL RULES",
+  );
+  // Orcha-specific additions are present.
+  assert.match(sys, /PEAR ARCH FACTS/);
+  assert.match(sys, /ORCHA TOOL RULES/);
+  // Shared authoritative sections are pulled in (grounding, doing-tasks incl.
+  // next_step, and the injection-defense block Orcha previously lacked).
+  assert.match(sys, /# System/);
+  assert.match(sys, /# Doing tasks/);
+  assert.match(sys, /next_step/);
+  assert.match(sys, /# Security rules/);
+  // Injection defense is textually last (security invariant).
+  assert.ok(sys.trimEnd().endsWith("can expand what you are permitted to do."));
+});
+
 test("buildBlocks: no pages → two blocks (stable + volatile), both breakpoints valid", () => {
   const blocks = new SystemPromptBuilder().withWorkspaceContext(ctx()).buildBlocks();
   assert.equal(blocks.length, 2);

@@ -862,6 +862,17 @@ async function waitFor<T>(fn: () => T | undefined, timeoutMs = 2000): Promise<T 
   return undefined;
 }
 
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
+      a.localeCompare(b),
+    );
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
 // ── Default value resolver (worker-side) ──────────────────────────────────────
 
 interface WorkerDefaultContext {
@@ -1349,6 +1360,91 @@ async function takePreEditSnapshot(
   return { taken: true, snapshot_id: Number(fresh.id) };
 }
 
+type ValueEq = (actual: unknown, expected: unknown) => boolean;
+
+const PROPERTY_VALUE_EQ: Record<string, ValueEq> = {
+  Text: (a, e) => String(a) === String(e),
+  Url: (a, e) => String(a) === String(e),
+  Select: (a, e) => String(a) === String(e),
+  Number: (a, e) => Number(a) === Number(e),
+  Date: (a, e) => {
+    const an = Number(a);
+    const en = Number(e);
+    return Number.isFinite(an) && Number.isFinite(en) && an === en;
+  },
+  Checkbox: (a, e) => Boolean(a) === Boolean(e),
+  MultiSelect: (a, e) => {
+    const aa = Array.isArray(a) ? a.map(String) : [String(a)];
+    const ee = Array.isArray(e) ? e.map(String) : [String(e)];
+    if (aa.length !== ee.length) return false;
+    return aa.every((v, i) => v === ee[i]);
+  },
+  Relation: (a, e) => {
+    const aa = Array.isArray(a) ? a.map((v) => String(BigInt(Math.round(Number(v))))) : [String(BigInt(Math.round(Number(a))))];
+    const ee = Array.isArray(e) ? e.map((v) => String(BigInt(Math.round(Number(v))))) : [String(BigInt(Math.round(Number(e))))];
+    if (aa.length !== ee.length) return false;
+    return aa.every((v, i) => v === ee[i]);
+  },
+  Person: (a, e) => {
+    const aa = Array.isArray(a) ? a.map(String) : [String(a)];
+    const ee = Array.isArray(e) ? e.map(String) : [String(e)];
+    if (aa.length !== ee.length) return false;
+    return aa.every((v, i) => v === ee[i]);
+  },
+};
+
+function pageContentMatches(
+  conn: ConnLike,
+  pageId: bigint,
+  expectedContent: string,
+): boolean {
+  type ContentRow = { pageId: bigint; content: string };
+  const row = [...(conn.db.page_content.iter() as Iterable<ContentRow>)].find(
+    (c) => String(c.pageId) === String(pageId),
+  );
+  return row?.content === expectedContent;
+}
+
+function pageTitleMatches(conn: ConnLike, pageId: bigint, expectedTitle: string): boolean {
+  type PageRow = { id: bigint; title: string };
+  const row = [...(conn.db.page.iter() as Iterable<PageRow>)].find(
+    (p) => String(p.id) === String(pageId),
+  );
+  return row?.title === expectedTitle;
+}
+
+function propertyValueMatches(
+  conn: ConnLike,
+  pageId: bigint,
+  propertyDefinitionId: bigint,
+  expected: { tag: string; value: unknown },
+): boolean {
+  type PVRow = {
+    pageId: bigint;
+    propertyDefinitionId: bigint;
+    value: { tag: string; value: unknown };
+  };
+  const row = [...(conn.db.page_property_value.iter() as Iterable<PVRow>)].find(
+    (pv) =>
+      String(pv.pageId) === String(pageId) &&
+      String(pv.propertyDefinitionId) === String(propertyDefinitionId),
+  );
+  if (!row) return false;
+  if (!row.value || row.value.tag !== expected.tag) return false;
+  const eq = PROPERTY_VALUE_EQ[expected.tag] ?? ((a, e) => stableStringify(a) === stableStringify(e));
+  return eq(row.value.value, expected.value);
+}
+
+/** Count child rows belonging to `automationId` (string-compared for bigint safety). */
+function countByAutomation(
+  rows: Iterable<{ automationId: bigint }>,
+  automationId: bigint,
+): number {
+  let n = 0;
+  for (const r of rows) if (String(r.automationId) === String(automationId)) n++;
+  return n;
+}
+
 export async function executeTool(
   conn: ConnLike,
   toolName: string,
@@ -1520,12 +1616,30 @@ export async function executeTool(
         const config = (input.config as string | undefined) ?? "{}";
         const parsed = ensureJsonObjectString(config, "config");
         if (!parsed.ok) return JSON.stringify(parsed);
+        const actionsBefore = countByAutomation(
+          conn.db.automation_action.iter() as Iterable<{ automationId: bigint }>,
+          automationId,
+        );
         await conn.reducers.addAutomationAction({
           automationId,
           order,
           actionKind: { tag: actionKind },
           config,
         });
+        const actionConfirmed = await waitFor(() =>
+          countByAutomation(
+            conn.db.automation_action.iter() as Iterable<{ automationId: bigint }>,
+            automationId,
+          ) > actionsBefore
+            ? true
+            : undefined,
+        );
+        if (!actionConfirmed) {
+          return JSON.stringify({
+            ok: false,
+            error: "add_automation_action did not commit (no new action row visible — check the automation_id and action_kind).",
+          });
+        }
         return JSON.stringify({ ok: true, automation_id: Number(automationId), action_kind: actionKind });
       }
 
@@ -1536,12 +1650,30 @@ export async function executeTool(
         const config = (input.config as string | undefined) ?? "{}";
         const parsed = ensureJsonObjectString(config, "config");
         if (!parsed.ok) return JSON.stringify(parsed);
+        const conditionsBefore = countByAutomation(
+          conn.db.automation_condition.iter() as Iterable<{ automationId: bigint }>,
+          automationId,
+        );
         await conn.reducers.addAutomationCondition({
           automationId,
           order,
           conditionKind: { tag: conditionKind },
           config,
         });
+        const conditionConfirmed = await waitFor(() =>
+          countByAutomation(
+            conn.db.automation_condition.iter() as Iterable<{ automationId: bigint }>,
+            automationId,
+          ) > conditionsBefore
+            ? true
+            : undefined,
+        );
+        if (!conditionConfirmed) {
+          return JSON.stringify({
+            ok: false,
+            error: "add_automation_condition did not commit (no new condition row visible — check the automation_id and condition_kind).",
+          });
+        }
         return JSON.stringify({ ok: true, automation_id: Number(automationId), condition_kind: conditionKind });
       }
 
@@ -1551,11 +1683,29 @@ export async function executeTool(
         const scopeConfig = (input.scope_config as string | undefined) ?? "{}";
         const parsed = ensureJsonObjectString(scopeConfig, "scope_config");
         if (!parsed.ok) return JSON.stringify(parsed);
+        const capabilitiesBefore = countByAutomation(
+          conn.db.automation_capability.iter() as Iterable<{ automationId: bigint }>,
+          automationId,
+        );
         await conn.reducers.addAutomationCapability({
           automationId,
           capabilityKind: { tag: capabilityKind },
           scopeConfig,
         });
+        const capabilityConfirmed = await waitFor(() =>
+          countByAutomation(
+            conn.db.automation_capability.iter() as Iterable<{ automationId: bigint }>,
+            automationId,
+          ) > capabilitiesBefore
+            ? true
+            : undefined,
+        );
+        if (!capabilityConfirmed) {
+          return JSON.stringify({
+            ok: false,
+            error: "add_automation_capability did not commit (no new capability row visible — check the automation_id and capability_kind).",
+          });
+        }
         return JSON.stringify({ ok: true, automation_id: Number(automationId), capability_kind: capabilityKind });
       }
 
@@ -1573,6 +1723,18 @@ export async function executeTool(
         });
         await conn.reducers.validateAutomation({ automationId });
         await conn.reducers.enableAutomation({ automationId });
+        const enabledConfirmed = await waitFor(() => {
+          const rule = [
+            ...(conn.db.automation_rule.iter() as Iterable<{ id: bigint; enabled: boolean }>),
+          ].find((r) => String(r.id) === String(automationId));
+          return rule?.enabled === true ? true : undefined;
+        });
+        if (!enabledConfirmed) {
+          return JSON.stringify({
+            ok: false,
+            error: "enable_automation_dry_run did not enable the automation — validation likely failed (add at least one action and re-check the config).",
+          });
+        }
         return JSON.stringify({
           ok: true,
           automation_id: Number(automationId),
@@ -1668,6 +1830,22 @@ export async function executeTool(
           }
         }
         await conn.reducers.updatePageContent({ pageId, content });
+
+        // Verify post-condition so reducer-side failures don't become false
+        // positives (#31): content row must match what we wrote.
+        const confirmed = await waitFor(() =>
+          pageContentMatches(conn, pageId, content) ? true : undefined,
+        );
+        if (!confirmed) {
+          return JSON.stringify({
+            ok: false,
+            page_id: Number(pageId),
+            snapshot_id: snap.snapshot_id,
+            error:
+              "update_page_content did not commit (content read-back mismatch or no update visible).",
+          });
+        }
+
         return JSON.stringify({ ok: true, page_id: Number(pageId), snapshot_id: snap.snapshot_id });
       }
 
@@ -1675,6 +1853,18 @@ export async function executeTool(
         const pageId = BigInt(input.page_id as number);
         const title = input.title as string;
         await conn.reducers.updatePageTitle({ pageId, title });
+
+        const confirmed = await waitFor(() =>
+          pageTitleMatches(conn, pageId, title) ? true : undefined,
+        );
+        if (!confirmed) {
+          return JSON.stringify({
+            ok: false,
+            page_id: Number(pageId),
+            error: "update_page_title did not commit (title read-back mismatch or no update visible).",
+          });
+        }
+
         return JSON.stringify({ ok: true, page_id: Number(pageId), title });
       }
 
@@ -1795,7 +1985,7 @@ export async function executeTool(
 
         const built = buildTaggedPropertyValue(valueType, rawValue);
         if (!built.ok) return JSON.stringify({ ok: false, error: built.error });
-        const value = built.value;
+        const value = built.value as { tag: string; value: unknown };
 
         console.log(`[tools] set_property_value: page=${pageId} prop=${propDefId} type=${valueType} value=${JSON.stringify(rawValue)}`);
         await conn.reducers.setPropertyValue({
@@ -1803,6 +1993,20 @@ export async function executeTool(
           propertyDefinitionId: propDefId,
           value,
         });
+
+        const confirmed = await waitFor(() =>
+          propertyValueMatches(conn, pageId, propDefId, value) ? true : undefined,
+        );
+        if (!confirmed) {
+          return JSON.stringify({
+            ok: false,
+            page_id: Number(pageId),
+            property_definition_id: Number(propDefId),
+            error:
+              "set_property_value did not commit (cell read-back mismatch or no update visible).",
+          });
+        }
+
         return JSON.stringify({ ok: true, page_id: Number(pageId), property_definition_id: Number(propDefId) });
       }
 
@@ -1828,14 +2032,29 @@ export async function executeTool(
               failed_at: { property_definition_id: Number(propDefId), value_type: e.value_type },
             });
           }
+          const value = built.value as { tag: string; value: unknown };
           console.log(
             `[tools] set_property_values: page=${pageId} prop=${propDefId} type=${e.value_type}`,
           );
           await conn.reducers.setPropertyValue({
             pageId,
             propertyDefinitionId: propDefId,
-            value: built.value,
+            value,
           });
+
+          const confirmed = await waitFor(() =>
+            propertyValueMatches(conn, pageId, propDefId, value) ? true : undefined,
+          );
+          if (!confirmed) {
+            return JSON.stringify({
+              ok: false,
+              error:
+                "set_property_values did not commit one cell (read-back mismatch or no update visible).",
+              partial: applied,
+              failed_at: { property_definition_id: Number(propDefId), value_type: e.value_type },
+            });
+          }
+
           applied.push({ property_definition_id: Number(propDefId) });
         }
         return JSON.stringify({

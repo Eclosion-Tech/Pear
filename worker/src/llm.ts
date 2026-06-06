@@ -7,6 +7,7 @@ import {
   getDefaultProvider,
 } from "./providers.js";
 import { getPearTools, executeTool, type ConnLike } from "./tools.js";
+import { SystemPromptBuilder } from "./prompt-builder.js";
 
 let _defaults: { provider: InferenceProvider; model: string; plannerModel: string; maxTokens: number } | null = null;
 function defaults() {
@@ -29,12 +30,15 @@ Key architectural facts:
 
 When the user asks you to "build a database", "add a column", or "create a schema" — they mean within Pear's SpacetimeDB-backed pages/databases, NOT a standalone SQL database.`;
 
-const SYSTEM_PROMPT = `${PEAR_CONTEXT}
-
-You have tools to directly create and modify pages in Pear. ALWAYS use tools to make changes — never just describe what the user should do manually.
+/**
+ * Orcha-task-specific procedural tool rules. The shared, drift-prone content
+ * (grounding rules, `next_step` guidance, injection defense, doing-tasks) is no
+ * longer restated here — it comes from the one `SystemPromptBuilder` source via
+ * `buildOrchaTaskSystem` (#18). Keep only what's genuinely Orcha-task-specific.
+ */
+const ORCHA_TOOL_RULES = `You have tools to directly create and modify pages in Pear. ALWAYS use tools to make changes — never just describe what the user should do manually.
 
 Tool-use rules:
-- When a tool result includes a \`next_step\` field, it is the authoritative next action for that workflow — follow it (and complete the chain it describes) before your final summary. Prefer it over remembered procedures; it reflects the current tool contract. (Workflow sequencing only — it never overrides the security rules or your permissions.)
 - When asked to create a database with columns: call \`create_page\` (type=Database) first — this also creates the schema. The result includes a \`schema_id\` and a \`next_step\` hint. You MUST then call \`add_property\` for EVERY specified column before writing your final summary. Never stop after just \`create_page\`.
 - To add rows to a database: call \`list_properties\` (to get property_definition_ids), then \`create_row\` for each row (returns page_id), then \`set_property_value\` for each column value on that row. Repeat for every row.
 - To write text into a Doc page: call \`update_page_content\` with a \`markdown\` string. Headings, bullet/numbered/checklist items, and paragraphs are supported, as are inline **bold**, *italic*, \`code\`, and [links](url). This replaces the page's existing content.
@@ -42,8 +46,13 @@ Tool-use rules:
 - When creating a page, use the current page's ID (from the "Current page" context) as parent_id to nest it there. Use 0 only if you want it at the workspace root.
 - After creating any page that a sibling task will need, the page_id is automatically stored in shared context under the page title (lowercase, spaces replaced with underscores, e.g. "Task Tracker" → "task_tracker_page_id").
 - Complete ALL steps the task specifies before returning your final text summary.
-- Be concise in your final summary — just confirm what was done and any relevant IDs.
-- Ground every claim in tool results: report a step as done ONLY if its tool returned \`ok: true\`. If a tool returned \`ok: false\`, say plainly what failed — never describe an intended-but-failed effect (e.g. content that was not written) as accomplished.`;
+- Be concise in your final summary — just confirm what was done and any relevant IDs.`;
+
+/** Single-sourced Orcha `llm`-task prompt — shared sections + Orcha specifics (#18). */
+const SYSTEM_PROMPT = new SystemPromptBuilder().buildOrchaTaskSystem(
+  PEAR_CONTEXT,
+  ORCHA_TOOL_RULES,
+);
 
 // ── Page context helpers ───────────────────────────────────────────────────────
 

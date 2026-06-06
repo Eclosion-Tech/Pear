@@ -195,10 +195,33 @@ function ThinkingBlock({ thinking, isStreaming }: { thinking: string; isStreamin
 
 // ── Tool call display ─────────────────────────────────────────────────────────
 
+/** Concrete entities a mutating tool touched (mirror of worker AffectedEntities, #32). */
+interface AffectedEntities {
+  pageId?: number;
+  createdNodeIds?: number[];
+  propertyDefinitionId?: number;
+  jobId?: number;
+}
+
+/** Unified persisted tool-call shape; `result` kept for legacy rows. */
 interface ToolCallInfo {
   name: string;
   status: "executing" | "done" | "error";
+  output?: string;
+  affected?: AffectedEntities;
+  /** Legacy field (pre-unified shape). */
   result?: string;
+}
+
+/** Short human summary of what a tool call touched, for the chat receipt (#32). */
+function affectedSummary(a: AffectedEntities | undefined): string | null {
+  if (!a) return null;
+  const bits: string[] = [];
+  if (a.pageId !== undefined) bits.push(`page ${a.pageId}`);
+  if (a.createdNodeIds?.length) bits.push(`${a.createdNodeIds.length} block${a.createdNodeIds.length === 1 ? "" : "s"}`);
+  if (a.propertyDefinitionId !== undefined) bits.push(`property ${a.propertyDefinitionId}`);
+  if (a.jobId !== undefined) bits.push(`job ${a.jobId}`);
+  return bits.length > 0 ? bits.join(", ") : null;
 }
 
 const TOOL_ICONS: Record<string, string> = {
@@ -206,7 +229,14 @@ const TOOL_ICONS: Record<string, string> = {
   fetch_url: "globe",
 };
 
-function ToolCallsDisplay({ toolCallsJson }: { toolCallsJson: string }) {
+function ToolCallsDisplay({
+  toolCallsJson,
+  conversationId,
+}: {
+  toolCallsJson: string;
+  conversationId: bigint;
+}) {
+  const router = useRouter();
   let calls: ToolCallInfo[] = [];
   try {
     calls = JSON.parse(toolCallsJson);
@@ -217,27 +247,47 @@ function ToolCallsDisplay({ toolCallsJson }: { toolCallsJson: string }) {
 
   return (
     <div className="mt-1.5 mb-1.5 space-y-1">
-      {calls.map((tc, i) => (
-        <div key={i} className="flex items-center gap-1.5 text-xs text-neutral-500 dark:text-neutral-400">
-          {tc.status === "executing" ? (
-            <span className="w-3 h-3 rounded-full border-2 border-violet-400 border-t-transparent animate-spin shrink-0" />
-          ) : tc.status === "done" ? (
-            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-green-500 shrink-0">
-              <polyline points="20 6 9 17 4 12" />
-            </svg>
-          ) : (
-            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-red-500 shrink-0">
-              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          )}
-          <span className="font-medium">{tc.name.replace(/_/g, " ")}</span>
-          {tc.result && tc.status === "done" && (
-            <span className="text-neutral-400 truncate max-w-[150px]" title={tc.result}>
-              — {tc.result}
-            </span>
-          )}
-        </div>
-      ))}
+      {calls.map((tc, i) => {
+        const summary = affectedSummary(tc.affected) ?? (tc.status === "done" ? tc.result : undefined);
+        const node = tc.affected?.createdNodeIds?.[0];
+        // Jump-to-change deep link: open the affected page (and the changed
+        // block, if any), keeping this conversation open (#32).
+        const href = tc.affected?.pageId !== undefined
+          ? `/workspace/${tc.affected.pageId}?conversation=${conversationId}${node !== undefined ? `&node=${node}` : ""}`
+          : null;
+        return (
+          <div key={i} className="flex items-center gap-1.5 text-xs text-neutral-500 dark:text-neutral-400">
+            {tc.status === "executing" ? (
+              <span className="w-3 h-3 rounded-full border-2 border-violet-400 border-t-transparent animate-spin shrink-0" />
+            ) : tc.status === "done" ? (
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-green-500 shrink-0">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            ) : (
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-red-500 shrink-0">
+                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            )}
+            <span className="font-medium">{tc.name.replace(/_/g, " ")}</span>
+            {href ? (
+              <button
+                type="button"
+                onClick={() => router.push(href)}
+                className="text-violet-500 hover:text-violet-600 hover:underline truncate max-w-[160px]"
+                title={`Jump to change — ${summary ?? "open page"}`}
+              >
+                → {summary ?? "open page"}
+              </button>
+            ) : (
+              summary && (
+                <span className="text-neutral-400 truncate max-w-[160px]" title={summary}>
+                  — {summary}
+                </span>
+              )
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -260,7 +310,9 @@ function AiMessageContent({ msg, aiName }: { msg: ConversationMessageRow; aiName
       )}
 
       {/* Tool calls */}
-      {toolCallsJson && <ToolCallsDisplay toolCallsJson={toolCallsJson} />}
+      {toolCallsJson && (
+        <ToolCallsDisplay toolCallsJson={toolCallsJson} conversationId={msg.conversationId} />
+      )}
 
       {/* Thinking indicator (no thinking text yet) */}
       {status === "Thinking" && !thinking && !msg.content && (

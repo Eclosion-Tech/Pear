@@ -514,8 +514,17 @@ export function createProviderFromConfig(
   }
 }
 
+/** Resolved provider bundle for an AI user. */
+export interface ResolvedProvider {
+  provider: InferenceProvider;
+  model: string;
+  maxTokens: number;
+  /** Provider family tag — drives utility-model selection (model-catalog.ts). */
+  providerTag: ProviderTag;
+}
+
 /** Cached provider instances keyed by AI user ID. */
-const providerCache = new Map<bigint, { provider: InferenceProvider; model: string; maxTokens: number }>();
+const providerCache = new Map<bigint, ResolvedProvider>();
 
 /** Invalidate cached provider for an AI user (call on ai_user_config update/delete). */
 export function invalidateProviderCache(aiUserId: bigint): void {
@@ -538,7 +547,7 @@ export function clearProviderCache(): void {
 export function getProviderForAiUser(
   conn: { db: Record<string, unknown> },
   aiUserId: bigint,
-): { provider: InferenceProvider; model: string; maxTokens: number } {
+): ResolvedProvider {
   const cached = providerCache.get(aiUserId);
   if (cached) return cached;
 
@@ -565,10 +574,11 @@ export function getProviderForAiUser(
     );
   }
 
-  const entry = {
+  const entry: ResolvedProvider = {
     provider: createProviderFromConfig(config),
     model: config.model,
     maxTokens: config.maxTokens || 8192,
+    providerTag: config.provider.tag,
   };
   providerCache.set(aiUserId, entry);
   return entry;

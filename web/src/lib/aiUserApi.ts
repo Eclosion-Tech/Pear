@@ -85,6 +85,44 @@ export function providerNeedsEndpoint(provider: ProviderTag): boolean {
   return provider === "Ollama" || provider === "OpenAiCompatible";
 }
 
+// ── Model catalog (mirror of worker/src/model-catalog.ts) ───────────────────
+// A provider key generally unlocks the whole family, so we can offer tiered
+// quick-picks and tell the operator which cheap sibling the worker uses for
+// utility tasks (intent verification, planning). Keep IDs in sync with the
+// worker catalog.
+
+export type ModelTier = "flagship" | "balanced" | "fast";
+export interface CatalogModel {
+  id: string;
+  tier: ModelTier;
+  label: string;
+}
+
+export const MODEL_CATALOG: Record<ProviderTag, CatalogModel[]> = {
+  Anthropic: [
+    { id: "claude-opus-4-8", tier: "flagship", label: "Opus 4.8" },
+    { id: "claude-sonnet-4-6", tier: "balanced", label: "Sonnet 4.6" },
+    { id: "claude-haiku-4-5-20251001", tier: "fast", label: "Haiku 4.5" },
+  ],
+  OpenAi: [
+    { id: "gpt-4.1", tier: "flagship", label: "GPT-4.1" },
+    { id: "gpt-4.1-mini", tier: "balanced", label: "GPT-4.1 mini" },
+    { id: "gpt-4.1-nano", tier: "fast", label: "GPT-4.1 nano" },
+  ],
+  Ollama: [],
+  OpenAiCompatible: [],
+};
+
+export function providerModels(provider: ProviderTag): CatalogModel[] {
+  return MODEL_CATALOG[provider] ?? [];
+}
+
+/** Fast sibling the worker uses for utility tasks; primary model if unknown family. */
+export function utilityModelFor(provider: ProviderTag, primaryModel: string): string {
+  const fast = MODEL_CATALOG[provider]?.find((m) => m.tier === "fast");
+  return fast?.id ?? primaryModel;
+}
+
 export interface AiUserCreateRequest {
   displayName: string;
   provider: ProviderTag;

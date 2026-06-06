@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   BlockEditor,
   PulpProvider,
@@ -41,11 +42,57 @@ registerCoreBlocks();
 registerPearBuiltinRenderers();
 
 /**
+ * Jump-to-change highlight (#32): when the page is opened via a chat tool-call
+ * deep link carrying `?node=<id>`, scroll that block into view and briefly flash
+ * it. Pulp's `BlockChrome` already renders each block with `id="block-<id>"`, so
+ * no editor changes are needed. Retries while the tree (and its IndexedDB Yjs
+ * state) finishes loading.
+ */
+function useHighlightNodeFromUrl(surfaceId: bigint): void {
+  const searchParams = useSearchParams();
+  const nodeParam = searchParams.get("node");
+
+  useEffect(() => {
+    if (!nodeParam) return;
+    let cancelled = false;
+    let attempts = 0;
+
+    const tryHighlight = () => {
+      if (cancelled) return;
+      const el = document.getElementById(`block-${nodeParam}`);
+      if (!el) {
+        if (attempts++ < 20) window.setTimeout(tryHighlight, 150);
+        return;
+      }
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      const prevTransition = el.style.transition;
+      const prevBg = el.style.backgroundColor;
+      el.style.transition = "background-color 0.25s ease";
+      el.style.backgroundColor = "rgba(139, 92, 246, 0.18)"; // violet flash
+      window.setTimeout(() => {
+        if (cancelled) return;
+        el.style.backgroundColor = prevBg;
+        window.setTimeout(() => {
+          if (!cancelled) el.style.transition = prevTransition;
+        }, 300);
+      }, 1500);
+    };
+
+    const raf = requestAnimationFrame(tryHighlight);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+    };
+  }, [nodeParam, surfaceId]);
+}
+
+/**
  * Pear's ComponentTree page surface — wires SpacetimeDB subscriptions
  * and reducers into `@eclosion-tech/pulp`'s storage-agnostic editor.
  */
 export function ComponentTreeRenderer({ surfaceId }: { surfaceId: bigint }) {
   const { idbNamespace } = useWorkspace();
+  useHighlightNodeFromUrl(surfaceId);
   const insertComponent = useInsertComponent();
   const deleteComponent = useDeleteComponent();
   const restoreComponent = useRestoreComponent();

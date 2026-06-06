@@ -2,8 +2,9 @@
  * WorkspaceContext — replaces claw-code's ProjectContext with SpacetimeDB queries.
  *
  * All data comes from the local SpacetimeDB subscription cache — no IO.
- * Page content is intentionally absent: it is always passed as a tool result,
- * never injected into the system prompt, so the static prompt stays cacheable.
+ * A bounded snapshot of the attached page is placed in the cached, conversation-
+ * stable system block (#24) so it's re-read at cache price rather than re-billed
+ * each turn; the model calls `get_page` for the live/full content on demand.
  */
 
 import type { ConnLike } from "./tools.js";

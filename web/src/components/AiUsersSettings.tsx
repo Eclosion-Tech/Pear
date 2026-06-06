@@ -24,6 +24,8 @@ import {
   PROVIDER_OPTIONS,
   providerDefaults,
   providerNeedsEndpoint,
+  providerModels,
+  utilityModelFor,
   type ProviderTag,
 } from "@/src/lib/aiUserApi";
 import { resolveWorkspaceWsUri } from "@/src/lib/workspaceConnections";
@@ -189,6 +191,31 @@ function CreateAiUserForm({ onDone }: { onDone: () => void }) {
             placeholder="e.g. claude-haiku-4-5-20251001"
             className={`${inputCls} font-mono`}
           />
+          {providerModels(provider).length > 0 && (
+            <span className="mt-1.5 flex flex-wrap items-center gap-1">
+              {providerModels(provider).map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => setModel(m.id)}
+                  disabled={busy}
+                  title={m.id}
+                  className={`px-2 py-0.5 rounded-md text-[11px] transition-colors disabled:opacity-50 ${
+                    model === m.id
+                      ? "bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900"
+                      : "bg-neutral-100 dark:bg-neutral-800 text-neutral-500 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-700"
+                  }`}
+                >
+                  {m.label}
+                  <span className="opacity-60"> · {m.tier}</span>
+                </button>
+              ))}
+            </span>
+          )}
+          <span className="mt-1 block text-[11px] text-neutral-400 dark:text-neutral-500">
+            Utility tasks (intent checks, planning) use{" "}
+            <span className="font-mono">{utilityModelFor(provider, model)}</span> to save cost.
+          </span>
         </label>
 
         {providerNeedsEndpoint(provider) && (
