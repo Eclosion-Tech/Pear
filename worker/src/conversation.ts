@@ -38,6 +38,7 @@ import {
 } from "./providers.js";
 import { utilityModelFor } from "./model-catalog.js";
 import { buildPageContext } from "./llm.js";
+import { readComponentNodeText } from "./component-authoring.js";
 import {
   getConversationTools,
   executeTool,
@@ -46,6 +47,7 @@ import {
 import { SystemPromptBuilder } from "./prompt-builder.js";
 import {
   discoverInstructionPages,
+  discoverAccessibleResources,
   buildAiUserMemoryIndex,
   buildBreadcrumb,
   summarizePageHistory,
@@ -71,6 +73,7 @@ type ConversationRow = {
   status: { tag: string };
   createdAt: { microsSinceUnixEpoch: bigint };
   updatedAt: { microsSinceUnixEpoch: bigint };
+  blockAnchor: bigint | undefined;
 };
 
 type ConversationParticipantRow = {
@@ -551,9 +554,19 @@ async function handleConversationMessage(
       return;
     }
 
-    const pageContext = conv.pageId
+    let pageContext = conv.pageId
       ? await buildPageContext(conn, conv.pageId)
       : "";
+    // Block-anchored ContextThread: surface the anchored component-tree node's
+    // text as the primary focus, so the AI knows where the user pointed it.
+    if (conv.pageId && conv.blockAnchor != null) {
+      const focusText = readComponentNodeText(conn, conv.blockAnchor).trim();
+      if (focusText) {
+        pageContext +=
+          `${pageContext ? "\n\n" : ""}Focused block (node ${conv.blockAnchor}) — the user placed ` +
+          `their request on this block; treat it as the primary focus:\n"${focusText.slice(0, 1000)}"`;
+      }
+    }
 
     // Build WorkspaceContext (page-anchored conversations only).
     let workspaceCtx: WorkspaceContext | undefined;
@@ -598,9 +611,15 @@ async function handleConversationMessage(
     // what it needs via read_memory / search_memory (assessment #19).
     const memoryIndex = buildAiUserMemoryIndex(conn, aiProfile.aiUserId);
 
+    // Pages the user granted this AI access to (the "Context for …" chips).
+    // Surfaced in the prompt so the model knows what it can act on — fixes the
+    // case where a read grant exists but the AI claims it has no page access.
+    const accessibleResources = discoverAccessibleResources(conn, selfHex);
+
     let builder = new SystemPromptBuilder()
       .withAiUserSystemPrompt(assistantParts.join("\n\n"))
-      .withAiUserMemoryIndex(memoryIndex);
+      .withAiUserMemoryIndex(memoryIndex)
+      .withAccessibleResources(accessibleResources);
     if (pageContext) builder = builder.withCurrentPageContext(pageContext);
     if (workspaceCtx) builder = builder.withWorkspaceContext(workspaceCtx);
     if (compactionSummary) {

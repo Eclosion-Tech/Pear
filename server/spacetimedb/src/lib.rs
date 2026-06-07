@@ -14,6 +14,7 @@ mod ai;
 mod api_endpoints;
 mod auth;
 mod automations;
+mod bridge;
 mod conversations;
 mod extensions;
 mod harness;
@@ -54,6 +55,11 @@ pub use crate::automations::{
     AutomationConditionKind, AutomationEventQueue, AutomationEventStatus, AutomationMode,
     AutomationPrimitive, AutomationPrimitiveKind, AutomationRule, AutomationRunLog,
     AutomationScheduleKind, AutomationTriggerKind,
+};
+pub use crate::bridge::{
+    bridge_command, bridge_command_result, bridge_device, bridge_device_allowlist, bridge_session,
+    BridgeCommand, BridgeCommandResult, BridgeCommandStatus, BridgeDevice, BridgeDeviceAllowlist,
+    BridgeSession,
 };
 pub use crate::conversations::ConversationVisibility;
 pub use crate::conversations::{

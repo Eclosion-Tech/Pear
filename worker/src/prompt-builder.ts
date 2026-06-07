@@ -22,6 +22,7 @@ import type {
   WorkspaceContext,
   InstructionPage,
   AiUserMemoryEntry,
+  AccessibleResource,
 } from "./workspace-context.js";
 import type { SystemBlock } from "./providers.js";
 
@@ -42,6 +43,9 @@ export class SystemPromptBuilder {
    * cached, conversation-stable block instead of being re-sent as a synthetic
    * message turn each request (#24). */
   private currentPageContext: string | undefined;
+  /** Pages this AI user has been granted access to (the "Context for …" chips).
+   * Surfaced so the model knows what it may act on instead of guessing (#grant-awareness). */
+  private accessibleResources: AccessibleResource[] = [];
   private appendSections: string[] = [];
 
   withWorkspaceContext(ctx: WorkspaceContext): this {
@@ -95,6 +99,17 @@ export class SystemPromptBuilder {
     return this;
   }
 
+  /**
+   * Pages this AI user has been explicitly granted access to via
+   * `page_access_rule` (the "Context for …" chips). Rendered in the volatile
+   * block so it stays correct even when grants change mid-conversation, and so
+   * page-less DM chats still advertise their granted pages.
+   */
+  withAccessibleResources(resources: AccessibleResource[]): this {
+    this.accessibleResources = resources;
+    return this;
+  }
+
   appendSection(section: string): this {
     this.appendSections.push(section);
     return this;
@@ -131,6 +146,9 @@ export class SystemPromptBuilder {
 
     // Block 3 — volatile, no cache breakpoint. Injection defense stays last.
     const volatileParts: string[] = [this.environmentSection()];
+    if (this.accessibleResources.length > 0) {
+      volatileParts.push(renderAccessibleResources(this.accessibleResources));
+    }
     if (this.workspaceContext) {
       const ws = renderWorkspaceContext(this.workspaceContext);
       if (ws) volatileParts.push(ws);
@@ -272,6 +290,22 @@ function renderInstructionPages(pages: InstructionPage[]): string {
     );
   }
   return sections.join("\n\n");
+}
+
+function renderAccessibleResources(resources: AccessibleResource[]): string {
+  const lines = [
+    "# Accessible resources",
+    "Pages the user has granted you access to for this conversation. You can use these page IDs " +
+      "directly with your tools (e.g. `get_page` to read, page-edit tools where you have write). " +
+      'When the user refers to "the current page" or "this page" without naming one, prefer a page ' +
+      "listed here. To act on a page that is NOT listed, call `request_page_access` and wait for the " +
+      "user to approve — do not assume access you have not been granted.",
+    "",
+  ];
+  for (const r of resources) {
+    lines.push(` - "${r.title}" (id: ${r.pageId}) — ${r.permission.toLowerCase()}`);
+  }
+  return lines.join("\n");
 }
 
 function renderCurrentPageContext(text: string): string {

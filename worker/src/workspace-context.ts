@@ -25,6 +25,18 @@ export interface PageHistorySummary {
   lastSnapshotType: string | undefined;
 }
 
+/**
+ * A page this conversation's AI user has been explicitly granted access to via
+ * `page_access_rule` (the "Context for …" chips). Surfaced in the system prompt
+ * so the model knows what it can act on without guessing (it can read/edit these
+ * page IDs directly), rather than discovering grants only when a tool succeeds.
+ */
+export interface AccessibleResource {
+  pageId: bigint;
+  title: string;
+  permission: "Read" | "Write";
+}
+
 export interface WorkspaceContext {
   /** The page the agent is currently operating on. */
   currentPageId: bigint;
@@ -156,6 +168,45 @@ export function discoverInstructionPages(
 /** Build the breadcrumb path from workspace root to the current page (titles only). */
 export function buildBreadcrumb(conn: ConnLike, currentPageId: bigint): string[] {
   return walkAncestors(conn, currentPageId).map((p) => p.title);
+}
+
+/**
+ * Enumerate the pages this AI user has been granted access to, mirroring the
+ * `page_access_rule` enforcement in tools.ts (`hasChatPageGrant`) and the
+ * "Context for …" chips in ContextBar. Dedups per page, keeping the strongest
+ * permission (Write > Read). The host page is intentionally NOT added here — it
+ * already appears in the Environment section as the current page.
+ */
+export function discoverAccessibleResources(
+  conn: ConnLike,
+  aiIdentityHex: string,
+): AccessibleResource[] {
+  const rows = conn.db.page_access_rule?.iter?.() as
+    | Iterable<{ pageId: bigint; principal: unknown; permission: { tag?: string } }>
+    | undefined;
+  if (!rows) return [];
+
+  const byPage = new Map<string, AccessibleResource>();
+  for (const row of rows) {
+    const p = row.principal as { tag?: string; value?: { toHexString?: () => string } };
+    if (p?.tag !== "WorkspaceMember") continue;
+    if (p.value?.toHexString?.() !== aiIdentityHex) continue;
+    const tag = row.permission?.tag;
+    if (tag !== "Read" && tag !== "Write") continue;
+
+    const key = String(row.pageId);
+    const existing = byPage.get(key);
+    // Write supersedes Read; keep the strongest grant per page.
+    if (existing && (existing.permission === "Write" || tag === "Read")) continue;
+
+    const page = conn.db.page?.id?.find?.(row.pageId) as { title?: string } | undefined;
+    byPage.set(key, {
+      pageId: row.pageId,
+      title: page?.title || `#${row.pageId}`,
+      permission: tag,
+    });
+  }
+  return [...byPage.values()];
 }
 
 /**

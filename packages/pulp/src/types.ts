@@ -89,6 +89,11 @@ export type PulpConfig = {
     href: string;
     subtitle?: string;
   }>;
+  /**
+   * Called when the user clicks "Comment" in the block menu.
+   * The host app is responsible for creating the anchored thread.
+   */
+  onCommentBlock?: (nodeId: BlockId) => void;
 };
 
 export type PulpContextValue = {

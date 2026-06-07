@@ -503,6 +503,7 @@ export const Conversation = __t.object("Conversation", {
     return ConversationKind;
   },
   canonicalKey: __t.option(__t.string()),
+  blockAnchor: __t.option(__t.u64()),
 });
 export type Conversation = __Infer<typeof Conversation>;
 
@@ -766,6 +767,12 @@ export const OrchaAgent = __t.object("OrchaAgent", {
 });
 export type OrchaAgent = __Infer<typeof OrchaAgent>;
 
+export const OrchaClaimReaper = __t.object("OrchaClaimReaper", {
+  scheduledId: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+});
+export type OrchaClaimReaper = __Infer<typeof OrchaClaimReaper>;
+
 export const OrchaJob = __t.object("OrchaJob", {
   id: __t.u64(),
   userId: __t.string(),
@@ -795,6 +802,7 @@ export const OrchaTask = __t.object("OrchaTask", {
   requiredCapabilities: __t.array(__t.string()),
   assignedTo: __t.option(__t.string()),
   result: __t.option(__t.string()),
+  claimedAt: __t.option(__t.timestamp()),
 });
 export type OrchaTask = __Infer<typeof OrchaTask>;
 

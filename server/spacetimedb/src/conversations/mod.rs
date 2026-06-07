@@ -148,6 +148,15 @@ pub struct Conversation {
     /// `-`. `None` for ContextThread and SharedThread.
     #[default(None::<String>)]
     pub canonical_key: Option<String>,
+    /// Anchor to a specific block within `page_id`, for block-scoped
+    /// Mention/ContextThread comments rendered in the page gutter. Holds the
+    /// `ComponentNode.id` (the pulp component-tree node) the @mention was placed
+    /// on. `None` for page-level threads and DMs.
+    ///
+    /// Must remain last for schema migration (STDB only allows additive
+    /// changes at the end of a struct).
+    #[default(None::<u64>)]
+    pub block_anchor: Option<u64>,
 }
 
 /// Membership join between conversations and identities. The worker
@@ -246,9 +255,14 @@ pub fn create_conversation(
     ctx: &ReducerContext,
     page_id: Option<u64>,
     participant_identities: Vec<Identity>,
+    block_anchor: Option<u64>,
 ) -> Result<(), String> {
     if let Some(pid) = page_id {
         ctx.db.page().id().find(pid).ok_or("Page not found")?;
+    }
+    // A block anchor only makes sense for a page-attached thread.
+    if block_anchor.is_some() && page_id.is_none() {
+        return Err("block_anchor requires a page_id".to_string());
     }
 
     for ident in &participant_identities {
@@ -269,6 +283,7 @@ pub fn create_conversation(
         visibility: ConversationVisibility::Private,
         kind: ConversationKind::ContextThread,
         canonical_key: None,
+        block_anchor,
     });
 
     let mut seen: Vec<Identity> = Vec::new();
@@ -581,6 +596,7 @@ pub fn find_or_create_dm(
         visibility: ConversationVisibility::Participants,
         kind: ConversationKind::Dm,
         canonical_key: Some(key),
+        block_anchor: None,
     });
 
     insert_dm_participants(ctx, conv.id, me, other_identity);
@@ -624,6 +640,7 @@ pub fn find_or_create_ai_dm(
         visibility: ConversationVisibility::Private,
         kind: ConversationKind::AiDm,
         canonical_key: Some(key),
+        block_anchor: None,
     });
 
     insert_dm_participants(ctx, conv.id, me, ai_identity);

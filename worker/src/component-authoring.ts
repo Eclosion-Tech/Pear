@@ -74,6 +74,15 @@ const MARKDOWN_PREFIX: Record<string, string> = {
   ChecklistItem: "- [ ] ",
 };
 
+/**
+ * Plain text of a single ComponentNode by id (its decoded per-node Yjs state).
+ * Used to surface the block a conversation is anchored to (`block_anchor`) as
+ * the focus in the AI's page context. Empty string if the node has no text.
+ */
+export function readComponentNodeText(conn: ConnLike, nodeId: bigint): string {
+  return decodeNodeText(conn, nodeId);
+}
+
 function decodeNodeText(conn: ConnLike, nodeId: bigint): string {
   const row = [...(conn.db.component_yjs_state.iter() as Iterable<ComponentYjsStateRow>)].find(
     (s) => s.componentNodeId === nodeId,

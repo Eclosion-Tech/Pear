@@ -586,6 +586,7 @@ fn decode_conversation(v: &Value) -> Result<Conversation, String> {
         visibility: ConversationVisibility::Private,
         kind: ConversationKind::ContextThread,
         canonical_key: None,
+        block_anchor: None,
     })
 }
 

@@ -12,6 +12,8 @@ export type PageEditorSurfaceProps = {
   content: PageContent | undefined;
   childPages?: PageRow[];
   onMentionAiUser?: () => void;
+  /** Open a block-anchored thread (from a gutter marker) in the AI panel. */
+  onOpenThread?: (conversationId: bigint) => void;
   /** PearEditor remount key — e.g. content updatedAt in modals. */
   editorKeySuffix?: string | number;
 };
@@ -25,6 +27,7 @@ export function PageEditorSurface({
   content,
   childPages,
   onMentionAiUser,
+  onOpenThread,
   editorKeySuffix = "",
 }: PageEditorSurfaceProps) {
   const migration = useMigrateBlockNotePageOnOpen(page, content?.content);
@@ -39,6 +42,7 @@ export function PageEditorSurface({
       <ComponentTreeRenderer
         key={`${page.id}-${editorKeySuffix}`}
         surfaceId={page.id}
+        onOpenThread={onOpenThread}
       />
     );
   }

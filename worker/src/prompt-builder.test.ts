@@ -46,6 +46,31 @@ test("buildBlocks: stable prefix is cached and ends before volatile content (#22
   assert.match(last.text, /# Environment/);
 });
 
+test("buildBlocks: granted pages surface in volatile block, even without a workspace context (grant-awareness)", () => {
+  // A page-less DM chat: no WorkspaceContext, but the user granted access to a page.
+  const blocks = new SystemPromptBuilder()
+    .withAccessibleResources([
+      { pageId: 42n, title: "Untitled", permission: "Read" },
+      { pageId: 99n, title: "Specs", permission: "Write" },
+    ])
+    .buildBlocks();
+
+  const last = blocks[blocks.length - 1];
+  assert.match(last.text, /# Accessible resources/);
+  assert.match(last.text, /"Untitled" \(id: 42\) — read/);
+  assert.match(last.text, /"Specs" \(id: 99\) — write/);
+  // It tells the model how to obtain access it doesn't have.
+  assert.match(last.text, /request_page_access/);
+  // Not cached (grants can change mid-conversation) and not in the stable prefix.
+  assert.equal(last.cache, undefined);
+  assert.doesNotMatch(blocks[0].text, /# Accessible resources/);
+});
+
+test("buildBlocks: no accessible-resources section when nothing is granted", () => {
+  const blocks = new SystemPromptBuilder().withWorkspaceContext(ctx()).buildBlocks();
+  for (const b of blocks) assert.doesNotMatch(b.text, /# Accessible resources/);
+});
+
 test("buildBlocks: injection defense is in the final volatile block, last (security)", () => {
   const blocks = new SystemPromptBuilder().withWorkspaceContext(ctx()).buildBlocks();
   const last = blocks[blocks.length - 1];
