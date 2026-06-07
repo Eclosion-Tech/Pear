@@ -102,6 +102,12 @@ pub enum PermissionScope {
     Subtree(u64),
     /// All pages in the workspace — requires explicit confirmation, never default.
     Workspace,
+    /// A specific paired bridge device. Scopes the `tool-bash` capability
+    /// to one device: a grant for device A does not authorize commands on
+    /// device B. Never defaulted; requires explicit confirmation at
+    /// install time. See `docs/PEAR_BRIDGE.md` § Which AI users can use
+    /// `tool-bash`.
+    BridgeDevice(u64),
 }
 
 #[derive(SpacetimeType, Clone, Debug, PartialEq)]

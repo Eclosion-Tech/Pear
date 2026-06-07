@@ -13,4 +13,5 @@ import {
 export default {
   pageId: __t.option(__t.u64()),
   participantIdentities: __t.array(__t.identity()),
+  blockAnchor: __t.option(__t.u64()),
 };

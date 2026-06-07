@@ -781,6 +781,8 @@ export function PearEditor({
       await createConversation({
         pageId,
         participantIdentities: [aiUser.identity],
+        // Legacy BlockNote editor: page-level thread only (no node anchor).
+        blockAnchor: undefined,
       });
       onMentionAiUser?.();
     } catch (err) {

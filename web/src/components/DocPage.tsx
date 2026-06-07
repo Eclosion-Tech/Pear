@@ -183,6 +183,9 @@ export function DocPage({ page }: DocPageProps) {
           content={content}
           childPages={children}
           onMentionAiUser={() => aiPanel.openPanel({ pageId: page.id })}
+          onOpenThread={(conversationId) =>
+            aiPanel.openPanel({ pageId: page.id, conversationId })
+          }
         />
       </div>
       </div>

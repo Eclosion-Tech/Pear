@@ -20,4 +20,5 @@ export default __t.row({
   requiredCapabilities: __t.array(__t.string()).name("required_capabilities"),
   assignedTo: __t.option(__t.string()).name("assigned_to"),
   result: __t.option(__t.string()),
+  claimedAt: __t.option(__t.timestamp()).name("claimed_at"),
 });

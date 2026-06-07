@@ -27,6 +27,7 @@ export function BlockMenu({
 }) {
   const pulp = usePulp();
   const focus = useSurfaceFocus();
+  const { onCommentBlock } = pulp.config;
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = useState(() => computePosition(anchorRect));
   const [turnIntoOpen, setTurnIntoOpen] = useState(false);
@@ -120,6 +121,18 @@ export function BlockMenu({
           }
         }}
       />
+      {onCommentBlock && (
+        <>
+          <MenuDivider />
+          <MenuItem
+            label="Comment"
+            onSelect={() => {
+              onCommentBlock(node.id);
+              onClose();
+            }}
+          />
+        </>
+      )}
       <MenuDivider />
       <MenuItem
         label="Delete"

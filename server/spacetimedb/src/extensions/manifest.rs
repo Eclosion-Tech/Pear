@@ -99,6 +99,11 @@ pub(crate) fn parse_permission_scope(s: &str) -> Result<PermissionScope, String>
             .parse::<u64>()
             .map_err(|_| format!("Invalid page id: {id_str}"))?;
         Ok(PermissionScope::Page(id))
+    } else if let Some(id_str) = s.strip_prefix("bridge-device:") {
+        let id = id_str
+            .parse::<u64>()
+            .map_err(|_| format!("Invalid bridge device id: {id_str}"))?;
+        Ok(PermissionScope::BridgeDevice(id))
     } else {
         Err(format!("Unknown permission scope: {s}"))
     }

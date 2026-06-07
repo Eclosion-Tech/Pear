@@ -15,6 +15,7 @@ import {
   type BlockTree,
 } from "@eclosion-tech/pulp";
 import type { ComponentNode } from "@/src/module_bindings/types";
+import { BlockThreadGutter } from "@/src/components/BlockThreadGutter";
 import {
   useComponentTree,
   useEnsureBuiltinComponentTypes,
@@ -35,6 +36,8 @@ import { useSyncChildPageLinks } from "@/src/hooks/useSyncChildPageLinks";
 import { useWorkspace } from "@/src/providers/WorkspaceProvider";
 import { AudioAttachmentContext } from "@/src/components/AudioAttachmentContext";
 import { useCreateAttachment } from "@/src/hooks/usePages";
+import { useCreateConversation } from "@/src/hooks/useConversations";
+import { useSpacetimeDB } from "spacetimedb/react";
 import { registerPearBuiltinRenderers } from "./built-in";
 import { PEAR_SLASH_ITEMS, slashItemsForDefs } from "./pearSlashItems";
 
@@ -90,8 +93,16 @@ function useHighlightNodeFromUrl(surfaceId: bigint): void {
  * Pear's ComponentTree page surface — wires SpacetimeDB subscriptions
  * and reducers into `@eclosion-tech/pulp`'s storage-agnostic editor.
  */
-export function ComponentTreeRenderer({ surfaceId }: { surfaceId: bigint }) {
+export function ComponentTreeRenderer({
+  surfaceId,
+  onOpenThread,
+}: {
+  surfaceId: bigint;
+  onOpenThread?: (conversationId: bigint) => void;
+}) {
   const { idbNamespace } = useWorkspace();
+  const { identity } = useSpacetimeDB();
+  const createConversation = useCreateConversation();
   useHighlightNodeFromUrl(surfaceId);
   const insertComponent = useInsertComponent();
   const deleteComponent = useDeleteComponent();
@@ -119,6 +130,8 @@ export function ComponentTreeRenderer({ surfaceId }: { surfaceId: bigint }) {
   saveYjsRef.current = saveComponentYjsState;
   const surfaceIdRef = useRef(surfaceId);
   surfaceIdRef.current = surfaceId;
+  // Positioning container for block-anchored thread markers (gutter overlay).
+  const editorContainerRef = useRef<HTMLDivElement | null>(null);
 
   const onNodeInsert = useCallback(
     (row: ComponentNode) => {
@@ -292,6 +305,18 @@ export function ComponentTreeRenderer({ surfaceId }: { surfaceId: bigint }) {
     deletePageLink,
   });
 
+  const handleCommentBlock = useCallback(
+    (nodeId: bigint) => {
+      if (!identity) return;
+      createConversation({
+        pageId: surfaceId,
+        participantIdentities: [identity],
+        blockAnchor: nodeId,
+      });
+    },
+    [createConversation, identity, surfaceId],
+  );
+
   const config = useMemo(
     () => ({
       idbPrefix: `pear:${idbNamespace}`,
@@ -303,8 +328,9 @@ export function ComponentTreeRenderer({ surfaceId }: { surfaceId: bigint }) {
         href: `/workspace/${page.id}`,
         subtitle: buildBreadcrumb(page, pages),
       })),
+      onCommentBlock: handleCommentBlock,
     }),
-    [idbNamespace, pages, tree.defs],
+    [idbNamespace, pages, tree.defs, handleCommentBlock],
   );
 
   const attachmentCtx = useMemo(
@@ -317,7 +343,16 @@ export function ComponentTreeRenderer({ surfaceId }: { surfaceId: bigint }) {
       <PulpProvider tree={tree} config={config} mutations={mutations}>
         <SurfaceFocusProvider coordinator={focusCoordinator}>
           <SurfaceUndoProvider coordinator={undoCoordinator}>
-            <BlockEditor />
+            <div ref={editorContainerRef} className="relative">
+              <BlockEditor />
+              {onOpenThread && (
+                <BlockThreadGutter
+                  containerRef={editorContainerRef}
+                  pageId={surfaceId}
+                  onOpenThread={onOpenThread}
+                />
+              )}
+            </div>
           </SurfaceUndoProvider>
         </SurfaceFocusProvider>
       </PulpProvider>

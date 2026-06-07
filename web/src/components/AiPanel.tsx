@@ -152,8 +152,11 @@ function InlineJobCard({ jobId }: { jobId: bigint }) {
 function ThinkingBlock({ thinking, isStreaming }: { thinking: string; isStreaming: boolean }) {
   const [expanded, setExpanded] = useState(isStreaming);
 
+  // Expand live while the model is thinking, then auto-collapse once the answer
+  // lands so completed messages stay tidy. Manual toggles persist until the
+  // streaming state next flips.
   useEffect(() => {
-    if (isStreaming) setExpanded(true);
+    setExpanded(isStreaming);
   }, [isStreaming]);
 
   return (
@@ -432,6 +435,7 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
       await createConversation({
         pageId: activePageId,
         participantIdentities: [aiUser.identity],
+        blockAnchor: undefined,
       });
       router.push(`/workspace/${activePageId}`);
       onBack();
@@ -712,6 +716,7 @@ function HandoffPanel({
       await createConversation({
         pageId,
         participantIdentities: [user.identity],
+        blockAnchor: undefined,
       });
       setOpen(false);
       setMode(null);
