@@ -23,14 +23,11 @@ import { handleAiPrimitiveTask } from "./ai-primitive-task.js";
 import { StructuralSensorsScheduler } from "./structural-sensors.js";
 import { subscribeToAvailableTables } from "./subscriptions.js";
 
-const SANDBOX_BACKEND = process.env.PEAR_SANDBOX_BACKEND ?? "";
-const TOOL_BASH_ENABLED = SANDBOX_BACKEND !== "";
-
 const CAPABILITIES = [
   "orchestrate",
   "llm",
   "ai_primitive",
-  ...(TOOL_BASH_ENABLED ? ["tool-bash"] : []),
+  "tool-bash",
 ];
 const MAX_ORCHESTRATE_DEPTH = 3;
 
@@ -471,19 +468,8 @@ export class DatabaseWorker {
           result = await handleAiPrimitiveTask(conn, task.description, task.jobId);
           break;
         case "tool-bash":
-          // Phase D placeholder. The actual sandbox handler (Docker /
-          // Firecracker per-workspace, scoped FS, allowed_domains
-          // enforcement) is still pending infra work. We accept the
-          // capability so plans can be written against it, but refuse
-          // execution unless an explicit backend has been wired.
-          if (!TOOL_BASH_ENABLED) {
-            throw new Error(
-              "tool-bash sandbox backend not configured (set PEAR_SANDBOX_BACKEND)",
-            );
-          }
-          throw new Error(
-            `tool-bash backend "${SANDBOX_BACKEND}" recognised but not implemented yet`,
-          );
+          result = await this.handleToolBash(conn, task);
+          break;
         case "llm":
         default: {
           const llmOut = await callLlm(task.description, conn, task.jobId);
@@ -510,6 +496,158 @@ export class DatabaseWorker {
     } finally {
       this.inFlight.delete(task.id);
     }
+  }
+
+  private async handleToolBash(conn: DbConnection, task: TaskRow): Promise<string> {
+    // Bridge-backed execution path: enqueue command into BridgeCommand and poll
+    // BridgeCommandResult. This replaces the old local sandbox placeholder.
+    type BridgeCommandRow = {
+      id: bigint;
+      deviceId: bigint;
+      sessionId: bigint;
+      conversationId: bigint;
+      requestedBy: unknown;
+      command: string;
+      cwd?: string;
+      status: { tag: string };
+      enqueuedAt: unknown;
+    };
+    type BridgeResultRow = {
+      commandId: bigint;
+      exitCode?: number;
+      stdout: string;
+      stderr: string;
+      rejectionReason?: string;
+      durationMs: bigint;
+      completedAt: unknown;
+    };
+
+    const payload = task.description?.trim();
+    if (!payload) throw new Error("tool-bash task missing JSON payload");
+
+    let parsed: {
+      device_id?: number | string;
+      command?: string;
+      cwd?: string;
+      conversation_id?: number | string;
+      job_id?: number | string;
+      task_id?: number | string;
+      timeout_ms?: number;
+    };
+    try {
+      parsed = JSON.parse(payload);
+    } catch (err) {
+      throw new Error(
+        `tool-bash task payload must be JSON: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    const command = (parsed.command ?? "").toString().trim();
+    if (!command) throw new Error("tool-bash payload missing `command`");
+
+    const coerceBigint = (v: unknown): bigint | undefined => {
+      if (v === undefined || v === null) return undefined;
+      if (typeof v === "bigint") return v;
+      if (typeof v === "number" && Number.isFinite(v)) return BigInt(Math.trunc(v));
+      if (typeof v === "string" && /^\d+$/.test(v)) return BigInt(v);
+      return undefined;
+    };
+
+    const deviceId = coerceBigint(parsed.device_id);
+    if (deviceId === undefined) {
+      throw new Error("tool-bash payload missing/invalid `device_id`");
+    }
+
+    const conversationId =
+      coerceBigint(parsed.conversation_id) ??
+      (task.jobId ? this.findConversationIdForJob(conn, task.jobId) : undefined) ??
+      BigInt(0);
+
+    const jobIdArg = coerceBigint(parsed.job_id) ?? task.jobId;
+    const taskIdArg = coerceBigint(parsed.task_id) ?? task.id;
+
+    const before = new Set(
+      [...(conn.db.bridge_command.iter() as Iterable<BridgeCommandRow>)].map((r) => String(r.id)),
+    );
+
+    await conn.reducers.enqueueBridgeCommand({
+      deviceId,
+      command,
+      cwd: parsed.cwd ? String(parsed.cwd) : undefined,
+      conversationId,
+      jobId: jobIdArg,
+      taskId: taskIdArg,
+    });
+
+    const waitFor = async <T>(
+      fn: () => T | undefined,
+      timeoutMs = 30_000,
+      intervalMs = 100,
+    ): Promise<T | undefined> => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        const found = fn();
+        if (found !== undefined) return found;
+        await new Promise((r) => setTimeout(r, intervalMs));
+      }
+      return undefined;
+    };
+
+    const enqueued = await waitFor(
+      () =>
+        [...(conn.db.bridge_command.iter() as Iterable<BridgeCommandRow>)].find(
+          (r) =>
+            !before.has(String(r.id)) &&
+            String(r.deviceId) === String(deviceId) &&
+            r.command === command,
+        ),
+      10_000,
+    );
+
+    if (!enqueued) {
+      throw new Error("enqueue_bridge_command succeeded but no BridgeCommand row appeared");
+    }
+
+    const timeoutMs = Math.max(1_000, Number(parsed.timeout_ms ?? 120_000));
+    const resultRow = await waitFor(
+      () =>
+        [...(conn.db.bridge_command_result.iter() as Iterable<BridgeResultRow>)].find(
+          (r) => String(r.commandId) === String(enqueued.id),
+        ),
+      timeoutMs,
+    );
+
+    if (!resultRow) {
+      throw new Error(
+        `bridge command ${enqueued.id} timed out waiting for result after ${timeoutMs}ms`,
+      );
+    }
+
+    const status =
+      [...(conn.db.bridge_command.iter() as Iterable<BridgeCommandRow>)].find(
+        (r) => String(r.id) === String(enqueued.id),
+      )?.status?.tag ?? "Unknown";
+
+    const rejected = Boolean(resultRow.rejectionReason || status === "Rejected");
+    const out = {
+      ok: !rejected,
+      status: rejected ? "rejected" : "completed",
+      command_id: Number(enqueued.id),
+      exit_code: resultRow.exitCode ?? null,
+      stdout: resultRow.stdout ?? "",
+      stderr: resultRow.stderr ?? "",
+      rejection_reason: resultRow.rejectionReason ?? null,
+      duration_ms: Number(resultRow.durationMs ?? BigInt(0)),
+    };
+    return JSON.stringify(out);
+  }
+
+  private findConversationIdForJob(conn: DbConnection, jobId: bigint): bigint | undefined {
+    type Msg = { conversationId: bigint; jobId?: bigint };
+    const row = [...(conn.db.conversation_message.iter() as Iterable<Msg>)].find(
+      (m) => m.jobId !== undefined && String(m.jobId) === String(jobId),
+    );
+    return row?.conversationId;
   }
 
   private async handleOrchestrate(conn: DbConnection, task: TaskRow): Promise<string> {

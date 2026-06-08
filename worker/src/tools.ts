@@ -757,6 +757,28 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
     },
   },
   {
+    name: "tool_bash",
+    description:
+      "Run a command through Pear Bridge on a paired device. Enqueues a bridge command and waits for completion.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        device_id: { type: "number", description: "Target paired bridge device id." },
+        command: { type: "string", description: "Shell command to run on the bridge device." },
+        cwd: { type: "string", description: "Optional working directory for the command." },
+        conversation_id: {
+          type: "number",
+          description: "Optional override conversation id; defaults to current chat conversation.",
+        },
+        timeout_ms: {
+          type: "number",
+          description: "Optional wait timeout for result polling (default 120000).",
+        },
+      },
+      required: ["device_id", "command"],
+    },
+  },
+  {
     name: "request_page_access",
     description:
       "Ask the human in this chat to grant you read or write access to a page. " +
@@ -1907,6 +1929,99 @@ export async function executeTool(
         });
       }
 
+      case "tool_bash": {
+        const command = String(input.command ?? "").trim();
+        if (!command) return JSON.stringify({ ok: false, error: "command is required" });
+        const deviceId = numericInputToBigInt(input.device_id);
+        if (!deviceId) {
+          return JSON.stringify({ ok: false, error: "device_id must be a positive integer" });
+        }
+
+        const conversationId =
+          numericInputToBigInt(input.conversation_id) ?? toolContext.conversationId ?? BigInt(0);
+
+        await conn.reducers.enqueueBridgeCommand({
+          deviceId,
+          command,
+          cwd: typeof input.cwd === "string" && input.cwd.trim() ? input.cwd : undefined,
+          conversationId,
+          jobId: undefined,
+          taskId: undefined,
+        });
+
+        type BridgeCmd = { id: bigint; deviceId: bigint; command: string; conversationId: bigint };
+        type BridgeRes = {
+          commandId: bigint;
+          exitCode?: number;
+          stdout: string;
+          stderr: string;
+          rejectionReason?: string;
+          durationMs: bigint;
+        };
+
+        const bridgeCommandRows: Iterable<BridgeCmd> | undefined =
+          (conn.db as { bridge_command?: { iter: () => Iterable<BridgeCmd> } }).bridge_command?.iter?.() ??
+          (conn.db as { bridgeCommand?: { iter: () => Iterable<BridgeCmd> } }).bridgeCommand?.iter?.();
+        const bridgeResultRows: Iterable<BridgeRes> | undefined =
+          (conn.db as { bridge_command_result?: { iter: () => Iterable<BridgeRes> } }).bridge_command_result?.iter?.() ??
+          (conn.db as { bridgeCommandResult?: { iter: () => Iterable<BridgeRes> } }).bridgeCommandResult?.iter?.();
+
+        if (!bridgeCommandRows || !bridgeResultRows) {
+          return JSON.stringify({
+            ok: true,
+            status: "queued",
+            command,
+            note: "Command enqueued; bridge table polling unavailable in this worker build.",
+          });
+        }
+
+        const enqueued = await waitFor(
+          () =>
+            [...bridgeCommandRows].find(
+              (r) =>
+                String(r.deviceId) === String(deviceId) &&
+                r.command === command &&
+                String(r.conversationId) === String(conversationId),
+            ),
+          10_000,
+        );
+        if (!enqueued) {
+          return JSON.stringify({
+            ok: true,
+            status: "queued",
+            command,
+            note: "Command enqueued; command row not yet visible.",
+          });
+        }
+
+        const timeoutMs = Math.max(1_000, Number(input.timeout_ms ?? 120_000));
+        const result = await waitFor(
+          () => [...bridgeResultRows].find((r) => String(r.commandId) === String(enqueued.id)),
+          timeoutMs,
+        );
+
+        if (!result) {
+          return JSON.stringify({
+            ok: true,
+            status: "running",
+            command_id: Number(enqueued.id),
+            note: `No BridgeCommandResult yet after ${timeoutMs}ms`,
+          });
+        }
+
+        const rejected = Boolean(result.rejectionReason);
+        return JSON.stringify({
+          ok: !rejected,
+          status: rejected ? "rejected" : "completed",
+          command_id: Number(enqueued.id),
+          exit_code: result.exitCode ?? null,
+          stdout: result.stdout ?? "",
+          stderr: result.stderr ?? "",
+          rejection_reason: result.rejectionReason ?? null,
+          duration_ms: Number(result.durationMs ?? BigInt(0)),
+        });
+      }
+
       case "list_properties": {
         const schemaId = BigInt(input.schema_id as number);
         type PropRow = { id: bigint; schemaId: bigint; name: string; propertyType: { tag: string }; order: number };
@@ -2291,7 +2406,11 @@ export class StaticToolExecutor {
   }
 
   /** Execute a static tool by name. */
-  async execute(toolName: string, input: Record<string, unknown>): Promise<string> {
-    return executeTool(this.conn, toolName, input, this.jobId);
+  async execute(
+    toolName: string,
+    input: Record<string, unknown>,
+    toolContext: ToolCallContext = {},
+  ): Promise<string> {
+    return executeTool(this.conn, toolName, input, this.jobId, toolContext);
   }
 }

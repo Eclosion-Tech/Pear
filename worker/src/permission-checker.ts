@@ -15,7 +15,7 @@ import type { ConnLike } from "./tools.js";
 
 // ── Permission type mirrors (must match SpacetimeDB enums) ───────────────────
 
-export type PermissionScopeTag = "Page" | "Subtree" | "Workspace";
+export type PermissionScopeTag = "Page" | "Subtree" | "Workspace" | "BridgeDevice";
 export type PermissionActionTag =
   | "Read"
   | "Write"
@@ -29,7 +29,7 @@ export type PermissionActionTag =
 
 export interface PermissionScope {
   tag: PermissionScopeTag;
-  /** Page or subtree root id (undefined for Workspace). */
+  /** Page/subtree/device id; undefined for Workspace. */
   value?: bigint;
 }
 
@@ -124,6 +124,44 @@ export class PermissionChecker {
   }
 
   /**
+   * Resolve the unique BridgeDevice scope grant for an extension.
+   * Used by tool-bash callers to auto-select device_id when possible.
+   */
+  resolveBridgeDevice(
+    installedExtensionId: bigint,
+  ): { ok: true; deviceId: bigint } | { ok: false; reason: string; candidates?: bigint[] } {
+    const grants = [
+      ...(this.conn.db.extension_permission?.iter() as
+        | Iterable<ExtensionPermissionRow>
+        | undefined ?? []),
+    ].filter(
+      (p) =>
+        p.installedExtensionId === installedExtensionId &&
+        p.scope?.tag === "BridgeDevice" &&
+        p.scope?.value !== undefined,
+    );
+
+    const ids = [...new Set(grants.map((g) => g.scope.value!).map((v) => String(v)))].map(
+      (s) => BigInt(s),
+    );
+
+    if (ids.length === 1) return { ok: true, deviceId: ids[0] };
+    if (ids.length === 0) {
+      return {
+        ok: false,
+        reason: `No BridgeDevice scope grant for extension ${installedExtensionId}`,
+      };
+    }
+    return {
+      ok: false,
+      reason:
+        `Multiple BridgeDevice scope grants for extension ${installedExtensionId}; ` +
+        `device_id must be specified explicitly`,
+      candidates: ids,
+    };
+  }
+
+  /**
    * Check HttpOutbound permission for a specific URL.
    * Validates domain against the allowed_domains list and blocks private hosts.
    */
@@ -203,6 +241,10 @@ export class PermissionChecker {
 
       case "Page":
         return scope.value === pageId;
+
+      // Not page-scoped; handled by resolveBridgeDevice.
+      case "BridgeDevice":
+        return false;
 
       default:
         return false;

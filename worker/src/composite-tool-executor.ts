@@ -19,7 +19,7 @@
  * not as a long-lived singleton — so the permission snapshot is fresh.
  */
 
-import type { ConnLike } from "./tools.js";
+import type { ConnLike, ToolCallContext } from "./tools.js";
 import { StaticToolExecutor } from "./tools.js";
 import { McpToolExecutor } from "./mcp-tool-executor.js";
 import { PermissionChecker, type PermissionActionTag } from "./permission-checker.js";
@@ -179,8 +179,46 @@ export class CompositeToolExecutor {
   async execute(toolName: string, input: Record<string, unknown>): Promise<string> {
     // Static tools always win and need no permission check
     if (this.staticExecutor.hasTool(toolName)) {
+      const staticToolContext: ToolCallContext = {
+        conversationId: this.config.conversationId,
+        currentPageId: this.config.currentPageId,
+      };
+
+      if (toolName === "tool_bash" && this.config.installedExtensionId !== undefined) {
+        const wanted = (input.device_id ?? input.deviceId) as unknown;
+        const toBigInt = (v: unknown): bigint | undefined => {
+          if (typeof v === "bigint") return v;
+          if (typeof v === "number" && Number.isFinite(v)) return BigInt(Math.trunc(v));
+          if (typeof v === "string" && /^\d+$/.test(v)) return BigInt(v);
+          return undefined;
+        };
+
+        const explicit = toBigInt(wanted);
+        if (explicit !== undefined) {
+          const resolved = this.permissionChecker.resolveBridgeDevice(this.config.installedExtensionId);
+          if (resolved.ok && resolved.deviceId !== explicit) {
+            return JSON.stringify({
+              ok: false,
+              error: `Permission denied: device_id ${explicit} is not permitted for this extension`,
+            });
+          }
+          if (!resolved.ok && resolved.candidates && !resolved.candidates.some((d) => d === explicit)) {
+            return JSON.stringify({
+              ok: false,
+              error: `Permission denied: device_id ${explicit} is not in granted BridgeDevice scopes`,
+            });
+          }
+        } else {
+          const resolved = this.permissionChecker.resolveBridgeDevice(this.config.installedExtensionId);
+          if (!resolved.ok) {
+            return JSON.stringify({ ok: false, error: `Permission denied: ${resolved.reason}` });
+          }
+          input.device_id = Number(resolved.deviceId);
+        }
+      }
+
       return this.bracketWithSnapshots(toolName, input, () =>
-        this.staticExecutor.execute(toolName, input),
+        this.staticExecutor.execute(toolName, input, staticToolContext),
       );
     }
 
