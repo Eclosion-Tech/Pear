@@ -162,10 +162,6 @@ pub struct BridgeCommandResult {
     /// 1:1 with BridgeCommand.id.
     #[primary_key]
     pub command_id: u64,
-    /// Copied from `BridgeCommand.requested_by` at completion time; used
-    /// by `BRIDGE_COMMAND_RESULT_FILTER` to scope visibility to the
-    /// originating AI user.
-    pub requested_by: Identity,
     pub exit_code: Option<i32>,
     /// Truncated at `max_output_bytes`; a suffix is appended if cut.
     pub stdout: String,
@@ -176,6 +172,11 @@ pub struct BridgeCommandResult {
     pub completed_at: Timestamp,
     /// SHA-256 of raw stdout+stderr, for the audit chain.
     pub output_hash: String,
+    /// Copied from `BridgeCommand.requested_by` at completion time; used
+    /// by `BRIDGE_COMMAND_RESULT_FILTER` to scope visibility to the
+    /// originating AI user.
+    #[default(Identity::ZERO)]
+    pub requested_by: Identity,
 }
 
 /// Per-device allowlist configuration. Authoritative source, editable
