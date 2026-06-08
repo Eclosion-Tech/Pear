@@ -15,7 +15,7 @@
 //! authoritative for configuration but not for containment. See
 //! `docs/PEAR_BRIDGE.md` § Security.
 
-use spacetimedb::{table, Identity, ReducerContext, SpacetimeType, Table, Timestamp};
+use spacetimedb::{client_visibility_filter, table, Filter, Identity, ReducerContext, SpacetimeType, Table, Timestamp};
 
 use crate::id_counters::alloc_id;
 
@@ -115,7 +115,12 @@ pub struct BridgeSession {
 
 /// A command enqueued by an AI user's `tool-bash` call. The `command`
 /// string is stored pre-allowlist-check; the bridge binary is the
-/// enforcement point.
+/// enforcement point. Each AI user sees only their own commands via
+/// `BRIDGE_COMMAND_FILTER`; the relay (module publisher) sees all rows.
+#[client_visibility_filter]
+const BRIDGE_COMMAND_FILTER: Filter =
+    Filter::Sql("SELECT * FROM bridge_command WHERE requested_by = :sender");
+
 #[table(accessor = bridge_command, public)]
 pub struct BridgeCommand {
     #[primary_key]
@@ -145,7 +150,13 @@ pub struct BridgeCommand {
 }
 
 /// Output and result for a completed command. 1:1 with BridgeCommand.
-/// The proxy never surfaces session internals — only stdout/stderr.
+/// `requested_by` is copied from the parent `BridgeCommand` at write time
+/// so the RLS filter can scope rows to the originating AI user without a
+/// join. The proxy never surfaces session internals — only stdout/stderr.
+#[client_visibility_filter]
+const BRIDGE_COMMAND_RESULT_FILTER: Filter =
+    Filter::Sql("SELECT * FROM bridge_command_result WHERE requested_by = :sender");
+
 #[table(accessor = bridge_command_result, public)]
 pub struct BridgeCommandResult {
     /// 1:1 with BridgeCommand.id.
@@ -172,6 +183,15 @@ pub struct BridgeCommandResult {
 /// from the Pear UI, fetched by the bridge at connect time. The bridge
 /// ALSO enforces this locally and applies an in-binary baseline of
 /// blocked patterns that the server cannot remove. 1:1 with BridgeDevice.
+///
+/// Readable by the device owner so the Pear settings UI can display and
+/// edit the current config without a REST round-trip. `updated_by` is
+/// always the device owner (enforced in `set_bridge_allowlist` via
+/// `require_owner`), so it doubles as the RLS identity column.
+#[client_visibility_filter]
+const BRIDGE_DEVICE_ALLOWLIST_FILTER: Filter =
+    Filter::Sql("SELECT * FROM bridge_device_allowlist WHERE updated_by = :sender");
+
 #[table(accessor = bridge_device_allowlist, public)]
 pub struct BridgeDeviceAllowlist {
     /// 1:1 with BridgeDevice.id.
