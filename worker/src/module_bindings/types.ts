@@ -431,6 +431,87 @@ export const BlockAccessRule = __t.object("BlockAccessRule", {
 });
 export type BlockAccessRule = __Infer<typeof BlockAccessRule>;
 
+export const BridgeCommand = __t.object("BridgeCommand", {
+  id: __t.u64(),
+  deviceId: __t.u64(),
+  sessionId: __t.u64(),
+  conversationId: __t.u64(),
+  jobId: __t.option(__t.u64()),
+  taskId: __t.option(__t.u64()),
+  requestedBy: __t.identity(),
+  command: __t.string(),
+  cwd: __t.option(__t.string()),
+  enqueuedAt: __t.timestamp(),
+  get status() {
+    return BridgeCommandStatus;
+  },
+  requiresConfirmation: __t.bool(),
+  confirmedAt: __t.option(__t.timestamp()),
+  confirmedBy: __t.option(__t.identity()),
+});
+export type BridgeCommand = __Infer<typeof BridgeCommand>;
+
+export const BridgeCommandResult = __t.object("BridgeCommandResult", {
+  commandId: __t.u64(),
+  exitCode: __t.option(__t.i32()),
+  stdout: __t.string(),
+  stderr: __t.string(),
+  rejectionReason: __t.option(__t.string()),
+  durationMs: __t.u64(),
+  completedAt: __t.timestamp(),
+  outputHash: __t.string(),
+});
+export type BridgeCommandResult = __Infer<typeof BridgeCommandResult>;
+
+// The tagged union or sum type for the algebraic type `BridgeCommandStatus`.
+export const BridgeCommandStatus = __t.enum("BridgeCommandStatus", {
+  Pending: __t.unit(),
+  AwaitingConfirmation: __t.unit(),
+  Running: __t.unit(),
+  Completed: __t.unit(),
+  Failed: __t.unit(),
+  Rejected: __t.unit(),
+  TimedOut: __t.unit(),
+});
+export type BridgeCommandStatus = __Infer<typeof BridgeCommandStatus>;
+
+export const BridgeDevice = __t.object("BridgeDevice", {
+  id: __t.u64(),
+  owner: __t.identity(),
+  name: __t.string(),
+  deviceTokenHash: __t.string(),
+  pearBridgeVersion: __t.string(),
+  platform: __t.string(),
+  pairedAt: __t.timestamp(),
+  lastSeenAt: __t.option(__t.timestamp()),
+  revokedAt: __t.option(__t.timestamp()),
+});
+export type BridgeDevice = __Infer<typeof BridgeDevice>;
+
+export const BridgeDeviceAllowlist = __t.object("BridgeDeviceAllowlist", {
+  deviceId: __t.u64(),
+  allowedCommands: __t.array(__t.string()),
+  blockedPatterns: __t.array(__t.string()),
+  allowedDirectories: __t.array(__t.string()),
+  requireConfirmationFor: __t.array(__t.string()),
+  maxOutputBytes: __t.u64(),
+  maxRuntimeSeconds: __t.u64(),
+  updatedAt: __t.timestamp(),
+  updatedBy: __t.identity(),
+});
+export type BridgeDeviceAllowlist = __Infer<typeof BridgeDeviceAllowlist>;
+
+export const BridgeSession = __t.object("BridgeSession", {
+  id: __t.u64(),
+  deviceId: __t.u64(),
+  tunnelTokenHash: __t.string(),
+  tunnelTokenExpiresAt: __t.timestamp(),
+  connectedAt: __t.timestamp(),
+  disconnectedAt: __t.option(__t.timestamp()),
+  remoteAddr: __t.string(),
+});
+export type BridgeSession = __Infer<typeof BridgeSession>;
+
 // The tagged union or sum type for the algebraic type `ComponentCapability`.
 export const ComponentCapability = __t.enum("ComponentCapability", {
   ReadsDatabase: __t.unit(),
@@ -979,6 +1060,7 @@ export const PermissionScope = __t.enum("PermissionScope", {
   Page: __t.u64(),
   Subtree: __t.u64(),
   Workspace: __t.unit(),
+  BridgeDevice: __t.u64(),
 });
 export type PermissionScope = __Infer<typeof PermissionScope>;
 

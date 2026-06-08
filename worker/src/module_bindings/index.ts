@@ -45,7 +45,10 @@ import ClaimTaskReducer from "./claim_task_reducer";
 import ClearBlockAccessRuleReducer from "./clear_block_access_rule_reducer";
 import ClearPageAccessRuleReducer from "./clear_page_access_rule_reducer";
 import ClearPropertyValueReducer from "./clear_property_value_reducer";
+import CloseBridgeSessionReducer from "./close_bridge_session_reducer";
 import CloseConversationReducer from "./close_conversation_reducer";
+import CompleteBridgeCommandReducer from "./complete_bridge_command_reducer";
+import ConfirmBridgeCommandReducer from "./confirm_bridge_command_reducer";
 import ConfirmExtensionInstallReducer from "./confirm_extension_install_reducer";
 import CreateAiUserReducer from "./create_ai_user_reducer";
 import CreateApiEndpointReducer from "./create_api_endpoint_reducer";
@@ -78,6 +81,7 @@ import DeleteViewReducer from "./delete_view_reducer";
 import DisableAiUserMemoryReducer from "./disable_ai_user_memory_reducer";
 import DisableAutomationReducer from "./disable_automation_reducer";
 import EnableAutomationReducer from "./enable_automation_reducer";
+import EnqueueBridgeCommandReducer from "./enqueue_bridge_command_reducer";
 import FailTaskReducer from "./fail_task_reducer";
 import FindOrCreateAiDmReducer from "./find_or_create_ai_dm_reducer";
 import FindOrCreateDmReducer from "./find_or_create_dm_reducer";
@@ -95,6 +99,8 @@ import MarkConversationReadReducer from "./mark_conversation_read_reducer";
 import MigratePageToComponentTreeReducer from "./migrate_page_to_component_tree_reducer";
 import MoveComponentReducer from "./move_component_reducer";
 import MovePageReducer from "./move_page_reducer";
+import OpenBridgeSessionReducer from "./open_bridge_session_reducer";
+import PairBridgeDeviceReducer from "./pair_bridge_device_reducer";
 import ProcessAutomationEventReducer from "./process_automation_event_reducer";
 import ProcessPendingAutomationEventsReducer from "./process_pending_automation_events_reducer";
 import PromoteToInstructionReducer from "./promote_to_instruction_reducer";
@@ -106,10 +112,13 @@ import RecordCompactionReducer from "./record_compaction_reducer";
 import RecordReviewAnnotationReducer from "./record_review_annotation_reducer";
 import RecordToolCallAuditReducer from "./record_tool_call_audit_reducer";
 import RecordUsageEventReducer from "./record_usage_event_reducer";
+import RefreshBridgeTunnelTokenReducer from "./refresh_bridge_tunnel_token_reducer";
 import RegisterReducer from "./register_reducer";
 import RegisterAgentReducer from "./register_agent_reducer";
 import RegisterComponentTypeReducer from "./register_component_type_reducer";
+import RejectBridgeCommandReducer from "./reject_bridge_command_reducer";
 import RemoveConversationParticipantReducer from "./remove_conversation_participant_reducer";
+import RenameBridgeDeviceReducer from "./rename_bridge_device_reducer";
 import RenamePropertyReducer from "./rename_property_reducer";
 import RenameViewReducer from "./rename_view_reducer";
 import ReorderPropertyReducer from "./reorder_property_reducer";
@@ -121,6 +130,7 @@ import RestorePageReducer from "./restore_page_reducer";
 import RestorePageToSnapshotReducer from "./restore_page_to_snapshot_reducer";
 import RevokeApiEndpointKeyReducer from "./revoke_api_endpoint_key_reducer";
 import RevokeAutoApplyReducer from "./revoke_auto_apply_reducer";
+import RevokeBridgeDeviceReducer from "./revoke_bridge_device_reducer";
 import RevokeExtensionPermissionReducer from "./revoke_extension_permission_reducer";
 import RunConventionSensorReducer from "./run_convention_sensor_reducer";
 import RunDeniedToolCallsSensorReducer from "./run_denied_tool_calls_sensor_reducer";
@@ -142,6 +152,7 @@ import SetAllowEvaluationSharingReducer from "./set_allow_evaluation_sharing_red
 import SetAutomationLimitsReducer from "./set_automation_limits_reducer";
 import SetAutomationModeReducer from "./set_automation_mode_reducer";
 import SetBlockAccessRuleReducer from "./set_block_access_rule_reducer";
+import SetBridgeAllowlistReducer from "./set_bridge_allowlist_reducer";
 import SetConversationVisibilityReducer from "./set_conversation_visibility_reducer";
 import SetDefaultViewReducer from "./set_default_view_reducer";
 import SetExtensionEnabledReducer from "./set_extension_enabled_reducer";
@@ -1021,7 +1032,10 @@ const reducersSchema = __reducers(
   __reducerSchema("clear_block_access_rule", ClearBlockAccessRuleReducer),
   __reducerSchema("clear_page_access_rule", ClearPageAccessRuleReducer),
   __reducerSchema("clear_property_value", ClearPropertyValueReducer),
+  __reducerSchema("close_bridge_session", CloseBridgeSessionReducer),
   __reducerSchema("close_conversation", CloseConversationReducer),
+  __reducerSchema("complete_bridge_command", CompleteBridgeCommandReducer),
+  __reducerSchema("confirm_bridge_command", ConfirmBridgeCommandReducer),
   __reducerSchema("confirm_extension_install", ConfirmExtensionInstallReducer),
   __reducerSchema("create_ai_user", CreateAiUserReducer),
   __reducerSchema("create_api_endpoint", CreateApiEndpointReducer),
@@ -1054,6 +1068,7 @@ const reducersSchema = __reducers(
   __reducerSchema("disable_ai_user_memory", DisableAiUserMemoryReducer),
   __reducerSchema("disable_automation", DisableAutomationReducer),
   __reducerSchema("enable_automation", EnableAutomationReducer),
+  __reducerSchema("enqueue_bridge_command", EnqueueBridgeCommandReducer),
   __reducerSchema("fail_task", FailTaskReducer),
   __reducerSchema("find_or_create_ai_dm", FindOrCreateAiDmReducer),
   __reducerSchema("find_or_create_dm", FindOrCreateDmReducer),
@@ -1071,6 +1086,8 @@ const reducersSchema = __reducers(
   __reducerSchema("migrate_page_to_component_tree", MigratePageToComponentTreeReducer),
   __reducerSchema("move_component", MoveComponentReducer),
   __reducerSchema("move_page", MovePageReducer),
+  __reducerSchema("open_bridge_session", OpenBridgeSessionReducer),
+  __reducerSchema("pair_bridge_device", PairBridgeDeviceReducer),
   __reducerSchema("process_automation_event", ProcessAutomationEventReducer),
   __reducerSchema("process_pending_automation_events", ProcessPendingAutomationEventsReducer),
   __reducerSchema("promote_to_instruction", PromoteToInstructionReducer),
@@ -1082,10 +1099,13 @@ const reducersSchema = __reducers(
   __reducerSchema("record_review_annotation", RecordReviewAnnotationReducer),
   __reducerSchema("record_tool_call_audit", RecordToolCallAuditReducer),
   __reducerSchema("record_usage_event", RecordUsageEventReducer),
+  __reducerSchema("refresh_bridge_tunnel_token", RefreshBridgeTunnelTokenReducer),
   __reducerSchema("register", RegisterReducer),
   __reducerSchema("register_agent", RegisterAgentReducer),
   __reducerSchema("register_component_type", RegisterComponentTypeReducer),
+  __reducerSchema("reject_bridge_command", RejectBridgeCommandReducer),
   __reducerSchema("remove_conversation_participant", RemoveConversationParticipantReducer),
+  __reducerSchema("rename_bridge_device", RenameBridgeDeviceReducer),
   __reducerSchema("rename_property", RenamePropertyReducer),
   __reducerSchema("rename_view", RenameViewReducer),
   __reducerSchema("reorder_property", ReorderPropertyReducer),
@@ -1097,6 +1117,7 @@ const reducersSchema = __reducers(
   __reducerSchema("restore_page_to_snapshot", RestorePageToSnapshotReducer),
   __reducerSchema("revoke_api_endpoint_key", RevokeApiEndpointKeyReducer),
   __reducerSchema("revoke_auto_apply", RevokeAutoApplyReducer),
+  __reducerSchema("revoke_bridge_device", RevokeBridgeDeviceReducer),
   __reducerSchema("revoke_extension_permission", RevokeExtensionPermissionReducer),
   __reducerSchema("run_convention_sensor", RunConventionSensorReducer),
   __reducerSchema("run_denied_tool_calls_sensor", RunDeniedToolCallsSensorReducer),
@@ -1118,6 +1139,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_automation_limits", SetAutomationLimitsReducer),
   __reducerSchema("set_automation_mode", SetAutomationModeReducer),
   __reducerSchema("set_block_access_rule", SetBlockAccessRuleReducer),
+  __reducerSchema("set_bridge_allowlist", SetBridgeAllowlistReducer),
   __reducerSchema("set_conversation_visibility", SetConversationVisibilityReducer),
   __reducerSchema("set_default_view", SetDefaultViewReducer),
   __reducerSchema("set_extension_enabled", SetExtensionEnabledReducer),

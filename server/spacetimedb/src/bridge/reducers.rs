@@ -373,6 +373,7 @@ pub fn complete_bridge_command(
     write_audit(ctx, &cmd, "allowed", &output_hash);
     ctx.db.bridge_command_result().insert(BridgeCommandResult {
         command_id,
+        requested_by: cmd.requested_by,
         exit_code,
         stdout,
         stderr,
@@ -406,6 +407,7 @@ pub fn reject_bridge_command(
     write_audit(ctx, &cmd, "denied", &output_hash);
     ctx.db.bridge_command_result().insert(BridgeCommandResult {
         command_id,
+        requested_by: cmd.requested_by,
         exit_code: None,
         stdout: String::new(),
         stderr: String::new(),
