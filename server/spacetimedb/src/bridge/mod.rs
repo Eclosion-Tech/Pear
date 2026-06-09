@@ -91,6 +91,23 @@ pub struct BridgeDevice {
     pub paired_at: Timestamp,
     pub last_seen_at: Option<Timestamp>,
     pub revoked_at: Option<Timestamp>,
+    /// The dedicated SpacetimeDB identity minted for this device at pair time
+    /// (option B). The relay dials STDB as THIS identity — least privilege, never
+    /// an owner/admin token — so the daemon's command subscription is RLS-scoped
+    /// to its own device via `BRIDGE_COMMAND_DEVICE_FILTER`. `Identity::ZERO`
+    /// until paired under the option-B flow.
+    #[default(Identity::ZERO)]
+    pub device_identity: Identity,
+    /// Base64 of the AES-GCM ciphertext (`nonce || ciphertext`) of the device's
+    /// STDB token, minted + encrypted server-side at pair time and decrypted by
+    /// the relay to dial STDB on the device's behalf. The device itself never
+    /// holds an STDB token. Kept in STDB (NOT Postgres) so a self-hosted OSS
+    /// relay can read it — bridge state must not depend on Pear-Cloud infra.
+    /// Stored as a base64 String (not `Vec<u8>`) so it round-trips reliably
+    /// through STDB SQL when the relay reads it back. `None` until paired under
+    /// option B. Lives on this PRIVATE table, so it is never client-readable.
+    #[default(None::<String>)]
+    pub device_stdb_token_ciphertext: Option<String>,
 }
 
 /// An active or recently-closed relay session for a paired device.
@@ -121,6 +138,15 @@ pub struct BridgeSession {
 const BRIDGE_COMMAND_FILTER: Filter =
     Filter::Sql("SELECT * FROM bridge_command WHERE requested_by = :sender");
 
+/// Second visibility rule, **unioned (OR)** with `BRIDGE_COMMAND_FILTER`: the
+/// executing device's own STDB identity can read its device's commands. The
+/// `pear-bridge` daemon connects (through the relay) AS this identity, so its
+/// subscription delivers exactly its own pending commands. STDB enforces RLS and
+/// unions multiple filters — confirmed by `spikes/rls-multi-filter/`.
+#[client_visibility_filter]
+const BRIDGE_COMMAND_DEVICE_FILTER: Filter =
+    Filter::Sql("SELECT * FROM bridge_command WHERE device_identity = :sender");
+
 #[table(accessor = bridge_command, public)]
 pub struct BridgeCommand {
     #[primary_key]
@@ -147,6 +173,12 @@ pub struct BridgeCommand {
     pub confirmed_at: Option<Timestamp>,
     /// The human who confirmed.
     pub confirmed_by: Option<Identity>,
+    /// The executing device's STDB identity, copied from `BridgeDevice` at
+    /// enqueue. Backs `BRIDGE_COMMAND_DEVICE_FILTER` so the daemon can see its
+    /// own device's commands, and gates `complete_/reject_bridge_command` to the
+    /// device that owns the work. `Identity::ZERO` for pre-option-B rows.
+    #[default(Identity::ZERO)]
+    pub device_identity: Identity,
 }
 
 /// Output and result for a completed command. 1:1 with BridgeCommand.

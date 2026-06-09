@@ -5,12 +5,14 @@
 //!
 //! * Device-management reducers (`pair`/`revoke`/`rename`/`set_allowlist`)
 //!   require the sender to be the device `owner`.
-//! * Session-lifecycle and command-completion reducers
-//!   (`open_bridge_session`, `close_bridge_session`,
-//!   `refresh_bridge_tunnel_token`, `complete_bridge_command`,
-//!   `reject_bridge_command`) are called by the relay on the bridge's
-//!   behalf — NEVER by an AI user. They are gated on a valid, non-revoked
-//!   device/session, not on `ctx.sender()` being human.
+//! * Session-lifecycle reducers (`open_bridge_session`,
+//!   `close_bridge_session`, `refresh_bridge_tunnel_token`) are called by the
+//!   relay on the bridge's behalf.
+//! * Command-completion reducers (`complete_bridge_command`,
+//!   `reject_bridge_command`) are gated on `ctx.sender()` equalling the
+//!   command's `device_identity` (option B) — i.e. only the executing device
+//!   (the daemon, connected through the relay as its device identity) may write
+//!   a command's result. NEVER callable by an AI user.
 //! * `enqueue_bridge_command` is the only reducer an AI user (worker
 //!   identity) calls. It records the request; it does NOT execute. The
 //!   bridge binary is the execution + allowlist enforcement point.
@@ -64,6 +66,21 @@ fn require_owner(ctx: &ReducerContext, device: &BridgeDevice) -> Result<(), Stri
     Ok(())
 }
 
+/// Require that the caller is the device executing this command — i.e. the
+/// `pear-bridge` daemon, connected (through the relay) as the device's STDB
+/// identity (option B). This closes a forge-results hole: `complete_`/`reject_`
+/// previously had no caller authorization, so any identity could write a
+/// command's result and inject it into the AI's context.
+fn require_executing_device(ctx: &ReducerContext, cmd: &BridgeCommand) -> Result<(), String> {
+    if cmd.device_identity == Identity::ZERO {
+        return Err("command has no device identity (pre-option-B row)".to_string());
+    }
+    if cmd.device_identity != ctx.sender() {
+        return Err("Only the executing device may report this command's result".to_string());
+    }
+    Ok(())
+}
+
 // ============================================================
 // Pairing — called by the Pear web app pairing UI
 // ============================================================
@@ -77,6 +94,13 @@ fn require_owner(ctx: &ReducerContext, device: &BridgeDevice) -> Result<(), Stri
 /// `/api/bridge/auth`; this reducer assumes the code has already been
 /// validated and consumed by the caller. The `device_token_hash` is the
 /// hash of the freshly-minted token.
+///
+/// Option B: `device_identity` + `device_stdb_token_ciphertext` are the
+/// device's dedicated STDB identity and its encrypted STDB token. They are
+/// minted + encrypted server-side (lifecycle, reusing the `api_service_token`
+/// machinery — reducers can't do HTTP or hold the encryption key) and passed
+/// in here. `owner` is still `ctx.sender()`, so this must be called as the
+/// human who is pairing.
 #[reducer]
 pub fn pair_bridge_device(
     ctx: &ReducerContext,
@@ -84,6 +108,10 @@ pub fn pair_bridge_device(
     device_token_hash: String,
     platform: String,
     bridge_version: String,
+    device_identity: Identity,
+    // Base64 of the AES-GCM-encrypted device STDB token (minted + encrypted
+    // server-side; see `mint_device_credentials`). Stored verbatim.
+    device_stdb_token_ciphertext: String,
 ) -> Result<(), String> {
     if device_name.trim().is_empty() {
         return Err("Device name cannot be empty".to_string());
@@ -102,6 +130,8 @@ pub fn pair_bridge_device(
         paired_at: ctx.timestamp,
         last_seen_at: None,
         revoked_at: None,
+        device_identity,
+        device_stdb_token_ciphertext: Some(device_stdb_token_ciphertext),
     });
     // Seed a conservative default allowlist (see docs/PEAR_BRIDGE.md
     // § Allowlist defaults). allowed_directories is intentionally NOT
@@ -188,7 +218,10 @@ pub fn open_bridge_session(
     ctx: &ReducerContext,
     device_token_hash: String,
     tunnel_token_hash: String,
-    tunnel_token_expires_at: Timestamp,
+    // Micros since the Unix epoch. Passed as a primitive (not `Timestamp`) so
+    // the relay can call this over STDB HTTP `/call` without encoding the
+    // SATS `Timestamp` shape. Built into a `Timestamp` in-reducer.
+    tunnel_token_expires_at_micros: i64,
     remote_addr: String,
 ) -> Result<(), String> {
     let device = ctx
@@ -205,7 +238,9 @@ pub fn open_bridge_session(
         id: session_id,
         device_id: device.id,
         tunnel_token_hash,
-        tunnel_token_expires_at,
+        tunnel_token_expires_at: Timestamp::from_micros_since_unix_epoch(
+            tunnel_token_expires_at_micros,
+        ),
         connected_at: ctx.timestamp,
         disconnected_at: None,
         remote_addr,
@@ -240,7 +275,8 @@ pub fn refresh_bridge_tunnel_token(
     ctx: &ReducerContext,
     session_id: u64,
     new_tunnel_token_hash: String,
-    new_expires_at: Timestamp,
+    // Micros since the Unix epoch (see `open_bridge_session`).
+    new_expires_at_micros: i64,
 ) -> Result<(), String> {
     let session = ctx
         .db
@@ -255,7 +291,7 @@ pub fn refresh_bridge_tunnel_token(
     live_device(ctx, session.device_id)?;
     ctx.db.bridge_session().id().update(BridgeSession {
         tunnel_token_hash: new_tunnel_token_hash,
-        tunnel_token_expires_at: new_expires_at,
+        tunnel_token_expires_at: Timestamp::from_micros_since_unix_epoch(new_expires_at_micros),
         ..session
     });
     Ok(())
@@ -317,8 +353,11 @@ pub fn enqueue_bridge_command(
         requires_confirmation: false,
         confirmed_at: None,
         confirmed_by: None,
+        // Stamp the device's STDB identity so the daemon (connected as that
+        // identity) can see this command via BRIDGE_COMMAND_DEVICE_FILTER, and
+        // so complete/reject can be gated to the executing device.
+        device_identity: device.device_identity,
     });
-    let _ = device; // device liveness already validated
     Ok(())
 }
 
@@ -363,6 +402,7 @@ pub fn complete_bridge_command(
         .id()
         .find(command_id)
         .ok_or_else(|| format!("Bridge command {command_id} not found"))?;
+    require_executing_device(ctx, &cmd)?;
     let status = match exit_code {
         Some(0) => BridgeCommandStatus::Completed,
         _ => BridgeCommandStatus::Failed,
@@ -400,6 +440,7 @@ pub fn reject_bridge_command(
         .id()
         .find(command_id)
         .ok_or_else(|| format!("Bridge command {command_id} not found"))?;
+    require_executing_device(ctx, &cmd)?;
     let output_hash = sha256_hex(&reason);
     // Audit + result first (read `cmd` by reference), then consume `cmd` in the
     // status update via `..cmd` — no clone needed. `reason` is moved into the

@@ -214,6 +214,9 @@ import AutomationPrimitiveRow from "./automation_primitive_table";
 import AutomationRuleRow from "./automation_rule_table";
 import AutomationRunLogRow from "./automation_run_log_table";
 import BlockAccessRuleRow from "./block_access_rule_table";
+import BridgeCommandRow from "./bridge_command_table";
+import BridgeCommandResultRow from "./bridge_command_result_table";
+import BridgeDeviceAllowlistRow from "./bridge_device_allowlist_table";
 import ComponentNodeRow from "./component_node_table";
 import ComponentTypeDefinitionRow from "./component_type_definition_table";
 import ComponentYjsStateRow from "./component_yjs_state_table";
@@ -517,6 +520,45 @@ const tablesSchema = __schema({
       { name: 'block_access_rule_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, BlockAccessRuleRow),
+  bridge_command: __table({
+    name: 'bridge_command',
+    indexes: [
+      { name: 'device_id', algorithm: 'btree', columns: [
+        'deviceId',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'session_id', algorithm: 'btree', columns: [
+        'sessionId',
+      ] },
+    ],
+    constraints: [
+      { name: 'bridge_command_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, BridgeCommandRow),
+  bridge_command_result: __table({
+    name: 'bridge_command_result',
+    indexes: [
+      { name: 'command_id', algorithm: 'btree', columns: [
+        'commandId',
+      ] },
+    ],
+    constraints: [
+      { name: 'bridge_command_result_command_id_key', constraint: 'unique', columns: ['commandId'] },
+    ],
+  }, BridgeCommandResultRow),
+  bridge_device_allowlist: __table({
+    name: 'bridge_device_allowlist',
+    indexes: [
+      { name: 'device_id', algorithm: 'btree', columns: [
+        'deviceId',
+      ] },
+    ],
+    constraints: [
+      { name: 'bridge_device_allowlist_device_id_key', constraint: 'unique', columns: ['deviceId'] },
+    ],
+  }, BridgeDeviceAllowlistRow),
   component_node: __table({
     name: 'component_node',
     indexes: [

@@ -460,6 +460,7 @@ export const BridgeCommandResult = __t.object("BridgeCommandResult", {
   durationMs: __t.u64(),
   completedAt: __t.timestamp(),
   outputHash: __t.string(),
+  requestedBy: __t.identity(),
 });
 export type BridgeCommandResult = __Infer<typeof BridgeCommandResult>;
 
