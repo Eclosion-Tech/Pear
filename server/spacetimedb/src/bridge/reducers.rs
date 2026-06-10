@@ -477,6 +477,37 @@ pub fn reject_bridge_command(
     Ok(())
 }
 
+/// Mark a command as awaiting human confirmation. Called by the bridge daemon
+/// (through the relay, as the device identity) when the command matched the
+/// local allowlist's `require_confirmation_for`. RELAY/BRIDGE-ONLY — gated on
+/// the executing device, like `complete_`/`reject_`. The human then releases it
+/// with `confirm_bridge_command`, which flips it back to `Pending` (with
+/// `confirmed_at` set) so the bridge re-runs it skipping the confirmation gate.
+#[reducer]
+pub fn await_bridge_command_confirmation(
+    ctx: &ReducerContext,
+    command_id: u64,
+) -> Result<(), String> {
+    let cmd = ctx
+        .db
+        .bridge_command()
+        .id()
+        .find(command_id)
+        .ok_or_else(|| format!("Bridge command {command_id} not found"))?;
+    require_executing_device(ctx, &cmd)?;
+    // Only a still-pending command can enter confirmation (ignore if already
+    // confirmed/among a re-dispatch race).
+    if cmd.status != BridgeCommandStatus::Pending {
+        return Ok(());
+    }
+    ctx.db.bridge_command().id().update(BridgeCommand {
+        status: BridgeCommandStatus::AwaitingConfirmation,
+        requires_confirmation: true,
+        ..cmd
+    });
+    Ok(())
+}
+
 // ============================================================
 // Allowlist management
 // ============================================================
