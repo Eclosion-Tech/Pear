@@ -25,9 +25,10 @@
 use spacetimedb::{reducer, Identity, ReducerContext, Table, Timestamp};
 
 use crate::bridge::{
-    bridge_command, bridge_command_result, bridge_device, bridge_device_allowlist, bridge_session,
-    next_bridge_command_id, next_bridge_device_id, next_bridge_session_id, BridgeCommand,
-    BridgeCommandResult, BridgeCommandStatus, BridgeDevice, BridgeDeviceAllowlist, BridgeSession,
+    bridge_command, bridge_command_result, bridge_device, bridge_device_allowlist,
+    bridge_device_summary, bridge_session, next_bridge_command_id, next_bridge_device_id,
+    next_bridge_session_id, BridgeCommand, BridgeCommandResult, BridgeCommandStatus, BridgeDevice,
+    BridgeDeviceAllowlist, BridgeDeviceSummary, BridgeSession,
 };
 use crate::extensions::{tool_call_audit_log, ToolCallAuditLog};
 
@@ -133,6 +134,15 @@ pub fn pair_bridge_device(
         return Err("At least one allowed directory is required to pair a device".to_string());
     }
     let device_id = next_bridge_device_id(ctx);
+    // Public summary mirror for device discovery (clone the safe fields before
+    // they move into the private row).
+    ctx.db.bridge_device_summary().insert(BridgeDeviceSummary {
+        id: device_id,
+        name: device_name.clone(),
+        platform: platform.clone(),
+        connected: false,
+        revoked_at: None,
+    });
     ctx.db.bridge_device().insert(BridgeDevice {
         id: device_id,
         owner: ctx.sender(),
@@ -180,6 +190,13 @@ pub fn revoke_bridge_device(ctx: &ReducerContext, device_id: u64) -> Result<(), 
         revoked_at: Some(ctx.timestamp),
         ..device
     });
+    if let Some(s) = ctx.db.bridge_device_summary().id().find(device_id) {
+        ctx.db.bridge_device_summary().id().update(BridgeDeviceSummary {
+            revoked_at: Some(ctx.timestamp),
+            connected: false,
+            ..s
+        });
+    }
     // Close any live sessions for this device so the relay drops them.
     let open: Vec<BridgeSession> = ctx
         .db
@@ -212,6 +229,12 @@ pub fn rename_bridge_device(
         .find(device_id)
         .ok_or_else(|| format!("Bridge device {device_id} not found"))?;
     require_owner(ctx, &device)?;
+    if let Some(s) = ctx.db.bridge_device_summary().id().find(device_id) {
+        ctx.db
+            .bridge_device_summary()
+            .id()
+            .update(BridgeDeviceSummary { name: name.clone(), ..s });
+    }
     ctx.db
         .bridge_device()
         .id()
@@ -258,10 +281,12 @@ pub fn open_bridge_session(
         disconnected_at: None,
         remote_addr,
     });
+    let device_id = device.id;
     ctx.db.bridge_device().id().update(BridgeDevice {
         last_seen_at: Some(ctx.timestamp),
         ..device
     });
+    set_summary_connected(ctx, device_id, true);
     Ok(())
 }
 
@@ -276,11 +301,24 @@ pub fn close_bridge_session(ctx: &ReducerContext, session_id: u64) -> Result<(),
     if session.disconnected_at.is_some() {
         return Ok(());
     }
+    let device_id = session.device_id;
     ctx.db.bridge_session().id().update(BridgeSession {
         disconnected_at: Some(ctx.timestamp),
         ..session
     });
+    set_summary_connected(ctx, device_id, false);
     Ok(())
+}
+
+/// Best-effort update of the public summary's `connected` flag. No-op if the
+/// summary row is missing (devices paired before the summary table existed).
+fn set_summary_connected(ctx: &ReducerContext, device_id: u64, connected: bool) {
+    if let Some(s) = ctx.db.bridge_device_summary().id().find(device_id) {
+        ctx.db
+            .bridge_device_summary()
+            .id()
+            .update(BridgeDeviceSummary { connected, ..s });
+    }
 }
 
 #[reducer]

@@ -448,6 +448,7 @@ export const BridgeCommand = __t.object("BridgeCommand", {
   requiresConfirmation: __t.bool(),
   confirmedAt: __t.option(__t.timestamp()),
   confirmedBy: __t.option(__t.identity()),
+  deviceIdentity: __t.identity(),
 });
 export type BridgeCommand = __Infer<typeof BridgeCommand>;
 
@@ -486,6 +487,8 @@ export const BridgeDevice = __t.object("BridgeDevice", {
   pairedAt: __t.timestamp(),
   lastSeenAt: __t.option(__t.timestamp()),
   revokedAt: __t.option(__t.timestamp()),
+  deviceIdentity: __t.identity(),
+  deviceStdbTokenCiphertext: __t.option(__t.string()),
 });
 export type BridgeDevice = __Infer<typeof BridgeDevice>;
 
@@ -501,6 +504,15 @@ export const BridgeDeviceAllowlist = __t.object("BridgeDeviceAllowlist", {
   updatedBy: __t.identity(),
 });
 export type BridgeDeviceAllowlist = __Infer<typeof BridgeDeviceAllowlist>;
+
+export const BridgeDeviceSummary = __t.object("BridgeDeviceSummary", {
+  id: __t.u64(),
+  name: __t.string(),
+  platform: __t.string(),
+  connected: __t.bool(),
+  revokedAt: __t.option(__t.timestamp()),
+});
+export type BridgeDeviceSummary = __Infer<typeof BridgeDeviceSummary>;
 
 export const BridgeSession = __t.object("BridgeSession", {
   id: __t.u64(),

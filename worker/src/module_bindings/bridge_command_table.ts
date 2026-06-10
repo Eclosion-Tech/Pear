@@ -31,4 +31,5 @@ export default __t.row({
   requiresConfirmation: __t.bool().name("requires_confirmation"),
   confirmedAt: __t.option(__t.timestamp()).name("confirmed_at"),
   confirmedBy: __t.option(__t.identity()).name("confirmed_by"),
+  deviceIdentity: __t.identity().name("device_identity"),
 });

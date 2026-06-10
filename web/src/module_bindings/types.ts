@@ -505,6 +505,15 @@ export const BridgeDeviceAllowlist = __t.object("BridgeDeviceAllowlist", {
 });
 export type BridgeDeviceAllowlist = __Infer<typeof BridgeDeviceAllowlist>;
 
+export const BridgeDeviceSummary = __t.object("BridgeDeviceSummary", {
+  id: __t.u64(),
+  name: __t.string(),
+  platform: __t.string(),
+  connected: __t.bool(),
+  revokedAt: __t.option(__t.timestamp()),
+});
+export type BridgeDeviceSummary = __Infer<typeof BridgeDeviceSummary>;
+
 export const BridgeSession = __t.object("BridgeSession", {
   id: __t.u64(),
   deviceId: __t.u64(),

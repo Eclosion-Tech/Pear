@@ -12,6 +12,7 @@ import AddAutomationConditionReducer from "../add_automation_condition_reducer";
 import AddConversationParticipantReducer from "../add_conversation_participant_reducer";
 import AddPropertyReducer from "../add_property_reducer";
 import AddTasksToJobReducer from "../add_tasks_to_job_reducer";
+import AwaitBridgeCommandConfirmationReducer from "../await_bridge_command_confirmation_reducer";
 import CancelExtensionInstallReducer from "../cancel_extension_install_reducer";
 import ClaimTaskReducer from "../claim_task_reducer";
 import ClearBlockAccessRuleReducer from "../clear_block_access_rule_reducer";
@@ -170,6 +171,7 @@ export type AddAutomationConditionParams = __Infer<typeof AddAutomationCondition
 export type AddConversationParticipantParams = __Infer<typeof AddConversationParticipantReducer>;
 export type AddPropertyParams = __Infer<typeof AddPropertyReducer>;
 export type AddTasksToJobParams = __Infer<typeof AddTasksToJobReducer>;
+export type AwaitBridgeCommandConfirmationParams = __Infer<typeof AwaitBridgeCommandConfirmationReducer>;
 export type CancelExtensionInstallParams = __Infer<typeof CancelExtensionInstallReducer>;
 export type ClaimTaskParams = __Infer<typeof ClaimTaskReducer>;
 export type ClearBlockAccessRuleParams = __Infer<typeof ClearBlockAccessRuleReducer>;

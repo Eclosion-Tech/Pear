@@ -13,5 +13,5 @@ import {
 export default {
   sessionId: __t.u64(),
   newTunnelTokenHash: __t.string(),
-  newExpiresAt: __t.timestamp(),
+  newExpiresAtMicros: __t.i64(),
 };

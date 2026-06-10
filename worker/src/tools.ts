@@ -757,13 +757,26 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
     },
   },
   {
+    name: "list_bridge_devices",
+    description:
+      "List the Pear Bridge devices paired to this workspace (id, name, platform, whether currently " +
+      "connected). Call this first to find the device_id to pass to tool_bash. Only connected, " +
+      "non-revoked devices can run commands.",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
     name: "tool_bash",
     description:
-      "Run a command through Pear Bridge on a paired device. Enqueues a bridge command and waits for completion.",
+      "Run a command through Pear Bridge on a paired device. Enqueues a bridge command and waits for completion. " +
+      "Use list_bridge_devices first to get the device_id.",
     input_schema: {
       type: "object" as const,
       properties: {
-        device_id: { type: "number", description: "Target paired bridge device id." },
+        device_id: { type: "number", description: "Target paired bridge device id (from list_bridge_devices)." },
         command: { type: "string", description: "Shell command to run on the bridge device." },
         cwd: { type: "string", description: "Optional working directory for the command." },
         conversation_id: {
@@ -1927,6 +1940,39 @@ export async function executeTool(
           permission,
           next_step: "A permission prompt is now visible to the human in this chat. Wait for approval before retrying.",
         });
+      }
+
+      case "list_bridge_devices": {
+        type BridgeDeviceSummaryRow = {
+          id: bigint;
+          name: string;
+          platform: string;
+          connected: boolean;
+          revokedAt?: unknown;
+        };
+        const summaryRows: Iterable<BridgeDeviceSummaryRow> | undefined =
+          (conn.db as { bridge_device_summary?: { iter: () => Iterable<BridgeDeviceSummaryRow> } })
+            .bridge_device_summary?.iter?.() ??
+          (conn.db as { bridgeDeviceSummary?: { iter: () => Iterable<BridgeDeviceSummaryRow> } })
+            .bridgeDeviceSummary?.iter?.();
+
+        if (!summaryRows) {
+          return JSON.stringify({
+            ok: true,
+            devices: [],
+            note: "Bridge device list unavailable in this worker build.",
+          });
+        }
+
+        const devices = [...summaryRows]
+          .filter((d) => d.revokedAt == null)
+          .map((d) => ({
+            device_id: Number(d.id),
+            name: d.name,
+            platform: d.platform,
+            connected: Boolean(d.connected),
+          }));
+        return JSON.stringify({ ok: true, devices });
       }
 
       case "tool_bash": {

@@ -11,8 +11,5 @@ import {
 } from "spacetimedb";
 
 export default {
-  deviceTokenHash: __t.string(),
-  tunnelTokenHash: __t.string(),
-  tunnelTokenExpiresAtMicros: __t.i64(),
-  remoteAddr: __t.string(),
+  commandId: __t.u64(),
 };

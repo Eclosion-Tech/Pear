@@ -15,4 +15,7 @@ export default {
   deviceTokenHash: __t.string(),
   platform: __t.string(),
   bridgeVersion: __t.string(),
+  deviceIdentity: __t.identity(),
+  deviceStdbTokenCiphertext: __t.string(),
+  allowedDirectories: __t.array(__t.string()),
 };

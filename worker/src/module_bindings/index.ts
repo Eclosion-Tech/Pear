@@ -40,6 +40,7 @@ import AddAutomationConditionReducer from "./add_automation_condition_reducer";
 import AddConversationParticipantReducer from "./add_conversation_participant_reducer";
 import AddPropertyReducer from "./add_property_reducer";
 import AddTasksToJobReducer from "./add_tasks_to_job_reducer";
+import AwaitBridgeCommandConfirmationReducer from "./await_bridge_command_confirmation_reducer";
 import CancelExtensionInstallReducer from "./cancel_extension_install_reducer";
 import ClaimTaskReducer from "./claim_task_reducer";
 import ClearBlockAccessRuleReducer from "./clear_block_access_rule_reducer";
@@ -217,6 +218,7 @@ import BlockAccessRuleRow from "./block_access_rule_table";
 import BridgeCommandRow from "./bridge_command_table";
 import BridgeCommandResultRow from "./bridge_command_result_table";
 import BridgeDeviceAllowlistRow from "./bridge_device_allowlist_table";
+import BridgeDeviceSummaryRow from "./bridge_device_summary_table";
 import ComponentNodeRow from "./component_node_table";
 import ComponentTypeDefinitionRow from "./component_type_definition_table";
 import ComponentYjsStateRow from "./component_yjs_state_table";
@@ -559,6 +561,17 @@ const tablesSchema = __schema({
       { name: 'bridge_device_allowlist_device_id_key', constraint: 'unique', columns: ['deviceId'] },
     ],
   }, BridgeDeviceAllowlistRow),
+  bridge_device_summary: __table({
+    name: 'bridge_device_summary',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'bridge_device_summary_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, BridgeDeviceSummaryRow),
   component_node: __table({
     name: 'component_node',
     indexes: [
@@ -1069,6 +1082,7 @@ const reducersSchema = __reducers(
   __reducerSchema("add_conversation_participant", AddConversationParticipantReducer),
   __reducerSchema("add_property", AddPropertyReducer),
   __reducerSchema("add_tasks_to_job", AddTasksToJobReducer),
+  __reducerSchema("await_bridge_command_confirmation", AwaitBridgeCommandConfirmationReducer),
   __reducerSchema("cancel_extension_install", CancelExtensionInstallReducer),
   __reducerSchema("claim_task", ClaimTaskReducer),
   __reducerSchema("clear_block_access_rule", ClearBlockAccessRuleReducer),

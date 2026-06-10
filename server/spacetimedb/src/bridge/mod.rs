@@ -224,6 +224,27 @@ pub struct BridgeCommandResult {
 const BRIDGE_DEVICE_ALLOWLIST_FILTER: Filter =
     Filter::Sql("SELECT * FROM bridge_device_allowlist WHERE updated_by = :sender");
 
+/// Non-sensitive, workspace-readable view of paired devices. `bridge_device`
+/// itself is PRIVATE (it holds token hashes + the encrypted STDB token), so AI
+/// users and the device-management UI cannot read it to discover which devices
+/// exist. This public mirror carries only the safe fields, letting any identity
+/// connected to this workspace module list devices (e.g. the `list_bridge_devices`
+/// agent tool). No RLS — visible workspace-wide, like other public reference
+/// data. Kept in sync by the device + session lifecycle reducers; 1:1 with
+/// `BridgeDevice` by `id`.
+#[table(accessor = bridge_device_summary, public)]
+pub struct BridgeDeviceSummary {
+    /// == `BridgeDevice.id`.
+    #[primary_key]
+    pub id: u64,
+    pub name: String,
+    pub platform: String,
+    /// True while a relay session is open for this device (best-effort; set by
+    /// `open_/close_bridge_session`).
+    pub connected: bool,
+    pub revoked_at: Option<Timestamp>,
+}
+
 #[table(accessor = bridge_device_allowlist, public)]
 pub struct BridgeDeviceAllowlist {
     /// 1:1 with BridgeDevice.id.

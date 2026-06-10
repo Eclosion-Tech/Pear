@@ -10,9 +10,10 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
-export default {
-  deviceTokenHash: __t.string(),
-  tunnelTokenHash: __t.string(),
-  tunnelTokenExpiresAtMicros: __t.i64(),
-  remoteAddr: __t.string(),
-};
+export default __t.row({
+  id: __t.u64().primaryKey(),
+  name: __t.string(),
+  platform: __t.string(),
+  connected: __t.bool(),
+  revokedAt: __t.option(__t.timestamp()).name("revoked_at"),
+});
