@@ -172,6 +172,38 @@ pub fn run_pending_migrations(ctx: &ReducerContext) -> Result<(), String> {
             Ok::<(), String>(())
         }
     );
+    run_step!(
+        ctx,
+        "bridge_device_summary_backfill_v1",
+        backfill_bridge_device_summary_inner
+    );
+    Ok(())
+}
+
+/// Seed the public `bridge_device_summary` mirror for devices paired before the
+/// table existed, so they appear in `list_bridge_devices`. `connected` starts
+/// false and is corrected the next time the device opens a relay session.
+fn backfill_bridge_device_summary_inner(ctx: &ReducerContext) -> Result<(), String> {
+    use crate::bridge::{bridge_device, bridge_device_summary, BridgeDeviceSummary};
+    let existing: std::collections::HashSet<u64> =
+        ctx.db.bridge_device_summary().iter().map(|s| s.id).collect();
+    let missing: Vec<_> = ctx
+        .db
+        .bridge_device()
+        .iter()
+        .filter(|d| !existing.contains(&d.id))
+        .collect();
+    let n = missing.len();
+    for d in missing {
+        ctx.db.bridge_device_summary().insert(BridgeDeviceSummary {
+            id: d.id,
+            name: d.name.clone(),
+            platform: d.platform.clone(),
+            connected: false,
+            revoked_at: d.revoked_at,
+        });
+    }
+    log::info!("bridge_device_summary_backfill_v1: inserted {n} rows");
     Ok(())
 }
 

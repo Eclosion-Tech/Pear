@@ -785,7 +785,10 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
         },
         timeout_ms: {
           type: "number",
-          description: "Optional wait timeout for result polling (default 120000).",
+          description:
+            "Optional wait timeout (ms) for result polling (default 150000). The bridge kills a " +
+            "command after its configured max runtime (120s by default) and returns a timed-out " +
+            "result, so the default leaves margin to receive that.",
         },
       },
       required: ["device_id", "command"],
@@ -1983,6 +1986,31 @@ export async function executeTool(
           return JSON.stringify({ ok: false, error: "device_id must be a positive integer" });
         }
 
+        // Fast-fail before enqueuing if the device isn't a live, connected
+        // target — otherwise a command for a down daemon sits Pending and the
+        // caller waits out the full result timeout for a result that never comes.
+        type DeviceSummary = { id: bigint; name: string; connected: boolean; revokedAt?: unknown };
+        const summaryIter: Iterable<DeviceSummary> | undefined =
+          (conn.db as { bridge_device_summary?: { iter: () => Iterable<DeviceSummary> } })
+            .bridge_device_summary?.iter?.() ??
+          (conn.db as { bridgeDeviceSummary?: { iter: () => Iterable<DeviceSummary> } })
+            .bridgeDeviceSummary?.iter?.();
+        if (summaryIter) {
+          const dev = [...summaryIter].find((d) => String(d.id) === String(deviceId));
+          if (!dev || dev.revokedAt != null) {
+            return JSON.stringify({
+              ok: false,
+              error: `Bridge device ${deviceId} not found. Use list_bridge_devices to see available devices.`,
+            });
+          }
+          if (!dev.connected) {
+            return JSON.stringify({
+              ok: false,
+              error: `Bridge device ${deviceId} (${dev.name}) is not connected — make sure the pear-bridge daemon is running on that machine.`,
+            });
+          }
+        }
+
         const conversationId =
           numericInputToBigInt(input.conversation_id) ?? toolContext.conversationId ?? BigInt(0);
 
@@ -2040,7 +2068,7 @@ export async function executeTool(
           });
         }
 
-        const timeoutMs = Math.max(1_000, Number(input.timeout_ms ?? 120_000));
+        const timeoutMs = Math.max(1_000, Number(input.timeout_ms ?? 150_000));
         const result = await waitFor(
           () => [...bridgeResultRows].find((r) => String(r.commandId) === String(enqueued.id)),
           timeoutMs,
