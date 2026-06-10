@@ -3,6 +3,8 @@
 
 **Domain:** pear.pro
 
+> **Historical document.** This is the original design document for Pear's MVP. The philosophy and data model still hold, but many implementation details have evolved — most notably, the document model is now a typed `ComponentNode` tree (not BlockNote), and several features described here as planned have shipped. For current shipped/planned status, see [`ROADMAP.md`](./ROADMAP.md); for current setup and features, see [`README.md`](./README.md).
+
 ---
 
 ## 1. The Problem

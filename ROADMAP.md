@@ -29,8 +29,8 @@
 
 ### Editor
 
-- ✅ BlockNote integration — rich text editor with slash commands
-- ✅ Local-first storage — IndexedDB primary, SpacetimeDB periodic backup (30s debounce)
+- ✅ BlockNote integration — rich text editor with slash commands *(legacy — superseded by the component-tree editor; see [Rendering substrate](#rendering-substrate--componentnode-tree) below)*
+- ✅ Local-first storage — IndexedDB primary, SpacetimeDB periodic backup (30s debounce) *(BlockNote pages only; component-tree pages sync block-level through SpacetimeDB directly)*
 - ✅ PageLink block — inline page reference with live title sync
 - ✅ Page history panel — timeline of snapshots, preview, restore
 
@@ -125,8 +125,8 @@
 - ✅ TypeScript module bindings regenerated — `orcha_job`, `orcha_task`, `orcha_agent`, `orcha_shared_context` tables + all 6 reducers available client-side
 - ✅ `hooks/useOrcha.ts` — `useOrchaJobsForPage`, `useOrchaTasksForJob`, `useOrchaAgents`, `useCreateJob`, and all reducer hooks
 - ✅ `AiPanel` component — star button in page header opens a right-side panel; shows all jobs for the page with task-level status; prompt textarea creates new jobs (⌘↵ to submit)
-- 📋 `PreAgentEdit` / `PostAgentEdit` snapshots — auto-snapshot before and after agent edits
-- 📋 Agent edit badge in history — "edited by [agent name]" with one-click revert
+- ✅ `PreAgentEdit` / `PostAgentEdit` snapshots — the worker brackets every mutating tool call with before/after snapshots
+- ✅ Pending-changes review — per-page panel lists agent edit brackets with accept / reject (rollback to pre-snapshot)
 - 📋 Schema generation agent — describe what you want to track, agent generates `DatabaseSchema` + `PropertyDefinitions`
 - 📋 Natural language filter — "show me all tasks due this week assigned to me" → filter config
 - 📋 Workspace summarization — "summarize my open tasks" pulls from `PropertyValues`, not raw text
@@ -167,22 +167,23 @@
 
 ### Real-time multi-user editing
 
-- 📋 Re-introduce streaming Yjs updates for active sessions (see `PEAR_MVP.md §17`)
+- 🔨 Live block-level sync — component-tree pages sync per-block through SpacetimeDB subscriptions; per-block Yjs state merges server-side. Streaming awareness (presence, cursors) still open.
 - 📋 Presence indicators — avatars on page title bar showing active collaborators
 - 📋 Named cursors — per-user cursor positions in the editor (`y-protocols/awareness`)
 - 📋 "Last edited by X" metadata on pages and properties
 
 ### Multi-workspace client
 
-- 📋 Local workspace connection storage — list of `WorkspaceConnection` entries, never synced
-- 📋 Workspace switcher in sidebar
+- ✅ Local workspace connection storage — workspace connections panel in settings; connection list stays local
+- ✅ Workspace snapshot export / import — download a full-workspace JSON snapshot, import into an empty workspace
 - 📋 Invite link generation and join flow — `pear://host:port?invite=token`
 - 📋 One-time invite tokens with expiry
 
 ### Permissions
 
-- 📋 Workspace roles — Owner, Admin, Member, Guest
-- 📋 Page-level sharing — make specific pages readable without workspace membership
+- ✅ Page & block access rules — `set_page_access_rule` / `set_block_access_rule` reducers with server-side enforcement
+- ✅ Access requests — `request_page_access` / `resolve_page_access_request` flow
+- 📋 Workspace roles — Owner, Admin, Member, Guest (today: admin flag + per-page rules)
 - 📋 Personal views — `DatabaseView.owner_identity` already in schema, needs UI
 
 ---
@@ -191,14 +192,15 @@
 
 *Goal: Let users connect Pear's data model to the outside world and to AI without writing code.*
 
-- 📋 Automation rules — trigger on page/property events, chain actions
-- 📋 Action types:
+- ✅ Automation substrate (v0) — typed trigger/action graphs in the module (`PageCreated`, `PageUpdated`, `PropertyChanged`, `Scheduled`, …), event queue, scheduled routines (interval / one-shot / cron), and **dry-run execution** so rules can be drafted, validated, and simulated safely
+- 🔨 Live action execution — side effects stay behind the queue boundary in v0; live mode exists as a flag but actions are not yet executed for real
+- 📋 Action types (live):
   - `HttpRequest` — webhooks, Zapier, n8n, Make
   - `SendEmail` — SMTP notification
   - `CreatePage` — auto-create rows in response to events
   - `UpdateProperty` — auto-set values
   - `OrchaJob` — delegate work to AI agent pool
-- 📋 Automation worker — Orcha-based worker that subscribes to `AutomationEventQueue`, executes action chains
+- 📋 Automation worker — Orcha-based worker that subscribes to the event queue, executes action chains
 - 📋 Automation run log — UI showing what ran, when, result per action
 - 📋 Automation builder UI — create/edit rules and action chains
 
@@ -208,11 +210,12 @@
 
 *Goal: More ways to look at the same data.*
 
-- 📋 Kanban view — group rows by a Select property, drag between columns
-- 📋 Calendar view — group rows by a Date property, month/week display
-- 📋 Gallery view — card grid, show a cover image property
-- 📋 Formula columns — computed values derived from other properties
-- 📋 Rollup columns — aggregate values from a related database
+- ✅ Kanban / board view — group rows by a Select property (`ViewType::Kanban` + `BoardView`)
+- 📋 Calendar view — group rows by a Date property, month/week display *(`ViewType::Calendar` exists in schema; no renderer yet)*
+- 📋 Gallery view — card grid, show a cover image property *(`ViewType::Gallery` exists in schema; no renderer yet)*
+- ✅ Formula columns — client-evaluated expressions over sibling properties (`PropertyType::Formula`)
+- ✅ Rollup columns — aggregate values from a related database (`PropertyType::Rollup`, client-evaluated)
+- ✅ AI columns — model-computed values over row data (`PropertyType::Ai`, evaluated by the worker with cached evaluations)
 - 📋 Timeline view — Gantt-style, requires date range properties
 - 📋 Board status transitions — enforce allowed `Status` changes (state machine for Select)
 
@@ -222,10 +225,11 @@
 
 *Goal: Pear as a platform, not just a product.*
 
-- 💡 Import from Notion — page tree, databases, properties, content
+- ✅ Import from Notion — `import_notion` reducer rebuilds page tree, databases, properties, and content into an empty workspace; settings panel drives it via an external OAuth + transform service
+- ✅ Pear snapshot export / import — full-workspace JSON snapshot for backup or migration between instances
 - 💡 Import from Markdown — flat file import with front-matter as properties
-- 💡 Export to Markdown — full workspace export for backup or migration
-- 🔨 Native desktop app — Tauri v2; `desktop/` package scaffolded; workspace picker + connection storage; `pear://` deep links + tray; tray **Meeting notes…** dispatches `pear-desktop-meeting-hint` in the webview (meeting banner without relying on mic device labels)
+- 💡 Export to Markdown — full workspace export
+- 💡 Native desktop app — Tauri v2 (an earlier prototype lived in this repo; not currently maintained here)
 - 💡 Mobile app — iOS/Android via Tauri v2 (read-first, then edit)
 - 💡 Public Pear Cloud — managed hosting for users who don't want to self-host
 - ✅ Plugin system — Extensions + MCP tools (see Phase 2 above)
@@ -236,31 +240,30 @@
 
 ## Rendering substrate — `ComponentNode` tree
 
-*Cross-cutting infrastructure replacement. Replaces BlockNote as Pear's document model with a typed component tree owned by SpacetimeDB. See [`docs/PEAR_RENDERING_SUBSTRATE.md`](../docs/PEAR_RENDERING_SUBSTRATE.md) (parent ADR) and [`docs/PEAR_COMPONENT_NODE_SCHEMA.md`](../docs/PEAR_COMPONENT_NODE_SCHEMA.md) (substrate-layer implementation ADR).*
+*Cross-cutting infrastructure replacement. Replaces BlockNote as Pear's document model with a typed component tree owned by SpacetimeDB.*
 
 ### Substrate layer (shipped)
 
-- ✅ `ComponentNode`, `ComponentYjsState`, `ComponentTypeDefinition` tables (module v0.11.1)
-- ✅ Component-tree reducer surface — `create_component_tree_page`, `insert_component`, `update_component_props`, `move_component`, `delete_component`, `restore_component`, `save_component_yjs_state`, `register_component_type`, `update_component_type`
-- ✅ Initial registry — 11 idempotently-seeded built-ins: `Container`, `RichText`, `Heading`, `Image`, `Form`, `Input`, `Button`, `Select`, `Checkbox`, `Markdown`, `CodeRef`
-- ✅ Per-`RichText` Y.Doc storage via `ComponentYjsState` (legacy `PageYjsState` stays during migration)
+- ✅ `ComponentNode`, `ComponentYjsState`, `ComponentTypeDefinition` tables
+- ✅ Component-tree reducer surface — `create_component_tree_page`, `insert_component`, `update_component_props`, `move_component`, `delete_component`, `restore_component`, `save_component_yjs_state`, `register_component_type`, `update_component_type`, plus migration reducers
+- ✅ Built-in registry — 18 idempotently-seeded types: `Container`, `RichText`, `Heading`, `Image`, `ImageBlock`, `Audio`, `Form`, `Input`, `Button`, `Table`, `Card`, `List`, `CodeRef`, `PageLink`, `Conversation`, `BulletListItem`, `NumberedListItem`, `ChecklistItem`
+- ✅ Per-block Y.Doc storage via `ComponentYjsState` (legacy `PageYjsState` retained for unmigrated BlockNote pages)
 - ✅ `PageSnapshot` payload extension — `component_tree_v1` JSON shape carries node tree + base64-encoded Yjs blobs; restore reassigns IDs and remaps parent refs
-- ✅ Purge cascade — `purge_page_inner` cascades into `component_node` + `component_yjs_state`
+- ✅ Purge cascade — page purge cascades into `component_node` + `component_yjs_state`
 - ✅ Integrity model — server-side reducers enforce tree-shape invariants (parent existence, no cycles, registered types, `accepts_children`, `has_yjs_state` consistency, leaf-only soft-delete, restore requires live ancestor chain, access control)
-- ✅ Client-side prop-schema validator (`pear/web/src/lib/componentProps.ts`) — dependency-free JSON Schema subset covering every built-in
-- ✅ End-to-end smoke harness — `pnpm --filter web smoke`, 19/19 against local stack; caught a latent cycle-detection bug in `ancestor_chain_contains` (fixed in v0.11.1)
-- ✅ [`@eclosion-tech/react-native-yjs-text` v0.1](https://www.npmjs.com/package/@eclosion-tech/react-native-yjs-text) — native RN rich-text editor primitive, MIT (May 24 2026)
+- ✅ Client-side prop-schema validator — dependency-free JSON Schema subset covering every built-in
+- ✅ End-to-end smoke harness — `pnpm --filter web smoke` against a local stack
+- ✅ [`@eclosion-tech/react-native-yjs-text` v0.1](https://www.npmjs.com/package/@eclosion-tech/react-native-yjs-text) — native RN rich-text editor primitive, MIT
 
-### Downstream — queued, each gets its own ADR
+### Editor & renderers
 
-- 📋 **BlockNote → `ComponentNode` migration tool** — mechanical migration of every existing `Page` with `content_format = BlockNote`. Also the right moment to swap `order: u32` → fractional indexing (`String`), since both are breaking changes that need `--break-clients` together.
-- 🔨 **Web renderer ADR** — *draft landed* ([`docs/PEAR_WEB_RENDERER.md`](../docs/PEAR_WEB_RENDERER.md), May 26 2026). React renderer that walks the `ComponentNode` tree against the registry. Sprint 1 (read-only renderer + `DocPage` fork on `contentFormat`) queued next; sprints 2–4 cover `y-prosemirror` editor stack, block chrome, and porting existing PearEditor custom blocks. Resolves parent ADR Open Q #2.
-- 📋 **React Native renderer ADR** — first user-visible win. RN renderer over `ComponentNode` tree; uses `YTextRenderer` from `react-native-yjs-text` for read-only mobile out of the gate, edit path lands when on-device verification clears.
-- 📋 **AI authoring surface ADR** — `add_component`, `set_prop`, `move_component`, `remove_component` as agent tools against the registry; validates against `prop_schema`; snapshots before/after. Folds into the unified provider/capability work in `docs/PEAR_AI_INTEGRATION.md`.
-- 📋 **Custom-view runtime** — cursors, bindings, write-back. Scoped ADR.
-- 📋 **Multi-stage custom-view generation pipeline** — agentic generation per `PEAR_RENDERING_SUBSTRATE.md` § Custom views.
-- 📋 **Server-side prop-schema enforcement** — deferred post-v1. Client-side validation is the authority at v1; promote to a reducer-side gate once we have signal on `prop_schema` evolution patterns.
-- 📋 **Templates** — shareable custom views, type-based binding remap on install. Lower priority.
+- ✅ **Web editor (`packages/pulp`)** — storage-agnostic component-tree editor: rendering against the registry, per-block ProseMirror rich text over Yjs, slash menu, drag handles, multi-block selection, turn-into, undo/redo. Wired to SpacetimeDB by the web app's component renderers.
+- ✅ **BlockNote → `ComponentNode` migration** — new Doc pages default to the component tree; existing BlockNote pages migrate in place
+- ✅ **AI authoring** — the worker authors component-tree content directly (markdown → component block specs → component reducers, with per-insert verification)
+- 📋 **React Native renderer** — RN renderer over the `ComponentNode` tree; `react-native-yjs-text` provides the rich-text primitive
+- 📋 **Custom-view runtime** — data-bound components (cursors, bindings, write-back) for building app-like views from the same primitives
+- 📋 **Server-side prop-schema enforcement** — client-side validation is the authority today; promote to a reducer-side gate once `prop_schema` evolution patterns settle
+- 📋 **Templates** — shareable custom views, type-based binding remap on install
 
 ---
 
@@ -268,15 +271,12 @@
 
 These are explicitly not being built until the core is solid:
 
-- Real-time multiplayer cursors ← post-Phase 3
-- Permissions / sharing ← post-Phase 3
-- Formula columns ← post-Phase 5
-- Rollups ← post-Phase 5
-- Kanban / Calendar / Gallery ← post-Phase 5
+- Real-time multiplayer cursors / presence ← post-Phase 3
+- Workspace roles (Owner/Admin/Member/Guest) ← post-Phase 3 *(per-page/block access rules already shipped)*
+- Calendar / Gallery / Timeline views ← post-Phase 5 *(Kanban board shipped)*
 - Mobile ← post-Phase 6
-- Notion import ← post-Phase 6
 - Whiteboard / Canvas ← post-Phase 6
 
 ---
 
-*Last updated: May 25, 2026 — rendering substrate layer landed at module v0.11.1: `ComponentNode` tree + reducer surface + 11 built-in component types + per-`RichText` Yjs storage + smoke harness all live; downstream renderers / migration / AI authoring queued, each with its own ADR before code lands. Earlier — April 2026: Phase 2 semantic search shipped (MiniLM embeddings, ⌘K hybrid search, sharp pin + editor scheduling); agent runtime + Extensions/MCP (incl. built-in extension); Phase 6 plugin system ✅*
+*Last updated: June 10, 2026 — component-tree editor (`packages/pulp`) is now the default document surface; BlockNote retained as legacy path with in-place migration. Also landed since May: page/block access rules + access requests, automations v0 substrate (dry-run), board view, formula/rollup/AI columns, Notion import, workspace snapshot export/import, custom REST API endpoints (`docs/API_ENDPOINTS.md`). Earlier — May 2026: rendering substrate layer (tables, reducers, registry, smoke harness). April 2026: Phase 2 semantic search; agent runtime + Extensions/MCP; Phase 6 plugin system ✅*

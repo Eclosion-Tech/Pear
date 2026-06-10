@@ -2042,10 +2042,10 @@ export async function executeTool(
 
         if (!bridgeCommandRows || !bridgeResultRows) {
           return JSON.stringify({
-            ok: true,
-            status: "queued",
+            ok: false,
+            status: "unconfirmed",
             command,
-            note: "Command enqueued; bridge table polling unavailable in this worker build.",
+            note: "Command was enqueued but its result cannot be read in this worker build. Do NOT claim it ran or succeeded.",
           });
         }
 
@@ -2061,10 +2061,10 @@ export async function executeTool(
         );
         if (!enqueued) {
           return JSON.stringify({
-            ok: true,
-            status: "queued",
+            ok: false,
+            status: "unconfirmed",
             command,
-            note: "Command enqueued; command row not yet visible.",
+            note: "enqueue_bridge_command did not produce a visible command row — the device may not have a connected session. Do NOT claim the command ran or succeeded.",
           });
         }
 
@@ -2076,10 +2076,10 @@ export async function executeTool(
 
         if (!result) {
           return JSON.stringify({
-            ok: true,
-            status: "running",
+            ok: false,
+            status: "no_result",
             command_id: Number(enqueued.id),
-            note: `No BridgeCommandResult yet after ${timeoutMs}ms`,
+            note: `No result after ${timeoutMs}ms — the command did not complete (it may still be running, or the device/daemon may be unresponsive). Do NOT claim it succeeded; tell the user it did not return a result.`,
           });
         }
 

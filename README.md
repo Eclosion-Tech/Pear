@@ -2,7 +2,7 @@
 
 **A self-hosted, relational-first Notion alternative built on SpacetimeDB.**
 
-Pages and database rows are the same entity — a page viewed in a grid is a row, a row opened fully is a page. Real-time data syncs over SpacetimeDB subscriptions; the editor is Yjs-backed and local-first, with merged state persisted to the server.
+Pages and database rows are the same entity — a page viewed in a grid is a row, a row opened fully is a page. Real-time data syncs over SpacetimeDB subscriptions; documents are typed component trees with Yjs-backed rich text, synced live through the database.
 
 ---
 
@@ -21,7 +21,7 @@ Pages and database rows are the same entity — a page viewed in a grid is a row
 |---|---|
 | Backend / sync | [SpacetimeDB](https://spacetimedb.com) (Rust module) |
 | Frontend | Next.js · React 19 · Tailwind CSS 3 |
-| Editor | [BlockNote](https://blocknotejs.org) + Yjs (local-first; full state snapshot to SpacetimeDB) |
+| Editor | Component-tree editor (`packages/pulp`) — typed `ComponentNode` rows in SpacetimeDB, per-block Yjs rich text via ProseMirror. [BlockNote](https://blocknotejs.org) retained as a legacy read path for unmigrated pages. |
 | Worker | Node (optional) — AI conversations, Orcha task execution, tool runtime |
 | Auth | Native SpacetimeDB email/password (default) · Any OIDC provider (optional) |
 | Attachments | S3-compatible storage (MinIO in Docker Compose by default) |
@@ -40,16 +40,17 @@ Pages and database rows are the same entity — a page viewed in a grid is a row
 
 ### Documents
 
-- **Rich text** — BlockNote with slash commands, inline **page links** (live title sync).
-- **Blocks** — Images and audio (uploads to blob storage), tables, code blocks with language picker and copy shortcut.
+- **Component-tree editor** — every block is a typed `ComponentNode` row in SpacetimeDB. Slash commands, drag handles, multi-block selection, turn-into, undo/redo.
+- **Rich text** — per-block Yjs documents (ProseMirror), merged through the server; inline **page links** (live title sync).
+- **Blocks** — Headings, images and audio (uploads to blob storage), code, markdown, forms (inputs, buttons, selects), embedded AI conversations.
 - **Audio** — Record or upload; inline playback; transcript via Web Speech API where the browser supports it.
-- **History** — Snapshot timeline, preview, one-click restore; optional snapshot with live editor content.
-- **Local-first** — IndexedDB holds working state; SpacetimeDB stores merged Yjs blobs and metadata on a debounced schedule.
+- **History** — Snapshot timeline, preview, one-click restore; snapshots capture the full component tree.
+- **Legacy pages** — pages created before the component tree still render via BlockNote and migrate in place.
 
 ### Databases
 
-- **Grid & list views** — Column resize persisted per view; **frozen first column**; filters and multi-column sorts.
-- **Property types** — Text, Number, Date, Select (conditional options, per-option colors), Multi-select, Checkbox, URL, Relation, Person, and agent-oriented fields where enabled.
+- **Grid, list & board views** — Column resize persisted per view; **frozen first column**; filters and multi-column sorts; board view grouped by a Select property.
+- **Property types** — Text, Number, Date, Select (conditional options, per-option colors), Multi-select, Checkbox, URL, Relation, Person, Formula (client-evaluated expressions), Rollup, and AI columns (model-computed values).
 - **Editing** — Inline cells, fill handle, keyboard navigation (arrows, Tab, Enter), multi-row selection with bulk delete.
 - **Rows** — Open any row as a full page (routable URL) with properties panel.
 
@@ -57,9 +58,15 @@ Pages and database rows are the same entity — a page viewed in a grid is a row
 
 - **Attachments** — Presigned upload/download via the web app; metadata in SpacetimeDB (`Attachment` table).
 
+### Import & API
+
+- **Custom API endpoints** — Expose any database as a versioned REST API (`/api/e/{slug}`) with field-level mappings, per-property type coercion, optional API-key auth, and an auto-generated OpenAPI 3.1 spec. See [`docs/API_ENDPOINTS.md`](./docs/API_ENDPOINTS.md).
+- **Notion import** — The `import_notion` reducer rebuilds a Notion workspace (pages, databases, properties, content) into an empty workspace; the bundled settings panel drives it through an external OAuth + transform service.
+
 ### AI & extensions (optional)
 
-- **AI users** — Configurable model providers; **conversations** attached to pages (human ↔ AI), persisted in SpacetimeDB.
+- **AI users** — Configurable model providers; **conversations** attached to pages or anchored to individual blocks (@mention a block to start a thread), persisted in SpacetimeDB.
+- **Agent edit review** — AI edits are bracketed with before/after snapshots; review and accept/reject them per page.
 - **Orcha** — Job/task coordination tables and reducers embedded in the same module (or point workers at an external Orcha DB). Page-scoped jobs from the in-app panel.
 - **Extensions** — Install MCP servers and config bundles; permissioned tool execution with audit logging. Built-in workspace tools extension seeded for new databases.
 
@@ -73,14 +80,16 @@ For a finer-grained shipped vs planned list, see [`ROADMAP.md`](./ROADMAP.md).
 Pear/
 ├── server/
 │   ├── spacetimedb/
-│   │   └── src/lib.rs       # Tables, reducers, types (source of truth for API surface)
+│   │   └── src/             # Tables, reducers, types (lib.rs + modules; source of truth for API surface)
 │   ├── docker/
 │   │   └── entrypoint.sh    # Starts SpacetimeDB, publishes WASM module
 │   └── spacetime.json       # Module path, TS bindings output dir
 ├── web/                     # Next.js app (UI, API routes, embeddings, uploads)
 ├── worker/                  # Optional Node worker (AI / Orcha / tools)
-├── desktop/                 # Desktop shell (workspace)
+├── packages/
+│   └── pulp/                # Storage-agnostic component-tree editor library
 ├── extensions/              # Example / built-in extension manifests
+├── docs/                    # Public feature docs (e.g. API endpoints)
 ├── docker-compose.yml
 └── pnpm-workspace.yaml
 ```
@@ -154,7 +163,7 @@ spacetime call -s local --yes pear-dev run_pending_migrations
 
 ### Frontend
 
-From the **repository root** (pnpm workspace — installs `web/`, `worker/`, `desktop/`, etc.):
+From the **repository root** (pnpm workspace — installs `web/`, `worker/`, `packages/pulp`, etc.):
 
 ```bash
 pnpm install
@@ -172,7 +181,7 @@ NEXT_PUBLIC_SPACETIMEDB_DB_NAME=pear-dev
 
 ### Regenerate TypeScript bindings
 
-Run this after any change to `server/spacetimedb/src/lib.rs`:
+Run this after any change to the module source under `server/spacetimedb/src/`:
 
 ```bash
 cd server
@@ -250,8 +259,8 @@ The identity SpacetimeDB derives is `SHA-256(iss ‖ sub)`, so the same user fro
 
 The SpacetimeDB module is large and evolving. Rather than duplicating every reducer here:
 
-- **Source of truth:** `server/spacetimedb/src/lib.rs` — all `#[reducer]` functions and `#[table]` definitions.
-- **High-level groups:** authentication (`register`, `login`, …), pages & Yjs (`save_yjs_state`, `update_page_content`, …), snapshots, attachments, embeddings (`set_page_embedding`), database schema & property values & views, **AI users & conversations** (`create_ai_user`, `send_message`, `record_compaction`, …), **Orcha** (`create_job`, `claim_task`, `submit_result`, …), **extensions** (`publish_extension`, `install_extension`, permission/audit reducers, …), and **HTTP API integrations** (endpoint CRUD reducers for inbound webhooks).
+- **Source of truth:** `server/spacetimedb/src/` — all `#[reducer]` functions and `#[table]` definitions (entry point `lib.rs`, grouped into modules).
+- **High-level groups:** authentication (`register`, `login`, …), pages & Yjs (`save_yjs_state`, `update_page_content`, …), **component tree** (`insert_component`, `update_component_props`, `move_component`, …), snapshots, attachments, embeddings (`set_page_embedding`), database schema & property values & views, **AI users & conversations** (`create_ai_user`, `send_message`, `record_compaction`, …), **Orcha** (`create_job`, `claim_task`, `submit_result`, …), **extensions** (`publish_extension`, `install_extension`, permission/audit reducers, …), **HTTP API endpoints** (endpoint CRUD reducers), and **import** (`import_notion`, …).
 
 Client call sites use the generated bindings under `web/src/module_bindings/`.
 
