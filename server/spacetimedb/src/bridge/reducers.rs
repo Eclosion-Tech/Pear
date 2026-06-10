@@ -112,12 +112,25 @@ pub fn pair_bridge_device(
     // Base64 of the AES-GCM-encrypted device STDB token (minted + encrypted
     // server-side; see `mint_device_credentials`). Stored verbatim.
     device_stdb_token_ciphertext: String,
+    // CWD jail chosen at pair time. v1 decision #2: at least one directory is
+    // required — the enforcer fails closed, so an empty jail makes any explicit
+    // `cwd` unusable. Enforced here so the reducer (not just the pairing UI) is
+    // the gate.
+    allowed_directories: Vec<String>,
 ) -> Result<(), String> {
     if device_name.trim().is_empty() {
         return Err("Device name cannot be empty".to_string());
     }
     if device_token_hash.len() != 64 {
         return Err("device_token_hash must be a hex SHA-256".to_string());
+    }
+    let allowed_directories: Vec<String> = allowed_directories
+        .into_iter()
+        .map(|d| d.trim().to_string())
+        .filter(|d| !d.is_empty())
+        .collect();
+    if allowed_directories.is_empty() {
+        return Err("At least one allowed directory is required to pair a device".to_string());
     }
     let device_id = next_bridge_device_id(ctx);
     ctx.db.bridge_device().insert(BridgeDevice {
@@ -134,13 +147,13 @@ pub fn pair_bridge_device(
         device_stdb_token_ciphertext: Some(device_stdb_token_ciphertext),
     });
     // Seed a conservative default allowlist (see docs/PEAR_BRIDGE.md
-    // § Allowlist defaults). allowed_directories is intentionally NOT
-    // defaulted — the pairing UI forces the user to pick (v1 decision #2).
+    // § Allowlist defaults) with the caller-chosen CWD jail (validated
+    // non-empty above — v1 decision #2).
     ctx.db.bridge_device_allowlist().insert(BridgeDeviceAllowlist {
         device_id,
         allowed_commands: default_allowed_commands(),
         blocked_patterns: Vec::new(),
-        allowed_directories: Vec::new(),
+        allowed_directories,
         require_confirmation_for: default_require_confirmation_for(),
         max_output_bytes: 65536,
         // v1.1 decision: default raised to 120s; 30s timed out cargo/npm.
