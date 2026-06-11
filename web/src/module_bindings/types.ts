@@ -202,6 +202,26 @@ export const Attachment = __t.object("Attachment", {
 });
 export type Attachment = __Infer<typeof Attachment>;
 
+// The tagged union or sum type for the algebraic type `AttachmentKind`.
+export const AttachmentKind = __t.enum("AttachmentKind", {
+  Image: __t.unit(),
+  Page: __t.unit(),
+  Blocks: __t.unit(),
+});
+export type AttachmentKind = __Infer<typeof AttachmentKind>;
+
+export const AttachmentSpec = __t.object("AttachmentSpec", {
+  get kind() {
+    return AttachmentKind;
+  },
+  objectKey: __t.option(__t.string()),
+  mimeType: __t.option(__t.string()),
+  fileName: __t.option(__t.string()),
+  pageId: __t.option(__t.u64()),
+  contentSnapshot: __t.option(__t.string()),
+});
+export type AttachmentSpec = __Infer<typeof AttachmentSpec>;
+
 // The tagged union or sum type for the algebraic type `AuthScheme`.
 export const AuthScheme = __t.enum("AuthScheme", {
   None: __t.unit(),
@@ -600,6 +620,23 @@ export const Conversation = __t.object("Conversation", {
   blockAnchor: __t.option(__t.u64()),
 });
 export type Conversation = __Infer<typeof Conversation>;
+
+export const ConversationAttachment = __t.object("ConversationAttachment", {
+  id: __t.u64(),
+  messageId: __t.u64(),
+  conversationId: __t.u64(),
+  get kind() {
+    return AttachmentKind;
+  },
+  objectKey: __t.option(__t.string()),
+  mimeType: __t.option(__t.string()),
+  fileName: __t.option(__t.string()),
+  pageId: __t.option(__t.u64()),
+  contentSnapshot: __t.option(__t.string()),
+  createdAt: __t.timestamp(),
+  createdBy: __t.identity(),
+});
+export type ConversationAttachment = __Infer<typeof ConversationAttachment>;
 
 // The tagged union or sum type for the algebraic type `ConversationKind`.
 export const ConversationKind = __t.enum("ConversationKind", {

@@ -1183,6 +1183,86 @@ interface AiPanelProps {
   openConversationId?: bigint;
 }
 
+/**
+ * "+ New" — starts a fresh conversation with a chosen AI user and opens it.
+ * Reducers don't return ids, so we snapshot the existing conversation ids, call
+ * `createConversation`, then open the new one initiated by us once it arrives.
+ */
+function NewConversationButton({ onOpen }: { onOpen: (id: bigint) => void }) {
+  const { identity } = useSpacetimeDB();
+  const profiles = useAiUserProfiles();
+  const { conversations } = useConversations();
+  const createConversation = useCreateConversation();
+  const [open, setOpen] = useState(false);
+  const pendingRef = useRef<Set<string> | null>(null);
+
+  useEffect(() => {
+    const existing = pendingRef.current;
+    if (!existing || !identity) return;
+    const meHex = identity.toHexString();
+    const fresh = conversations
+      .filter((c) => !existing.has(String(c.id)) && c.initiatedBy.toHexString() === meHex)
+      .sort((a, b) => Number(b.id - a.id))[0];
+    if (fresh) {
+      pendingRef.current = null;
+      setOpen(false);
+      onOpen(fresh.id);
+    }
+  }, [conversations, identity, onOpen]);
+
+  async function startWith(aiIdentity: Identity) {
+    pendingRef.current = new Set(conversations.map((c) => String(c.id)));
+    await createConversation({
+      pageId: undefined,
+      participantIdentities: [aiIdentity],
+      blockAnchor: undefined,
+    });
+  }
+
+  if (profiles.length === 0) return null;
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        title="New conversation"
+        className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="12" y1="5" x2="12" y2="19" />
+          <line x1="5" y1="12" x2="19" y2="12" />
+        </svg>
+        New
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 mt-1 z-20 w-56 max-h-72 overflow-y-auto rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-lg py-1">
+            <p className="px-3 py-1.5 text-[10px] uppercase tracking-wide text-neutral-400">
+              Start a conversation with
+            </p>
+            {profiles.map((p) => (
+              <button
+                key={String(p.aiUserId)}
+                onClick={() => void startWith(p.identity)}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-neutral-50 dark:hover:bg-neutral-800"
+              >
+                <span className="w-6 h-6 rounded-full bg-gradient-to-br from-violet-400 to-indigo-500 flex items-center justify-center text-white text-[10px] font-bold shrink-0">
+                  {p.displayName[0]?.toUpperCase() ?? "?"}
+                </span>
+                <span className="flex-1 min-w-0">
+                  <span className="block text-sm text-neutral-800 dark:text-neutral-200 truncate">{p.displayName}</span>
+                  <span className="block text-[11px] text-neutral-400 truncate">{p.modelName}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function AiPanel({ pageId, onClose, openConversationId }: AiPanelProps) {
   const { identity } = useSpacetimeDB();
   const { conversations: allConversations } = useConversations();
@@ -1246,6 +1326,13 @@ export function AiPanel({ pageId, onClose, openConversationId }: AiPanelProps) {
             Members
           </button>
         </div>
+        <div className="flex items-center gap-1">
+        <NewConversationButton
+          onOpen={(id) => {
+            setTab("conversations");
+            setSelectedConvId(id);
+          }}
+        />
         <button
           onClick={onClose}
           className="p-1 rounded text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
@@ -1255,6 +1342,7 @@ export function AiPanel({ pageId, onClose, openConversationId }: AiPanelProps) {
             <line x1="6" y1="6" x2="18" y2="18" />
           </svg>
         </button>
+        </div>
       </div>
 
       {/* Tab content */}

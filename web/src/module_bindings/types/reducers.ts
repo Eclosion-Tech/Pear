@@ -117,6 +117,7 @@ import SeedAgentInstructionPropertyReducer from "../seed_agent_instruction_prope
 import SeedBuiltinExtensionsReducer from "../seed_builtin_extensions_reducer";
 import SeedSensorRegistryReducer from "../seed_sensor_registry_reducer";
 import SendMessageReducer from "../send_message_reducer";
+import SendUserMessageReducer from "../send_user_message_reducer";
 import SetAiUserApiKeyReducer from "../set_ai_user_api_key_reducer";
 import SetAiUserSerperApiKeyReducer from "../set_ai_user_serper_api_key_reducer";
 import SetAiUserToolSecretsJsonReducer from "../set_ai_user_tool_secrets_json_reducer";
@@ -276,6 +277,7 @@ export type SeedAgentInstructionPropertyParams = __Infer<typeof SeedAgentInstruc
 export type SeedBuiltinExtensionsParams = __Infer<typeof SeedBuiltinExtensionsReducer>;
 export type SeedSensorRegistryParams = __Infer<typeof SeedSensorRegistryReducer>;
 export type SendMessageParams = __Infer<typeof SendMessageReducer>;
+export type SendUserMessageParams = __Infer<typeof SendUserMessageReducer>;
 export type SetAiUserApiKeyParams = __Infer<typeof SetAiUserApiKeyReducer>;
 export type SetAiUserSerperApiKeyParams = __Infer<typeof SetAiUserSerperApiKeyReducer>;
 export type SetAiUserToolSecretsJsonParams = __Infer<typeof SetAiUserToolSecretsJsonReducer>;
