@@ -35,10 +35,23 @@ export type ToolResultBlock = {
   tool_use_id: string;
   content: string;
 };
+/**
+ * A normalized image block. Shape matches Anthropic's native image block so the
+ * Anthropic adapter can pass it through unchanged; other adapters translate it
+ * (OpenAI-family → an `image_url` data URL). Provider-agnostic at this layer —
+ * Pear users can configure any provider.
+ */
+export type ImageBlock = {
+  type: "image";
+  source: { type: "base64"; media_type: string; data: string };
+};
+/** User-turn content blocks (a message with attached images renders as these). */
+export type UserContentBlock = TextBlock | ImageBlock;
 
 export type UserMessage = {
   role: "user";
-  content: string | ToolResultBlock[];
+  // A string (plain text), tool results, or text+image blocks (attachments).
+  content: string | ToolResultBlock[] | UserContentBlock[];
 };
 export type AssistantMessage = {
   role: "assistant";
@@ -328,14 +341,25 @@ class OpenAIProvider implements InferenceProvider {
       if (msg.role === "user") {
         if (typeof msg.content === "string") {
           messages.push({ role: "user", content: msg.content });
-        } else {
-          for (const block of msg.content) {
+        } else if (msg.content.length > 0 && "tool_use_id" in msg.content[0]) {
+          for (const block of msg.content as ToolResultBlock[]) {
             messages.push({
               role: "tool",
               tool_call_id: block.tool_use_id,
               content: block.content,
             });
           }
+        } else {
+          // Text + image attachment blocks → OpenAI multimodal content parts.
+          const parts = (msg.content as UserContentBlock[]).map((b) =>
+            b.type === "image"
+              ? {
+                  type: "image_url" as const,
+                  image_url: { url: `data:${b.source.media_type};base64,${b.source.data}` },
+                }
+              : { type: "text" as const, text: b.text },
+          );
+          messages.push({ role: "user", content: parts });
         }
       } else {
         const textParts = msg.content

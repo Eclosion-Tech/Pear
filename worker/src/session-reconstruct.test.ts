@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { reconstructSessionTail } from "./session-reconstruct.js";
 import type { StoredToolCall } from "./tool-call-record.js";
+import type { ToolResultBlock } from "./providers.js";
 import type { ConnLike } from "./tools.js";
 
 // ── Minimal fake conn ──────────────────────────────────────────────────────────
@@ -103,7 +104,7 @@ test("every tool_use is answered, even when output is missing (valid API pairing
     .filter((b) => typeof b === "object" && b.type === "tool_use");
   const toolResults = msgs
     .filter((m) => m.role === "user")
-    .flatMap((m) => (Array.isArray(m.content) ? m.content : []));
+    .flatMap((m) => (Array.isArray(m.content) ? (m.content as ToolResultBlock[]) : []));
 
   assert.equal(toolUses.length, 1);
   assert.equal(toolResults.length, 1);
@@ -132,6 +133,35 @@ test("malformed toolCallsJson falls back to text-only, no throw", () => {
   ]);
   const msgs = reconstructSessionTail(conn, 1n, ASSISTANT);
   assert.deepEqual(msgs, [{ role: "assistant", content: [{ type: "text", text: "hi" }] }]);
+});
+
+test("resolved attachments inject images and context text into human turns", () => {
+  nextId = 1n; // deterministic ids so the attachment map keys line up
+  const conn = makeConn([
+    row({ sender: user(HUMAN), content: "what's in this image?" }),
+    row({ sender: user(HUMAN), content: "" }), // attachment-only message
+  ]);
+  const img = {
+    type: "image" as const,
+    source: { type: "base64" as const, media_type: "image/png", data: "AAAA" },
+  };
+  const attachments = new Map([
+    [1n, { images: [img], contextText: "" }],
+    [2n, { images: [], contextText: "<attached_context>page snapshot</attached_context>" }],
+  ]);
+
+  const msgs = reconstructSessionTail(conn, 1n, ASSISTANT, attachments);
+
+  assert.equal(msgs.length, 2);
+  assert.deepEqual(msgs[0], {
+    role: "user",
+    content: [img, { type: "text", text: "what's in this image?" }],
+  });
+  // Context-only message survives despite empty content.
+  assert.deepEqual(msgs[1], {
+    role: "user",
+    content: "<attached_context>page snapshot</attached_context>",
+  });
 });
 
 test("compaction floor discards messages at or before the most recent floor", () => {

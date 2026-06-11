@@ -18,12 +18,27 @@ import {
   useAddConversationParticipant,
   useMessagesForConversation,
   useSendMessage,
+  useSendUserMessage,
+  useAttachmentsForConversation,
   useCloseConversation,
   useParticipantsForConversation,
   identitiesEqual,
   type ConversationRow,
   type ConversationMessageRow,
+  type ConversationAttachmentRow,
 } from "@/src/hooks/useConversations";
+import {
+  PAGE_DRAG_MIME,
+  newLocalId,
+  isImageFile,
+  uploadChatImage,
+  chatImageSrc,
+  toAttachmentSpecs,
+  extractTextFromBlockJson,
+  type PendingAttachment,
+  type PageDragPayload,
+} from "@/src/lib/chatAttachments";
+import { usePearWorkspaceSlug } from "@/src/lib/blobUpload";
 import { useUsers } from "@/src/hooks/useUser";
 import {
   useAiUserProfiles,
@@ -365,6 +380,113 @@ function LinkedConversationCard({ linkedConversationId }: { linkedConversationId
   );
 }
 
+// ── Attachments ──────────────────────────────────────────────────────────────
+
+/** Chips + thumbnails for attachments queued in the composer (removable). */
+function ComposerAttachments({
+  pending,
+  onRemove,
+}: {
+  pending: PendingAttachment[];
+  onRemove: (id: string) => void;
+}) {
+  if (pending.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5 mb-2">
+      {pending.map((att) => (
+        <div
+          key={att.id}
+          className="group relative flex items-center gap-1.5 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 px-1.5 py-1"
+        >
+          {att.kind === "image" ? (
+            <>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={att.previewUrl}
+                alt={att.fileName}
+                className={`w-8 h-8 rounded object-cover ${att.status === "uploading" ? "opacity-50" : ""}`}
+              />
+              <span className="text-[11px] text-neutral-500 max-w-[90px] truncate">
+                {att.status === "uploading"
+                  ? "Uploading…"
+                  : att.status === "error"
+                    ? "Upload failed"
+                    : att.fileName}
+              </span>
+            </>
+          ) : (
+            <>
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-neutral-400 shrink-0">
+                {att.kind === "page" ? (
+                  <>
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                  </>
+                ) : (
+                  <>
+                    <line x1="21" y1="6" x2="3" y2="6" />
+                    <line x1="21" y1="12" x2="9" y2="12" />
+                    <line x1="21" y1="18" x2="7" y2="18" />
+                  </>
+                )}
+              </svg>
+              <span className="text-[11px] text-neutral-600 dark:text-neutral-300 max-w-[120px] truncate">
+                {att.kind === "page" ? att.title : (att.title ?? "Selection")}
+              </span>
+            </>
+          )}
+          <button
+            onClick={() => onRemove(att.id)}
+            title="Remove"
+            className="ml-0.5 p-0.5 rounded text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-200 dark:hover:bg-neutral-700 transition-colors"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Attachments on a sent message: image thumbnails (workspace blob route) + context chips. */
+function MessageAttachments({ attachments }: { attachments: ConversationAttachmentRow[] }) {
+  const slug = usePearWorkspaceSlug();
+  if (attachments.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5 mb-1.5">
+      {attachments.map((att) => {
+        if (att.kind.tag === "Image" && att.objectKey) {
+          return (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              key={String(att.id)}
+              src={chatImageSrc(slug, att.objectKey)}
+              alt={att.fileName ?? "attachment"}
+              className="max-w-[160px] max-h-[120px] rounded-lg object-cover border border-black/10 dark:border-white/10"
+            />
+          );
+        }
+        return (
+          <span
+            key={String(att.id)}
+            className="inline-flex items-center gap-1 rounded-md bg-black/10 dark:bg-white/10 px-1.5 py-0.5 text-[11px] opacity-80"
+            title={att.contentSnapshot?.slice(0, 500)}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+            </svg>
+            {att.fileName ?? (att.kind.tag === "Page" ? "Page" : "Selection")}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Conversation thread ──────────────────────────────────────────────────────
 
 function ConversationThread({ conversation, onBack, activePageId }: { conversation: ConversationRow; onBack: () => void; activePageId?: bigint }) {
@@ -373,13 +495,21 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
   const { profiles: allAiProfiles } = useAiUserProfiles();
   const aiIdentityHexes = new Set(allAiProfiles.map((p) => p.identity.toHexString()));
   const sendMessage = useSendMessage();
+  const sendUserMessage = useSendUserMessage();
+  const conversationAttachments = useAttachmentsForConversation(conversation.id);
   const closeConversation = useCloseConversation();
   const createConversation = useCreateConversation();
   const router = useRouter();
   const { identity } = useSpacetimeDB();
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [pending, setPending] = useState<PendingAttachment[]>([]);
+  const [dragOver, setDragOver] = useState(false);
+  const workspaceSlug = usePearWorkspaceSlug();
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Page rows + snapshots for resolving a dropped page into a text snapshot.
+  const [allPages] = useTable(tables.page);
+  const [allSnapshots] = useTable(tables.page_snapshot);
 
   const isActive = conversation.status.tag === "Active";
   const aiName = aiUser?.displayName ?? "AI";
@@ -404,24 +534,145 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages.length, isAiActive, lastMessage?.content, lastMessage?.thinking, lastMessage?.status?.tag]);
 
+  const uploading = pending.some((a) => a.kind === "image" && a.status === "uploading");
+  const readySpecs = toAttachmentSpecs(pending);
+  const canSend = (!!input.trim() || readySpecs.length > 0) && !sending && !uploading && isActive;
+
+  function removePending(id: string) {
+    setPending((prev) => {
+      const att = prev.find((a) => a.id === id);
+      if (att?.kind === "image") URL.revokeObjectURL(att.previewUrl);
+      return prev.filter((a) => a.id !== id);
+    });
+  }
+
+  /** Queue an image file: instant local thumbnail, upload in the background. */
+  function addImageFiles(files: File[]) {
+    for (const file of files.filter(isImageFile)) {
+      const id = newLocalId();
+      setPending((prev) => [
+        ...prev,
+        {
+          id,
+          kind: "image",
+          fileName: file.name || "image",
+          mimeType: file.type || "image/png",
+          previewUrl: URL.createObjectURL(file),
+          status: "uploading",
+        },
+      ]);
+      void uploadChatImage(workspaceSlug, file).then((objectKey) => {
+        setPending((prev) =>
+          prev.map((a) =>
+            a.id === id && a.kind === "image"
+              ? objectKey
+                ? { ...a, objectKey, status: "ready" }
+                : { ...a, status: "error" }
+              : a,
+          ),
+        );
+      });
+    }
+  }
+
+  /** Resolve a sidebar page drop into a snapshot-at-drag context attachment. */
+  function addPageAttachment(payload: PageDragPayload) {
+    let pageId: bigint;
+    try {
+      pageId = BigInt(payload.pageId);
+    } catch {
+      return;
+    }
+    if (pending.some((a) => a.kind === "page" && a.pageId === pageId)) return;
+    const page = allPages.find((p) => p.id === pageId);
+    const latest = allSnapshots
+      .filter((s) => s.pageId === pageId)
+      .sort((a, b) => Number(b.snapshotAt.microsSinceUnixEpoch - a.snapshotAt.microsSinceUnixEpoch))[0];
+    const snapshot = latest?.content ? extractTextFromBlockJson(latest.content) : "";
+    setPending((prev) => [
+      ...prev,
+      {
+        id: newLocalId(),
+        kind: "page",
+        pageId,
+        title: page?.title ?? payload.title ?? "Untitled",
+        snapshot,
+      },
+    ]);
+  }
+
+  function handleComposerDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragOver(false);
+    const pagePayload = e.dataTransfer.getData(PAGE_DRAG_MIME);
+    if (pagePayload) {
+      try {
+        addPageAttachment(JSON.parse(pagePayload) as PageDragPayload);
+      } catch { /* malformed drag payload */ }
+      return;
+    }
+    if (e.dataTransfer.files.length > 0) {
+      addImageFiles(Array.from(e.dataTransfer.files));
+      return;
+    }
+    // Editor / native text selection drag → block-snapshot context.
+    const text = e.dataTransfer.getData("text/plain").trim();
+    if (text) {
+      setPending((prev) => [
+        ...prev,
+        {
+          id: newLocalId(),
+          kind: "blocks",
+          pageId: activePageId,
+          title: activePageId
+            ? (allPages.find((p) => p.id === activePageId)?.title ?? "Selection")
+            : "Selection",
+          snapshot: text,
+        },
+      ]);
+    }
+  }
+
+  function handlePaste(e: React.ClipboardEvent) {
+    const files = Array.from(e.clipboardData.files).filter(isImageFile);
+    if (files.length > 0) {
+      e.preventDefault();
+      addImageFiles(files);
+    }
+  }
+
   async function handleSend() {
-    if (!input.trim() || sending || !isActive) return;
+    if (!canSend) return;
     setSending(true);
     try {
-      await sendMessage({
-        conversationId: conversation.id,
-        content: input.trim(),
-        jobId: undefined,
-        status: undefined,
-        thinking: undefined,
-        toolCallsJson: undefined,
-        inputTokens: undefined,
-        outputTokens: undefined,
-        cacheCreationInputTokens: undefined,
-        cacheReadInputTokens: undefined,
-        linkedConversationId: undefined,
-      });
+      if (readySpecs.length > 0) {
+        await sendUserMessage({
+          conversationId: conversation.id,
+          content: input.trim(),
+          attachments: readySpecs,
+        });
+      } else {
+        await sendMessage({
+          conversationId: conversation.id,
+          content: input.trim(),
+          jobId: undefined,
+          status: undefined,
+          thinking: undefined,
+          toolCallsJson: undefined,
+          inputTokens: undefined,
+          outputTokens: undefined,
+          cacheCreationInputTokens: undefined,
+          cacheReadInputTokens: undefined,
+          linkedConversationId: undefined,
+        });
+      }
       setInput("");
+      setPending((prev) => {
+        for (const a of prev) {
+          if (a.kind === "image") URL.revokeObjectURL(a.previewUrl);
+        }
+        return [];
+      });
     } catch (err) {
       console.error("[AiPanel] Failed to send message", err);
     } finally {
@@ -510,7 +761,14 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
                   </p>
                 )}
                 {isHuman ? (
-                  <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                  <>
+                    <MessageAttachments
+                      attachments={conversationAttachments.filter((a) => a.messageId === msg.id)}
+                    />
+                    {msg.content && (
+                      <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                    )}
+                  </>
                 ) : (
                   <AiMessageContent msg={msg} aiName={aiName} />
                 )}
@@ -538,11 +796,27 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
 
       {/* Input */}
       {isActive ? (
-        <div className="flex-shrink-0 border-t border-neutral-200 dark:border-neutral-800 p-3">
+        <div
+          className={`flex-shrink-0 border-t p-3 transition-colors ${
+            dragOver
+              ? "border-blue-400 bg-blue-50/50 dark:bg-blue-950/20"
+              : "border-neutral-200 dark:border-neutral-800"
+          }`}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragOver(true);
+          }}
+          onDragLeave={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false);
+          }}
+          onDrop={handleComposerDrop}
+        >
+          <ComposerAttachments pending={pending} onRemove={removePending} />
           <div className="flex gap-2">
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
+              onPaste={handlePaste}
               placeholder={`Message ${aiName}…`}
               rows={2}
               className="flex-1 text-sm bg-neutral-50 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded-lg px-3 py-2 text-neutral-800 dark:text-neutral-200 placeholder:text-neutral-400 resize-none outline-none focus:ring-1 focus:ring-neutral-400 dark:focus:ring-neutral-600 transition-shadow"
@@ -555,7 +829,7 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
             />
             <button
               onClick={() => void handleSend()}
-              disabled={!input.trim() || sending}
+              disabled={!canSend}
               className="self-end p-2 rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:bg-neutral-700 dark:hover:bg-neutral-300 disabled:opacity-40 transition-colors"
               title="Send (↵)"
             >
@@ -566,7 +840,7 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
             </button>
           </div>
           <div className="flex items-center justify-between mt-2">
-            <span className="text-xs text-neutral-400">↵ send · ⇧↵ newline</span>
+            <span className="text-xs text-neutral-400">↵ send · ⇧↵ newline · drop images or pages</span>
             <div className="flex items-center gap-3">
               <HandoffPanel
                 conversation={conversation}
@@ -1190,7 +1464,7 @@ interface AiPanelProps {
  */
 function NewConversationButton({ onOpen }: { onOpen: (id: bigint) => void }) {
   const { identity } = useSpacetimeDB();
-  const profiles = useAiUserProfiles();
+  const { profiles } = useAiUserProfiles();
   const { conversations } = useConversations();
   const createConversation = useCreateConversation();
   const [open, setOpen] = useState(false);

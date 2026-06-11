@@ -58,6 +58,7 @@ import {
   loadCompactionSummary,
   reconstructSessionTail,
 } from "./session-reconstruct.js";
+import { resolveConversationAttachments } from "./attachments.js";
 import {
   type StoredToolCall,
   cap,
@@ -630,8 +631,19 @@ async function handleConversationMessage(
     const systemBlocks = builder.buildBlocks();
 
     // Reconstruct message tail (respects compaction floor). Filter out the
-    // placeholder we just inserted (no content).
-    const tailMessages = reconstructSessionTail(conn, conv.id, selfHex);
+    // placeholder we just inserted (no content). Attachments (images via S3,
+    // page/block snapshots) resolve into the human turns they were sent with.
+    const resolvedAttachments = await resolveConversationAttachments(
+      conn,
+      conv.id,
+      logTag,
+    );
+    const tailMessages = reconstructSessionTail(
+      conn,
+      conv.id,
+      selfHex,
+      resolvedAttachments,
+    );
     const llmMessages: Message[] = tailMessages.filter(
       (m) =>
         !(m.role === "assistant" && Array.isArray(m.content) && m.content.length === 0),

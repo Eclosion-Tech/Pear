@@ -145,6 +145,7 @@ import SeedAgentInstructionPropertyReducer from "./seed_agent_instruction_proper
 import SeedBuiltinExtensionsReducer from "./seed_builtin_extensions_reducer";
 import SeedSensorRegistryReducer from "./seed_sensor_registry_reducer";
 import SendMessageReducer from "./send_message_reducer";
+import SendUserMessageReducer from "./send_user_message_reducer";
 import SetAiUserApiKeyReducer from "./set_ai_user_api_key_reducer";
 import SetAiUserSerperApiKeyReducer from "./set_ai_user_serper_api_key_reducer";
 import SetAiUserToolSecretsJsonReducer from "./set_ai_user_tool_secrets_json_reducer";
@@ -223,6 +224,7 @@ import ComponentNodeRow from "./component_node_table";
 import ComponentTypeDefinitionRow from "./component_type_definition_table";
 import ComponentYjsStateRow from "./component_yjs_state_table";
 import ConversationRow from "./conversation_table";
+import ConversationAttachmentRow from "./conversation_attachment_table";
 import ConversationMessageRow from "./conversation_message_table";
 import ConversationParticipantRow from "./conversation_participant_table";
 import DatabaseRowMarkerRow from "./database_row_marker_table";
@@ -633,6 +635,20 @@ const tablesSchema = __schema({
       { name: 'conversation_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, ConversationRow),
+  conversation_attachment: __table({
+    name: 'conversation_attachment',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'message_id', algorithm: 'btree', columns: [
+        'messageId',
+      ] },
+    ],
+    constraints: [
+      { name: 'conversation_attachment_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, ConversationAttachmentRow),
   conversation_message: __table({
     name: 'conversation_message',
     indexes: [
@@ -1187,6 +1203,7 @@ const reducersSchema = __reducers(
   __reducerSchema("seed_builtin_extensions", SeedBuiltinExtensionsReducer),
   __reducerSchema("seed_sensor_registry", SeedSensorRegistryReducer),
   __reducerSchema("send_message", SendMessageReducer),
+  __reducerSchema("send_user_message", SendUserMessageReducer),
   __reducerSchema("set_ai_user_api_key", SetAiUserApiKeyReducer),
   __reducerSchema("set_ai_user_serper_api_key", SetAiUserSerperApiKeyReducer),
   __reducerSchema("set_ai_user_tool_secrets_json", SetAiUserToolSecretsJsonReducer),

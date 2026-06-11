@@ -29,6 +29,8 @@ export type UploadWorkspaceBlobParams = {
 export type UploadWorkspaceBlobResult = {
   objectId: string;
   byteSize: number;
+  /** Full S3 key (`workspaces/{workspaceId}/{objectId}`) when the API provides it. */
+  storageKey?: string;
 };
 
 async function jsonOr<T>(res: Response): Promise<T | null> {
@@ -72,6 +74,7 @@ export async function uploadWorkspaceBlob(
     method: "PUT";
     uploadUrl: string;
     objectId: string;
+    storageKey?: string;
     headers?: Record<string, string>;
   };
 
@@ -102,7 +105,11 @@ export async function uploadWorkspaceBlob(
   }
   const done = (await completeRes.json()) as { byteSize: number };
 
-  return { objectId: presign.objectId, byteSize: done.byteSize };
+  return {
+    objectId: presign.objectId,
+    byteSize: done.byteSize,
+    storageKey: presign.storageKey,
+  };
 }
 
 /**

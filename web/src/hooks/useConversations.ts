@@ -126,6 +126,19 @@ export function useSendMessage() {
   return useReducer(reducers.sendMessage);
 }
 
+/** Human send with attachments (images, page refs, block snapshots). */
+export function useSendUserMessage() {
+  return useReducer(reducers.sendUserMessage);
+}
+
+/** All attachments in a conversation, keyed for per-message lookup by the thread. */
+export function useAttachmentsForConversation(conversationId: bigint) {
+  const [attachments] = useTable(tables.conversation_attachment);
+  return attachments
+    .filter((a) => a.conversationId === conversationId)
+    .sort((a, b) => Number(a.id - b.id));
+}
+
 export function useAddConversationParticipant() {
   return useReducer(reducers.addConversationParticipant);
 }
@@ -141,5 +154,6 @@ export function identitiesEqual(a: Identity | undefined, b: Identity | undefined
 }
 
 export type ConversationRow = ReturnType<typeof useConversations>["conversations"][number];
+export type ConversationAttachmentRow = ReturnType<typeof useAttachmentsForConversation>[number];
 export type ConversationMessageRow = ReturnType<typeof useConversationMessages>[number];
 export type ConversationParticipantRow = ReturnType<typeof useConversationParticipants>[number];

@@ -41,6 +41,17 @@ pub(crate) fn next_conversation_participant_id(ctx: &ReducerContext) -> u64 {
     })
 }
 
+pub(crate) fn next_conversation_attachment_id(ctx: &ReducerContext) -> u64 {
+    alloc_id(ctx, "conversation_attachment", || {
+        ctx.db
+            .conversation_attachment()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
+    })
+}
+
 pub(crate) mod visibility;
 
 /// Visibility scope for a `Conversation`. Conversations get their own
@@ -238,6 +249,56 @@ pub struct ConversationMessage {
     pub linked_conversation_id: Option<u64>,
 }
 
+/// What a `ConversationAttachment` carries.
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum AttachmentKind {
+    /// An uploaded image (S3 `object_key`); the AI receives it as a vision block.
+    Image,
+    /// A reference to a page (`page_id`); the AI reads the page's *current*
+    /// content as context at turn time (live, not frozen).
+    Page,
+    /// A snapshot of selected blocks (`content_snapshot` markdown) from a source
+    /// `page_id`, captured at drag time.
+    Blocks,
+}
+
+/// One attachment passed into `send_user_message`. The id/timestamps/keys are
+/// assigned by the reducer; this is just the caller-supplied payload.
+#[derive(SpacetimeType, Clone, Debug)]
+pub struct AttachmentSpec {
+    pub kind: AttachmentKind,
+    /// Image: the S3 object key of the uploaded image.
+    pub object_key: Option<String>,
+    pub mime_type: Option<String>,
+    pub file_name: Option<String>,
+    /// Page: the referenced page. Blocks: the source page the blocks came from.
+    pub page_id: Option<u64>,
+    /// Blocks: markdown of the selected blocks. (Optional for Page.)
+    pub content_snapshot: Option<String>,
+}
+
+/// An attachment on a `ConversationMessage` — an image, a page reference, or a
+/// snapshot of selected blocks dragged in as context. Public with advisory
+/// visibility, mirroring `conversation_message` (the image bytes themselves stay
+/// behind presigned S3 URLs; `object_key` alone is not the image).
+#[table(accessor = conversation_attachment, public)]
+pub struct ConversationAttachment {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub message_id: u64,
+    pub conversation_id: u64,
+    pub kind: AttachmentKind,
+    pub object_key: Option<String>,
+    pub mime_type: Option<String>,
+    pub file_name: Option<String>,
+    pub page_id: Option<u64>,
+    pub content_snapshot: Option<String>,
+    pub created_at: Timestamp,
+    pub created_by: Identity,
+}
+
 // ============================================================
 // Conversation Reducers
 // ============================================================
@@ -381,6 +442,72 @@ pub fn send_message(
         ..conv
     });
 
+    Ok(())
+}
+
+/// Send a human message with optional attachments (images, page references,
+/// block snapshots). Inserts the message, then one `ConversationAttachment` per
+/// spec linked to it, and bumps the conversation. The worker reacts to the new
+/// message via subscription (same as `send_message`) and resolves the
+/// attachments into the model turn. A separate reducer from `send_message` so
+/// the worker's many `send_message` call sites are untouched.
+#[reducer]
+pub fn send_user_message(
+    ctx: &ReducerContext,
+    conversation_id: u64,
+    content: String,
+    attachments: Vec<AttachmentSpec>,
+) -> Result<(), String> {
+    let conv = ctx
+        .db
+        .conversation()
+        .id()
+        .find(conversation_id)
+        .ok_or("Conversation not found")?;
+    if conv.status != ConversationStatus::Active {
+        return Err("Conversation is closed".to_string());
+    }
+    if content.trim().is_empty() && attachments.is_empty() {
+        return Err("Message must have text or at least one attachment".to_string());
+    }
+
+    let message = ctx.db.conversation_message().insert(ConversationMessage {
+        id: next_conversation_message_id(ctx),
+        conversation_id,
+        sender: MessageSender::User(ctx.sender()),
+        content,
+        job_id: None,
+        created_at: ctx.timestamp,
+        status: MessageStatus::Complete,
+        thinking: None,
+        tool_calls_json: None,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        linked_conversation_id: None,
+    });
+
+    for spec in attachments {
+        ctx.db.conversation_attachment().insert(ConversationAttachment {
+            id: next_conversation_attachment_id(ctx),
+            message_id: message.id,
+            conversation_id,
+            kind: spec.kind,
+            object_key: spec.object_key,
+            mime_type: spec.mime_type,
+            file_name: spec.file_name,
+            page_id: spec.page_id,
+            content_snapshot: spec.content_snapshot,
+            created_at: ctx.timestamp,
+            created_by: ctx.sender(),
+        });
+    }
+
+    ctx.db.conversation().id().update(Conversation {
+        updated_at: ctx.timestamp,
+        ..conv
+    });
     Ok(())
 }
 

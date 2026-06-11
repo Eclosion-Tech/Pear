@@ -12,8 +12,15 @@
  */
 
 import type { ConnLike } from "./tools.js";
-import type { Message, ToolResultBlock, ToolUseBlock, TextBlock } from "./providers.js";
+import type {
+  Message,
+  ToolResultBlock,
+  ToolUseBlock,
+  TextBlock,
+  UserContentBlock,
+} from "./providers.js";
 import { isStoredToolCall } from "./tool-call-record.js";
+import type { ResolvedMessageAttachments } from "./attachments.js";
 
 // ── Internal row type ─────────────────────────────────────────────────────────
 
@@ -78,11 +85,16 @@ export function loadCompactionSummary(
  * user whose worker is reconstructing the thread. Human messages are every
  * other `User(identity)` row; the assistant's rows use the same `User` tag
  * after the MessageSender refactor (there is no separate `AiUser` variant).
+ *
+ * `attachments` (optional, from `resolveConversationAttachments`) maps message
+ * id → resolved images/context for human turns. Resolved separately because
+ * image resolution is async (S3) while reconstruction stays synchronous.
  */
 export function reconstructSessionTail(
   conn: ConnLike,
   conversationId: bigint,
   assistantIdentityHex: string,
+  attachments?: Map<bigint, ResolvedMessageAttachments>,
 ): Message[] {
   const allMessages = [
     ...(conn.db.conversation_message.iter() as Iterable<ConversationMessageRow>),
@@ -121,8 +133,15 @@ export function reconstructSessionTail(
     const isAssistantTurn = senderHex === assistantHex;
 
     if (!isAssistantTurn) {
-      if (!msg.content) continue;
-      result.push({ role: "user", content: msg.content });
+      const att = attachments?.get(msg.id);
+      const text = [msg.content, att?.contextText].filter(Boolean).join("\n\n");
+      if (att && att.images.length > 0) {
+        const blocks: UserContentBlock[] = [...att.images];
+        if (text) blocks.push({ type: "text", text });
+        result.push({ role: "user", content: blocks });
+      } else if (text) {
+        result.push({ role: "user", content: text });
+      }
       continue;
     }
 
