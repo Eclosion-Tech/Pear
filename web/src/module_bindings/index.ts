@@ -163,6 +163,7 @@ import SetPageAccessRuleReducer from "./set_page_access_rule_reducer";
 import SetPageEmbeddingReducer from "./set_page_embedding_reducer";
 import SetPageHiddenReducer from "./set_page_hidden_reducer";
 import SetPropertyValueReducer from "./set_property_value_reducer";
+import SetSchemaParentReducer from "./set_schema_parent_reducer";
 import SetSharedContextReducer from "./set_shared_context_reducer";
 import SetUserAdminReducer from "./set_user_admin_reducer";
 import SetUserPreferenceReducer from "./set_user_preference_reducer";
@@ -1221,6 +1222,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_page_embedding", SetPageEmbeddingReducer),
   __reducerSchema("set_page_hidden", SetPageHiddenReducer),
   __reducerSchema("set_property_value", SetPropertyValueReducer),
+  __reducerSchema("set_schema_parent", SetSchemaParentReducer),
   __reducerSchema("set_shared_context", SetSharedContextReducer),
   __reducerSchema("set_user_admin", SetUserAdminReducer),
   __reducerSchema("set_user_preference", SetUserPreferenceReducer),

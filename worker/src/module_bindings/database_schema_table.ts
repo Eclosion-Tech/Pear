@@ -15,4 +15,5 @@ export default __t.row({
   pageId: __t.u64().name("page_id"),
   name: __t.string(),
   config: __t.option(__t.string()),
+  parentSchemaId: __t.option(__t.u64()).name("parent_schema_id"),
 });

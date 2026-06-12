@@ -783,6 +783,7 @@ fn decode_database_schema(v: &Value) -> Result<DatabaseSchema, String> {
         page_id: u64_at(m, "pageId")?,
         name: string_at(m, "name")?,
         config: opt_string_at(m, "config")?,
+        parent_schema_id: opt_u64_at(m, "parentSchemaId")?,
     })
 }
 

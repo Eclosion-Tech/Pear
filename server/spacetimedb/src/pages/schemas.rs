@@ -150,6 +150,15 @@ pub struct DatabaseSchema {
     /// JSON config for schema-level settings (e.g. name column default).
     #[default(None::<String>)]
     pub config: Option<String>,
+    /// OOP-style schema inheritance. When set, this schema's *effective*
+    /// columns are the ancestor chain's `PropertyDefinition`s (root-first)
+    /// followed by its own. Inherited columns keep their original
+    /// `property_definition_id`, so `PagePropertyValue` rows on child-db
+    /// pages reference parent definitions directly — no copying, no ID
+    /// remapping. Single inheritance only; cycles are rejected by
+    /// `set_schema_parent`.
+    #[default(None::<u64>)]
+    pub parent_schema_id: Option<u64>,
 }
 
 /// Each column in a database schema.
@@ -196,6 +205,100 @@ pub struct PagePropertyValueHistory {
 }
 
 // ============================================================
+// Schema inheritance helpers
+// ============================================================
+
+/// Hard cap on inheritance depth. Generous for real use; bounds the walk
+/// if data is ever corrupted into a cycle despite the reducer guard.
+const MAX_SCHEMA_CHAIN_DEPTH: usize = 32;
+
+/// Per-schema system columns that are intentionally present on every
+/// schema (seeded, not user-created). Exempt from shadowing checks so
+/// linking two seeded schemas doesn't spuriously conflict.
+const SYSTEM_PROPERTY_NAMES: &[&str] = &["agent_instruction"];
+
+/// Ancestor chain for a schema, child-first: `[schema_id, parent, ...]`.
+/// Stops at the root, at a dangling parent reference, or at
+/// `MAX_SCHEMA_CHAIN_DEPTH`.
+pub(crate) fn schema_ancestor_chain(ctx: &ReducerContext, schema_id: u64) -> Vec<u64> {
+    let mut chain = Vec::new();
+    let mut current = Some(schema_id);
+    while let Some(id) = current {
+        if chain.contains(&id) || chain.len() >= MAX_SCHEMA_CHAIN_DEPTH {
+            break;
+        }
+        chain.push(id);
+        current = ctx
+            .db
+            .database_schema()
+            .id()
+            .find(id)
+            .and_then(|s| s.parent_schema_id);
+    }
+    chain
+}
+
+/// Direct + transitive child schema ids of `schema_id` (excluding itself).
+/// Full-scan BFS — the schema table holds one row per database, so this
+/// stays small.
+pub(crate) fn schema_descendants(ctx: &ReducerContext, schema_id: u64) -> Vec<u64> {
+    let all: Vec<(u64, Option<u64>)> = ctx
+        .db
+        .database_schema()
+        .iter()
+        .map(|s| (s.id, s.parent_schema_id))
+        .collect();
+    let mut found: Vec<u64> = Vec::new();
+    let mut frontier = vec![schema_id];
+    while let Some(pid) = frontier.pop() {
+        for (id, parent) in &all {
+            if *parent == Some(pid) && !found.contains(id) {
+                found.push(*id);
+                frontier.push(*id);
+            }
+        }
+    }
+    found
+}
+
+/// Resolved column set for a schema: ancestor definitions root-first,
+/// own definitions last, each schema's block sorted by `order`. Inherited
+/// definitions keep their original ids — write paths need no remapping.
+pub(crate) fn effective_property_definitions(
+    ctx: &ReducerContext,
+    schema_id: u64,
+) -> Vec<PropertyDefinition> {
+    let mut defs = Vec::new();
+    for sid in schema_ancestor_chain(ctx, schema_id).into_iter().rev() {
+        let mut block: Vec<PropertyDefinition> =
+            ctx.db.property_definition().schema_id().filter(&sid).collect();
+        block.sort_by_key(|p| p.order);
+        defs.extend(block);
+    }
+    defs
+}
+
+/// No-shadowing rule (v1): a property name must be unique across a
+/// schema's whole inheritance chain — ancestors *and* descendants — so
+/// the effective column set is unambiguous everywhere. Returns the id of
+/// the schema that already defines `name`, if any.
+fn find_shadowing_conflict(ctx: &ReducerContext, schema_id: u64, name: &str) -> Option<u64> {
+    if SYSTEM_PROPERTY_NAMES.contains(&name) {
+        return None;
+    }
+    let mut related: Vec<u64> = schema_ancestor_chain(ctx, schema_id);
+    related.extend(schema_descendants(ctx, schema_id));
+    related.retain(|sid| *sid != schema_id);
+    related.into_iter().find(|sid| {
+        ctx.db
+            .property_definition()
+            .schema_id()
+            .filter(sid)
+            .any(|p| p.name == name)
+    })
+}
+
+// ============================================================
 // Schema Reducers
 // ============================================================
 
@@ -211,6 +314,76 @@ pub fn create_database_schema(
         page_id,
         name,
         config: None,
+        parent_schema_id: None,
+    });
+    Ok(())
+}
+
+/// Link (or unlink, with `None`) a schema to a parent schema. The child's
+/// effective columns become the parent chain's definitions plus its own —
+/// see `effective_property_definitions`. Rejects self-parenting, cycles,
+/// and links that would shadow a property name anywhere in the combined
+/// chain (v1 has no override semantics).
+#[reducer]
+pub fn set_schema_parent(
+    ctx: &ReducerContext,
+    schema_id: u64,
+    parent_schema_id: Option<u64>,
+) -> Result<(), String> {
+    let schema = ctx
+        .db
+        .database_schema()
+        .id()
+        .find(schema_id)
+        .ok_or("Schema not found")?;
+
+    if let Some(parent_id) = parent_schema_id {
+        if parent_id == schema_id {
+            return Err("A schema cannot inherit from itself".to_string());
+        }
+        ctx.db
+            .database_schema()
+            .id()
+            .find(parent_id)
+            .ok_or("Parent schema not found")?;
+
+        // Cycle guard: the proposed parent's ancestor chain must not pass
+        // through this schema (or any of its descendants — equivalent check,
+        // since descendants chain through schema_id).
+        if schema_ancestor_chain(ctx, parent_id).contains(&schema_id) {
+            return Err("Cannot set parent: would create an inheritance cycle".to_string());
+        }
+
+        // No-shadowing: every name defined in this schema's subtree must be
+        // absent from the new ancestor chain.
+        let new_ancestors = schema_ancestor_chain(ctx, parent_id);
+        let mut subtree = vec![schema_id];
+        subtree.extend(schema_descendants(ctx, schema_id));
+        for sid in &subtree {
+            for prop in ctx.db.property_definition().schema_id().filter(sid) {
+                if SYSTEM_PROPERTY_NAMES.contains(&prop.name.as_str()) {
+                    continue;
+                }
+                let clash = new_ancestors.iter().any(|aid| {
+                    ctx.db
+                        .property_definition()
+                        .schema_id()
+                        .filter(aid)
+                        .any(|p| p.name == prop.name)
+                });
+                if clash {
+                    return Err(format!(
+                        "Cannot set parent: property \"{}\" exists in both the parent chain and this schema's chain",
+                        prop.name
+                    ));
+                }
+            }
+        }
+    }
+
+    ctx.db.database_schema().id().update(DatabaseSchema {
+        parent_schema_id,
+        ..schema
     });
     Ok(())
 }
@@ -245,6 +418,11 @@ pub fn add_property(
         .id()
         .find(schema_id)
         .ok_or("Schema not found")?;
+    if let Some(other) = find_shadowing_conflict(ctx, schema_id, &name) {
+        return Err(format!(
+            "Property \"{name}\" already exists on a related schema (id {other}) in this inheritance chain"
+        ));
+    }
     let max_order = ctx
         .db
         .property_definition()
@@ -307,6 +485,13 @@ pub fn rename_property(
         .id()
         .find(property_definition_id)
         .ok_or("PropertyDefinition not found")?;
+    if name != prop.name {
+        if let Some(other) = find_shadowing_conflict(ctx, prop.schema_id, &name) {
+            return Err(format!(
+                "Property \"{name}\" already exists on a related schema (id {other}) in this inheritance chain"
+            ));
+        }
+    }
     ctx.db
         .property_definition()
         .id()

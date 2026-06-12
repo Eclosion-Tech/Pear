@@ -711,6 +711,7 @@ export const DatabaseSchema = __t.object("DatabaseSchema", {
   pageId: __t.u64(),
   name: __t.string(),
   config: __t.option(__t.string()),
+  parentSchemaId: __t.option(__t.u64()),
 });
 export type DatabaseSchema = __Infer<typeof DatabaseSchema>;
 

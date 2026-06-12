@@ -427,6 +427,8 @@ fn decode_database_schema(v: &Value) -> Result<DatabaseSchema, String> {
         page_id: u64_at(m, "pageId")?,
         name: string_at(m, "name")?,
         config: opt_string_at(m, "config")?,
+        // Notion has no schema inheritance — imported schemas are roots.
+        parent_schema_id: None,
     })
 }
 

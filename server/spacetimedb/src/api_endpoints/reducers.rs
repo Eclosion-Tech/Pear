@@ -16,9 +16,9 @@ use crate::automations::{
     enqueue_page_created, enqueue_page_deleted, enqueue_page_updated, enqueue_property_changed,
 };
 use crate::pages::schemas::{
-    database_schema, next_page_property_value_history_id, next_page_property_value_id,
-    page_property_value, page_property_value_history, property_definition, PagePropertyValue,
-    PagePropertyValueHistory, PropertyDefinition,
+    database_schema, effective_property_definitions, next_page_property_value_history_id,
+    next_page_property_value_id, page_property_value, page_property_value_history,
+    property_definition, PagePropertyValue, PagePropertyValueHistory, PropertyDefinition,
 };
 use crate::pages::{
     next_page_id, next_sort_order, page, page_content, Page, PageContent, PageContentFormat,
@@ -94,13 +94,9 @@ pub fn create_api_endpoint(
         .filter(&database_page_id)
         .next();
     if let Some(schema) = schema {
-        let mut props: Vec<PropertyDefinition> = ctx
-            .db
-            .property_definition()
-            .schema_id()
-            .filter(&schema.id)
-            .collect();
-        props.sort_by_key(|p| p.order);
+        // Resolved through the inheritance chain — inherited columns get
+        // field mappings too, keyed by their original definition ids.
+        let props: Vec<PropertyDefinition> = effective_property_definitions(ctx, schema.id);
 
         let mut used_names: Vec<String> = Vec::new();
         for (i, prop) in props.iter().enumerate() {

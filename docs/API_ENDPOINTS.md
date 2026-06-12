@@ -52,6 +52,12 @@ configured for the endpoint:
 - Mappings flagged `readOnly` are accepted on `GET` responses but
   rejected on `POST` / `PATCH`.
 
+When an endpoint is created, `create_api_endpoint` auto-generates one
+mapping per column of the database's **effective schema** — including
+columns inherited through `DatabaseSchema.parent_schema_id` (see
+`docs/FEATURE_schema_inheritance.md`). Inherited mappings reference the
+parent's original `property_definition_id`.
+
 The full encoding rules live in
 [`pear/web/src/lib/api-endpoint/codec.ts`](../web/src/lib/api-endpoint/codec.ts).
 

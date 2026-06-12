@@ -218,6 +218,7 @@
 - ✅ AI columns — model-computed values over row data (`PropertyType::Ai`, evaluated by the worker with cached evaluations)
 - 📋 Timeline view — Gantt-style, requires date range properties
 - 📋 Board status transitions — enforce allowed `Status` changes (state machine for Select)
+- 🔨 Database schema inheritance — a database inherits its parent's columns OOP-style (`DatabaseSchema.parent_schema_id`, module 0.14.1: `set_schema_parent` reducer, effective-schema resolver, no-shadowing guards; UI lands with the substrate `Table` component — see `docs/FEATURE_schema_inheritance.md`)
 
 ---
 

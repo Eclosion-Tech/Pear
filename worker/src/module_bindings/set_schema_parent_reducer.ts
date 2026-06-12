@@ -10,10 +10,7 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
-export default __t.row({
-  id: __t.u64().primaryKey(),
-  pageId: __t.u64().name("page_id"),
-  name: __t.string(),
-  config: __t.option(__t.string()),
-  parentSchemaId: __t.option(__t.u64()).name("parent_schema_id"),
-});
+export default {
+  schemaId: __t.u64(),
+  parentSchemaId: __t.option(__t.u64()),
+};
