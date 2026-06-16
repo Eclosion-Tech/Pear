@@ -15,6 +15,11 @@ client/out/
 # ————————————————————————————————
 server/spacetimedb/target/
 
+# Per-developer SpacetimeDB CLI override (pins a local/personal database name).
+# The shared `spacetime.json` manifest is tracked; the `.local.json` is not.
+spacetime.local.json
+**/spacetime.local.json
+
 # ————————————————————————————————
 # Generated bindings
 # web/src/module_bindings/ is intentionally committed — regenerate with
