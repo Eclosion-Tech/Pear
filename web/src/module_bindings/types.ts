@@ -618,6 +618,7 @@ export const Conversation = __t.object("Conversation", {
   },
   canonicalKey: __t.option(__t.string()),
   blockAnchor: __t.option(__t.u64()),
+  modelOverride: __t.option(__t.string()),
 });
 export type Conversation = __Infer<typeof Conversation>;
 

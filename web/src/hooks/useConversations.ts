@@ -147,6 +147,16 @@ export function useCloseConversation() {
   return useReducer(reducers.closeConversation);
 }
 
+/**
+ * Set or clear this conversation's model override. Pass a model id to pin the
+ * thread to a specific model, or `undefined` to revert to the AI user's
+ * configured default. The provider/API key are unchanged, so the model must be
+ * one the AI user's existing key can reach.
+ */
+export function useSetConversationModel() {
+  return useReducer(reducers.setConversationModel);
+}
+
 /** Compare two Identity values structurally (Identity has no equality op). */
 export function identitiesEqual(a: Identity | undefined, b: Identity | undefined): boolean {
   if (!a || !b) return false;

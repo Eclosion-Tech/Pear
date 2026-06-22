@@ -75,6 +75,7 @@ type ConversationRow = {
   createdAt: { microsSinceUnixEpoch: bigint };
   updatedAt: { microsSinceUnixEpoch: bigint };
   blockAnchor: bigint | undefined;
+  modelOverride: string | undefined;
 };
 
 type ConversationParticipantRow = {
@@ -654,10 +655,14 @@ async function handleConversationMessage(
 
     const {
       provider: aiProvider,
-      model,
+      model: defaultModel,
       maxTokens,
       providerTag,
     } = getProviderForAiUser(conn, aiProfile.aiUserId);
+    // A per-conversation override pins this thread to a specific model; the
+    // provider/key/maxTokens still come from ai_user_config, so the override
+    // must name a model that key can reach. Blank/None falls back to default.
+    const model = conv.modelOverride?.trim() || defaultModel;
     // Cheaper sibling on the same key for auxiliary work (intent verification).
     const utilityModel = utilityModelFor(providerTag, model);
 

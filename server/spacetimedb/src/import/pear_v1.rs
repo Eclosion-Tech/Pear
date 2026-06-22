@@ -949,6 +949,7 @@ fn decode_conversation(v: &Value) -> Result<Conversation, String> {
         kind: ConversationKind::ContextThread,
         canonical_key: None,
         block_anchor: None,
+        model_override: None,
     })
 }
 

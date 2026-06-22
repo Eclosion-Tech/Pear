@@ -155,6 +155,7 @@ import SetAutomationLimitsReducer from "./set_automation_limits_reducer";
 import SetAutomationModeReducer from "./set_automation_mode_reducer";
 import SetBlockAccessRuleReducer from "./set_block_access_rule_reducer";
 import SetBridgeAllowlistReducer from "./set_bridge_allowlist_reducer";
+import SetConversationModelReducer from "./set_conversation_model_reducer";
 import SetConversationVisibilityReducer from "./set_conversation_visibility_reducer";
 import SetDefaultViewReducer from "./set_default_view_reducer";
 import SetExtensionEnabledReducer from "./set_extension_enabled_reducer";
@@ -1214,6 +1215,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_automation_mode", SetAutomationModeReducer),
   __reducerSchema("set_block_access_rule", SetBlockAccessRuleReducer),
   __reducerSchema("set_bridge_allowlist", SetBridgeAllowlistReducer),
+  __reducerSchema("set_conversation_model", SetConversationModelReducer),
   __reducerSchema("set_conversation_visibility", SetConversationVisibilityReducer),
   __reducerSchema("set_default_view", SetDefaultViewReducer),
   __reducerSchema("set_extension_enabled", SetExtensionEnabledReducer),

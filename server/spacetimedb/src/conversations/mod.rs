@@ -163,11 +163,18 @@ pub struct Conversation {
     /// Mention/ContextThread comments rendered in the page gutter. Holds the
     /// `ComponentNode.id` (the pulp component-tree node) the @mention was placed
     /// on. `None` for page-level threads and DMs.
+    #[default(None::<u64>)]
+    pub block_anchor: Option<u64>,
+    /// Optional per-conversation model override. When `Some`, the worker uses
+    /// this model id for replies in this thread instead of the AI user's
+    /// configured default; the provider, API key, and max tokens still come from
+    /// `ai_user_config`, so the override must name a model that key can reach.
+    /// `None` (the default) means "use the AI user's configured model".
     ///
     /// Must remain last for schema migration (STDB only allows additive
     /// changes at the end of a struct).
-    #[default(None::<u64>)]
-    pub block_anchor: Option<u64>,
+    #[default(None::<String>)]
+    pub model_override: Option<String>,
 }
 
 /// Membership join between conversations and identities. The worker
@@ -345,6 +352,7 @@ pub fn create_conversation(
         kind: ConversationKind::ContextThread,
         canonical_key: None,
         block_anchor,
+        model_override: None,
     });
 
     let mut seen: Vec<Identity> = Vec::new();
@@ -607,6 +615,35 @@ pub fn close_conversation(ctx: &ReducerContext, conversation_id: u64) -> Result<
     Ok(())
 }
 
+/// Set or clear the per-conversation model override. `Some(model)` pins replies
+/// in this thread to `model`; `None` — or a blank/whitespace string — reverts to
+/// the AI user's configured default. Only the model changes: provider and API
+/// key are untouched, so the override must name a model the AI user's existing
+/// key can reach. Like `close_conversation`, this is intentionally unguarded at
+/// the reducer level (deployments restrict callers at the HTTP/API layer).
+#[reducer]
+pub fn set_conversation_model(
+    ctx: &ReducerContext,
+    conversation_id: u64,
+    model: Option<String>,
+) -> Result<(), String> {
+    let conv = ctx
+        .db
+        .conversation()
+        .id()
+        .find(conversation_id)
+        .ok_or("Conversation not found")?;
+    let model_override = model
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty());
+    ctx.db.conversation().id().update(Conversation {
+        model_override,
+        updated_at: ctx.timestamp,
+        ..conv
+    });
+    Ok(())
+}
+
 /// Record a claw-code compaction event for a conversation.
 ///
 /// Inserts a `System("compaction")` message containing the summary text produced
@@ -724,6 +761,7 @@ pub fn find_or_create_dm(
         kind: ConversationKind::Dm,
         canonical_key: Some(key),
         block_anchor: None,
+        model_override: None,
     });
 
     insert_dm_participants(ctx, conv.id, me, other_identity);
@@ -768,6 +806,7 @@ pub fn find_or_create_ai_dm(
         kind: ConversationKind::AiDm,
         canonical_key: Some(key),
         block_anchor: None,
+        model_override: None,
     });
 
     insert_dm_participants(ctx, conv.id, me, ai_identity);

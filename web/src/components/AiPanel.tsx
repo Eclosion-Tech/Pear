@@ -21,12 +21,17 @@ import {
   useSendUserMessage,
   useAttachmentsForConversation,
   useCloseConversation,
+  useSetConversationModel,
   useParticipantsForConversation,
   identitiesEqual,
   type ConversationRow,
   type ConversationMessageRow,
   type ConversationAttachmentRow,
 } from "@/src/hooks/useConversations";
+import {
+  providerModels,
+  type ProviderTag,
+} from "@/src/lib/aiUserApi";
 import {
   PAGE_DRAG_MIME,
   newLocalId,
@@ -489,6 +494,126 @@ function MessageAttachments({ attachments }: { attachments: ConversationAttachme
 
 // ── Conversation thread ──────────────────────────────────────────────────────
 
+/** AI-user `provider_name` → catalog `ProviderTag`. Matches `provider_display_name`
+ *  on the server; only Anthropic/OpenAI families carry quick-pick catalogs. */
+const PROVIDER_TAG_BY_NAME: Record<string, ProviderTag> = {
+  Anthropic: "Anthropic",
+  OpenAI: "OpenAi",
+  Ollama: "Ollama",
+  "OpenAI Compatible": "OpenAiCompatible",
+};
+
+/**
+ * Thread-header model switcher. Shows the effective model (per-conversation
+ * override, else the AI user's configured default) and lets the operator pin a
+ * different model for this thread or revert to the default. Only the model
+ * changes — the AI user's provider and API key still apply, so picks are limited
+ * to the family that key unlocks.
+ */
+function ConversationModelSwitcher({
+  conversation,
+  aiUser,
+}: {
+  conversation: ConversationRow;
+  aiUser: AiUserProfileRow;
+}) {
+  const setConversationModel = useSetConversationModel();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const defaultModel = aiUser.modelName;
+  const override = conversation.modelOverride ?? undefined;
+  const effective = override ?? defaultModel;
+  const catalog = providerModels(PROVIDER_TAG_BY_NAME[aiUser.providerName] ?? "Ollama");
+
+  const apply = async (model: string | undefined) => {
+    setOpen(false);
+    if (model === override) return;
+    setBusy(true);
+    try {
+      await setConversationModel({ conversationId: conversation.id, model });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        disabled={busy}
+        title="Change the model for this conversation"
+        className="flex items-center gap-1 max-w-full text-xs text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 disabled:opacity-50 transition-colors"
+      >
+        <span className="truncate">
+          {aiUser.providerName} · {effective}
+        </span>
+        {override && (
+          <span className="shrink-0 rounded bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300 px-1 text-[10px] font-medium">
+            override
+          </span>
+        )}
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 opacity-70">
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 top-full mt-1 z-20 min-w-[13rem] rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-lg py-1">
+            <MenuModelItem
+              label="Default"
+              hint={defaultModel}
+              active={!override}
+              onSelect={() => void apply(undefined)}
+            />
+            {catalog.length > 0 && (
+              <div className="my-1 border-t border-neutral-100 dark:border-neutral-800" />
+            )}
+            {catalog.map((m) => (
+              <MenuModelItem
+                key={m.id}
+                label={m.label}
+                hint={m.tier}
+                active={!!override && effective === m.id}
+                onSelect={() => void apply(m.id)}
+              />
+            ))}
+            {override && !catalog.some((m) => m.id === override) && (
+              <MenuModelItem label={override} hint="custom" active onSelect={() => setOpen(false)} />
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function MenuModelItem({
+  label,
+  hint,
+  active,
+  onSelect,
+}: {
+  label: string;
+  hint?: string;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+    >
+      <span className={`w-3 shrink-0 ${active ? "text-violet-600 dark:text-violet-400" : "opacity-0"}`}>✓</span>
+      <span className="flex-1 truncate font-mono">{label}</span>
+      {hint && <span className="shrink-0 text-[10px] text-neutral-400">{hint}</span>}
+    </button>
+  );
+}
+
 function ConversationThread({ conversation, onBack, activePageId }: { conversation: ConversationRow; onBack: () => void; activePageId?: bigint }) {
   const aiUser = useAiUserInConversation(conversation.id);
   const messages = useMessagesForConversation(conversation.id);
@@ -712,9 +837,7 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
             {aiName}
           </p>
           {aiUser && (
-            <p className="text-xs text-neutral-400 truncate">
-              {aiUser.providerName} · {aiUser.modelName}
-            </p>
+            <ConversationModelSwitcher conversation={conversation} aiUser={aiUser} />
           )}
         </div>
         {isActive && (
