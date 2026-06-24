@@ -43,6 +43,12 @@ pub(crate) fn next_bridge_command_id(ctx: &ReducerContext) -> u64 {
     })
 }
 
+pub(crate) fn next_bridge_device_grant_id(ctx: &ReducerContext) -> u64 {
+    alloc_id(ctx, "bridge_device_grant", || {
+        ctx.db.bridge_device_grant().iter().map(|r| r.id).max().unwrap_or(0)
+    })
+}
+
 // ============================================================
 // Bridge — enums
 // ============================================================
@@ -243,6 +249,45 @@ pub struct BridgeDeviceSummary {
     /// `open_/close_bridge_session`).
     pub connected: bool,
     pub revoked_at: Option<Timestamp>,
+}
+
+/// Per-(device, AI user) authorization to run `tool-bash` on a device.
+///
+/// This is the **substrate-level** permission boundary for the bridge. The
+/// `enqueue_bridge_command` reducer is default-deny: an AI user identity may
+/// only enqueue a command for a device that has a matching grant row. Every
+/// caller path — chat (`executeTool`), Orcha, and any future MCP surface —
+/// goes through that reducer, so the grant is enforced uniformly regardless of
+/// which worker code path initiated the call. (The `CompositeToolExecutor`
+/// `PermissionChecker` check remains as TS-side defense-in-depth, but it is no
+/// longer the only thing standing between an AI user and a real shell.)
+///
+/// Grants are created/removed by the device `owner` (`grant_bridge_device` /
+/// `revoke_bridge_device_grant`). Two visibility filters apply (unioned): the
+/// owner reads their grants via `granted_by`, and an AI user reads grants
+/// naming it via `ai_user_identity` (so `list_bridge_devices` can scope to the
+/// devices that AI user may actually target).
+#[client_visibility_filter]
+const BRIDGE_DEVICE_GRANT_OWNER_FILTER: Filter =
+    Filter::Sql("SELECT * FROM bridge_device_grant WHERE granted_by = :sender");
+
+#[client_visibility_filter]
+const BRIDGE_DEVICE_GRANT_AI_USER_FILTER: Filter =
+    Filter::Sql("SELECT * FROM bridge_device_grant WHERE ai_user_identity = :sender");
+
+#[table(accessor = bridge_device_grant, public)]
+pub struct BridgeDeviceGrant {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub device_id: u64,
+    /// The AI user's STDB identity (== `AiUserConfig.identity`). Matched against
+    /// `ctx.sender()` in `enqueue_bridge_command`.
+    pub ai_user_identity: Identity,
+    /// The device owner who created this grant.
+    pub granted_by: Identity,
+    pub granted_at: Timestamp,
 }
 
 #[table(accessor = bridge_device_allowlist, public)]

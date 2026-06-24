@@ -177,6 +177,54 @@ pub fn run_pending_migrations(ctx: &ReducerContext) -> Result<(), String> {
         "bridge_device_summary_backfill_v1",
         backfill_bridge_device_summary_inner
     );
+    run_step!(
+        ctx,
+        "bridge_device_grant_backfill_v1",
+        backfill_bridge_device_grants_inner
+    );
+    Ok(())
+}
+
+/// Backfill `BridgeDeviceGrant` rows so the default-deny boundary added to
+/// `enqueue_bridge_command` does not break workspaces that were using
+/// `tool-bash` before grants existed. Before this change, any AI user could run
+/// `tool-bash` on any device in the workspace; this preserves that *effective*
+/// access by granting every existing AI user every existing (non-revoked)
+/// device — but now as explicit, owner-revocable rows. New devices/AI users
+/// start with no grants (default-deny), which is the intended posture going
+/// forward. `granted_by` is set to the device owner.
+fn backfill_bridge_device_grants_inner(ctx: &ReducerContext) -> Result<(), String> {
+    use crate::bridge::{
+        bridge_device, bridge_device_grant, next_bridge_device_grant_id, BridgeDeviceGrant,
+    };
+    let ai_user_identities: Vec<spacetimedb::Identity> =
+        ctx.db.ai_user_config().iter().map(|u| u.identity).collect();
+    if ai_user_identities.is_empty() {
+        return Ok(());
+    }
+    let mut inserted = 0u64;
+    for device in ctx.db.bridge_device().iter().filter(|d| d.revoked_at.is_none()) {
+        for ai_user_identity in &ai_user_identities {
+            let already = ctx
+                .db
+                .bridge_device_grant()
+                .device_id()
+                .filter(device.id)
+                .any(|g| g.ai_user_identity == *ai_user_identity);
+            if already {
+                continue;
+            }
+            ctx.db.bridge_device_grant().insert(BridgeDeviceGrant {
+                id: next_bridge_device_grant_id(ctx),
+                device_id: device.id,
+                ai_user_identity: *ai_user_identity,
+                granted_by: device.owner,
+                granted_at: ctx.timestamp,
+            });
+            inserted += 1;
+        }
+    }
+    log::info!("bridge_device_grant_backfill_v1: inserted {inserted} grants");
     Ok(())
 }
 

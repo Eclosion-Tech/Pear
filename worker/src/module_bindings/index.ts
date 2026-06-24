@@ -87,6 +87,7 @@ import FailTaskReducer from "./fail_task_reducer";
 import FindOrCreateAiDmReducer from "./find_or_create_ai_dm_reducer";
 import FindOrCreateDmReducer from "./find_or_create_dm_reducer";
 import GrantAutoApplyReducer from "./grant_auto_apply_reducer";
+import GrantBridgeDeviceReducer from "./grant_bridge_device_reducer";
 import GrantExtensionPermissionReducer from "./grant_extension_permission_reducer";
 import ImportNotionReducer from "./import_notion_reducer";
 import ImportPearSnapshotV1Reducer from "./import_pear_snapshot_v_1_reducer";
@@ -132,6 +133,7 @@ import RestorePageToSnapshotReducer from "./restore_page_to_snapshot_reducer";
 import RevokeApiEndpointKeyReducer from "./revoke_api_endpoint_key_reducer";
 import RevokeAutoApplyReducer from "./revoke_auto_apply_reducer";
 import RevokeBridgeDeviceReducer from "./revoke_bridge_device_reducer";
+import RevokeBridgeDeviceGrantReducer from "./revoke_bridge_device_grant_reducer";
 import RevokeExtensionPermissionReducer from "./revoke_extension_permission_reducer";
 import RunConventionSensorReducer from "./run_convention_sensor_reducer";
 import RunDeniedToolCallsSensorReducer from "./run_denied_tool_calls_sensor_reducer";
@@ -221,6 +223,7 @@ import BlockAccessRuleRow from "./block_access_rule_table";
 import BridgeCommandRow from "./bridge_command_table";
 import BridgeCommandResultRow from "./bridge_command_result_table";
 import BridgeDeviceAllowlistRow from "./bridge_device_allowlist_table";
+import BridgeDeviceGrantRow from "./bridge_device_grant_table";
 import BridgeDeviceSummaryRow from "./bridge_device_summary_table";
 import ComponentNodeRow from "./component_node_table";
 import ComponentTypeDefinitionRow from "./component_type_definition_table";
@@ -565,6 +568,20 @@ const tablesSchema = __schema({
       { name: 'bridge_device_allowlist_device_id_key', constraint: 'unique', columns: ['deviceId'] },
     ],
   }, BridgeDeviceAllowlistRow),
+  bridge_device_grant: __table({
+    name: 'bridge_device_grant',
+    indexes: [
+      { name: 'device_id', algorithm: 'btree', columns: [
+        'deviceId',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'bridge_device_grant_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, BridgeDeviceGrantRow),
   bridge_device_summary: __table({
     name: 'bridge_device_summary',
     indexes: [
@@ -1147,6 +1164,7 @@ const reducersSchema = __reducers(
   __reducerSchema("find_or_create_ai_dm", FindOrCreateAiDmReducer),
   __reducerSchema("find_or_create_dm", FindOrCreateDmReducer),
   __reducerSchema("grant_auto_apply", GrantAutoApplyReducer),
+  __reducerSchema("grant_bridge_device", GrantBridgeDeviceReducer),
   __reducerSchema("grant_extension_permission", GrantExtensionPermissionReducer),
   __reducerSchema("import_notion", ImportNotionReducer),
   __reducerSchema("import_pear_snapshot_v_1", ImportPearSnapshotV1Reducer),
@@ -1192,6 +1210,7 @@ const reducersSchema = __reducers(
   __reducerSchema("revoke_api_endpoint_key", RevokeApiEndpointKeyReducer),
   __reducerSchema("revoke_auto_apply", RevokeAutoApplyReducer),
   __reducerSchema("revoke_bridge_device", RevokeBridgeDeviceReducer),
+  __reducerSchema("revoke_bridge_device_grant", RevokeBridgeDeviceGrantReducer),
   __reducerSchema("revoke_extension_permission", RevokeExtensionPermissionReducer),
   __reducerSchema("run_convention_sensor", RunConventionSensorReducer),
   __reducerSchema("run_denied_tool_calls_sensor", RunDeniedToolCallsSensorReducer),

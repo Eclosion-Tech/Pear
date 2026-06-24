@@ -1483,6 +1483,29 @@ function countByAutomation(
   return n;
 }
 
+/**
+ * The set of bridge device ids this AI user has been granted `tool_bash` on.
+ *
+ * The `bridge_device_grant` table is RLS-scoped to `ai_user_identity = :sender`,
+ * so a worker connected as the AI user only sees grants naming it — iterating
+ * the table yields exactly the devices it may target. The reducer
+ * (`enqueue_bridge_command`) is the authoritative default-deny boundary; this is
+ * used to scope discovery (`list_bridge_devices`) and to fail fast with a clear
+ * message before a round-trip. Returns `undefined` if the table is unavailable
+ * in this worker build (older bindings) — callers treat that as "can't pre-check
+ * here, let the reducer decide".
+ */
+function grantedBridgeDeviceIds(conn: ConnLike): Set<string> | undefined {
+  type GrantRow = { deviceId: bigint };
+  const rows: Iterable<GrantRow> | undefined =
+    (conn.db as { bridge_device_grant?: { iter: () => Iterable<GrantRow> } })
+      .bridge_device_grant?.iter?.() ??
+    (conn.db as { bridgeDeviceGrant?: { iter: () => Iterable<GrantRow> } })
+      .bridgeDeviceGrant?.iter?.();
+  if (!rows) return undefined;
+  return new Set([...rows].map((g) => String(g.deviceId)));
+}
+
 export async function executeTool(
   conn: ConnLike,
   toolName: string,
@@ -1967,8 +1990,13 @@ export async function executeTool(
           });
         }
 
+        // Scope discovery to devices this AI user has been granted. If the
+        // grant table isn't readable in this build, fall back to the prior
+        // workspace-wide list (the reducer still enforces grants on use).
+        const granted = grantedBridgeDeviceIds(conn);
         const devices = [...summaryRows]
           .filter((d) => d.revokedAt == null)
+          .filter((d) => granted === undefined || granted.has(String(d.id)))
           .map((d) => ({
             device_id: Number(d.id),
             name: d.name,
@@ -1984,6 +2012,19 @@ export async function executeTool(
         const deviceId = numericInputToBigInt(input.device_id);
         if (!deviceId) {
           return JSON.stringify({ ok: false, error: "device_id must be a positive integer" });
+        }
+
+        // Default-deny pre-flight: the AI user must hold a BridgeDeviceGrant for
+        // this device. The enqueue_bridge_command reducer is the authoritative
+        // boundary; this mirrors it to fail fast with a clear message (and avoid
+        // a doomed round-trip). Skipped only if the grant table is unreadable in
+        // this build, in which case the reducer still enforces.
+        const grantedIds = grantedBridgeDeviceIds(conn);
+        if (grantedIds !== undefined && !grantedIds.has(String(deviceId))) {
+          return JSON.stringify({
+            ok: false,
+            error: `Permission denied: this AI user is not granted bridge device ${deviceId}. The device owner must grant access before tool_bash can target it.`,
+          });
         }
 
         // Fast-fail before enqueuing if the device isn't a live, connected

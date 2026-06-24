@@ -24,11 +24,13 @@
 
 use spacetimedb::{reducer, Identity, ReducerContext, Table, Timestamp};
 
+use crate::ai::ai_user_config;
 use crate::bridge::{
     bridge_command, bridge_command_result, bridge_device, bridge_device_allowlist,
-    bridge_device_summary, bridge_session, next_bridge_command_id, next_bridge_device_id,
-    next_bridge_session_id, BridgeCommand, BridgeCommandResult, BridgeCommandStatus, BridgeDevice,
-    BridgeDeviceAllowlist, BridgeDeviceSummary, BridgeSession,
+    bridge_device_grant, bridge_device_summary, bridge_session, next_bridge_command_id,
+    next_bridge_device_grant_id, next_bridge_device_id, next_bridge_session_id, BridgeCommand,
+    BridgeCommandResult, BridgeCommandStatus, BridgeDevice, BridgeDeviceAllowlist,
+    BridgeDeviceGrant, BridgeDeviceSummary, BridgeSession,
 };
 use crate::extensions::{tool_call_audit_log, ToolCallAuditLog};
 
@@ -65,6 +67,34 @@ fn require_owner(ctx: &ReducerContext, device: &BridgeDevice) -> Result<(), Stri
         return Err("Only the device owner may perform this action".to_string());
     }
     Ok(())
+}
+
+/// Find an existing grant for `(device_id, ai_user_identity)`, if any. Scans the
+/// device's grants (indexed by `device_id` — typically a handful per device).
+fn find_grant(
+    ctx: &ReducerContext,
+    device_id: u64,
+    ai_user_identity: Identity,
+) -> Option<BridgeDeviceGrant> {
+    ctx.db
+        .bridge_device_grant()
+        .device_id()
+        .filter(device_id)
+        .find(|g| g.ai_user_identity == ai_user_identity)
+}
+
+/// The substrate-level `tool-bash` boundary: require that the calling AI user
+/// identity has been granted this device by its owner. Default-deny — no grant,
+/// no execution. Enforced here (not just in the TS worker) so every caller path
+/// is gated uniformly; see `BridgeDeviceGrant` docs.
+fn require_bridge_grant(ctx: &ReducerContext, device_id: u64) -> Result<(), String> {
+    if find_grant(ctx, device_id, ctx.sender()).is_some() {
+        return Ok(());
+    }
+    Err(format!(
+        "AI user is not granted access to bridge device {device_id}. \
+         The device owner must grant it via grant_bridge_device."
+    ))
 }
 
 /// Require that the caller is the device executing this command — i.e. the
@@ -374,6 +404,15 @@ pub fn enqueue_bridge_command(
         return Err("Command cannot be empty".to_string());
     }
     let device = live_device(ctx, device_id)?;
+
+    // Substrate-level permission boundary (default-deny): the calling AI user
+    // identity must hold a BridgeDeviceGrant for this device. This closes the
+    // gap where the chat/`executeTool` path bypassed the TS-side
+    // PermissionChecker — every caller path reaches this reducer, so the grant
+    // is enforced uniformly here. The TS `CompositeToolExecutor` check remains
+    // as defense-in-depth + a friendlier pre-flight error.
+    require_bridge_grant(ctx, device_id)?;
+
     // Require a currently-connected session for this device.
     let session = ctx
         .db
@@ -382,11 +421,6 @@ pub fn enqueue_bridge_command(
         .filter(|s| s.device_id == device_id && s.disconnected_at.is_none())
         .max_by_key(|s| s.connected_at)
         .ok_or_else(|| format!("No connected bridge session for device {device_id}"))?;
-
-    // NOTE: tool-bash capability + per-device grant is enforced by the
-    // PermissionChecker in CompositeToolExecutor BEFORE this reducer is
-    // called (PermissionScope::BridgeDevice(device_id)). This reducer is
-    // not the permission boundary; it is the command bus.
 
     let command_id = next_bridge_command_id(ctx);
     ctx.db.bridge_command().insert(BridgeCommand {
@@ -579,6 +613,68 @@ pub fn set_bridge_allowlist(
         ctx.db.bridge_device_allowlist().device_id().update(row);
     } else {
         ctx.db.bridge_device_allowlist().insert(row);
+    }
+    Ok(())
+}
+
+// ============================================================
+// Bridge device grants — per-(device, AI user) tool-bash authorization
+// ============================================================
+
+/// Grant an AI user permission to run `tool-bash` on a device. Owner-only.
+/// Idempotent: re-granting an existing (device, AI user) pair is a no-op.
+/// `ai_user_identity` must be a real AI user in this workspace.
+#[reducer]
+pub fn grant_bridge_device(
+    ctx: &ReducerContext,
+    device_id: u64,
+    ai_user_identity: Identity,
+) -> Result<(), String> {
+    let device = live_device(ctx, device_id)?;
+    require_owner(ctx, &device)?;
+    if ai_user_identity == Identity::ZERO {
+        return Err("ai_user_identity must be a non-zero Identity".to_string());
+    }
+    // The grant must name a real AI user, so a typo'd identity can't silently
+    // create a dangling grant.
+    if ctx
+        .db
+        .ai_user_config()
+        .identity()
+        .find(ai_user_identity)
+        .is_none()
+    {
+        return Err("No AI user exists with that identity in this workspace".to_string());
+    }
+    if find_grant(ctx, device_id, ai_user_identity).is_some() {
+        return Ok(()); // idempotent
+    }
+    ctx.db.bridge_device_grant().insert(BridgeDeviceGrant {
+        id: next_bridge_device_grant_id(ctx),
+        device_id,
+        ai_user_identity,
+        granted_by: ctx.sender(),
+        granted_at: ctx.timestamp,
+    });
+    Ok(())
+}
+
+/// Revoke an AI user's `tool-bash` access to a device. Owner-only. Idempotent:
+/// revoking a non-existent grant is a no-op. Pending commands already enqueued
+/// are unaffected (they were authorized when enqueued); future enqueues fail.
+#[reducer]
+pub fn revoke_bridge_device_grant(
+    ctx: &ReducerContext,
+    device_id: u64,
+    ai_user_identity: Identity,
+) -> Result<(), String> {
+    // The device may already be revoked/removed; still allow grant cleanup. Only
+    // require that, if the device exists, the caller owns it.
+    if let Some(device) = ctx.db.bridge_device().id().find(device_id) {
+        require_owner(ctx, &device)?;
+    }
+    if let Some(grant) = find_grant(ctx, device_id, ai_user_identity) {
+        ctx.db.bridge_device_grant().id().delete(&grant.id);
     }
     Ok(())
 }

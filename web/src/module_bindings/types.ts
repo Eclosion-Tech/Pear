@@ -525,6 +525,15 @@ export const BridgeDeviceAllowlist = __t.object("BridgeDeviceAllowlist", {
 });
 export type BridgeDeviceAllowlist = __Infer<typeof BridgeDeviceAllowlist>;
 
+export const BridgeDeviceGrant = __t.object("BridgeDeviceGrant", {
+  id: __t.u64(),
+  deviceId: __t.u64(),
+  aiUserIdentity: __t.identity(),
+  grantedBy: __t.identity(),
+  grantedAt: __t.timestamp(),
+});
+export type BridgeDeviceGrant = __Infer<typeof BridgeDeviceGrant>;
+
 export const BridgeDeviceSummary = __t.object("BridgeDeviceSummary", {
   id: __t.u64(),
   name: __t.string(),
