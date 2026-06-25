@@ -2055,15 +2055,6 @@ export async function executeTool(
         const conversationId =
           numericInputToBigInt(input.conversation_id) ?? toolContext.conversationId ?? BigInt(0);
 
-        await conn.reducers.enqueueBridgeCommand({
-          deviceId,
-          command,
-          cwd: typeof input.cwd === "string" && input.cwd.trim() ? input.cwd : undefined,
-          conversationId,
-          jobId: undefined,
-          taskId: undefined,
-        });
-
         type BridgeCmd = {
           id: bigint;
           deviceId: bigint;
@@ -2087,7 +2078,26 @@ export async function executeTool(
           (conn.db as { bridge_command_result?: { iter: () => Iterable<BridgeRes> } }).bridge_command_result?.iter?.() ??
           (conn.db as { bridgeCommandResult?: { iter: () => Iterable<BridgeRes> } }).bridgeCommandResult?.iter?.();
 
-        if (!bridgeCommandRows || !bridgeResultRows) {
+        // Snapshot existing command ids BEFORE enqueuing so we wait on the row we
+        // actually create — not a prior identical command. Matching by command
+        // text alone returns the oldest same-text row (and its stale result),
+        // which makes the AI falsely report success on a re-run while the new
+        // command is still pending/awaiting approval. (Undefined if the table
+        // isn't readable in this build — handled by the guard below.)
+        const preCmdIds = bridgeCommandRows
+          ? new Set([...bridgeCommandRows].map((r) => String(r.id)))
+          : undefined;
+
+        await conn.reducers.enqueueBridgeCommand({
+          deviceId,
+          command,
+          cwd: typeof input.cwd === "string" && input.cwd.trim() ? input.cwd : undefined,
+          conversationId,
+          jobId: undefined,
+          taskId: undefined,
+        });
+
+        if (!bridgeCommandRows || !bridgeResultRows || !preCmdIds) {
           return JSON.stringify({
             ok: false,
             status: "unconfirmed",
@@ -2098,12 +2108,15 @@ export async function executeTool(
 
         const enqueued = await waitFor(
           () =>
-            [...bridgeCommandRows].find(
-              (r) =>
-                String(r.deviceId) === String(deviceId) &&
-                r.command === command &&
-                String(r.conversationId) === String(conversationId),
-            ),
+            [...bridgeCommandRows]
+              .filter(
+                (r) =>
+                  !preCmdIds.has(String(r.id)) &&
+                  String(r.deviceId) === String(deviceId) &&
+                  r.command === command &&
+                  String(r.conversationId) === String(conversationId),
+              )
+              .sort((a, b) => (a.id < b.id ? 1 : b.id < a.id ? -1 : 0))[0],
           10_000,
         );
         if (!enqueued) {

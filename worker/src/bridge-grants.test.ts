@@ -162,6 +162,20 @@ test("tool_bash surfaces AwaitingConfirmation instead of an opaque timeout", asy
   assert.equal(out.status, "awaiting_confirmation");
 });
 
+test("tool_bash does not return a prior identical command's result", async () => {
+  const { conn, commands, addResult } = makeBridgeConn();
+  // A previously-completed command with the SAME text + its result. The new run
+  // must not match this stale row (which would falsely report success).
+  commands.push({ id: 100n, deviceId: 1n, command: "echo hi", conversationId: 0n, status: { tag: "Completed" } });
+  addResult({ commandId: 100n, exitCode: 0, stdout: "OLD", stderr: "", durationMs: 1n });
+  // New run; never completes (no result for the new row).
+  const out = JSON.parse(
+    await executeTool(conn, "tool_bash", { device_id: 1, command: "echo hi", timeout_ms: 1500 }, 0n),
+  );
+  assert.equal(out.ok, false, "must not surface the stale prior success");
+  assert.notEqual(out.status, "completed");
+});
+
 test("tool_bash without a readable grant table defers to the reducer (no TS pre-deny)", async () => {
   // Older bindings without bridge_device_grant: the TS pre-check is skipped and
   // enforcement falls to the reducer. Here the device is connected, so the call
