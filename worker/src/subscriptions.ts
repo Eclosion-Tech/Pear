@@ -30,6 +30,21 @@ function missingTableName(err: unknown): string | undefined {
   return match?.[1];
 }
 
+// Tables whose live INSERT/UPDATE delivery the request/response bridge flow
+// depends on (the worker enqueues a command then waits to see the row + its
+// result appear). These get their OWN subscription, isolated from the large
+// bundle below: a single bad/By-changed query in a ~60-table bundle can leave
+// the whole subscription delivering only its initial snapshot (no incrementals),
+// which silently breaks the bridge poll loop. An isolated subscription can't be
+// degraded by an unrelated table.
+const BRIDGE_TABLE_NAMES = [
+  "bridge_command",
+  "bridge_command_result",
+  "bridge_device_summary",
+  "bridge_device_grant",
+  "bridge_device_allowlist",
+];
+
 export function subscribeToAvailableTables(
   conn: unknown,
   logTag: string,
@@ -63,6 +78,41 @@ export function subscribeToAvailableTables(
         }
 
         console.error(`${logTag} subscription error:`, errorMessage(err));
+      })
+      .subscribe(queries);
+  };
+
+  subscribe();
+  subscribeBridgeTables(connection, logTag);
+}
+
+/**
+ * Dedicated, isolated subscription for the bridge tables (see BRIDGE_TABLE_NAMES).
+ * Kept separate from the main bundle so their realtime INSERT/UPDATE delivery is
+ * never degraded by an unrelated query in the big subscription. Each available
+ * bridge table is subscribed; a missing one (older module) is skipped.
+ */
+function subscribeBridgeTables(connection: ConnectionLike, logTag: string): void {
+  const present = new Set(ALL_TABLE_NAMES);
+  const skipped = new Set<string>();
+
+  const subscribe = (): void => {
+    const queries = BRIDGE_TABLE_NAMES.filter(
+      (name) => present.has(name) && !skipped.has(name),
+    ).map((name) => `SELECT * FROM ${name}`);
+    if (queries.length === 0) return;
+
+    connection
+      .subscriptionBuilder()
+      .onApplied(() => console.log(`${logTag} bridge subscription ready`))
+      .onError((_ctx: unknown, err: unknown) => {
+        const missing = missingTableName(err);
+        if (missing && !skipped.has(missing)) {
+          skipped.add(missing);
+          subscribe();
+          return;
+        }
+        console.error(`${logTag} bridge subscription error:`, errorMessage(err));
       })
       .subscribe(queries);
   };
