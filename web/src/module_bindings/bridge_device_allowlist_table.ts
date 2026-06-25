@@ -9,6 +9,10 @@ import {
   type AlgebraicTypeType as __AlgebraicTypeType,
   type Infer as __Infer,
 } from "spacetimedb";
+import {
+  UnlistedCommandPolicy,
+} from "./types";
+
 
 export default __t.row({
   deviceId: __t.u64().primaryKey().name("device_id"),
@@ -20,4 +24,7 @@ export default __t.row({
   maxRuntimeSeconds: __t.u64().name("max_runtime_seconds"),
   updatedAt: __t.timestamp().name("updated_at"),
   updatedBy: __t.identity().name("updated_by"),
+  get unlistedCommandPolicy() {
+    return UnlistedCommandPolicy.name("unlisted_command_policy");
+  },
 });

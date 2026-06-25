@@ -10,7 +10,13 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
+import {
+  UnlistedCommandPolicy,
+} from "./types";
+
 export default {
-  commandId: __t.u64(),
-  remember: __t.bool(),
+  deviceId: __t.u64(),
+  get policy() {
+    return UnlistedCommandPolicy;
+  },
 };

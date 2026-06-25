@@ -79,6 +79,7 @@ import DeletePageReducer from "./delete_page_reducer";
 import DeletePropertyReducer from "./delete_property_reducer";
 import DeleteReviewAgentBindingReducer from "./delete_review_agent_binding_reducer";
 import DeleteViewReducer from "./delete_view_reducer";
+import DenyBridgeCommandReducer from "./deny_bridge_command_reducer";
 import DisableAiUserMemoryReducer from "./disable_ai_user_memory_reducer";
 import DisableAutomationReducer from "./disable_automation_reducer";
 import EnableAutomationReducer from "./enable_automation_reducer";
@@ -157,6 +158,7 @@ import SetAutomationLimitsReducer from "./set_automation_limits_reducer";
 import SetAutomationModeReducer from "./set_automation_mode_reducer";
 import SetBlockAccessRuleReducer from "./set_block_access_rule_reducer";
 import SetBridgeAllowlistReducer from "./set_bridge_allowlist_reducer";
+import SetBridgeUnlistedPolicyReducer from "./set_bridge_unlisted_policy_reducer";
 import SetConversationModelReducer from "./set_conversation_model_reducer";
 import SetConversationVisibilityReducer from "./set_conversation_visibility_reducer";
 import SetDefaultViewReducer from "./set_default_view_reducer";
@@ -1156,6 +1158,7 @@ const reducersSchema = __reducers(
   __reducerSchema("delete_property", DeletePropertyReducer),
   __reducerSchema("delete_review_agent_binding", DeleteReviewAgentBindingReducer),
   __reducerSchema("delete_view", DeleteViewReducer),
+  __reducerSchema("deny_bridge_command", DenyBridgeCommandReducer),
   __reducerSchema("disable_ai_user_memory", DisableAiUserMemoryReducer),
   __reducerSchema("disable_automation", DisableAutomationReducer),
   __reducerSchema("enable_automation", EnableAutomationReducer),
@@ -1234,6 +1237,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_automation_mode", SetAutomationModeReducer),
   __reducerSchema("set_block_access_rule", SetBlockAccessRuleReducer),
   __reducerSchema("set_bridge_allowlist", SetBridgeAllowlistReducer),
+  __reducerSchema("set_bridge_unlisted_policy", SetBridgeUnlistedPolicyReducer),
   __reducerSchema("set_conversation_model", SetConversationModelReducer),
   __reducerSchema("set_conversation_visibility", SetConversationVisibilityReducer),
   __reducerSchema("set_default_view", SetDefaultViewReducer),

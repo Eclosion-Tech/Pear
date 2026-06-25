@@ -469,6 +469,7 @@ export const BridgeCommand = __t.object("BridgeCommand", {
   confirmedAt: __t.option(__t.timestamp()),
   confirmedBy: __t.option(__t.identity()),
   deviceIdentity: __t.identity(),
+  ownerIdentity: __t.identity(),
 });
 export type BridgeCommand = __Infer<typeof BridgeCommand>;
 
@@ -522,6 +523,9 @@ export const BridgeDeviceAllowlist = __t.object("BridgeDeviceAllowlist", {
   maxRuntimeSeconds: __t.u64(),
   updatedAt: __t.timestamp(),
   updatedBy: __t.identity(),
+  get unlistedCommandPolicy() {
+    return UnlistedCommandPolicy;
+  },
 });
 export type BridgeDeviceAllowlist = __Infer<typeof BridgeDeviceAllowlist>;
 
@@ -1283,6 +1287,13 @@ export const ToolCallAuditLog = __t.object("ToolCallAuditLog", {
   calledAt: __t.timestamp(),
 });
 export type ToolCallAuditLog = __Infer<typeof ToolCallAuditLog>;
+
+// The tagged union or sum type for the algebraic type `UnlistedCommandPolicy`.
+export const UnlistedCommandPolicy = __t.enum("UnlistedCommandPolicy", {
+  Prompt: __t.unit(),
+  Reject: __t.unit(),
+});
+export type UnlistedCommandPolicy = __Infer<typeof UnlistedCommandPolicy>;
 
 export const User = __t.object("User", {
   identity: __t.identity(),

@@ -12,4 +12,5 @@ import {
 
 export default {
   commandId: __t.u64(),
+  remember: __t.bool(),
 };

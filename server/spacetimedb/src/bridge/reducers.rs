@@ -30,7 +30,7 @@ use crate::bridge::{
     bridge_device_grant, bridge_device_summary, bridge_session, next_bridge_command_id,
     next_bridge_device_grant_id, next_bridge_device_id, next_bridge_session_id, BridgeCommand,
     BridgeCommandResult, BridgeCommandStatus, BridgeDevice, BridgeDeviceAllowlist,
-    BridgeDeviceGrant, BridgeDeviceSummary, BridgeSession,
+    BridgeDeviceGrant, BridgeDeviceSummary, BridgeSession, UnlistedCommandPolicy,
 };
 use crate::extensions::{tool_call_audit_log, ToolCallAuditLog};
 
@@ -200,6 +200,9 @@ pub fn pair_bridge_device(
         max_runtime_seconds: 120,
         updated_at: ctx.timestamp,
         updated_by: ctx.sender(),
+        // New devices default to prompting for unlisted commands (the owner can
+        // Allow / Deny in the UI) rather than hard-rejecting them.
+        unlisted_command_policy: UnlistedCommandPolicy::Prompt,
     });
     Ok(())
 }
@@ -442,14 +445,28 @@ pub fn enqueue_bridge_command(
         // identity) can see this command via BRIDGE_COMMAND_DEVICE_FILTER, and
         // so complete/reject can be gated to the executing device.
         device_identity: device.device_identity,
+        // Stamp the owner so they can see + approve/deny this command in the UI
+        // (BRIDGE_COMMAND_OWNER_FILTER).
+        owner_identity: device.owner,
     });
     Ok(())
 }
 
-/// Confirm a command sitting in AwaitingConfirmation. Called by the Pear
-/// UI; the human confirmer is the sender and must own the device.
+/// Confirm a command sitting in AwaitingConfirmation. Called by the Pear UI; the
+/// human confirmer is the sender and must own the device. Flipping it back to
+/// Pending (with `confirmed_at` set) re-dispatches it to the daemon, which skips
+/// the confirmation gate on the confirmed re-run.
+///
+/// `remember` backs the UI's "Always allow": when true, the command's leading
+/// program is appended to the device's `allowed_commands`, so future runs of
+/// that program don't prompt. (Only meaningful for the unlisted-command case;
+/// harmless for `require_confirmation_for` matches.)
 #[reducer]
-pub fn confirm_bridge_command(ctx: &ReducerContext, command_id: u64) -> Result<(), String> {
+pub fn confirm_bridge_command(
+    ctx: &ReducerContext,
+    command_id: u64,
+    remember: bool,
+) -> Result<(), String> {
     let cmd = ctx
         .db
         .bridge_command()
@@ -461,6 +478,24 @@ pub fn confirm_bridge_command(ctx: &ReducerContext, command_id: u64) -> Result<(
     }
     let device = live_device(ctx, cmd.device_id)?;
     require_owner(ctx, &device)?;
+
+    if remember {
+        if let Some(program) = leading_program(&cmd.command) {
+            if let Some(allowlist) = ctx.db.bridge_device_allowlist().device_id().find(cmd.device_id) {
+                if !allowlist.allowed_commands.iter().any(|c| c == &program) {
+                    let mut allowed_commands = allowlist.allowed_commands.clone();
+                    allowed_commands.push(program);
+                    ctx.db.bridge_device_allowlist().device_id().update(BridgeDeviceAllowlist {
+                        allowed_commands,
+                        updated_at: ctx.timestamp,
+                        updated_by: ctx.sender(),
+                        ..allowlist
+                    });
+                }
+            }
+        }
+    }
+
     ctx.db.bridge_command().id().update(BridgeCommand {
         status: BridgeCommandStatus::Pending,
         confirmed_at: Some(ctx.timestamp),
@@ -468,6 +503,70 @@ pub fn confirm_bridge_command(ctx: &ReducerContext, command_id: u64) -> Result<(
         ..cmd
     });
     Ok(())
+}
+
+/// Deny a command sitting in AwaitingConfirmation — the UI's "Deny". Owner-only.
+/// Writes a Rejected result so the worker's wait resolves immediately (instead of
+/// timing out) and the AI learns the human declined. Unlike `reject_bridge_command`
+/// (relay/bridge-only, for allowlist rejections), this is the human-initiated path.
+#[reducer]
+pub fn deny_bridge_command(ctx: &ReducerContext, command_id: u64) -> Result<(), String> {
+    let cmd = ctx
+        .db
+        .bridge_command()
+        .id()
+        .find(command_id)
+        .ok_or_else(|| format!("Bridge command {command_id} not found"))?;
+    if cmd.status != BridgeCommandStatus::AwaitingConfirmation {
+        return Err("Command is not awaiting confirmation".to_string());
+    }
+    let device = live_device(ctx, cmd.device_id)?;
+    require_owner(ctx, &device)?;
+    let reason = "denied by user".to_string();
+    let output_hash = sha256_hex(&reason);
+    write_audit(ctx, &cmd, "denied", &output_hash);
+    ctx.db.bridge_command_result().insert(BridgeCommandResult {
+        command_id,
+        requested_by: cmd.requested_by,
+        exit_code: None,
+        stdout: String::new(),
+        stderr: String::new(),
+        rejection_reason: Some(reason),
+        duration_ms: 0,
+        completed_at: ctx.timestamp,
+        output_hash,
+    });
+    ctx.db.bridge_command().id().update(BridgeCommand {
+        status: BridgeCommandStatus::Rejected,
+        ..cmd
+    });
+    Ok(())
+}
+
+/// Extract the leading program token of a command for the "Always allow"
+/// allowlist append: first segment's first token, skipping `NAME=VALUE`
+/// env-assignment prefixes. Deliberately simple (the daemon does the rigorous
+/// parsing); this only needs the program name a human just approved.
+fn leading_program(command: &str) -> Option<String> {
+    let first_segment = command
+        .split(['|', '&', ';'])
+        .next()
+        .unwrap_or(command)
+        .trim();
+    for token in first_segment.split_whitespace() {
+        // Skip leading env assignments like FOO=bar.
+        let is_assignment = matches!(token.find('='), Some(i) if i > 0)
+            && token
+                .split('=')
+                .next()
+                .map(|n| n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(false);
+        if is_assignment {
+            continue;
+        }
+        return Some(token.to_string());
+    }
+    None
 }
 
 /// Write the result of a completed command. RELAY/BRIDGE-ONLY — must not
@@ -608,12 +707,44 @@ pub fn set_bridge_allowlist(
         max_runtime_seconds,
         updated_at: ctx.timestamp,
         updated_by: ctx.sender(),
+        // Preserve the existing unlisted-command policy across allowlist edits
+        // (it has its own toggle, `set_bridge_unlisted_policy`); new rows default
+        // to Prompt.
+        unlisted_command_policy: existing
+            .as_ref()
+            .map(|e| e.unlisted_command_policy.clone())
+            .unwrap_or(UnlistedCommandPolicy::Prompt),
     };
     if existing.is_some() {
         ctx.db.bridge_device_allowlist().device_id().update(row);
     } else {
         ctx.db.bridge_device_allowlist().insert(row);
     }
+    Ok(())
+}
+
+/// Toggle how unlisted commands are handled on a device: `Prompt` (route to
+/// human Allow/Deny) or `Reject` (hard-deny). Owner-only.
+#[reducer]
+pub fn set_bridge_unlisted_policy(
+    ctx: &ReducerContext,
+    device_id: u64,
+    policy: UnlistedCommandPolicy,
+) -> Result<(), String> {
+    let device = live_device(ctx, device_id)?;
+    require_owner(ctx, &device)?;
+    let existing = ctx
+        .db
+        .bridge_device_allowlist()
+        .device_id()
+        .find(device_id)
+        .ok_or_else(|| format!("No allowlist configured for device {device_id}"))?;
+    ctx.db.bridge_device_allowlist().device_id().update(BridgeDeviceAllowlist {
+        unlisted_command_policy: policy,
+        updated_at: ctx.timestamp,
+        updated_by: ctx.sender(),
+        ..existing
+    });
     Ok(())
 }
 

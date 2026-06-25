@@ -35,6 +35,57 @@ const DEVICES = [
   { id: 2n, name: "Server", platform: "linux-x86_64", connected: true },
 ];
 
+// A richer fake for the status-aware tool_bash wait: backs bridge_command (with a
+// mutable status) and bridge_command_result so we can drive the daemon-side state
+// machine the worker now reads. `enqueueBridgeCommand` inserts a Pending command;
+// the test then mutates status / inserts a result to simulate the daemon.
+function makeBridgeConn(opts: { connected?: boolean } = {}) {
+  const connected = opts.connected ?? true;
+  const commands: Array<{
+    id: bigint;
+    deviceId: bigint;
+    command: string;
+    conversationId: bigint;
+    status: { tag: string };
+  }> = [];
+  const results: Array<{
+    commandId: bigint;
+    exitCode?: number;
+    stdout: string;
+    stderr: string;
+    rejectionReason?: string;
+    durationMs: bigint;
+  }> = [];
+  let nextId = 1n;
+  const conn: ConnLike = {
+    db: {
+      bridge_device_summary: {
+        iter: () => [{ id: 1n, name: "MacBook", platform: "darwin-arm64", connected, revokedAt: null }],
+      },
+      bridge_device_grant: { iter: () => [{ deviceId: 1n }] },
+      bridge_command: { iter: () => commands },
+      bridge_command_result: { iter: () => results },
+    },
+    reducers: {
+      enqueueBridgeCommand: async (args: { deviceId: bigint; command: string; conversationId: bigint }) => {
+        commands.push({
+          id: nextId++,
+          deviceId: args.deviceId,
+          command: args.command,
+          conversationId: args.conversationId ?? 0n,
+          status: { tag: "Pending" },
+        });
+      },
+    },
+  };
+  const setStatus = (id: bigint, tag: string) => {
+    const c = commands.find((r) => r.id === id);
+    if (c) c.status = { tag };
+  };
+  const addResult = (r: (typeof results)[number]) => results.push(r);
+  return { conn, commands, setStatus, addResult };
+}
+
 test("list_bridge_devices only returns devices granted to the AI user", async () => {
   const { conn } = makeConn({ devices: DEVICES, grantedDeviceIds: [2n] });
   const out = JSON.parse(await executeTool(conn, "list_bridge_devices", {}, 0n));
@@ -69,6 +120,46 @@ test("tool_bash passes the grant gate for a granted device", async () => {
   assert.equal(out.ok, false);
   assert.match(out.error, /not connected/i, "should fail on connection, not on the grant gate");
   assert.equal(enqueued.length, 0);
+});
+
+test("tool_bash returns the result once the daemon completes it", async () => {
+  const { conn, commands, setStatus, addResult } = makeBridgeConn();
+  // Simulate the daemon: shortly after enqueue, mark Running then write a result.
+  setTimeout(() => {
+    const id = commands[0]?.id ?? 1n;
+    setStatus(id, "Running");
+    addResult({ commandId: id, exitCode: 0, stdout: "hi", stderr: "", durationMs: 5n });
+  }, 150);
+  const out = JSON.parse(
+    await executeTool(conn, "tool_bash", { device_id: 1, command: "echo hi", timeout_ms: 3000 }, 0n),
+  );
+  assert.equal(out.ok, true);
+  assert.equal(out.status, "completed");
+  assert.equal(out.exit_code, 0);
+});
+
+test("tool_bash bails fast when the command stays Pending (daemon not consuming)", async () => {
+  const { conn } = makeBridgeConn();
+  // Never mark Running / never add a result → stuck Pending.
+  const t0 = Date.now();
+  const out = JSON.parse(
+    await executeTool(conn, "tool_bash", { device_id: 1, command: "echo hi", timeout_ms: 1500 }, 0n),
+  );
+  const elapsed = Date.now() - t0;
+  assert.equal(out.ok, false);
+  assert.equal(out.status, "pending");
+  // Should bail at the scaled grace (~500ms), well before the 1500ms timeout.
+  assert.ok(elapsed < 1400, `expected early bail, took ${elapsed}ms`);
+});
+
+test("tool_bash surfaces AwaitingConfirmation instead of an opaque timeout", async () => {
+  const { conn, commands, setStatus } = makeBridgeConn();
+  setTimeout(() => setStatus(commands[0]?.id ?? 1n, "AwaitingConfirmation"), 100);
+  const out = JSON.parse(
+    await executeTool(conn, "tool_bash", { device_id: 1, command: "git push", timeout_ms: 1200 }, 0n),
+  );
+  assert.equal(out.ok, false);
+  assert.equal(out.status, "awaiting_confirmation");
 });
 
 test("tool_bash without a readable grant table defers to the reducer (no TS pre-deny)", async () => {

@@ -53,6 +53,20 @@ pub(crate) fn next_bridge_device_grant_id(ctx: &ReducerContext) -> u64 {
 // Bridge — enums
 // ============================================================
 
+/// How the bridge treats a command whose leading token is not in
+/// `allowed_commands` (and is not caught by the in-binary baseline-blocked
+/// floor). The daemon enforces this; the value is shipped to it in the allowlist
+/// bootstrap frame.
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum UnlistedCommandPolicy {
+    /// Route unlisted commands to `AwaitingConfirmation` so the device owner can
+    /// Allow / Deny in the Pear UI. The baseline-blocked floor + CWD jail still
+    /// hard-reject regardless. This is the default for new devices.
+    Prompt,
+    /// Hard-reject unlisted commands (strict — the original behavior).
+    Reject,
+}
+
 #[derive(SpacetimeType, Clone, Debug, PartialEq)]
 pub enum BridgeCommandStatus {
     /// Enqueued, not yet picked up by the bridge.
@@ -153,6 +167,16 @@ const BRIDGE_COMMAND_FILTER: Filter =
 const BRIDGE_COMMAND_DEVICE_FILTER: Filter =
     Filter::Sql("SELECT * FROM bridge_command WHERE device_identity = :sender");
 
+/// Third visibility rule, **unioned (OR)** with the two above: the device
+/// **owner** (the human who paired it) can read their devices' commands. This is
+/// what lets the owner see `AwaitingConfirmation` commands and Allow/Deny them in
+/// the Pear UI. Backed by the denormalized `owner_identity` column (stamped at
+/// enqueue from `BridgeDevice.owner`) so the filter stays a simple equality —
+/// joins/subqueries in RLS are unproven (see `spikes/rls-multi-filter`).
+#[client_visibility_filter]
+const BRIDGE_COMMAND_OWNER_FILTER: Filter =
+    Filter::Sql("SELECT * FROM bridge_command WHERE owner_identity = :sender");
+
 #[table(accessor = bridge_command, public)]
 pub struct BridgeCommand {
     #[primary_key]
@@ -185,6 +209,15 @@ pub struct BridgeCommand {
     /// device that owns the work. `Identity::ZERO` for pre-option-B rows.
     #[default(Identity::ZERO)]
     pub device_identity: Identity,
+    /// The device owner's identity, copied from `BridgeDevice.owner` at enqueue.
+    /// Backs `BRIDGE_COMMAND_OWNER_FILTER` so the owner can see and approve/deny
+    /// their devices' commands in the UI. `Identity::ZERO` for rows enqueued
+    /// before this column existed (invisible to the owner — only historical).
+    ///
+    /// Must remain last for schema migration (STDB only allows additive changes
+    /// at the end of a struct).
+    #[default(Identity::ZERO)]
+    pub owner_identity: Identity,
 }
 
 /// Output and result for a completed command. 1:1 with BridgeCommand.
@@ -310,4 +343,10 @@ pub struct BridgeDeviceAllowlist {
     pub max_runtime_seconds: u64,
     pub updated_at: Timestamp,
     pub updated_by: Identity,
+    /// What to do with a command whose leader is not in `allowed_commands`:
+    /// `Prompt` (default) routes it to human confirmation; `Reject` hard-denies.
+    /// Must remain last for schema migration (STDB only allows additive changes
+    /// at the end of a struct).
+    #[default(UnlistedCommandPolicy::Prompt)]
+    pub unlisted_command_policy: UnlistedCommandPolicy,
 }

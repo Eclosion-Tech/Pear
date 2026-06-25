@@ -2064,7 +2064,13 @@ export async function executeTool(
           taskId: undefined,
         });
 
-        type BridgeCmd = { id: bigint; deviceId: bigint; command: string; conversationId: bigint };
+        type BridgeCmd = {
+          id: bigint;
+          deviceId: bigint;
+          command: string;
+          conversationId: bigint;
+          status?: { tag: string };
+        };
         type BridgeRes = {
           commandId: bigint;
           exitCode?: number;
@@ -2110,17 +2116,64 @@ export async function executeTool(
         }
 
         const timeoutMs = Math.max(1_000, Number(input.timeout_ms ?? 150_000));
-        const result = await waitFor(
-          () => [...bridgeResultRows].find((r) => String(r.commandId) === String(enqueued.id)),
-          timeoutMs,
-        );
+        // How long a freshly-enqueued command may sit Pending before we treat the
+        // daemon as not consuming it. A connected daemon picks commands up in well
+        // under a second; this only fires when the device/daemon is unresponsive.
+        // Caps at 10s for the default 150s timeout, but scales down for short
+        // explicit timeouts so a small request still fails fast.
+        const PENDING_GRACE_MS = Math.min(10_000, Math.max(500, Math.floor(timeoutMs / 3)));
+
+        // Status-aware wait: resolve as soon as a result row exists, OR bail early
+        // if the command is stuck Pending (daemon never picked it up). We keep
+        // waiting through Running and AwaitingConfirmation (both are legitimately
+        // in-progress — the latter is waiting on a human Allow/Deny in the UI), so
+        // those surface as informative timeouts rather than an opaque spin.
+        const start = Date.now();
+        let result: BridgeRes | undefined;
+        let lastTag: string | undefined;
+        let everLeftPending = false;
+        let stuckPending = false;
+        while (Date.now() - start < timeoutMs) {
+          result = [...bridgeResultRows].find((r) => String(r.commandId) === String(enqueued.id));
+          if (result) break;
+          const cmdRow = [...bridgeCommandRows].find((r) => String(r.id) === String(enqueued.id));
+          lastTag = cmdRow?.status?.tag;
+          if (lastTag && lastTag !== "Pending") everLeftPending = true;
+          // Daemon never consumed it: still Pending past the grace window and it
+          // never progressed (don't trip on the brief Pending after a human
+          // confirms an AwaitingConfirmation command — that has everLeftPending).
+          if (lastTag === "Pending" && !everLeftPending && Date.now() - start > PENDING_GRACE_MS) {
+            stuckPending = true;
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 100));
+        }
 
         if (!result) {
+          if (stuckPending) {
+            return JSON.stringify({
+              ok: false,
+              status: "pending",
+              command_id: Number(enqueued.id),
+              note: "The command is still queued and the daemon has not picked it up — the device/daemon is likely disconnected or unresponsive. Do NOT claim it ran; tell the user the bridge did not pick up the command.",
+            });
+          }
+          if (lastTag === "AwaitingConfirmation") {
+            return JSON.stringify({
+              ok: false,
+              status: "awaiting_confirmation",
+              command_id: Number(enqueued.id),
+              note: `This command needs human approval and was not approved within ${timeoutMs}ms. It is still awaiting an Allow/Deny in the workspace. Do NOT claim it ran; tell the user it is waiting for their approval.`,
+            });
+          }
           return JSON.stringify({
             ok: false,
-            status: "no_result",
+            status: lastTag === "Running" ? "running" : "no_result",
             command_id: Number(enqueued.id),
-            note: `No result after ${timeoutMs}ms — the command did not complete (it may still be running, or the device/daemon may be unresponsive). Do NOT claim it succeeded; tell the user it did not return a result.`,
+            note:
+              lastTag === "Running"
+                ? `The command is still running after ${timeoutMs}ms (it may be a long-running command). Do NOT claim it succeeded; tell the user it has not returned yet.`
+                : `No result after ${timeoutMs}ms — the command did not complete. Do NOT claim it succeeded; tell the user it did not return a result.`,
           });
         }
 

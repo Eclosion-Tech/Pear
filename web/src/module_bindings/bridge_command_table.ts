@@ -32,4 +32,5 @@ export default __t.row({
   confirmedAt: __t.option(__t.timestamp()).name("confirmed_at"),
   confirmedBy: __t.option(__t.identity()).name("confirmed_by"),
   deviceIdentity: __t.identity().name("device_identity"),
+  ownerIdentity: __t.identity().name("owner_identity"),
 });
