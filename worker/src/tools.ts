@@ -2069,6 +2069,7 @@ export async function executeTool(
           stderr: string;
           rejectionReason?: string;
           durationMs: bigint;
+          requestedBy?: { toHexString?: () => string };
         };
 
         const bridgeCommandRows: Iterable<BridgeCmd> | undefined =
@@ -2163,6 +2164,26 @@ export async function executeTool(
         }
 
         if (!result) {
+          // Diagnostic: a command can complete server-side (bridge_command →
+          // Completed) while the worker never sees its bridge_command_result row.
+          // Dump what this connection actually sees so we can tell a subscription/
+          // RLS gap (zero/none-matching rows) from a genuine non-completion.
+          try {
+            const allResults = [...bridgeResultRows];
+            const sample = allResults
+              .slice(-5)
+              .map(
+                (r) =>
+                  `cmd=${String(r.commandId)} by=${r.requestedBy?.toHexString?.()?.slice(0, 10) ?? "?"}`,
+              );
+            console.warn(
+              `[tools] tool_bash no result for cmd=${enqueued.id} lastStatus=${lastTag ?? "?"} ` +
+                `aiIdentity=${toolContext.aiIdentityHex?.slice(0, 10) ?? "?"} ` +
+                `visibleResultRows=${allResults.length} recent=[${sample.join(", ")}]`,
+            );
+          } catch {
+            /* diagnostic only */
+          }
           if (stuckPending) {
             return JSON.stringify({
               ok: false,
