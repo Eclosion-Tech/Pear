@@ -326,7 +326,20 @@ function ToolCallsDisplay({
           const statusTag = match?.status.tag;
           const awaiting = statusTag === "AwaitingConfirmation";
           const live = statusTag ? BRIDGE_STATUS_LABEL[statusTag] ?? statusTag : null;
-          const running = tc.status === "executing" && !awaiting;
+          // Trust the bridge row's terminal status over a stale `executing`
+          // tool-call (the worker can lag delivering the result). Completed/
+          // failed/rejected/timed-out ⇒ not running, even if tc says executing.
+          const terminal =
+            statusTag === "Completed" ||
+            statusTag === "Failed" ||
+            statusTag === "Rejected" ||
+            statusTag === "TimedOut";
+          const failed =
+            statusTag === "Failed" ||
+            statusTag === "Rejected" ||
+            statusTag === "TimedOut" ||
+            tc.status === "error";
+          const running = tc.status === "executing" && !awaiting && !terminal;
           const btn = (action: "allow" | "always" | "deny", label: string, cls: string) => (
             <button
               type="button"
@@ -347,7 +360,7 @@ function ToolCallsDisplay({
                   <span className="w-3 h-3 rounded-full border-2 border-violet-400 border-t-transparent animate-spin shrink-0" />
                 ) : awaiting ? (
                   <span className="text-amber-500 shrink-0">⏸</span>
-                ) : tc.status === "error" ? (
+                ) : failed ? (
                   <span className="text-red-500 shrink-0">✕</span>
                 ) : (
                   <span className="text-green-500 shrink-0">✓</span>
