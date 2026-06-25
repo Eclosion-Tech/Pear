@@ -52,8 +52,8 @@ import {
   type AiUserProfileRow,
 } from "@/src/hooks/useAiUsers";
 import { ContextBar } from "@/src/components/ContextBar";
-import { useTable } from "spacetimedb/react";
-import { tables } from "@/src/module_bindings";
+import { useTable, useReducer } from "spacetimedb/react";
+import { tables, reducers } from "@/src/module_bindings";
 import type { Identity } from "spacetimedb";
 
 function StatusBadge({ status }: { status: string }) {
@@ -232,8 +232,32 @@ interface ToolCallInfo {
   status: "executing" | "done" | "error";
   output?: string;
   affected?: AffectedEntities;
+  /** JSON-stringified tool input (e.g. `{device_id, command}` for tool_bash). */
+  input?: string;
   /** Legacy field (pre-unified shape). */
   result?: string;
+}
+
+/** Live status labels for a matched `bridge_command` row (BridgeCommandStatus). */
+const BRIDGE_STATUS_LABEL: Record<string, string> = {
+  Pending: "queued",
+  AwaitingConfirmation: "needs approval",
+  Running: "running",
+  Completed: "done",
+  Failed: "failed",
+  Rejected: "rejected",
+  TimedOut: "timed out",
+};
+
+/** Pull the shell command out of a tool_bash call's stored `input`. */
+function bashCommandOf(tc: ToolCallInfo): string | null {
+  if (!tc.input) return null;
+  try {
+    const o = JSON.parse(tc.input) as { command?: unknown };
+    return typeof o.command === "string" ? o.command : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Short human summary of what a tool call touched, for the chat receipt (#32). */
@@ -260,6 +284,11 @@ function ToolCallsDisplay({
   conversationId: bigint;
 }) {
   const router = useRouter();
+  const [bridgeCommands] = useTable(tables.bridge_command);
+  const confirmCommand = useReducer(reducers.confirmBridgeCommand);
+  const denyCommand = useReducer(reducers.denyBridgeCommand);
+  const [bridgeBusy, setBridgeBusy] = useState<string | null>(null);
+
   let calls: ToolCallInfo[] = [];
   try {
     calls = JSON.parse(toolCallsJson);
@@ -268,9 +297,98 @@ function ToolCallsDisplay({
   }
   if (calls.length === 0) return null;
 
+  // Most-recent bridge_command for this conversation matching a command string —
+  // links a tool_bash call to its live row (status + approval).
+  const matchBridge = (command: string) =>
+    bridgeCommands
+      .filter((c) => c.conversationId === conversationId && c.command === command)
+      .reduce<(typeof bridgeCommands)[number] | undefined>(
+        (best, c) => (best && best.id > c.id ? best : c),
+        undefined,
+      );
+  const decideBridge = async (commandId: bigint, action: "allow" | "always" | "deny") => {
+    setBridgeBusy(`${commandId}:${action}`);
+    try {
+      if (action === "deny") await denyCommand({ commandId });
+      else await confirmCommand({ commandId, remember: action === "always" });
+    } finally {
+      setBridgeBusy(null);
+    }
+  };
+
   return (
     <div className="mt-1.5 mb-1.5 space-y-1">
       {calls.map((tc, i) => {
+        // tool_bash: show the command + live bridge status + inline approval.
+        if (tc.name === "tool_bash") {
+          const command = bashCommandOf(tc);
+          const match = command ? matchBridge(command) : undefined;
+          const statusTag = match?.status.tag;
+          const awaiting = statusTag === "AwaitingConfirmation";
+          const live = statusTag ? BRIDGE_STATUS_LABEL[statusTag] ?? statusTag : null;
+          const running = tc.status === "executing" && !awaiting;
+          const btn = (action: "allow" | "always" | "deny", label: string, cls: string) => (
+            <button
+              type="button"
+              disabled={bridgeBusy !== null}
+              onClick={() => match && void decideBridge(match.id, action)}
+              className={`rounded px-2 py-0.5 text-[11px] font-medium disabled:opacity-50 ${cls}`}
+            >
+              {bridgeBusy === `${match?.id}:${action}` ? "…" : label}
+            </button>
+          );
+          return (
+            <div
+              key={i}
+              className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1.5 dark:border-neutral-800 dark:bg-neutral-900/40"
+            >
+              <div className="flex items-center gap-1.5 text-xs text-neutral-500 dark:text-neutral-400">
+                {running ? (
+                  <span className="w-3 h-3 rounded-full border-2 border-violet-400 border-t-transparent animate-spin shrink-0" />
+                ) : awaiting ? (
+                  <span className="text-amber-500 shrink-0">⏸</span>
+                ) : tc.status === "error" ? (
+                  <span className="text-red-500 shrink-0">✕</span>
+                ) : (
+                  <span className="text-green-500 shrink-0">✓</span>
+                )}
+                <span className="font-medium">bridge shell</span>
+                {live && (
+                  <span
+                    className={`rounded px-1 text-[10px] ${
+                      awaiting
+                        ? "bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300"
+                        : "bg-neutral-200 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400"
+                    }`}
+                  >
+                    {live}
+                  </span>
+                )}
+              </div>
+              {command && (
+                <code className="mt-1 block break-all font-mono text-[11px] text-neutral-700 dark:text-neutral-300">
+                  $ {command}
+                </code>
+              )}
+              {awaiting && match && (
+                <div className="mt-1.5 flex gap-1.5">
+                  {btn("allow", "Allow once", "bg-emerald-600 text-white hover:bg-emerald-700")}
+                  {btn(
+                    "always",
+                    "Always allow",
+                    "bg-emerald-100 text-emerald-800 hover:bg-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300",
+                  )}
+                  {btn(
+                    "deny",
+                    "Deny",
+                    "bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400",
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        }
+
         const summary = affectedSummary(tc.affected) ?? (tc.status === "done" ? tc.result : undefined);
         const node = tc.affected?.createdNodeIds?.[0];
         // Jump-to-change deep link: open the affected page (and the changed
