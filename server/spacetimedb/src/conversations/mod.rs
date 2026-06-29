@@ -2,7 +2,10 @@
 //! can be attached to a page (today's @mention flow) or detached (future
 //! channel/DM threads).
 
-use spacetimedb::{reducer, table, Identity, ReducerContext, SpacetimeType, Table, Timestamp};
+use spacetimedb::{
+    client_visibility_filter, reducer, table, Filter, Identity, ReducerContext, SpacetimeType,
+    Table, Timestamp,
+};
 
 use crate::ai::ai_user_profile;
 use crate::id_counters::alloc_id;
@@ -45,6 +48,17 @@ pub(crate) fn next_conversation_attachment_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "conversation_attachment", || {
         ctx.db
             .conversation_attachment()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
+    })
+}
+
+pub(crate) fn next_message_feedback_id(ctx: &ReducerContext) -> u64 {
+    alloc_id(ctx, "message_feedback", || {
+        ctx.db
+            .message_feedback()
             .iter()
             .map(|r| r.id)
             .max()
@@ -304,6 +318,40 @@ pub struct ConversationAttachment {
     pub content_snapshot: Option<String>,
     pub created_at: Timestamp,
     pub created_by: Identity,
+}
+
+/// A human's thumbs up/down rating on a single (assistant) message.
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum MessageFeedbackRating {
+    Up,
+    Down,
+}
+
+/// Durable human-review signal on a message — the thumbs up/down a rater can
+/// set, change, or clear. This replaces the old inline, self-graded LLM "intent
+/// check" banner with a real governed record of human judgment on agent actions
+/// (on-strategy for the governed-substrate direction). One row per (message,
+/// rater); RLS scopes each row to the identity that left it, so the control
+/// reflects the current user's own rating without exposing others' feedback.
+#[client_visibility_filter]
+const MESSAGE_FEEDBACK_RATER_FILTER: Filter =
+    Filter::Sql("SELECT * FROM message_feedback WHERE rater = :sender");
+
+#[table(accessor = message_feedback, public)]
+pub struct MessageFeedback {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub message_id: u64,
+    pub conversation_id: u64,
+    /// The human (or any identity) who left this rating; backs the RLS filter.
+    pub rater: Identity,
+    pub rating: MessageFeedbackRating,
+    /// Optional free-text note accompanying the rating (e.g. why a thumbs-down).
+    pub note: String,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
 }
 
 // ============================================================
@@ -810,5 +858,71 @@ pub fn find_or_create_ai_dm(
     });
 
     insert_dm_participants(ctx, conv.id, me, ai_identity);
+    Ok(())
+}
+
+/// Set (or change) the calling user's thumbs up/down rating on a message.
+/// Upserts the single (message, rater) row so re-clicking a different rating
+/// flips it in place rather than stacking rows. `note` is optional context.
+#[reducer]
+pub fn set_message_feedback(
+    ctx: &ReducerContext,
+    message_id: u64,
+    rating: MessageFeedbackRating,
+    note: Option<String>,
+) -> Result<(), String> {
+    let msg = ctx
+        .db
+        .conversation_message()
+        .id()
+        .find(message_id)
+        .ok_or("Message not found")?;
+
+    let rater = ctx.sender();
+    let note = note.unwrap_or_default();
+
+    if let Some(existing) = ctx
+        .db
+        .message_feedback()
+        .message_id()
+        .filter(message_id)
+        .find(|f| f.rater == rater)
+    {
+        ctx.db.message_feedback().id().update(MessageFeedback {
+            rating,
+            note,
+            updated_at: ctx.timestamp,
+            ..existing
+        });
+    } else {
+        ctx.db.message_feedback().insert(MessageFeedback {
+            id: next_message_feedback_id(ctx),
+            message_id,
+            conversation_id: msg.conversation_id,
+            rater,
+            rating,
+            note,
+            created_at: ctx.timestamp,
+            updated_at: ctx.timestamp,
+        });
+    }
+    Ok(())
+}
+
+/// Remove the calling user's rating on a message (toggle off). No-op if none.
+#[reducer]
+pub fn clear_message_feedback(ctx: &ReducerContext, message_id: u64) -> Result<(), String> {
+    let rater = ctx.sender();
+    let ids: Vec<u64> = ctx
+        .db
+        .message_feedback()
+        .message_id()
+        .filter(message_id)
+        .filter(|f| f.rater == rater)
+        .map(|f| f.id)
+        .collect();
+    for id in ids {
+        ctx.db.message_feedback().id().delete(&id);
+    }
     Ok(())
 }

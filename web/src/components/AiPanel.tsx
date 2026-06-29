@@ -489,7 +489,84 @@ function AiMessageContent({ msg, aiName }: { msg: ConversationMessageRow; aiName
       {status === "Error" && !msg.content && (
         <p className="text-xs text-red-500 italic">Failed to generate response</p>
       )}
+
+      {/* Human review: thumbs up/down feedback on the finished turn. Replaces the
+          old self-graded "intent check" banner with a durable, RLS-scoped signal. */}
+      {status === "Complete" && (msg.content || toolCallsJson) && (
+        <MessageFeedbackControl messageId={msg.id} />
+      )}
     </>
+  );
+}
+
+// ── Message feedback (thumbs up/down) ─────────────────────────────────────────
+
+/**
+ * Durable human-review control on an assistant message. `message_feedback` is
+ * RLS-scoped to the rater, so `useTable` only ever yields this user's own rows;
+ * we find this message's row to reflect/toggle the current rating. Re-clicking
+ * the active rating clears it; clicking the other flips it in place.
+ */
+function MessageFeedbackControl({ messageId }: { messageId: bigint }) {
+  const [feedback] = useTable(tables.message_feedback);
+  const setFeedback = useReducer(reducers.setMessageFeedback);
+  const clearFeedback = useReducer(reducers.clearMessageFeedback);
+  const [busy, setBusy] = useState(false);
+
+  const mine = feedback.find((f) => f.messageId === messageId);
+  const current = mine?.rating?.tag as "Up" | "Down" | undefined;
+
+  const apply = async (rating: "Up" | "Down") => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      if (current === rating) await clearFeedback({ messageId });
+      else await setFeedback({ messageId, rating: { tag: rating }, note: undefined });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const btn = (rating: "Up" | "Down") => {
+    const active = current === rating;
+    const tone = rating === "Up" ? "text-emerald-500" : "text-rose-500";
+    return (
+      <button
+        type="button"
+        onClick={() => apply(rating)}
+        disabled={busy}
+        aria-pressed={active}
+        aria-label={rating === "Up" ? "Good response" : "Bad response"}
+        title={rating === "Up" ? "Good response" : "Needs work"}
+        className={`p-1 rounded transition-colors disabled:opacity-50 ${
+          active
+            ? tone
+            : "text-neutral-400 hover:text-neutral-600 dark:text-neutral-500 dark:hover:text-neutral-300"
+        }`}
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="13"
+          height="13"
+          viewBox="0 0 24 24"
+          fill={active ? "currentColor" : "none"}
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className={rating === "Down" ? "rotate-180" : undefined}
+        >
+          <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3" />
+        </svg>
+      </button>
+    );
+  };
+
+  return (
+    <div className="mt-1.5 flex items-center gap-0.5 opacity-60 hover:opacity-100 transition-opacity">
+      {btn("Up")}
+      {btn("Down")}
+    </div>
   );
 }
 

@@ -33,10 +33,8 @@ import {
   type StreamEvent,
   type ChatStreamRequest,
   type TokenUsage,
-  type InferenceProvider,
   getProviderForAiUser,
 } from "./providers.js";
-import { utilityModelFor } from "./model-catalog.js";
 import { buildPageContext } from "./llm.js";
 import { readComponentNodeText } from "./component-authoring.js";
 import {
@@ -390,58 +388,6 @@ function buildActionReceipt(toolCalls: StoredToolCall[]): string {
   return `\n\n---\n_Actions this turn (system-verified):_\n${lines.join("\n")}`;
 }
 
-/**
- * Lightweight, non-blocking **intent verification** (the Pear-shaped take on #4):
- * after a chat turn that actually changed something, ask a cheap utility-tier
- * model whether the applied changes match what the user asked for, and surface
- * drift/overreach inline. This is a guardrail, not a gate — the write already
- * landed (workspace-OS, not IDE: no pre-review friction). Returns null on any
- * error so it never blocks or fails the turn.
- *
- * The verdict is advisory only (shown to the user, never acted on), so reading
- * tool inputs/outputs here carries no injection risk.
- */
-async function verifyIntentAlignment(
-  provider: InferenceProvider,
-  utilityModel: string,
-  userRequest: string,
-  appliedMutations: StoredToolCall[],
-): Promise<{ aligned: boolean; note: string } | null> {
-  if (appliedMutations.length === 0) return null;
-  const changeLines = appliedMutations.map((t) => {
-    const detail = summarizeToolCall(t);
-    const input = t.input ? ` input=${t.input.slice(0, 240)}` : "";
-    return `- ${t.name}${detail ? ` (${detail})` : ""}${input}`;
-  });
-  const system =
-    "You verify that an AI assistant's workspace edits match what the user asked for. " +
-    "You are given the user's request and the changes the assistant applied this turn. " +
-    'Reply with JSON only: {"aligned": boolean, "note": string}. ' +
-    "Set aligned=false only when a change clearly overreaches, contradicts, or is unrelated to the request. " +
-    'If every change maps to the request, return {"aligned": true, "note": ""}. ' +
-    "Keep note under 140 characters and name the specific concern.";
-  const user = `User request:\n${userRequest.slice(0, 2000)}\n\nChanges applied this turn:\n${changeLines.join("\n")}`;
-  try {
-    const res = await provider.chat({
-      model: utilityModel,
-      maxTokens: 200,
-      system,
-      messages: [{ role: "user", content: user }],
-    });
-    const block = res.content.find((b) => b.type === "text");
-    if (!block || block.type !== "text") return null;
-    const raw = block.text.replace(/```(?:json)?/gi, "").trim();
-    const parsed = JSON.parse(raw) as { aligned?: unknown; note?: unknown };
-    if (typeof parsed.aligned !== "boolean") return null;
-    return {
-      aligned: parsed.aligned,
-      note: typeof parsed.note === "string" ? parsed.note : "",
-    };
-  } catch {
-    return null;
-  }
-}
-
 /** Extract the job id from a successful `delegate` tool result, if present. */
 function delegatedJobIdFromResult(result: string): bigint | undefined {
   try {
@@ -657,14 +603,11 @@ async function handleConversationMessage(
       provider: aiProvider,
       model: defaultModel,
       maxTokens,
-      providerTag,
     } = getProviderForAiUser(conn, aiProfile.aiUserId);
     // A per-conversation override pins this thread to a specific model; the
     // provider/key/maxTokens still come from ai_user_config, so the override
     // must name a model that key can reach. Blank/None falls back to default.
     const model = conv.modelOverride?.trim() || defaultModel;
-    // Cheaper sibling on the same key for auxiliary work (intent verification).
-    const utilityModel = utilityModelFor(providerTag, model);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const aiCfg = (conn.db as any).ai_user_config?.id?.find(
@@ -1013,25 +956,11 @@ async function handleConversationMessage(
     // it (prevents "claimed it did something it didn't").
     responseText = `${responseText}${buildActionReceipt(allToolCalls)}`;
 
-    // Intent verification (#4, Pear-shaped): if this turn actually changed
-    // something, have a cheap utility-tier model confirm the changes match the
-    // request and surface any drift/overreach inline. Non-blocking.
-    const appliedMutations = allToolCalls.filter(
-      (t) => !READ_ONLY_TOOLS.has(t.name) && t.status === "done",
-    );
-    if (appliedMutations.length > 0) {
-      const verdict = await verifyIntentAlignment(
-        aiProvider,
-        utilityModel,
-        msg.content,
-        appliedMutations,
-      );
-      if (verdict && !verdict.aligned && verdict.note) {
-        responseText += `\n\n_⚠️ Intent check — possible mismatch with your request: ${verdict.note}_`;
-      } else if (verdict && verdict.aligned) {
-        responseText += `\n\n_✓ Changes verified against your request._`;
-      }
-    }
+    // (Removed the inline LLM "intent check" banner: it fired a utility-model
+    // call on every mutating turn and surfaced a noisy ⚠️/✓ line the user found
+    // unhelpful. Human review of agent actions now lives in the message feedback
+    // control in the UI — a durable thumbs up/down signal instead of an advisory
+    // the model graded itself on.)
 
     await flushMessage(
       conn,

@@ -876,6 +876,27 @@ export const InstalledExtension = __t.object("InstalledExtension", {
 });
 export type InstalledExtension = __Infer<typeof InstalledExtension>;
 
+export const MessageFeedback = __t.object("MessageFeedback", {
+  id: __t.u64(),
+  messageId: __t.u64(),
+  conversationId: __t.u64(),
+  rater: __t.identity(),
+  get rating() {
+    return MessageFeedbackRating;
+  },
+  note: __t.string(),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+});
+export type MessageFeedback = __Infer<typeof MessageFeedback>;
+
+// The tagged union or sum type for the algebraic type `MessageFeedbackRating`.
+export const MessageFeedbackRating = __t.enum("MessageFeedbackRating", {
+  Up: __t.unit(),
+  Down: __t.unit(),
+});
+export type MessageFeedbackRating = __Infer<typeof MessageFeedbackRating>;
+
 // The tagged union or sum type for the algebraic type `MessageSender`.
 export const MessageSender = __t.enum("MessageSender", {
   User: __t.identity(),

@@ -44,6 +44,7 @@ import AwaitBridgeCommandConfirmationReducer from "./await_bridge_command_confir
 import CancelExtensionInstallReducer from "./cancel_extension_install_reducer";
 import ClaimTaskReducer from "./claim_task_reducer";
 import ClearBlockAccessRuleReducer from "./clear_block_access_rule_reducer";
+import ClearMessageFeedbackReducer from "./clear_message_feedback_reducer";
 import ClearPageAccessRuleReducer from "./clear_page_access_rule_reducer";
 import ClearPropertyValueReducer from "./clear_property_value_reducer";
 import CloseBridgeSessionReducer from "./close_bridge_session_reducer";
@@ -164,6 +165,7 @@ import SetConversationVisibilityReducer from "./set_conversation_visibility_redu
 import SetDefaultViewReducer from "./set_default_view_reducer";
 import SetExtensionEnabledReducer from "./set_extension_enabled_reducer";
 import SetMcpServerApiKeyReducer from "./set_mcp_server_api_key_reducer";
+import SetMessageFeedbackReducer from "./set_message_feedback_reducer";
 import SetPageAccessRuleReducer from "./set_page_access_rule_reducer";
 import SetPageEmbeddingReducer from "./set_page_embedding_reducer";
 import SetPageHiddenReducer from "./set_page_hidden_reducer";
@@ -241,6 +243,7 @@ import ExtensionManifestRow from "./extension_manifest_table";
 import HarnessTemplateRow from "./harness_template_table";
 import IdCounterRow from "./id_counter_table";
 import InstalledExtensionRow from "./installed_extension_table";
+import MessageFeedbackRow from "./message_feedback_table";
 import MigrationStateRow from "./migration_state_table";
 import ModuleInstallMetaRow from "./module_install_meta_table";
 import OrchaAgentRow from "./orcha_agent_table";
@@ -794,6 +797,20 @@ const tablesSchema = __schema({
       { name: 'installed_extension_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, InstalledExtensionRow),
+  message_feedback: __table({
+    name: 'message_feedback',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'message_id', algorithm: 'btree', columns: [
+        'messageId',
+      ] },
+    ],
+    constraints: [
+      { name: 'message_feedback_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, MessageFeedbackRow),
   migration_state: __table({
     name: 'migration_state',
     indexes: [
@@ -1123,6 +1140,7 @@ const reducersSchema = __reducers(
   __reducerSchema("cancel_extension_install", CancelExtensionInstallReducer),
   __reducerSchema("claim_task", ClaimTaskReducer),
   __reducerSchema("clear_block_access_rule", ClearBlockAccessRuleReducer),
+  __reducerSchema("clear_message_feedback", ClearMessageFeedbackReducer),
   __reducerSchema("clear_page_access_rule", ClearPageAccessRuleReducer),
   __reducerSchema("clear_property_value", ClearPropertyValueReducer),
   __reducerSchema("close_bridge_session", CloseBridgeSessionReducer),
@@ -1243,6 +1261,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_default_view", SetDefaultViewReducer),
   __reducerSchema("set_extension_enabled", SetExtensionEnabledReducer),
   __reducerSchema("set_mcp_server_api_key", SetMcpServerApiKeyReducer),
+  __reducerSchema("set_message_feedback", SetMessageFeedbackReducer),
   __reducerSchema("set_page_access_rule", SetPageAccessRuleReducer),
   __reducerSchema("set_page_embedding", SetPageEmbeddingReducer),
   __reducerSchema("set_page_hidden", SetPageHiddenReducer),

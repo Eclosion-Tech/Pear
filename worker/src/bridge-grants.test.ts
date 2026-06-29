@@ -2,6 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { executeTool, type ConnLike } from "./tools.ts";
+import {
+  registerBridgeSql,
+  unregisterBridgeSql,
+  wsUriToHttpBase,
+  type BridgeSqlClient,
+} from "./bridge-sql.ts";
 
 // Minimal fake connection: only the tables/reducers the bridge tool paths touch.
 // `tool_bash` and `list_bridge_devices` read `bridge_device_summary` (device
@@ -174,6 +180,111 @@ test("tool_bash does not return a prior identical command's result", async () =>
   );
   assert.equal(out.ok, false, "must not surface the stale prior success");
   assert.notEqual(out.status, "completed");
+});
+
+test("wsUriToHttpBase converts scheme and strips the subscribe path", () => {
+  assert.equal(wsUriToHttpBase("ws://localhost:3000"), "http://localhost:3000");
+  assert.equal(wsUriToHttpBase("wss://eclosion.cloud.pear.pro"), "https://eclosion.cloud.pear.pro");
+  assert.equal(
+    wsUriToHttpBase("ws://10.0.0.4:3000/v1/database/eclosion/subscribe"),
+    "http://10.0.0.4:3000",
+  );
+});
+
+test("tool_bash reads its result via the registered HTTP /sql client (subscription cache empty)", async () => {
+  const AI_HEX = "c2002c31aabbccdd";
+  // Connection whose bridge_command / bridge_command_result caches are EMPTY —
+  // mimicking the production incremental-delivery gap. The grant + device tables
+  // still report a connected, granted device so the call reaches the wait loop.
+  const conn: ConnLike = {
+    db: {
+      bridge_device_summary: {
+        iter: () => [{ id: 1n, name: "MacBook", platform: "darwin-arm64", connected: true, revokedAt: null }],
+      },
+      bridge_device_grant: { iter: () => [{ deviceId: 1n }] },
+      bridge_command: { iter: () => [] },
+      bridge_command_result: { iter: () => [] },
+    },
+    reducers: { enqueueBridgeCommand: async () => {} },
+  };
+
+  // Fake /sql client: the first read is the pre-enqueue snapshot (empty), then
+  // the new command row "appears" and is Completed; its result is available.
+  let cmdReads = 0;
+  const client: BridgeSqlClient = {
+    commandsForDevice: async () => {
+      cmdReads += 1;
+      if (cmdReads === 1) return [];
+      return [
+        { id: "7", deviceId: "1", command: "echo hi", conversationId: "0", status: { tag: "Completed" } },
+      ];
+    },
+    resultForCommand: async (commandId) => {
+      if (String(commandId) !== "7") return undefined;
+      return { commandId: "7", exitCode: 0, stdout: "hi", stderr: "", rejectionReason: null, durationMs: 5n };
+    },
+  };
+  registerBridgeSql(AI_HEX, client);
+  try {
+    const out = JSON.parse(
+      await executeTool(
+        conn,
+        "tool_bash",
+        { device_id: 1, command: "echo hi", timeout_ms: 3000 },
+        0n,
+        { aiIdentityHex: AI_HEX },
+      ),
+    );
+    assert.equal(out.ok, true);
+    assert.equal(out.status, "completed");
+    assert.equal(out.exit_code, 0);
+    assert.equal(out.command_id, 7);
+  } finally {
+    unregisterBridgeSql(AI_HEX);
+  }
+});
+
+test("tool_bash via /sql does not surface a prior identical command's result", async () => {
+  const AI_HEX = "deadbeefdeadbeef";
+  const conn: ConnLike = {
+    db: {
+      bridge_device_summary: {
+        iter: () => [{ id: 1n, name: "MacBook", platform: "darwin-arm64", connected: true, revokedAt: null }],
+      },
+      bridge_device_grant: { iter: () => [{ deviceId: 1n }] },
+      bridge_command: { iter: () => [] },
+      bridge_command_result: { iter: () => [] },
+    },
+    reducers: { enqueueBridgeCommand: async () => {} },
+  };
+  // A prior completed same-text command (id 100) exists from the first /sql read,
+  // so it is captured in preCmdIds; the new run never produces its own row, so
+  // the loop must NOT fall back to the stale id-100 success.
+  const client: BridgeSqlClient = {
+    commandsForDevice: async () => [
+      { id: "100", deviceId: "1", command: "echo hi", conversationId: "0", status: { tag: "Completed" } },
+    ],
+    resultForCommand: async (commandId) =>
+      String(commandId) === "100"
+        ? { commandId: "100", exitCode: 0, stdout: "OLD", stderr: "", rejectionReason: null, durationMs: 1n }
+        : undefined,
+  };
+  registerBridgeSql(AI_HEX, client);
+  try {
+    const out = JSON.parse(
+      await executeTool(
+        conn,
+        "tool_bash",
+        { device_id: 1, command: "echo hi", timeout_ms: 1200 },
+        0n,
+        { aiIdentityHex: AI_HEX },
+      ),
+    );
+    assert.equal(out.ok, false, "must not surface the stale prior success");
+    assert.notEqual(out.status, "completed");
+  } finally {
+    unregisterBridgeSql(AI_HEX);
+  }
 });
 
 test("tool_bash without a readable grant table defers to the reducer (no TS pre-deny)", async () => {

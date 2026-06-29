@@ -9,6 +9,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { writeComponentTreeDoc, readComponentTreeDoc } from "./component-authoring.js";
 import { ssrfSafeFetch } from "./ssrf.js";
+import { getBridgeSql } from "./bridge-sql.js";
 import {
   readAiUserMemoryPage,
   searchAiUserMemory,
@@ -890,10 +891,13 @@ type AnyRow = Record<string, unknown>;
  * non-undefined value. Used to detect new rows after reducer calls, since
  * SpacetimeDB reducers don't return values directly.
  */
-async function waitFor<T>(fn: () => T | undefined, timeoutMs = 2000): Promise<T | undefined> {
+async function waitFor<T>(
+  fn: () => T | undefined | Promise<T | undefined>,
+  timeoutMs = 2000,
+): Promise<T | undefined> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const result = fn();
+    const result = await fn();
     if (result !== undefined) return result;
     await new Promise((r) => setTimeout(r, 100));
   }
@@ -2079,14 +2083,36 @@ export async function executeTool(
           (conn.db as { bridge_command_result?: { iter: () => Iterable<BridgeRes> } }).bridge_command_result?.iter?.() ??
           (conn.db as { bridgeCommandResult?: { iter: () => Iterable<BridgeRes> } }).bridgeCommandResult?.iter?.();
 
+        // The AI-user subscription does not reliably deliver bridge_command
+        // incrementals (3-filter RLS table — see bridge-sql.ts). When an HTTP
+        // `/sql` reader is registered for this AI user, read committed rows
+        // directly through it instead of the subscription cache; otherwise fall
+        // back to the cache (older build / Orcha admin connection / tests).
+        const sqlClient = getBridgeSql(toolContext.aiIdentityHex);
+        const readCommands = async (): Promise<BridgeCmd[]> => {
+          if (sqlClient) {
+            return (await sqlClient.commandsForDevice(deviceId)) as unknown as BridgeCmd[];
+          }
+          return bridgeCommandRows ? [...bridgeCommandRows] : [];
+        };
+        const readResult = async (cmdId: bigint | string): Promise<BridgeRes | undefined> => {
+          if (sqlClient) {
+            return (await sqlClient.resultForCommand(cmdId)) as unknown as BridgeRes | undefined;
+          }
+          return bridgeResultRows
+            ? [...bridgeResultRows].find((r) => String(r.commandId) === String(cmdId))
+            : undefined;
+        };
+        // Without the SQL reader we depend on the (readable) subscription tables.
+        const canReadRows = Boolean(sqlClient) || Boolean(bridgeCommandRows && bridgeResultRows);
+
         // Snapshot existing command ids BEFORE enqueuing so we wait on the row we
         // actually create — not a prior identical command. Matching by command
         // text alone returns the oldest same-text row (and its stale result),
         // which makes the AI falsely report success on a re-run while the new
-        // command is still pending/awaiting approval. (Undefined if the table
-        // isn't readable in this build — handled by the guard below.)
-        const preCmdIds = bridgeCommandRows
-          ? new Set([...bridgeCommandRows].map((r) => String(r.id)))
+        // command is still pending/awaiting approval.
+        const preCmdIds = canReadRows
+          ? new Set((await readCommands()).map((r) => String(r.id)))
           : undefined;
 
         await conn.reducers.enqueueBridgeCommand({
@@ -2098,7 +2124,7 @@ export async function executeTool(
           taskId: undefined,
         });
 
-        if (!bridgeCommandRows || !bridgeResultRows || !preCmdIds) {
+        if (!canReadRows || !preCmdIds) {
           return JSON.stringify({
             ok: false,
             status: "unconfirmed",
@@ -2108,8 +2134,8 @@ export async function executeTool(
         }
 
         const enqueued = await waitFor(
-          () =>
-            [...bridgeCommandRows]
+          async () =>
+            (await readCommands())
               .filter(
                 (r) =>
                   !preCmdIds.has(String(r.id)) &&
@@ -2117,7 +2143,7 @@ export async function executeTool(
                   r.command === command &&
                   String(r.conversationId) === String(conversationId),
               )
-              .sort((a, b) => (a.id < b.id ? 1 : b.id < a.id ? -1 : 0))[0],
+              .sort((a, b) => (Number(a.id) < Number(b.id) ? 1 : Number(b.id) < Number(a.id) ? -1 : 0))[0],
           10_000,
         );
         if (!enqueued) {
@@ -2148,9 +2174,9 @@ export async function executeTool(
         let everLeftPending = false;
         let stuckPending = false;
         while (Date.now() - start < timeoutMs) {
-          result = [...bridgeResultRows].find((r) => String(r.commandId) === String(enqueued.id));
+          result = await readResult(enqueued.id);
           if (result) break;
-          const cmdRow = [...bridgeCommandRows].find((r) => String(r.id) === String(enqueued.id));
+          const cmdRow = (await readCommands()).find((r) => String(r.id) === String(enqueued.id));
           lastTag = cmdRow?.status?.tag;
           if (lastTag && lastTag !== "Pending") everLeftPending = true;
           // Daemon never consumed it: still Pending past the grace window and it
@@ -2169,8 +2195,8 @@ export async function executeTool(
           // Dump what this connection actually sees so we can tell a subscription/
           // RLS gap (zero/none-matching rows) from a genuine non-completion.
           try {
-            const allResults = [...bridgeResultRows];
-            const sample = allResults
+            const cacheResults = bridgeResultRows ? [...bridgeResultRows] : [];
+            const sample = cacheResults
               .slice(-5)
               .map(
                 (r) =>
@@ -2179,7 +2205,8 @@ export async function executeTool(
             console.warn(
               `[tools] tool_bash no result for cmd=${enqueued.id} lastStatus=${lastTag ?? "?"} ` +
                 `aiIdentity=${toolContext.aiIdentityHex?.slice(0, 10) ?? "?"} ` +
-                `visibleResultRows=${allResults.length} recent=[${sample.join(", ")}]`,
+                `source=${sqlClient ? "http-sql" : "subscription"} ` +
+                `cacheResultRows=${cacheResults.length} recent=[${sample.join(", ")}]`,
             );
           } catch {
             /* diagnostic only */

@@ -16,6 +16,7 @@ import AwaitBridgeCommandConfirmationReducer from "../await_bridge_command_confi
 import CancelExtensionInstallReducer from "../cancel_extension_install_reducer";
 import ClaimTaskReducer from "../claim_task_reducer";
 import ClearBlockAccessRuleReducer from "../clear_block_access_rule_reducer";
+import ClearMessageFeedbackReducer from "../clear_message_feedback_reducer";
 import ClearPageAccessRuleReducer from "../clear_page_access_rule_reducer";
 import ClearPropertyValueReducer from "../clear_property_value_reducer";
 import CloseBridgeSessionReducer from "../close_bridge_session_reducer";
@@ -136,6 +137,7 @@ import SetConversationVisibilityReducer from "../set_conversation_visibility_red
 import SetDefaultViewReducer from "../set_default_view_reducer";
 import SetExtensionEnabledReducer from "../set_extension_enabled_reducer";
 import SetMcpServerApiKeyReducer from "../set_mcp_server_api_key_reducer";
+import SetMessageFeedbackReducer from "../set_message_feedback_reducer";
 import SetPageAccessRuleReducer from "../set_page_access_rule_reducer";
 import SetPageEmbeddingReducer from "../set_page_embedding_reducer";
 import SetPageHiddenReducer from "../set_page_hidden_reducer";
@@ -182,6 +184,7 @@ export type AwaitBridgeCommandConfirmationParams = __Infer<typeof AwaitBridgeCom
 export type CancelExtensionInstallParams = __Infer<typeof CancelExtensionInstallReducer>;
 export type ClaimTaskParams = __Infer<typeof ClaimTaskReducer>;
 export type ClearBlockAccessRuleParams = __Infer<typeof ClearBlockAccessRuleReducer>;
+export type ClearMessageFeedbackParams = __Infer<typeof ClearMessageFeedbackReducer>;
 export type ClearPageAccessRuleParams = __Infer<typeof ClearPageAccessRuleReducer>;
 export type ClearPropertyValueParams = __Infer<typeof ClearPropertyValueReducer>;
 export type CloseBridgeSessionParams = __Infer<typeof CloseBridgeSessionReducer>;
@@ -302,6 +305,7 @@ export type SetConversationVisibilityParams = __Infer<typeof SetConversationVisi
 export type SetDefaultViewParams = __Infer<typeof SetDefaultViewReducer>;
 export type SetExtensionEnabledParams = __Infer<typeof SetExtensionEnabledReducer>;
 export type SetMcpServerApiKeyParams = __Infer<typeof SetMcpServerApiKeyReducer>;
+export type SetMessageFeedbackParams = __Infer<typeof SetMessageFeedbackReducer>;
 export type SetPageAccessRuleParams = __Infer<typeof SetPageAccessRuleReducer>;
 export type SetPageEmbeddingParams = __Infer<typeof SetPageEmbeddingReducer>;
 export type SetPageHiddenParams = __Infer<typeof SetPageHiddenReducer>;

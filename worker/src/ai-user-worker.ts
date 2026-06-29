@@ -28,6 +28,11 @@ import {
 } from "./providers.js";
 import { subscribeToAvailableTables } from "./subscriptions.js";
 import type { ConnLike } from "./tools.js";
+import {
+  createBridgeSqlClient,
+  registerBridgeSql,
+  unregisterBridgeSql,
+} from "./bridge-sql.js";
 
 const RECONNECT_CAP_MS = 30_000;
 const RECONNECT_BASE_MS = 1_500;
@@ -120,10 +125,20 @@ export class AiUserWorker {
         console.log(
           `${this.logTag} connected — identity: ${identity.toHexString().slice(0, 12)}…`,
         );
+        // Register an HTTP `/sql` reader for this AI user so `tool_bash` can read
+        // its own bridge_command / bridge_command_result rows directly. The
+        // AI-user subscription does not reliably deliver bridge_command
+        // incrementals (3-filter RLS table); this committed-state read sidesteps
+        // that. Uses THIS connection's token, so RLS stays scoped to the AI user.
+        registerBridgeSql(
+          identity.toHexString(),
+          createBridgeSqlClient({ uri: this.uri, dbName: this.dbName, token: this.token }),
+        );
         this.registerHandlers(conn, identity);
       })
       .onDisconnect(() => {
         console.log(`${this.logTag} disconnected`);
+        if (this.aiUserIdentity) unregisterBridgeSql(this.aiUserIdentity.toHexString());
         this.conn = null;
         this.aiUserIdentity = null;
         // Drop the cached provider for this AI user so the next connect
@@ -149,7 +164,9 @@ export class AiUserWorker {
     this.stopped = true;
     this.clearReconnectTimer();
     clearProviderCache();
+    if (this.aiUserIdentity) unregisterBridgeSql(this.aiUserIdentity.toHexString());
     this.conn = null;
+    this.aiUserIdentity = null;
     console.log(`${this.logTag} stopped`);
   }
 
