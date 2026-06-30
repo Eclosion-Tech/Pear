@@ -632,6 +632,7 @@ export const Conversation = __t.object("Conversation", {
   canonicalKey: __t.option(__t.string()),
   blockAnchor: __t.option(__t.u64()),
   modelOverride: __t.option(__t.string()),
+  effortOverride: __t.option(__t.string()),
 });
 export type Conversation = __Infer<typeof Conversation>;
 
@@ -947,6 +948,8 @@ export const OrchaJob = __t.object("OrchaJob", {
   pageId: __t.option(__t.u64()),
   status: __t.string(),
   createdAt: __t.timestamp(),
+  aiUserId: __t.option(__t.u64()),
+  tier: __t.option(__t.string()),
 });
 export type OrchaJob = __Infer<typeof OrchaJob>;
 

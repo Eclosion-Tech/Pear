@@ -17,4 +17,6 @@ export default __t.row({
   pageId: __t.option(__t.u64()).name("page_id"),
   status: __t.string(),
   createdAt: __t.timestamp().name("created_at"),
+  aiUserId: __t.option(__t.u64()).name("ai_user_id"),
+  tier: __t.option(__t.string()),
 });

@@ -74,9 +74,6 @@ pub struct OrchaJob {
     #[auto_inc]
     pub id: u64,
     pub user_id: String,
-    /// AI user whose credentials should be used for inference, passed by the
-    /// caller of `create_job` (None for human-initiated jobs → default provider).
-    pub ai_user_id: Option<u64>,
     pub prompt: String,
     /// Pear page linked to this job — enables native traversal from job → page content.
     #[index(btree)]
@@ -84,11 +81,16 @@ pub struct OrchaJob {
     /// "executing" | "complete" | "failed"
     pub status: String,
     pub created_at: Timestamp,
+    // New fields are appended below for additive schema migration — SpacetimeDB
+    // AutoMigrate only accepts columns added at the end of the struct.
+    /// AI user whose credentials should be used for inference, passed by the
+    /// caller of `create_job` (None for human-initiated jobs → default provider).
+    pub ai_user_id: Option<u64>,
     /// Capability tier the delegating agent chose for this job's inference
     /// (e.g. "fast"|"balanced"|"flagship"|"frontier"), resolved to a concrete
     /// model within the AI user's provider family at run time. None → the AI
     /// user's configured default model. Stored as a string so adding a tier is
-    /// a data change. Kept last for additive schema migration.
+    /// a data change.
     pub tier: Option<String>,
 }
 

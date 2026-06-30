@@ -151,6 +151,7 @@ import SeedSensorRegistryReducer from "./seed_sensor_registry_reducer";
 import SendMessageReducer from "./send_message_reducer";
 import SendUserMessageReducer from "./send_user_message_reducer";
 import SetAiUserApiKeyReducer from "./set_ai_user_api_key_reducer";
+import SetAiUserModelReducer from "./set_ai_user_model_reducer";
 import SetAiUserSerperApiKeyReducer from "./set_ai_user_serper_api_key_reducer";
 import SetAiUserToolSecretsJsonReducer from "./set_ai_user_tool_secrets_json_reducer";
 import SetAiUserWorkerTokenReducer from "./set_ai_user_worker_token_reducer";
@@ -160,6 +161,7 @@ import SetAutomationModeReducer from "./set_automation_mode_reducer";
 import SetBlockAccessRuleReducer from "./set_block_access_rule_reducer";
 import SetBridgeAllowlistReducer from "./set_bridge_allowlist_reducer";
 import SetBridgeUnlistedPolicyReducer from "./set_bridge_unlisted_policy_reducer";
+import SetConversationEffortReducer from "./set_conversation_effort_reducer";
 import SetConversationModelReducer from "./set_conversation_model_reducer";
 import SetConversationVisibilityReducer from "./set_conversation_visibility_reducer";
 import SetDefaultViewReducer from "./set_default_view_reducer";
@@ -1247,6 +1249,7 @@ const reducersSchema = __reducers(
   __reducerSchema("send_message", SendMessageReducer),
   __reducerSchema("send_user_message", SendUserMessageReducer),
   __reducerSchema("set_ai_user_api_key", SetAiUserApiKeyReducer),
+  __reducerSchema("set_ai_user_model", SetAiUserModelReducer),
   __reducerSchema("set_ai_user_serper_api_key", SetAiUserSerperApiKeyReducer),
   __reducerSchema("set_ai_user_tool_secrets_json", SetAiUserToolSecretsJsonReducer),
   __reducerSchema("set_ai_user_worker_token", SetAiUserWorkerTokenReducer),
@@ -1256,6 +1259,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_block_access_rule", SetBlockAccessRuleReducer),
   __reducerSchema("set_bridge_allowlist", SetBridgeAllowlistReducer),
   __reducerSchema("set_bridge_unlisted_policy", SetBridgeUnlistedPolicyReducer),
+  __reducerSchema("set_conversation_effort", SetConversationEffortReducer),
   __reducerSchema("set_conversation_model", SetConversationModelReducer),
   __reducerSchema("set_conversation_visibility", SetConversationVisibilityReducer),
   __reducerSchema("set_default_view", SetDefaultViewReducer),

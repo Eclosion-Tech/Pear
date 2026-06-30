@@ -11,10 +11,6 @@ import {
 } from "spacetimedb";
 
 export default {
-  userId: __t.string(),
-  prompt: __t.string(),
-  pageId: __t.option(__t.u64()),
-  aiUserId: __t.option(__t.u64()),
-  tier: __t.option(__t.string()),
-  taskGraphJson: __t.string(),
+  conversationId: __t.u64(),
+  effort: __t.option(__t.string()),
 };

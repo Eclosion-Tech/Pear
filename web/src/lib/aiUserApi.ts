@@ -122,6 +122,14 @@ export function providerModels(provider: ProviderTag): CatalogModel[] {
   return MODEL_CATALOG[provider] ?? [];
 }
 
+/** Map an AI user's display provider name (from its public profile) to a ProviderTag. */
+export const PROVIDER_TAG_BY_NAME: Record<string, ProviderTag> = {
+  Anthropic: "Anthropic",
+  OpenAI: "OpenAi",
+  Ollama: "Ollama",
+  "OpenAI Compatible": "OpenAiCompatible",
+};
+
 /** Fast sibling the worker uses for utility tasks; primary model if unknown family. */
 export function utilityModelFor(provider: ProviderTag, primaryModel: string): string {
   const fast = MODEL_CATALOG[provider]?.find((m) => m.tier === "fast");

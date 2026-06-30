@@ -75,6 +75,11 @@ export function useSetAiUserApiKey() {
   return useReducer(reducers.setAiUserApiKey);
 }
 
+/** Change only the default model for an AI user (provider/key/endpoint preserved). */
+export function useSetAiUserModel() {
+  return useReducer(reducers.setAiUserModel);
+}
+
 /**
  * Persist the SpacetimeDB worker token for an AI user (keyed by identity) so
  * the OSS worker can spawn an `AiUserWorker` that connects as the AI user. Only

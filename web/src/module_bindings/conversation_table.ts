@@ -34,4 +34,5 @@ export default __t.row({
   canonicalKey: __t.option(__t.string()).name("canonical_key"),
   blockAnchor: __t.option(__t.u64()).name("block_anchor"),
   modelOverride: __t.option(__t.string()).name("model_override"),
+  effortOverride: __t.option(__t.string()).name("effort_override"),
 });

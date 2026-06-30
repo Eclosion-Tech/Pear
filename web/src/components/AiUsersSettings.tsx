@@ -10,6 +10,7 @@ import {
   useDisableAiUserMemory,
   usePatchAiUserProfileSettings,
   useProvisionAiUserMemory,
+  useSetAiUserModel,
   useSetAiUserSerperApiKey,
   useSetAiUserWorkerToken,
   useUpdateAiUserSystemPrompt,
@@ -25,6 +26,7 @@ import {
   providerDefaults,
   providerNeedsEndpoint,
   providerModels,
+  PROVIDER_TAG_BY_NAME,
   utilityModelFor,
   type ProviderTag,
 } from "@/src/lib/aiUserApi";
@@ -307,8 +309,11 @@ function AiUserRowEditor({
   const patchProfile = usePatchAiUserProfileSettings();
   const updateSystemPrompt = useUpdateAiUserSystemPrompt();
   const setSerperApiKey = useSetAiUserSerperApiKey();
+  const setAiUserModel = useSetAiUserModel();
+  const providerTag = PROVIDER_TAG_BY_NAME[profile.providerName] ?? "Ollama";
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [displayName, setDisplayName] = useState(profile.displayName);
+  const [model, setModel] = useState(profile.modelName);
   const [systemPrompt, setSystemPrompt] = useState(() =>
     optionStringFromRow(profile.systemPrompt)
   );
@@ -321,8 +326,9 @@ function AiUserRowEditor({
 
   useEffect(() => {
     setDisplayName(profile.displayName);
+    setModel(profile.modelName);
     setSystemPrompt(optionStringFromRow(profile.systemPrompt));
-  }, [profile.displayName, profile.systemPrompt, profile.aiUserId]);
+  }, [profile.displayName, profile.modelName, profile.systemPrompt, profile.aiUserId]);
 
   const onSaveSerper = async () => {
     if (hostDelegated) return;
@@ -352,8 +358,13 @@ function AiUserRowEditor({
   const onSave = async () => {
     const name = displayName.trim();
     const prompt = systemPrompt.trim();
+    const modelName = model.trim();
     if (!name) {
       setLocalErr("Display name is required");
+      return;
+    }
+    if (!modelName) {
+      setLocalErr("Model is required");
       return;
     }
     setLocalErr(null);
@@ -361,6 +372,7 @@ function AiUserRowEditor({
     try {
       const nameChanged = name !== profile.displayName;
       const promptChanged = prompt !== optionStringFromRow(profile.systemPrompt);
+      const modelChanged = modelName !== profile.modelName;
       if (nameChanged) {
         await patchProfile({
           aiUserId: profile.aiUserId,
@@ -373,6 +385,10 @@ function AiUserRowEditor({
           aiUserId: profile.aiUserId,
           systemPrompt: prompt === "" ? null : prompt,
         });
+      }
+      if (modelChanged) {
+        // Only the model changes; provider, key, and endpoint are preserved.
+        await setAiUserModel({ aiUserId: profile.aiUserId, model: modelName });
       }
     } catch (e) {
       setLocalErr(e instanceof Error ? e.message : String(e));
@@ -482,6 +498,53 @@ function AiUserRowEditor({
           )}
         </div>
 
+        <div>
+          <label
+            htmlFor={`ai-user-model-${profile.aiUserId.toString()}`}
+            className="block text-sm font-medium text-neutral-800 dark:text-neutral-200"
+          >
+            Default model
+          </label>
+          <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5 mb-1.5 max-w-lg">
+            The model this AI user replies with by default. Pick one the existing API key can reach
+            (the {profile.providerName} family) — the provider and key are unchanged.
+          </p>
+          <input
+            id={`ai-user-model-${profile.aiUserId.toString()}`}
+            type="text"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            disabled={rowBusy}
+            placeholder="e.g. claude-haiku-4-5-20251001"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-neutral-900 dark:text-white disabled:opacity-50 font-mono"
+          />
+          {providerModels(providerTag).length > 0 && (
+            <span className="mt-1.5 flex flex-wrap items-center gap-1">
+              {providerModels(providerTag).map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => setModel(m.id)}
+                  disabled={rowBusy}
+                  title={m.id}
+                  className={`px-2 py-0.5 rounded-md text-[11px] transition-colors disabled:opacity-50 ${
+                    model === m.id
+                      ? "bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900"
+                      : "bg-neutral-100 dark:bg-neutral-800 text-neutral-500 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-700"
+                  }`}
+                >
+                  {m.label}
+                  <span className="opacity-60"> · {m.tier}</span>
+                </button>
+              ))}
+            </span>
+          )}
+          <span className="mt-1 block text-[11px] text-neutral-400 dark:text-neutral-500">
+            Utility tasks (intent checks, planning) use{" "}
+            <span className="font-mono">{utilityModelFor(providerTag, model)}</span> to save cost.
+          </span>
+        </div>
+
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
@@ -492,7 +555,7 @@ function AiUserRowEditor({
             Save
           </button>
           <span className="text-sm text-neutral-500 dark:text-neutral-400">
-            {profile.providerName} · {profile.modelName}
+            {profile.providerName}
           </span>
 
           <span className="ml-auto" />

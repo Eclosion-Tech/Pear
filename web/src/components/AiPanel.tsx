@@ -30,7 +30,7 @@ import {
 } from "@/src/hooks/useConversations";
 import {
   providerModels,
-  type ProviderTag,
+  PROVIDER_TAG_BY_NAME,
 } from "@/src/lib/aiUserApi";
 import {
   PAGE_DRAG_MIME,
@@ -701,15 +701,6 @@ function MessageAttachments({ attachments }: { attachments: ConversationAttachme
 }
 
 // ── Conversation thread ──────────────────────────────────────────────────────
-
-/** AI-user `provider_name` → catalog `ProviderTag`. Matches `provider_display_name`
- *  on the server; only Anthropic/OpenAI families carry quick-pick catalogs. */
-const PROVIDER_TAG_BY_NAME: Record<string, ProviderTag> = {
-  Anthropic: "Anthropic",
-  OpenAI: "OpenAi",
-  Ollama: "Ollama",
-  "OpenAI Compatible": "OpenAiCompatible",
-};
 
 /**
  * Thread-header model switcher. Shows the effective model (per-conversation

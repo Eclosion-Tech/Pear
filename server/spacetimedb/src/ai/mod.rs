@@ -389,6 +389,43 @@ pub fn update_ai_user_config(
     Ok(())
 }
 
+/// Change only the default model for an AI user, preserving the provider, key,
+/// endpoint, and max tokens. The chosen model must be reachable by the existing
+/// key (same provider family). Mirrors the new model to the public profile.
+///
+/// Unguarded at the reducer level like the other AI-user config updates;
+/// deployments restrict callers at the HTTP/API layer.
+#[reducer]
+pub fn set_ai_user_model(
+    ctx: &ReducerContext,
+    ai_user_id: u64,
+    model: String,
+) -> Result<(), String> {
+    let model_name = model.trim().to_string();
+    if model_name.is_empty() {
+        return Err("Model is required".to_string());
+    }
+    let config = ctx
+        .db
+        .ai_user_config()
+        .id()
+        .find(ai_user_id)
+        .ok_or("AI user config not found")?;
+    ctx.db.ai_user_config().id().update(AiUserConfig {
+        model: model_name.clone(),
+        updated_at: ctx.timestamp,
+        ..config
+    });
+    if let Some(profile) = ctx.db.ai_user_profile().ai_user_id().find(ai_user_id) {
+        ctx.db.ai_user_profile().ai_user_id().update(AiUserProfile {
+            model_name,
+            updated_at: ctx.timestamp,
+            ..profile
+        });
+    }
+    Ok(())
+}
+
 /// Set or clear the API key for an AI user. Separated from `update_ai_user_config`
 /// so callers can update config without re-submitting the key. The secret is not
 /// exposed on subscriptions (RLS on `ai_user_config` limits visibility to the AI
