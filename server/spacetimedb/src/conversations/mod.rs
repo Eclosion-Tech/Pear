@@ -184,11 +184,17 @@ pub struct Conversation {
     /// configured default; the provider, API key, and max tokens still come from
     /// `ai_user_config`, so the override must name a model that key can reach.
     /// `None` (the default) means "use the AI user's configured model".
+    #[default(None::<String>)]
+    pub model_override: Option<String>,
+    /// Optional per-conversation reasoning-effort override (e.g. "low"|"medium"|
+    /// "high"|…), set by the AI user via `set_conversation_effort`. Applied only
+    /// when the resolved model supports an effort knob; ignored otherwise.
+    /// `None` (the default) means "use the model's default effort".
     ///
     /// Must remain last for schema migration (STDB only allows additive
     /// changes at the end of a struct).
     #[default(None::<String>)]
-    pub model_override: Option<String>,
+    pub effort_override: Option<String>,
 }
 
 /// Membership join between conversations and identities. The worker
@@ -401,6 +407,7 @@ pub fn create_conversation(
         canonical_key: None,
         block_anchor,
         model_override: None,
+        effort_override: None,
     });
 
     let mut seen: Vec<Identity> = Vec::new();
@@ -692,6 +699,33 @@ pub fn set_conversation_model(
     Ok(())
 }
 
+/// Set (or clear, with `None`/blank) the per-conversation reasoning-effort
+/// override. The AI user adjusts this for its own thread; it's applied only when
+/// the resolved model supports an effort knob. Like `set_conversation_model`,
+/// intentionally unguarded at the reducer level (callers restricted at the API layer).
+#[reducer]
+pub fn set_conversation_effort(
+    ctx: &ReducerContext,
+    conversation_id: u64,
+    effort: Option<String>,
+) -> Result<(), String> {
+    let conv = ctx
+        .db
+        .conversation()
+        .id()
+        .find(conversation_id)
+        .ok_or("Conversation not found")?;
+    let effort_override = effort
+        .map(|e| e.trim().to_string())
+        .filter(|e| !e.is_empty());
+    ctx.db.conversation().id().update(Conversation {
+        effort_override,
+        updated_at: ctx.timestamp,
+        ..conv
+    });
+    Ok(())
+}
+
 /// Record a claw-code compaction event for a conversation.
 ///
 /// Inserts a `System("compaction")` message containing the summary text produced
@@ -810,6 +844,7 @@ pub fn find_or_create_dm(
         canonical_key: Some(key),
         block_anchor: None,
         model_override: None,
+        effort_override: None,
     });
 
     insert_dm_participants(ctx, conv.id, me, other_identity);
@@ -855,6 +890,7 @@ pub fn find_or_create_ai_dm(
         canonical_key: Some(key),
         block_anchor: None,
         model_override: None,
+        effort_override: None,
     });
 
     insert_dm_participants(ctx, conv.id, me, ai_identity);

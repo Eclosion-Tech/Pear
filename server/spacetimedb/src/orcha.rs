@@ -74,6 +74,9 @@ pub struct OrchaJob {
     #[auto_inc]
     pub id: u64,
     pub user_id: String,
+    /// AI user whose credentials should be used for inference, passed by the
+    /// caller of `create_job` (None for human-initiated jobs → default provider).
+    pub ai_user_id: Option<u64>,
     pub prompt: String,
     /// Pear page linked to this job — enables native traversal from job → page content.
     #[index(btree)]
@@ -81,6 +84,12 @@ pub struct OrchaJob {
     /// "executing" | "complete" | "failed"
     pub status: String,
     pub created_at: Timestamp,
+    /// Capability tier the delegating agent chose for this job's inference
+    /// (e.g. "fast"|"balanced"|"flagship"|"frontier"), resolved to a concrete
+    /// model within the AI user's provider family at run time. None → the AI
+    /// user's configured default model. Stored as a string so adding a tier is
+    /// a data change. Kept last for additive schema migration.
+    pub tier: Option<String>,
 }
 
 /// Atomic unit of work within a job. Supports DAG dependencies via depends_on.
@@ -198,6 +207,15 @@ pub fn create_job(
     user_id: String,
     prompt: String,
     page_id: Option<u64>,
+    // AI user whose credentials should be used for inference. The caller knows
+    // this (the worker passes its own AI-user id when delegating; human-initiated
+    // jobs pass None and run on the default provider). It cannot be inferred from
+    // `ctx.sender` — that is the human for editor jobs and the AI user for
+    // delegated jobs, neither of which reliably maps to one AiUserConfig.
+    ai_user_id: Option<u64>,
+    // Capability tier for this job's inference, chosen by the delegating agent
+    // (None for human-initiated jobs → the AI user's default model).
+    tier: Option<String>,
     task_graph_json: String,
 ) -> Result<(), String> {
     let specs: Vec<TaskSpec> = serde_json::from_str(&task_graph_json)
@@ -211,10 +229,12 @@ pub fn create_job(
     let job = ctx.db.orcha_job().insert(OrchaJob {
         id: next_orcha_job_id(ctx),
         user_id,
+        ai_user_id,
         prompt,
         page_id,
         status: "executing".to_string(),
         created_at: ctx.timestamp,
+        tier,
     });
     let job_id = job.id;
 

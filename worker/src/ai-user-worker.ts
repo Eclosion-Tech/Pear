@@ -24,7 +24,9 @@ import {
 } from "./conversation.js";
 import {
   clearProviderCache,
+  getProviderForAiUser,
   invalidateProviderCache,
+  type ResolvedProvider,
 } from "./providers.js";
 import { subscribeToAvailableTables } from "./subscriptions.js";
 import type { ConnLike } from "./tools.js";
@@ -75,6 +77,22 @@ export class AiUserWorker {
   /** Currently-connected SpacetimeDB Identity, or null before onConnect fires. */
   get identity(): Identity | null {
     return this.aiUserIdentity;
+  }
+
+  /**
+   * Resolve this AI user's inference provider on its own connection — the only
+   * one where the `ai_user_config` row (with the API key) is RLS-visible.
+   * Returns undefined if not connected yet or the config/key isn't available,
+   * so the host worker falls back to the default provider instead of failing.
+   */
+  resolveProvider(aiUserId: bigint): ResolvedProvider | undefined {
+    if (!this.conn) return undefined;
+    try {
+      return getProviderForAiUser(this.conn, aiUserId);
+    } catch (err) {
+      console.warn(`${this.logTag} resolveProvider(${aiUserId}) failed:`, err);
+      return undefined;
+    }
   }
 
   private clearReconnectTimer(): void {

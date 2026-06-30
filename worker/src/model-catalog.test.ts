@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MODEL_CATALOG, utilityModelFor } from "./model-catalog.js";
+import {
+  MODEL_CATALOG,
+  modelForTier,
+  resolveRouting,
+  utilityModelFor,
+} from "./model-catalog.js";
 
 test("each known-provider family has exactly one fast tier", () => {
   for (const provider of ["Anthropic", "OpenAi"] as const) {
@@ -14,7 +19,7 @@ test("utilityModelFor returns the provider's fast model regardless of primary", 
     utilityModelFor("Anthropic", "claude-opus-4-8"),
     "claude-haiku-4-5-20251001",
   );
-  assert.equal(utilityModelFor("OpenAi", "gpt-4.1"), "gpt-4.1-nano");
+  assert.equal(utilityModelFor("OpenAi", "gpt-5.4"), "gpt-5.4-nano");
 });
 
 test("utilityModelFor falls back to the primary model for unknown families", () => {
@@ -30,4 +35,66 @@ test("a user already on the fast tier keeps that model", () => {
     utilityModelFor("Anthropic", "claude-haiku-4-5-20251001"),
     "claude-haiku-4-5-20251001",
   );
+});
+
+test("modelForTier maps each tier to the right model", () => {
+  assert.equal(modelForTier("Anthropic", "frontier"), "claude-fable-5");
+  assert.equal(modelForTier("Anthropic", "flagship"), "claude-opus-4-8");
+  assert.equal(modelForTier("Anthropic", "balanced"), "claude-sonnet-4-6");
+  assert.equal(modelForTier("Anthropic", "fast"), "claude-haiku-4-5-20251001");
+  assert.equal(modelForTier("OpenAi", "frontier"), "gpt-5.5");
+  // Unknown family → undefined (caller keeps the configured model).
+  assert.equal(modelForTier("Ollama", "flagship"), undefined);
+});
+
+test("resolveRouting: human override wins over the agent's tier", () => {
+  const r = resolveRouting(
+    { providerTag: "Anthropic", model: "claude-opus-4-8" },
+    { modelOverride: "claude-haiku-4-5-20251001", tier: "frontier" },
+  );
+  assert.equal(r.model, "claude-haiku-4-5-20251001");
+});
+
+test("resolveRouting: agent tier maps to a concrete model", () => {
+  const r = resolveRouting(
+    { providerTag: "Anthropic", model: "claude-opus-4-8" },
+    { tier: "fast" },
+  );
+  assert.equal(r.model, "claude-haiku-4-5-20251001");
+});
+
+test("resolveRouting: effort kept when the resolved model supports it", () => {
+  const r = resolveRouting(
+    { providerTag: "Anthropic", model: "claude-opus-4-8" },
+    { effort: "high" },
+  );
+  assert.equal(r.model, "claude-opus-4-8");
+  assert.equal(r.effort, "high");
+});
+
+test("resolveRouting: effort dropped when the resolved model can't take it", () => {
+  // Routing to the fast tier (Haiku) drops a requested effort — Haiku has none.
+  const r = resolveRouting(
+    { providerTag: "Anthropic", model: "claude-opus-4-8" },
+    { tier: "fast", effort: "high" },
+  );
+  assert.equal(r.model, "claude-haiku-4-5-20251001");
+  assert.equal(r.effort, undefined);
+});
+
+test("resolveRouting: an invalid effort level is dropped", () => {
+  const r = resolveRouting(
+    { providerTag: "Anthropic", model: "claude-opus-4-8" },
+    { effort: "ultra" },
+  );
+  assert.equal(r.effort, undefined);
+});
+
+test("resolveRouting: custom-family tier choice keeps the configured model", () => {
+  const r = resolveRouting(
+    { providerTag: "Ollama", model: "llama3.1" },
+    { tier: "flagship", effort: "high" },
+  );
+  assert.equal(r.model, "llama3.1");
+  assert.equal(r.effort, undefined); // unknown model → no effort knob
 });

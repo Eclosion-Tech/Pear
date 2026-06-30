@@ -85,13 +85,16 @@ export function providerNeedsEndpoint(provider: ProviderTag): boolean {
   return provider === "Ollama" || provider === "OpenAiCompatible";
 }
 
-// ── Model catalog (mirror of worker/src/model-catalog.ts) ───────────────────
+// ── Model catalog (UI mirror of worker/src/model-catalog.ts) ────────────────
 // A provider key generally unlocks the whole family, so we can offer tiered
 // quick-picks and tell the operator which cheap sibling the worker uses for
-// utility tasks (intent verification, planning). Keep IDs in sync with the
-// worker catalog.
+// utility tasks. This is the picker subset (id/tier/label); the worker catalog
+// is the source of truth (and also carries per-model effort capability). Keep
+// the IDs and tiers in sync. `TIERS` is ordered cheapest → most capable and is
+// append-only — `frontier` sits above `flagship` (Fable 5 / GPT-5.5).
 
-export type ModelTier = "flagship" | "balanced" | "fast";
+export const TIERS = ["fast", "balanced", "flagship", "frontier"] as const;
+export type ModelTier = (typeof TIERS)[number];
 export interface CatalogModel {
   id: string;
   tier: ModelTier;
@@ -100,14 +103,16 @@ export interface CatalogModel {
 
 export const MODEL_CATALOG: Record<ProviderTag, CatalogModel[]> = {
   Anthropic: [
+    { id: "claude-fable-5", tier: "frontier", label: "Fable 5" },
     { id: "claude-opus-4-8", tier: "flagship", label: "Opus 4.8" },
     { id: "claude-sonnet-4-6", tier: "balanced", label: "Sonnet 4.6" },
     { id: "claude-haiku-4-5-20251001", tier: "fast", label: "Haiku 4.5" },
   ],
   OpenAi: [
-    { id: "gpt-4.1", tier: "flagship", label: "GPT-4.1" },
-    { id: "gpt-4.1-mini", tier: "balanced", label: "GPT-4.1 mini" },
-    { id: "gpt-4.1-nano", tier: "fast", label: "GPT-4.1 nano" },
+    { id: "gpt-5.5", tier: "frontier", label: "GPT-5.5" },
+    { id: "gpt-5.4", tier: "flagship", label: "GPT-5.4" },
+    { id: "gpt-5.4-mini", tier: "balanced", label: "GPT-5.4 mini" },
+    { id: "gpt-5.4-nano", tier: "fast", label: "GPT-5.4 nano" },
   ],
   Ollama: [],
   OpenAiCompatible: [],

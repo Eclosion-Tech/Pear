@@ -691,6 +691,11 @@ export function PearEditor({
         userId: identity?.toHexString() ?? "",
         prompt: aiPrompt.trim(),
         pageId,
+        // Human-initiated job: no AI user attributed, so it runs on the default
+        // provider. (Wire a selected AI user here if the editor gains one.)
+        aiUserId: undefined,
+        // No agent tier choice on the human-initiated path → default model.
+        tier: undefined,
         // Always start with an orchestrate task — the worker decomposes the
         // prompt into a proper task graph and writes the subtasks back via
         // add_tasks_to_job before marking itself done.

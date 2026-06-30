@@ -21,6 +21,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
+import { effortSupportFor } from "./model-catalog.js";
+
 // ── Normalized types ────────────────────────────────────────────────────────────
 
 export type TextBlock = { type: "text"; text: string };
@@ -85,6 +87,14 @@ export interface ChatRequest {
   system: SystemPrompt;
   messages: Message[];
   tools?: ToolDef[];
+  /**
+   * Reasoning effort/intensity level (e.g. "low" | "medium" | "high" | …).
+   * Mapped to the provider's native knob — Anthropic `output_config.effort`,
+   * OpenAI `reasoning_effort` — only when the model's catalog descriptor
+   * supports it; ignored (no param sent) otherwise. Gated/validated upstream;
+   * providers also re-check against the catalog before sending.
+   */
+  effort?: string;
 }
 
 /**
@@ -197,6 +207,36 @@ function logCacheUsage(
   }
 }
 
+/**
+ * Anthropic thinking + effort params for a request, derived from the model's
+ * catalog capability:
+ *  - Adaptive-thinking family (Opus 4.6+/Sonnet 4.6/Fable — `anthropic_effort`):
+ *    `thinking: {type:"adaptive"}`, plus `output_config.effort` when a valid
+ *    effort level is requested. Never `budget_tokens` (rejected with a 400).
+ *  - Everything else (Haiku 4.5, Claude 3.7, …): legacy extended thinking via
+ *    `budget_tokens` when a budget is provided.
+ * Returns `{}` when no thinking is wanted, so callers can merge unconditionally.
+ */
+function anthropicThinkingParams(
+  model: string,
+  effort: string | undefined,
+  thinkingBudget: number | undefined,
+): Record<string, unknown> {
+  const support = effortSupportFor(model);
+  if (support.kind === "anthropic_effort") {
+    const out: Record<string, unknown> = {};
+    if (effort || thinkingBudget) out.thinking = { type: "adaptive" };
+    if (effort && support.levels?.includes(effort)) {
+      out.output_config = { effort };
+    }
+    return out;
+  }
+  if (thinkingBudget) {
+    return { thinking: { type: "enabled", budget_tokens: thinkingBudget } };
+  }
+  return {};
+}
+
 class AnthropicProvider implements InferenceProvider {
   private client: Anthropic;
 
@@ -214,6 +254,7 @@ class AnthropicProvider implements InferenceProvider {
     if (request.tools?.length) {
       params.tools = request.tools as Anthropic.Messages.Tool[];
     }
+    Object.assign(params, anthropicThinkingParams(request.model, request.effort, undefined));
 
     const response = await this.client.messages.create(params);
     logCacheUsage("chat", response.usage);
@@ -245,9 +286,10 @@ class AnthropicProvider implements InferenceProvider {
     if (request.tools?.length) {
       params.tools = request.tools as Anthropic.Messages.Tool[];
     }
-    if (request.thinkingBudget) {
-      params.thinking = { type: "enabled", budget_tokens: request.thinkingBudget };
-    }
+    Object.assign(
+      params,
+      anthropicThinkingParams(request.model, request.effort, request.thinkingBudget),
+    );
 
     const stream = this.client.messages.stream(params);
 
@@ -396,6 +438,14 @@ class OpenAIProvider implements InferenceProvider {
           parameters: t.input_schema,
         },
       }));
+    }
+    const effortSupport = effortSupportFor(request.model);
+    if (
+      request.effort &&
+      effortSupport.kind === "openai_reasoning_effort" &&
+      effortSupport.levels?.includes(request.effort)
+    ) {
+      Object.assign(params, { reasoning_effort: request.effort });
     }
 
     const response = await this.client.chat.completions.create(params);

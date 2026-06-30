@@ -876,8 +876,36 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
             "A clear, self-contained description of the subtask to orchestrate. Include all specifics " +
             "(titles, columns, values, target pages) — the background agent does not see this chat.",
         },
+        tier: {
+          type: "string",
+          enum: ["fast", "balanced", "flagship", "frontier"],
+          description:
+            "Optional capability tier for the subagent's model, chosen by you for this task: " +
+            "'fast' (cheapest, simple/scoped work), 'balanced' (most tasks), 'flagship' (hard reasoning/coding), " +
+            "'frontier' (the most demanding work; slowest, most expensive). Resolved to a concrete model in " +
+            "the AI user's provider family. Omit to use the configured default.",
+        },
       },
       required: ["description"],
+    },
+  },
+  {
+    name: "set_effort",
+    description:
+      "Set the reasoning-effort level for YOUR replies in this conversation, at your discretion — " +
+      "raise it ('high'/'xhigh'/'max') for a hard problem, lower it ('low'/'medium') for quick exchanges. " +
+      "It persists for the thread until you change it, and applies only if the active model supports an " +
+      "effort control (otherwise it's a no-op). It does not switch the model. Pass an empty string to reset to the default.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        effort: {
+          type: "string",
+          description:
+            "Effort level (e.g. 'low' | 'medium' | 'high' | 'xhigh' | 'max'), or '' to reset to the model default.",
+        },
+      },
+      required: ["effort"],
     },
   },
 ];
@@ -2512,6 +2540,7 @@ export async function executeTool(
         if (!description) {
           return JSON.stringify({ ok: false, error: "description is required" });
         }
+        const tier = String((input.tier as string) ?? "").trim() || undefined;
         const userId = toolContext.aiIdentityHex ?? "";
         type JobRow = { id: bigint; userId: string; prompt: string };
         const existingJobIds = new Set(
@@ -2530,6 +2559,11 @@ export async function executeTool(
             userId,
             prompt: description,
             pageId: toolContext.currentPageId ?? undefined,
+            // Run the delegated job as the AI user that spawned it, so its
+            // inference uses that AI user's own credentials.
+            aiUserId: toolContext.aiUserId,
+            // Optional capability tier the agent picked for this subagent.
+            tier,
             taskGraphJson,
           });
         } catch (err) {
@@ -2555,6 +2589,33 @@ export async function executeTool(
           job_id: Number(job.id),
           next_step:
             "The delegated job is now running in the background; its progress and results render inline in this conversation. Tell the user you've started it — do NOT claim the work is finished.",
+        });
+      }
+
+      case "set_effort": {
+        const conversationId = toolContext.conversationId;
+        if (!conversationId) {
+          return JSON.stringify({ ok: false, error: "set_effort: no conversation in context" });
+        }
+        const effort = String((input.effort as string) ?? "").trim();
+        try {
+          await conn.reducers.setConversationEffort({
+            conversationId,
+            // Empty string clears the override (reducer trims+filters to None).
+            effort: effort || undefined,
+          });
+        } catch (err) {
+          return JSON.stringify({
+            ok: false,
+            error: `set_effort failed: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+        return JSON.stringify({
+          ok: true,
+          effort: effort || null,
+          note: effort
+            ? `Effort set to "${effort}" for this conversation (applies if the active model supports it).`
+            : "Effort reset to the model default for this conversation.",
         });
       }
 

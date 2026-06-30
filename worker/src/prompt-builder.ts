@@ -320,10 +320,24 @@ function renderCurrentPageContext(text: string): string {
 function renderAiUserMemoryIndex(entries: AiUserMemoryEntry[]): string {
   const lines: string[] = [
     "# Your private memory (index)",
-    "These pages sit under your per-AI-user hidden memory subtree (`provision_ai_user_memory`) and hold your " +
-      "persona, long-term memory, style, and cross-conversation notes. Only an index is shown here to save context — " +
-      "open a page's full text with `read_memory(page_id)`, or find something across them with `search_memory(query)`. " +
-      "You can still edit them with your usual page tools.",
+    "These pages sit under your per-AI-user hidden memory subtree and hold your persona, durable knowledge, " +
+      "style, and cross-conversation notes. Only an index — page titles plus a one-line snippet — is shown here to " +
+      "save context. Open a page's full text with `read_memory(page_id)`, find something across them with " +
+      "`search_memory(query)`, and create or edit memory pages with your usual page tools.",
+    "",
+    "Keeping memory useful:",
+    " - One topic per page. Add a page for each distinct, reusable fact rather than appending everything to one " +
+      "doc. Before adding, `search_memory` for an existing page on the topic and update that page instead of " +
+      "creating a near-duplicate.",
+    " - Titles and opening lines are load-bearing: this index shows only the title and a snippet, so make each " +
+      "title specific enough to recognize without opening it, and lead the body with the key point.",
+    " - Record why something matters, not just what happened — the decision, constraint, or correction and the " +
+      "reason behind it.",
+    " - Keep work-in-progress notes short and rewrite them freely; promote anything worth keeping long-term into a " +
+      "clearly-titled page of its own.",
+    " - Don't store what a page or the current conversation already records. Convert relative dates (\"yesterday\", " +
+      "\"next week\") to absolute ones. Delete notes that turn out to be wrong, and reference related memory pages " +
+      "by their page id.",
     "",
   ];
   for (const e of entries) {

@@ -950,6 +950,7 @@ fn decode_conversation(v: &Value) -> Result<Conversation, String> {
         canonical_key: None,
         block_anchor: None,
         model_override: None,
+        effort_override: None,
     })
 }
 
@@ -1133,10 +1134,12 @@ fn decode_orcha_job(v: &Value) -> Result<OrchaJob, String> {
     Ok(OrchaJob {
         id: u64_at(m, "id")?,
         user_id: string_at(m, "userId")?,
+        ai_user_id: opt_u64_at(m, "aiUserId")?,
         prompt: string_at(m, "prompt")?,
         page_id: opt_u64_at(m, "pageId")?,
         status: string_at(m, "status")?,
         created_at: decode_timestamp(m.get("createdAt").ok_or("createdAt")?)?,
+        tier: opt_string_at(m, "tier")?,
     })
 }
 

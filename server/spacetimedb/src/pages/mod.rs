@@ -267,7 +267,7 @@ fn create_component_tree_page_inner(
 }
 
 /// Root `Container` + one empty `RichText` — fresh doc is immediately editable.
-fn seed_default_component_tree(ctx: &ReducerContext, surface_id: u64) {
+pub(crate) fn seed_default_component_tree(ctx: &ReducerContext, surface_id: u64) {
     let root_id = next_component_node_id(ctx);
     ctx.db.component_node().insert(ComponentNode {
         id: root_id,

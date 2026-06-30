@@ -590,6 +590,7 @@ fn decode_conversation(v: &Value) -> Result<Conversation, String> {
         canonical_key: None,
         block_anchor: None,
         model_override: None,
+        effort_override: None,
     })
 }
 

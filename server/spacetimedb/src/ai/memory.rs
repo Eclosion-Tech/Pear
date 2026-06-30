@@ -12,7 +12,7 @@ use crate::access_control::{next_page_access_rule_id, page_access_rule, PageAcce
 use crate::ai::{ai_user_config, ai_user_profile};
 use crate::id_counters::alloc_id;
 use crate::pages::{
-    next_page_id, next_sort_order, page, page_content, ActorType, Page, PageContent,
+    next_page_id, next_sort_order, page, seed_default_component_tree, ActorType, Page,
     PageContentFormat, PageType,
 };
 use crate::types::Permission;
@@ -110,13 +110,11 @@ pub fn provision_ai_user_memory(ctx: &ReducerContext, ai_user_id: u64) -> Result
         deleted_at: None,
         parent_pk: 0,
         is_hidden: true,
-        content_format: PageContentFormat::BlockNote,
+        content_format: PageContentFormat::ComponentTree,
     });
-    ctx.db.page_content().insert(PageContent {
-        page_id: root.id,
-        content: String::new(),
-        updated_at: ctx.timestamp,
-    });
+    // ComponentTree pages store body in `ComponentNode` rows (not `PageContent`);
+    // seed the same root Container + empty RichText that a normal Doc gets.
+    seed_default_component_tree(ctx, root.id);
     grant_ai_memory_page_access(ctx, root.id, ai_user.identity);
     ctx.db.ai_user_memory().insert(AiUserMemory {
         id: next_ai_user_memory_id(ctx),

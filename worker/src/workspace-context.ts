@@ -8,6 +8,7 @@
  */
 
 import type { ConnLike } from "./tools.js";
+import { readComponentTreeDoc } from "./component-authoring.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -339,6 +340,11 @@ function snippetOf(content: string, max = 200): string {
 }
 
 function memoryPageContent(conn: ConnLike, pageId: bigint): string {
+  // Memory pages are ComponentTree, whose body lives in `ComponentNode` rows —
+  // `page_content` is empty for them. Fall back to `page_content` for any
+  // legacy BlockNote memory pages provisioned before the format switch.
+  const tree = readComponentTreeDoc(conn, pageId);
+  if (tree !== undefined) return tree;
   const row = conn.db.page_content?.pageId?.find(pageId) as PageContentRow | undefined;
   return row?.content ?? "";
 }

@@ -17,7 +17,8 @@
 
 import { DbConnection, type EventContext } from "./module_bindings/index.js";
 import { callLlm, planTasks, buildPageContext } from "./llm.js";
-import type { TokenUsage } from "./providers.js";
+import { type ResolvedProvider, type TokenUsage } from "./providers.js";
+import { resolveRouting, type ModelTier } from "./model-catalog.js";
 import { AiUserWorker } from "./ai-user-worker.js";
 import { handleAiPrimitiveTask } from "./ai-primitive-task.js";
 import { StructuralSensorsScheduler } from "./structural-sensors.js";
@@ -40,9 +41,12 @@ function parseIntervalEnv(key: string): number | undefined {
 
 type JobRow = {
   id: bigint;
+  userId: string;
+  aiUserId?: bigint;
   pageId?: bigint;
   prompt: string;
   status: string;
+  tier?: string;
 };
 
 type TaskRow = {
@@ -76,7 +80,6 @@ export interface AiUserDescriptor {
 
 const RECONNECT_CAP_MS = 30_000;
 const RECONNECT_BASE_MS = 1_500;
-
 export class DatabaseWorker {
   private conn: DbConnection | null = null;
   private inFlight = new Set<bigint>();
@@ -86,6 +89,28 @@ export class DatabaseWorker {
   private aiUserWorkers = new Map<bigint, AiUserWorker>();
   /** Token last used to spawn each worker, so we can detect rotation. */
   private aiUserTokens = new Map<bigint, string>();
+
+  /**
+   * Resolve the inference provider for a job attributed to an AI user. The
+   * per-AI-user `ai_user_config` (with the API key) is RLS-scoped to the AI
+   * user's own connection, so it is never visible on this host connection —
+   * resolution must happen on the AI user's own worker. Returns undefined when
+   * the job has no AI user or that worker isn't connected yet, so the caller
+   * falls back to the default env provider rather than failing the job.
+   */
+  private resolveProviderForJob(job: JobRow | undefined): ResolvedProvider | undefined {
+    if (!job?.aiUserId) return undefined;
+    const base = this.aiUserWorkers.get(job.aiUserId)?.resolveProvider(job.aiUserId);
+    if (!base) return undefined;
+    // Apply the delegating agent's chosen tier (if any) → concrete model within
+    // the AI user's provider family. The provider/key/maxTokens are unchanged.
+    const tier = typeof job.tier === "string" ? (job.tier as ModelTier) : undefined;
+    const routed = resolveRouting(
+      { providerTag: base.providerTag, model: base.model },
+      { tier },
+    );
+    return { ...base, model: routed.model };
+  }
 
   private sensors: StructuralSensorsScheduler | null = null;
 
@@ -472,7 +497,9 @@ export class DatabaseWorker {
           break;
         case "llm":
         default: {
-          const llmOut = await callLlm(task.description, conn, task.jobId);
+          const llmJob = conn.db.orcha_job.id.find(task.jobId) as JobRow | undefined;
+          const llmOverrides = this.resolveProviderForJob(llmJob);
+          const llmOut = await callLlm(task.description, conn, task.jobId, "", llmOverrides);
           result = llmOut.text;
           usage = llmOut.usage;
           break;
@@ -669,7 +696,8 @@ export class DatabaseWorker {
       console.log(`[worker:${this.dbName}] Page context: ${pageContext.slice(0, 80)}…`);
     }
 
-    const taskSpecs = await planTasks(task.description, pageContext);
+    const orchestrateOverrides = this.resolveProviderForJob(job);
+    const taskSpecs = await planTasks(task.description, pageContext, orchestrateOverrides);
 
     if (atMaxDepth) {
       for (const spec of taskSpecs) {

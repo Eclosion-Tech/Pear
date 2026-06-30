@@ -35,6 +35,7 @@ import {
   type TokenUsage,
   getProviderForAiUser,
 } from "./providers.js";
+import { resolveRouting } from "./model-catalog.js";
 import { buildPageContext } from "./llm.js";
 import { readComponentNodeText } from "./component-authoring.js";
 import {
@@ -603,11 +604,18 @@ async function handleConversationMessage(
       provider: aiProvider,
       model: defaultModel,
       maxTokens,
+      providerTag,
     } = getProviderForAiUser(conn, aiProfile.aiUserId);
-    // A per-conversation override pins this thread to a specific model; the
-    // provider/key/maxTokens still come from ai_user_config, so the override
-    // must name a model that key can reach. Blank/None falls back to default.
-    const model = conv.modelOverride?.trim() || defaultModel;
+    // Two-dial routing. The human `modelOverride` pins this thread to a specific
+    // model and wins; the agent's tier/effort dials plug into this same call
+    // once surfaced (see RoutingChoice). The provider/key/maxTokens still come
+    // from ai_user_config, so any chosen model must be one that key can reach.
+    // `effort` is threaded into the stream request below and applied only where
+    // the resolved model supports it.
+    const { model, effort } = resolveRouting(
+      { providerTag, model: defaultModel },
+      { modelOverride: conv.modelOverride, effort: conv.effortOverride },
+    );
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const aiCfg = (conn.db as any).ai_user_config?.id?.find(
@@ -668,6 +676,7 @@ async function handleConversationMessage(
           messages: llmMessages,
           tools: tools.length > 0 ? tools : undefined,
           thinkingBudget: THINKING_BUDGET,
+          effort,
         };
 
         let doneResponse: (StreamEvent & { type: "done" }) | null = null;
