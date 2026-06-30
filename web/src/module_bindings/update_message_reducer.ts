@@ -22,6 +22,7 @@ export default {
   },
   thinking: __t.option(__t.string()),
   toolCallsJson: __t.option(__t.string()),
+  timelineJson: __t.option(__t.string()),
   inputTokens: __t.option(__t.u32()),
   outputTokens: __t.option(__t.u32()),
   cacheCreationInputTokens: __t.option(__t.u32()),

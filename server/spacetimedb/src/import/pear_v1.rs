@@ -1001,6 +1001,7 @@ fn decode_conversation_message(v: &Value) -> Result<ConversationMessage, String>
         status: decode_message_status(m.get("status").ok_or("status")?)?,
         thinking: opt_string_at(m, "thinking")?,
         tool_calls_json: opt_string_at(m, "toolCallsJson")?,
+        timeline_json: opt_string_at(m, "timelineJson")?,
         input_tokens: u64_at(m, "inputTokens")? as u32,
         output_tokens: u64_at(m, "outputTokens")? as u32,
         cache_creation_input_tokens: u64_at(m, "cacheCreationInputTokens")? as u32,

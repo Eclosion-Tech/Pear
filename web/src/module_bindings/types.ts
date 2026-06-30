@@ -677,6 +677,7 @@ export const ConversationMessage = __t.object("ConversationMessage", {
   },
   thinking: __t.option(__t.string()),
   toolCallsJson: __t.option(__t.string()),
+  timelineJson: __t.option(__t.string()),
   inputTokens: __t.u32(),
   outputTokens: __t.u32(),
   cacheCreationInputTokens: __t.u32(),

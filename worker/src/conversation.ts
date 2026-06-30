@@ -26,6 +26,7 @@
 
 import type { Identity } from "spacetimedb";
 import type { ConnLike } from "./tools.js";
+import { TurnLock } from "./turn-lock.js";
 import {
   type Message,
   type ToolUseBlock,
@@ -111,17 +112,14 @@ type AiUserProfileRow = {
   hasApiKey: boolean;
 };
 
-const processing = new Set<string>();
+// Per-conversation turn lock. Ensures at most one in-flight turn per
+// (responder, conversation) and remembers a message that arrives mid-turn so
+// it is answered AFTER the current turn finishes (queue, not a second
+// concurrent turn). See turn-lock.ts + turn-lock.test.ts.
+const turnLock = new TurnLock();
 const FLUSH_INTERVAL_MS = 300;
 const THINKING_BUDGET = 5_000;
 const MAX_TOOL_ITERATIONS = 15;
-
-function messageKey(convId: bigint, msgId: bigint, selfHex: string): string {
-  // Include the responder identity: multiple AI users share this module-level
-  // `processing` set, and two AI participants in the same conversation must be
-  // able to respond to the same message independently.
-  return `${selfHex}:${convId}:${msgId}`;
-}
 
 function identityHex(id: { toHexString(): string } | unknown): string {
   if (id && typeof (id as { toHexString?: () => string }).toHexString === "function") {
@@ -249,6 +247,7 @@ async function flushMessage(
   toolCalls: StoredToolCall[],
   jobId?: bigint,
   usage?: TokenUsage,
+  timelineJson?: string,
 ): Promise<void> {
   try {
     await conn.reducers.updateMessage({
@@ -258,6 +257,7 @@ async function flushMessage(
       thinking: thinking || undefined,
       toolCallsJson:
         toolCalls.length > 0 ? JSON.stringify(toolCalls) : undefined,
+      timelineJson,
       jobId,
       inputTokens: usage ? u32(usage.inputTokens) : undefined,
       outputTokens: usage ? u32(usage.outputTokens) : undefined,
@@ -423,15 +423,37 @@ function isParticipant(
   return false;
 }
 
+function latestForeignMessage(
+  conn: ConnLike,
+  conversationId: bigint,
+  selfHex: string,
+): ConversationMessageRow | undefined {
+  let latest: ConversationMessageRow | undefined;
+  for (const m of conn.db.conversation_message.iter() as Iterable<ConversationMessageRow>) {
+    if (m.conversationId !== conversationId) continue;
+    if (!isFromOtherUser(m, selfHex)) continue;
+    if (!latest || m.id > latest.id) latest = m;
+  }
+  return latest;
+}
+
 async function handleConversationMessage(
   conn: ConnLike,
   msg: ConversationMessageRow,
   selfHex: string,
   logTag: string,
+  opts: { bypassWatermark?: boolean } = {},
 ): Promise<void> {
-  const key = messageKey(msg.conversationId, msg.id, selfHex);
-  if (processing.has(key)) return;
-  processing.add(key);
+  // Per-conversation turn lock. The dedup key intentionally OMITS the message
+  // id: only one turn may run per (responder, conversation) at a time. A
+  // message that arrives while a turn is in flight must NOT spawn a second
+  // concurrent turn (that produced two interleaved replies in one
+  // conversation). Instead we record that the conversation needs a re-check and
+  // pick the newest message up when the current turn releases the lock.
+  const convKey = `${selfHex}:${msg.conversationId}`;
+  // begin() returns false if a turn is already running for this conversation;
+  // it records the conversation as pending so this finally-block re-dispatches.
+  if (!turnLock.begin(convKey)) return;
 
   try {
     const conv = conn.db.conversation.id.find(msg.conversationId) as
@@ -464,8 +486,14 @@ async function handleConversationMessage(
         break;
       }
     }
-    if (repliedAfter) return;
-    if (hasLaterForeignMessage(conn, msg, selfHex)) return;
+    // `bypassWatermark` is set only when this call is a re-dispatch fired from
+    // the finally-block of a just-finished turn: the message genuinely arrived
+    // mid-turn and has NOT been answered, even though an (older) reply now
+    // post-dates it, so the timestamp watermark would wrongly skip it.
+    if (!opts.bypassWatermark) {
+      if (repliedAfter) return;
+      if (hasLaterForeignMessage(conn, msg, selfHex)) return;
+    }
 
     const aiProfile = findOwnProfile(conn, selfHex);
     if (!aiProfile) {
@@ -659,6 +687,50 @@ async function handleConversationMessage(
       responseText = "";
     };
 
+    /** Cumulative on-screen text: earlier-iteration narration plus the segment
+     * currently streaming. Streaming flushes use this (not bare `responseText`)
+     * so the message grows monotonically instead of blanking each time
+     * `accrueNarration` resets `responseText` at a tool boundary. */
+    const visibleContent = () =>
+      narration
+        ? responseText
+          ? `${narration}\n\n${responseText}`
+          : narration
+        : responseText;
+
+    /** Render-only ordered timeline of the turn: text segments and tool refs in
+     * the order they occurred, so the client can interleave tool cards between
+     * prose instead of stacking them all at the top (#inline-tools). Tools are
+     * stored by id; the client looks up name/status/output in `tool_calls_json`.
+     * `content` + `tool_calls_json` are unchanged and remain the source of truth
+     * for session reconstruction. */
+    type TimelineBlock = { t: "text"; text: string } | { t: "tool"; id: string };
+    const timeline: TimelineBlock[] = [];
+    // How many of `allToolCalls` are already represented in `timeline`. The rest
+    // belong to the in-progress iteration.
+    let committedTools = 0;
+    /** Committed timeline plus the in-progress iteration (live streaming text +
+     * any tools started but not yet committed). Sent on every streaming flush. */
+    const liveTimeline = (): TimelineBlock[] => {
+      const live = timeline.slice();
+      const seg = responseText.trim();
+      if (seg) live.push({ t: "text", text: seg });
+      for (let i = committedTools; i < allToolCalls.length; i++) {
+        live.push({ t: "tool", id: allToolCalls[i].id });
+      }
+      return live;
+    };
+    /** Fold the in-progress iteration (current text segment + new tools) into the
+     * committed timeline. Call before `accrueNarration` resets `responseText`. */
+    const commitTimeline = () => {
+      const seg = responseText.trim();
+      if (seg) timeline.push({ t: "text", text: seg });
+      for (let i = committedTools; i < allToolCalls.length; i++) {
+        timeline.push({ t: "tool", id: allToolCalls[i].id });
+      }
+      committedTools = allToolCalls.length;
+    };
+
     if (aiProvider.chatStream) {
       let cleanFinish = false;
       while (iterations++ < MAX_TOOL_ITERATIONS) {
@@ -688,10 +760,13 @@ async function handleConversationMessage(
               await flushMessage(
                 conn,
                 aiMsgId,
-                responseText,
+                visibleContent(),
                 "Thinking",
                 thinkingText,
                 allToolCalls,
+                undefined,
+                undefined,
+                JSON.stringify(liveTimeline()),
               );
               lastFlush = Date.now();
             }
@@ -702,10 +777,13 @@ async function handleConversationMessage(
               await flushMessage(
                 conn,
                 aiMsgId,
-                responseText,
+                visibleContent(),
                 currentStatus,
                 thinkingText,
                 allToolCalls,
+                undefined,
+                undefined,
+                JSON.stringify(liveTimeline()),
               );
               lastFlush = Date.now();
             }
@@ -721,10 +799,13 @@ async function handleConversationMessage(
             await flushMessage(
               conn,
               aiMsgId,
-              responseText,
+              visibleContent(),
               "ToolUse",
               thinkingText,
               allToolCalls,
+              undefined,
+              undefined,
+              JSON.stringify(liveTimeline()),
             );
           } else if (event.type === "done") {
             doneResponse = event;
@@ -804,15 +885,19 @@ async function handleConversationMessage(
         await flushMessage(
           conn,
           aiMsgId,
-          responseText,
+          visibleContent(),
           "ToolUse",
           thinkingText,
           allToolCalls,
           spawnedJobId,
+          undefined,
+          JSON.stringify(liveTimeline()),
         );
         llmMessages.push({ role: "user", content: toolResults });
 
-        // Preserve any prose emitted before these tool calls (#30).
+        // Fold this iteration's prose + tools into the render timeline, then
+        // preserve the prose for the final content composition (#30).
+        commitTimeline();
         accrueNarration();
       }
       if (!cleanFinish) toolLimitReached = true;
@@ -900,11 +985,17 @@ async function handleConversationMessage(
 
         llmMessages.push({ role: "user", content: toolResults });
 
-        // Preserve prose emitted before these tool calls (#30).
+        // Fold this iteration's prose + tools into the render timeline, then
+        // preserve the prose for the final content composition (#30).
+        commitTimeline();
         accrueNarration();
       }
       if (!cleanFinish) toolLimitReached = true;
     }
+
+    // Fold the final iteration (closing prose + any tools left uncommitted, e.g.
+    // unexecuted tool blocks on a max_tokens stop) into the render timeline.
+    commitTimeline();
 
     // Compose the full turn: earlier-iteration narration + final segment (#30).
     if (narration) {
@@ -950,14 +1041,16 @@ async function handleConversationMessage(
     // success (assessment #29 / #12).
     if (truncated) {
       console.warn(`${logTag} response truncated on max_tokens in conversation ${conv.id}`);
-      responseText =
-        `${responseText}\n\n_⚠️ This response was cut off at the length limit. Ask me to continue._`.trim();
+      const warn = "_⚠️ This response was cut off at the length limit. Ask me to continue._";
+      responseText = `${responseText}\n\n${warn}`.trim();
+      timeline.push({ t: "text", text: warn });
     } else if (toolLimitReached) {
       console.warn(
         `${logTag} hit tool-iteration cap (${MAX_TOOL_ITERATIONS}) in conversation ${conv.id}`,
       );
-      responseText =
-        `${responseText}\n\n_⚠️ I stopped after ${MAX_TOOL_ITERATIONS} tool steps. Ask me to continue if the task isn't finished._`.trim();
+      const warn = `_⚠️ I stopped after ${MAX_TOOL_ITERATIONS} tool steps. Ask me to continue if the task isn't finished._`;
+      responseText = `${responseText}\n\n${warn}`.trim();
+      timeline.push({ t: "text", text: warn });
     }
 
     // Append a deterministic, system-verified record of what the tools actually
@@ -980,6 +1073,7 @@ async function handleConversationMessage(
       allToolCalls,
       spawnedJobId,
       turnUsage,
+      timeline.length > 0 ? JSON.stringify(timeline) : undefined,
     );
 
     console.log(
@@ -991,7 +1085,17 @@ async function handleConversationMessage(
       err instanceof Error ? err.message : err,
     );
   } finally {
-    processing.delete(key);
+    // end() returns true if a message arrived mid-turn and was deferred.
+    // Queue-on-release: pick up the newest one now, bypassing the timestamp
+    // watermark (the reply we just sent post-dates it).
+    if (turnLock.end(convKey)) {
+      const latest = latestForeignMessage(conn, msg.conversationId, selfHex);
+      if (latest && latest.id > msg.id) {
+        void handleConversationMessage(conn, latest, selfHex, logTag, {
+          bypassWatermark: true,
+        });
+      }
+    }
   }
 }
 

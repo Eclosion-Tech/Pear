@@ -257,6 +257,13 @@ pub struct ConversationMessage {
     /// Round-trippable JSON array of tool_use / tool_result content blocks.
     #[default(None::<String>)]
     pub tool_calls_json: Option<String>,
+    /// Render-only ordered timeline of the assistant turn: a JSON array of
+    /// `{"t":"text","text":...}` and `{"t":"tool","id":...}` blocks, in the order
+    /// they occurred, so the client can interleave tool cards between text
+    /// segments instead of stacking all tools at the top. Ignored by session
+    /// reconstruction (which uses `content` + `tool_calls_json`); purely cosmetic.
+    #[default(None::<String>)]
+    pub timeline_json: Option<String>,
     /// Anthropic input tokens consumed by this assistant turn (0 for human/system).
     #[default(0u32)]
     pub input_tokens: u32,
@@ -493,6 +500,7 @@ pub fn send_message(
         status: status.unwrap_or(MessageStatus::Complete),
         thinking,
         tool_calls_json,
+        timeline_json: None,
         input_tokens: input_tokens.unwrap_or(0),
         output_tokens: output_tokens.unwrap_or(0),
         cache_creation_input_tokens: cache_creation_input_tokens.unwrap_or(0),
@@ -544,6 +552,7 @@ pub fn send_user_message(
         status: MessageStatus::Complete,
         thinking: None,
         tool_calls_json: None,
+        timeline_json: None,
         input_tokens: 0,
         output_tokens: 0,
         cache_creation_input_tokens: 0,
@@ -583,6 +592,7 @@ pub fn update_message(
     status: MessageStatus,
     thinking: Option<String>,
     tool_calls_json: Option<String>,
+    timeline_json: Option<String>,
     input_tokens: Option<u32>,
     output_tokens: Option<u32>,
     cache_creation_input_tokens: Option<u32>,
@@ -636,6 +646,7 @@ pub fn update_message(
             status,
             thinking,
             tool_calls_json,
+            timeline_json,
             input_tokens: input_tokens.unwrap_or(msg.input_tokens),
             output_tokens: output_tokens.unwrap_or(msg.output_tokens),
             cache_creation_input_tokens: cache_creation_input_tokens
@@ -757,6 +768,7 @@ pub fn record_compaction(
         status: MessageStatus::Complete,
         thinking: None,
         tool_calls_json: None,
+        timeline_json: None,
         input_tokens: 0,
         output_tokens: 0,
         cache_creation_input_tokens: 0,

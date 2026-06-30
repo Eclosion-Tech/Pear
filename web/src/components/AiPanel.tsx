@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useSpacetimeDB } from "spacetimedb/react";
 import Markdown from "react-markdown";
@@ -228,6 +228,8 @@ interface AffectedEntities {
 
 /** Unified persisted tool-call shape; `result` kept for legacy rows. */
 interface ToolCallInfo {
+  /** tool_use id — used to resolve a timeline `{t:"tool",id}` block to its call. */
+  id?: string;
   name: string;
   status: "executing" | "done" | "error";
   output?: string;
@@ -276,11 +278,13 @@ const TOOL_ICONS: Record<string, string> = {
   fetch_url: "globe",
 };
 
-function ToolCallsDisplay({
-  toolCallsJson,
+/** A single tool-call card. Extracted so both the batched `ToolCallsDisplay`
+ * and the interleaved `TimelineDisplay` can render an identical card. */
+function ToolCallItem({
+  tc,
   conversationId,
 }: {
-  toolCallsJson: string;
+  tc: ToolCallInfo;
   conversationId: bigint;
 }) {
   const router = useRouter();
@@ -288,14 +292,6 @@ function ToolCallsDisplay({
   const confirmCommand = useReducer(reducers.confirmBridgeCommand);
   const denyCommand = useReducer(reducers.denyBridgeCommand);
   const [bridgeBusy, setBridgeBusy] = useState<string | null>(null);
-
-  let calls: ToolCallInfo[] = [];
-  try {
-    calls = JSON.parse(toolCallsJson);
-  } catch {
-    return null;
-  }
-  if (calls.length === 0) return null;
 
   // Most-recent bridge_command for this conversation matching a command string —
   // links a tool_bash call to its live row (status + approval).
@@ -316,132 +312,196 @@ function ToolCallsDisplay({
     }
   };
 
-  return (
-    <div className="mt-1.5 mb-1.5 space-y-1">
-      {calls.map((tc, i) => {
-        // tool_bash: show the command + live bridge status + inline approval.
-        if (tc.name === "tool_bash") {
-          const command = bashCommandOf(tc);
-          const match = command ? matchBridge(command) : undefined;
-          const statusTag = match?.status.tag;
-          const awaiting = statusTag === "AwaitingConfirmation";
-          const live = statusTag ? BRIDGE_STATUS_LABEL[statusTag] ?? statusTag : null;
-          // Trust the bridge row's terminal status over a stale `executing`
-          // tool-call (the worker can lag delivering the result). Completed/
-          // failed/rejected/timed-out ⇒ not running, even if tc says executing.
-          const terminal =
-            statusTag === "Completed" ||
-            statusTag === "Failed" ||
-            statusTag === "Rejected" ||
-            statusTag === "TimedOut";
-          const failed =
-            statusTag === "Failed" ||
-            statusTag === "Rejected" ||
-            statusTag === "TimedOut" ||
-            tc.status === "error";
-          const running = tc.status === "executing" && !awaiting && !terminal;
-          const btn = (action: "allow" | "always" | "deny", label: string, cls: string) => (
-            <button
-              type="button"
-              disabled={bridgeBusy !== null}
-              onClick={() => match && void decideBridge(match.id, action)}
-              className={`rounded px-2 py-0.5 text-[11px] font-medium disabled:opacity-50 ${cls}`}
+  // tool_bash: show the command + live bridge status + inline approval.
+  if (tc.name === "tool_bash") {
+    const command = bashCommandOf(tc);
+    const match = command ? matchBridge(command) : undefined;
+    const statusTag = match?.status.tag;
+    const awaiting = statusTag === "AwaitingConfirmation";
+    const live = statusTag ? BRIDGE_STATUS_LABEL[statusTag] ?? statusTag : null;
+    // Trust the bridge row's terminal status over a stale `executing`
+    // tool-call (the worker can lag delivering the result). Completed/
+    // failed/rejected/timed-out ⇒ not running, even if tc says executing.
+    const terminal =
+      statusTag === "Completed" ||
+      statusTag === "Failed" ||
+      statusTag === "Rejected" ||
+      statusTag === "TimedOut";
+    const failed =
+      statusTag === "Failed" ||
+      statusTag === "Rejected" ||
+      statusTag === "TimedOut" ||
+      tc.status === "error";
+    const running = tc.status === "executing" && !awaiting && !terminal;
+    const btn = (action: "allow" | "always" | "deny", label: string, cls: string) => (
+      <button
+        type="button"
+        disabled={bridgeBusy !== null}
+        onClick={() => match && void decideBridge(match.id, action)}
+        className={`rounded px-2 py-0.5 text-[11px] font-medium disabled:opacity-50 ${cls}`}
+      >
+        {bridgeBusy === `${match?.id}:${action}` ? "…" : label}
+      </button>
+    );
+    return (
+      <div className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1.5 dark:border-neutral-800 dark:bg-neutral-900/40">
+        <div className="flex items-center gap-1.5 text-xs text-neutral-500 dark:text-neutral-400">
+          {running ? (
+            <span className="w-3 h-3 rounded-full border-2 border-violet-400 border-t-transparent animate-spin shrink-0" />
+          ) : awaiting ? (
+            <span className="text-amber-500 shrink-0">⏸</span>
+          ) : failed ? (
+            <span className="text-red-500 shrink-0">✕</span>
+          ) : (
+            <span className="text-green-500 shrink-0">✓</span>
+          )}
+          <span className="font-medium">bridge shell</span>
+          {live && (
+            <span
+              className={`rounded px-1 text-[10px] ${
+                awaiting
+                  ? "bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300"
+                  : "bg-neutral-200 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400"
+              }`}
             >
-              {bridgeBusy === `${match?.id}:${action}` ? "…" : label}
-            </button>
-          );
-          return (
-            <div
-              key={i}
-              className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1.5 dark:border-neutral-800 dark:bg-neutral-900/40"
-            >
-              <div className="flex items-center gap-1.5 text-xs text-neutral-500 dark:text-neutral-400">
-                {running ? (
-                  <span className="w-3 h-3 rounded-full border-2 border-violet-400 border-t-transparent animate-spin shrink-0" />
-                ) : awaiting ? (
-                  <span className="text-amber-500 shrink-0">⏸</span>
-                ) : failed ? (
-                  <span className="text-red-500 shrink-0">✕</span>
-                ) : (
-                  <span className="text-green-500 shrink-0">✓</span>
-                )}
-                <span className="font-medium">bridge shell</span>
-                {live && (
-                  <span
-                    className={`rounded px-1 text-[10px] ${
-                      awaiting
-                        ? "bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300"
-                        : "bg-neutral-200 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400"
-                    }`}
-                  >
-                    {live}
-                  </span>
-                )}
-              </div>
-              {command && (
-                <code className="mt-1 block break-all font-mono text-[11px] text-neutral-700 dark:text-neutral-300">
-                  $ {command}
-                </code>
-              )}
-              {awaiting && match && (
-                <div className="mt-1.5 flex gap-1.5">
-                  {btn("allow", "Allow once", "bg-emerald-600 text-white hover:bg-emerald-700")}
-                  {btn(
-                    "always",
-                    "Always allow",
-                    "bg-emerald-100 text-emerald-800 hover:bg-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300",
-                  )}
-                  {btn(
-                    "deny",
-                    "Deny",
-                    "bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400",
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        }
-
-        const summary = affectedSummary(tc.affected) ?? (tc.status === "done" ? tc.result : undefined);
-        const node = tc.affected?.createdNodeIds?.[0];
-        // Jump-to-change deep link: open the affected page (and the changed
-        // block, if any), keeping this conversation open (#32).
-        const href = tc.affected?.pageId !== undefined
-          ? `/workspace/${tc.affected.pageId}?conversation=${conversationId}${node !== undefined ? `&node=${node}` : ""}`
-          : null;
-        return (
-          <div key={i} className="flex items-center gap-1.5 text-xs text-neutral-500 dark:text-neutral-400">
-            {tc.status === "executing" ? (
-              <span className="w-3 h-3 rounded-full border-2 border-violet-400 border-t-transparent animate-spin shrink-0" />
-            ) : tc.status === "done" ? (
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-green-500 shrink-0">
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-            ) : (
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-red-500 shrink-0">
-                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
+              {live}
+            </span>
+          )}
+        </div>
+        {command && (
+          <code className="mt-1 block break-all font-mono text-[11px] text-neutral-700 dark:text-neutral-300">
+            $ {command}
+          </code>
+        )}
+        {awaiting && match && (
+          <div className="mt-1.5 flex gap-1.5">
+            {btn("allow", "Allow once", "bg-emerald-600 text-white hover:bg-emerald-700")}
+            {btn(
+              "always",
+              "Always allow",
+              "bg-emerald-100 text-emerald-800 hover:bg-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300",
             )}
-            <span className="font-medium">{tc.name.replace(/_/g, " ")}</span>
-            {href ? (
-              <button
-                type="button"
-                onClick={() => router.push(href)}
-                className="text-violet-500 hover:text-violet-600 hover:underline truncate max-w-[160px]"
-                title={`Jump to change — ${summary ?? "open page"}`}
-              >
-                → {summary ?? "open page"}
-              </button>
-            ) : (
-              summary && (
-                <span className="text-neutral-400 truncate max-w-[160px]" title={summary}>
-                  — {summary}
-                </span>
-              )
+            {btn(
+              "deny",
+              "Deny",
+              "bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400",
             )}
           </div>
-        );
+        )}
+      </div>
+    );
+  }
+
+  const summary = affectedSummary(tc.affected) ?? (tc.status === "done" ? tc.result : undefined);
+  const node = tc.affected?.createdNodeIds?.[0];
+  // Jump-to-change deep link: open the affected page (and the changed
+  // block, if any), keeping this conversation open (#32).
+  const href = tc.affected?.pageId !== undefined
+    ? `/workspace/${tc.affected.pageId}?conversation=${conversationId}${node !== undefined ? `&node=${node}` : ""}`
+    : null;
+  return (
+    <div className="flex items-center gap-1.5 text-xs text-neutral-500 dark:text-neutral-400">
+      {tc.status === "executing" ? (
+        <span className="w-3 h-3 rounded-full border-2 border-violet-400 border-t-transparent animate-spin shrink-0" />
+      ) : tc.status === "done" ? (
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-green-500 shrink-0">
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+      ) : (
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-red-500 shrink-0">
+          <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+      )}
+      <span className="font-medium">{tc.name.replace(/_/g, " ")}</span>
+      {href ? (
+        <button
+          type="button"
+          onClick={() => router.push(href)}
+          className="text-violet-500 hover:text-violet-600 hover:underline truncate max-w-[160px]"
+          title={`Jump to change — ${summary ?? "open page"}`}
+        >
+          → {summary ?? "open page"}
+        </button>
+      ) : (
+        summary && (
+          <span className="text-neutral-400 truncate max-w-[160px]" title={summary}>
+            — {summary}
+          </span>
+        )
+      )}
+    </div>
+  );
+}
+
+/** Batched tool-call list (used when a message has no render timeline). */
+function ToolCallsDisplay({
+  toolCallsJson,
+  conversationId,
+}: {
+  toolCallsJson: string;
+  conversationId: bigint;
+}) {
+  let calls: ToolCallInfo[] = [];
+  try {
+    calls = JSON.parse(toolCallsJson);
+  } catch {
+    return null;
+  }
+  if (calls.length === 0) return null;
+  return (
+    <div className="mt-1.5 mb-1.5 space-y-1">
+      {calls.map((tc, i) => (
+        <ToolCallItem key={i} tc={tc} conversationId={conversationId} />
+      ))}
+    </div>
+  );
+}
+
+type TimelineBlock = { t: "text"; text: string } | { t: "tool"; id: string };
+
+/** Interleaved render of a turn: text segments and tool cards in the order they
+ * happened (the worker's `timeline_json`). Tool blocks are resolved to their
+ * full call (name/status/output) by id from `toolCallsJson`. */
+function TimelineDisplay({
+  blocks,
+  toolCallsJson,
+  conversationId,
+  streaming,
+}: {
+  blocks: TimelineBlock[];
+  toolCallsJson: string | undefined;
+  conversationId: bigint;
+  streaming: boolean;
+}) {
+  const byId = useMemo(() => {
+    let calls: ToolCallInfo[] = [];
+    try {
+      calls = toolCallsJson ? JSON.parse(toolCallsJson) : [];
+    } catch {
+      calls = [];
+    }
+    const map = new Map<string, ToolCallInfo>();
+    for (const c of calls) if (c.id) map.set(c.id, c);
+    return map;
+  }, [toolCallsJson]);
+
+  return (
+    <div className="mt-1 space-y-1.5">
+      {blocks.map((b, i) => {
+        if (b.t === "text") {
+          return b.text ? (
+            <div
+              key={i}
+              className="ai-message-md text-sm leading-relaxed prose prose-sm prose-neutral dark:prose-invert max-w-none"
+            >
+              <Markdown>{b.text}</Markdown>
+            </div>
+          ) : null;
+        }
+        const tc = byId.get(b.id);
+        return tc ? <ToolCallItem key={i} tc={tc} conversationId={conversationId} /> : null;
       })}
+      {streaming && <span className="animate-pulse">|</span>}
     </div>
   );
 }
@@ -453,6 +513,20 @@ function AiMessageContent({ msg, aiName }: { msg: ConversationMessageRow; aiName
   const thinking = msg.thinking;
   const toolCallsJson = msg.toolCallsJson;
 
+  // Render timeline (text segments interleaved with tool cards in order). When
+  // present it supersedes the separate tool-list + content blocks; falls back to
+  // the legacy layout for messages without one (pre-timeline rows, or a parse
+  // failure).
+  const timelineBlocks = useMemo<TimelineBlock[] | null>(() => {
+    if (!msg.timelineJson) return null;
+    try {
+      const parsed = JSON.parse(msg.timelineJson);
+      return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
+    } catch {
+      return null;
+    }
+  }, [msg.timelineJson]);
+
   return (
     <>
       {/* Thinking block */}
@@ -463,25 +537,36 @@ function AiMessageContent({ msg, aiName }: { msg: ConversationMessageRow; aiName
         />
       )}
 
-      {/* Tool calls */}
-      {toolCallsJson && (
-        <ToolCallsDisplay toolCallsJson={toolCallsJson} conversationId={msg.conversationId} />
+      {timelineBlocks ? (
+        <TimelineDisplay
+          blocks={timelineBlocks}
+          toolCallsJson={toolCallsJson}
+          conversationId={msg.conversationId}
+          streaming={status === "Streaming"}
+        />
+      ) : (
+        <>
+          {/* Tool calls */}
+          {toolCallsJson && (
+            <ToolCallsDisplay toolCallsJson={toolCallsJson} conversationId={msg.conversationId} />
+          )}
+
+          {/* Message content */}
+          {msg.content && (
+            <div className="ai-message-md text-sm leading-relaxed prose prose-sm prose-neutral dark:prose-invert max-w-none">
+              <Markdown>{msg.content}</Markdown>
+              {status === "Streaming" && <span className="animate-pulse">|</span>}
+            </div>
+          )}
+        </>
       )}
 
       {/* Thinking indicator (no thinking text yet) */}
-      {status === "Thinking" && !thinking && !msg.content && (
+      {status === "Thinking" && !thinking && !msg.content && !timelineBlocks && (
         <div className="flex items-center gap-1.5 py-1">
           <span className="w-1.5 h-1.5 rounded-full bg-violet-400 dark:bg-violet-500 animate-bounce [animation-delay:0ms]" />
           <span className="w-1.5 h-1.5 rounded-full bg-violet-400 dark:bg-violet-500 animate-bounce [animation-delay:150ms]" />
           <span className="w-1.5 h-1.5 rounded-full bg-violet-400 dark:bg-violet-500 animate-bounce [animation-delay:300ms]" />
-        </div>
-      )}
-
-      {/* Message content */}
-      {msg.content && (
-        <div className="ai-message-md text-sm leading-relaxed prose prose-sm prose-neutral dark:prose-invert max-w-none">
-          <Markdown>{msg.content}</Markdown>
-          {status === "Streaming" && <span className="animate-pulse">|</span>}
         </div>
       )}
 
@@ -854,6 +939,16 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
         lastMessage.status?.tag !== "Complete" &&
         lastMessage.status?.tag !== "Error"));
 
+  // Id of the AI turn currently in flight (non-terminal AI message), if any.
+  // A human message with a higher id arrived mid-turn and is therefore queued:
+  // the worker defers it and picks it up when this turn finishes.
+  const inFlightAiMsg = [...messages].reverse().find((m) => {
+    const sid = m.sender.tag === "User" ? m.sender.value : undefined;
+    const isAi = sid != null && aiIdentityHexes.has(sid.toHexString());
+    return isAi && m.status?.tag !== "Complete" && m.status?.tag !== "Error";
+  });
+  const inFlightAiMsgId = inFlightAiMsg?.id;
+
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages.length, isAiActive, lastMessage?.content, lastMessage?.thinking, lastMessage?.status?.tag]);
@@ -1039,7 +1134,13 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
             <ConversationModelSwitcher conversation={conversation} aiUser={aiUser} />
           )}
         </div>
-        {isActive && (
+        {isActive && isAiActive && (
+          <span className="flex items-center gap-1.5 shrink-0" title={`${aiName} is working`}>
+            <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+            <span className="text-xs text-amber-600 dark:text-amber-400">Working…</span>
+          </span>
+        )}
+        {isActive && !isAiActive && (
           <span className="w-2 h-2 rounded-full bg-green-500 shrink-0" title="Active" />
         )}
         {!isActive && (
@@ -1065,6 +1166,8 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
             isHuman &&
             identity &&
             senderIdentity!.toHexString() === identity.toHexString();
+          const isQueued =
+            isHuman && inFlightAiMsgId != null && msg.id > inFlightAiMsgId;
 
           return (
             <div key={String(msg.id)} className={`flex ${isMe ? "justify-end" : "justify-start"}`}>
@@ -1089,6 +1192,12 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
                     />
                     {msg.content && (
                       <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                    )}
+                    {isQueued && (
+                      <span className="mt-1 flex items-center gap-1 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                        Queued · {aiName} will pick this up when the current turn finishes
+                      </span>
                     )}
                   </>
                 ) : (
@@ -1162,7 +1271,11 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
             </button>
           </div>
           <div className="flex items-center justify-between mt-2">
-            <span className="text-xs text-neutral-400">↵ send · ⇧↵ newline · drop images or pages</span>
+            <span className="text-xs text-neutral-400">
+              {isAiActive
+                ? `${aiName} is working — new messages queue until the turn finishes`
+                : "↵ send · ⇧↵ newline · drop images or pages"}
+            </span>
             <div className="flex items-center gap-3">
               <HandoffPanel
                 conversation={conversation}
