@@ -81,16 +81,20 @@ pub struct OrchaJob {
     /// "executing" | "complete" | "failed"
     pub status: String,
     pub created_at: Timestamp,
-    // New fields are appended below for additive schema migration — SpacetimeDB
-    // AutoMigrate only accepts columns added at the end of the struct.
+    // New fields are appended below with a `#[default(...)]` annotation —
+    // SpacetimeDB AutoMigrate requires a default on any added column so it can
+    // backfill existing rows; without it, publish refuses with
+    // "requires a default value annotation" and forces a manual migration.
     /// AI user whose credentials should be used for inference, passed by the
     /// caller of `create_job` (None for human-initiated jobs → default provider).
+    #[default(None::<u64>)]
     pub ai_user_id: Option<u64>,
     /// Capability tier the delegating agent chose for this job's inference
     /// (e.g. "fast"|"balanced"|"flagship"|"frontier"), resolved to a concrete
     /// model within the AI user's provider family at run time. None → the AI
     /// user's configured default model. Stored as a string so adding a tier is
     /// a data change.
+    #[default(None::<String>)]
     pub tier: Option<String>,
 }
 
