@@ -29,10 +29,10 @@ export default __t.row({
   },
   thinking: __t.option(__t.string()),
   toolCallsJson: __t.option(__t.string()).name("tool_calls_json"),
-  timelineJson: __t.option(__t.string()).name("timeline_json"),
   inputTokens: __t.u32().name("input_tokens"),
   outputTokens: __t.u32().name("output_tokens"),
   cacheCreationInputTokens: __t.u32().name("cache_creation_input_tokens"),
   cacheReadInputTokens: __t.u32().name("cache_read_input_tokens"),
   linkedConversationId: __t.option(__t.u64()).name("linked_conversation_id"),
+  timelineJson: __t.option(__t.string()).name("timeline_json"),
 });

@@ -257,13 +257,6 @@ pub struct ConversationMessage {
     /// Round-trippable JSON array of tool_use / tool_result content blocks.
     #[default(None::<String>)]
     pub tool_calls_json: Option<String>,
-    /// Render-only ordered timeline of the assistant turn: a JSON array of
-    /// `{"t":"text","text":...}` and `{"t":"tool","id":...}` blocks, in the order
-    /// they occurred, so the client can interleave tool cards between text
-    /// segments instead of stacking all tools at the top. Ignored by session
-    /// reconstruction (which uses `content` + `tool_calls_json`); purely cosmetic.
-    #[default(None::<String>)]
-    pub timeline_json: Option<String>,
     /// Anthropic input tokens consumed by this assistant turn (0 for human/system).
     #[default(0u32)]
     pub input_tokens: u32,
@@ -281,6 +274,14 @@ pub struct ConversationMessage {
     /// in the thread view.
     #[default(None::<u64>)]
     pub linked_conversation_id: Option<u64>,
+    /// Render-only ordered timeline of the assistant turn: a JSON array of
+    /// `{"t":"text","text":...}` and `{"t":"tool","id":...}` blocks, in the order
+    /// they occurred, so the client can interleave tool cards between text
+    /// segments instead of stacking all tools at the top. Ignored by session
+    /// reconstruction (which uses `content` + `tool_calls_json`); purely cosmetic.
+    /// MUST stay last: AutoMigrate only supports columns appended at the end.
+    #[default(None::<String>)]
+    pub timeline_json: Option<String>,
 }
 
 /// What a `ConversationAttachment` carries.
