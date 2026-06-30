@@ -66,6 +66,15 @@ export interface DatabaseWorkerOptions {
   dbName: string;
   agentId: string;
   token?: string;
+  /**
+   * When true, this worker does NOT self-discover AI users from its own
+   * `ai_user_config` view — an external authority (pear-cloud's manager, via
+   * {@link DatabaseWorker.reconcileAiUsers}) is the sole driver of the AI-user
+   * worker set. Leaving both drivers on lets them diverge and churn workers
+   * (each tears down what the other spawns). Defaults to false (self-hosted/OSS
+   * single-process deployments, where self-discovery is the only driver).
+   */
+  externalAiUserDiscovery?: boolean;
 }
 
 /** AI user identity description supplied by the host (lifecycle in pear-cloud). */
@@ -124,12 +133,15 @@ export class DatabaseWorker {
   readonly dbName: string;
   readonly agentId: string;
   private token: string | undefined;
+  /** See {@link DatabaseWorkerOptions.externalAiUserDiscovery}. */
+  private readonly externalAiUserDiscovery: boolean;
 
   constructor(opts: DatabaseWorkerOptions) {
     this.uri = opts.uri;
     this.dbName = opts.dbName;
     this.agentId = opts.agentId;
     this.token = opts.token;
+    this.externalAiUserDiscovery = opts.externalAiUserDiscovery ?? false;
   }
 
   private clearReconnectTimer(): void {
@@ -256,6 +268,14 @@ export class DatabaseWorker {
       }
     }
 
+    // Actually close the admin WebSocket. Nulling the ref alone leaves the
+    // socket open with its orcha_task / ai_user_config handlers live, so a
+    // "stopped" worker keeps reacting to row events.
+    try {
+      this.conn?.disconnect();
+    } catch (e) {
+      console.warn(`[worker:${this.dbName}] disconnect failed:`, e);
+    }
     this.conn = null;
     console.log(`[worker:${this.dbName}] Stopped`);
   }
@@ -369,17 +389,24 @@ export class DatabaseWorker {
     // appears, is rotated, or is cleared. Uses `as any` for the table accessor
     // because the AI-user tables are not part of the strongly-typed Orcha set
     // this worker was built around.
-    const aiCfg = (conn.db as unknown as {
-      ai_user_config?: {
-        onInsert(cb: () => void): void;
-        onUpdate(cb: () => void): void;
-        onDelete(cb: () => void): void;
-      };
-    }).ai_user_config;
-    if (aiCfg) {
-      aiCfg.onInsert(() => this.scheduleAiUserReconcile(conn));
-      aiCfg.onUpdate(() => this.scheduleAiUserReconcile(conn));
-      aiCfg.onDelete(() => this.scheduleAiUserReconcile(conn));
+    //
+    // Skipped entirely when an external authority drives reconciliation
+    // (pear-cloud's manager). Running both drivers off divergent token sources
+    // makes them fight — each tears down the AI-user worker the other just
+    // spawned — which churns the connection (and its bridge registration).
+    if (!this.externalAiUserDiscovery) {
+      const aiCfg = (conn.db as unknown as {
+        ai_user_config?: {
+          onInsert(cb: () => void): void;
+          onUpdate(cb: () => void): void;
+          onDelete(cb: () => void): void;
+        };
+      }).ai_user_config;
+      if (aiCfg) {
+        aiCfg.onInsert(() => this.scheduleAiUserReconcile(conn));
+        aiCfg.onUpdate(() => this.scheduleAiUserReconcile(conn));
+        aiCfg.onDelete(() => this.scheduleAiUserReconcile(conn));
+      }
     }
 
     conn.db.orcha_task.onUpdate(
@@ -413,7 +440,11 @@ export class DatabaseWorker {
       }
 
       // Spawn AI-user workers for any rows that already carry a worker_token.
-      this.scheduleAiUserReconcile(conn);
+      // Only when self-discovery is the authority; otherwise the external
+      // manager's poll is what populates the AI-user worker set.
+      if (!this.externalAiUserDiscovery) {
+        this.scheduleAiUserReconcile(conn);
+      }
     });
   }
 

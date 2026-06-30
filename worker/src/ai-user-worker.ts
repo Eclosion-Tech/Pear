@@ -183,6 +183,16 @@ export class AiUserWorker {
     this.clearReconnectTimer();
     clearProviderCache();
     if (this.aiUserIdentity) unregisterBridgeSql(this.aiUserIdentity.toHexString());
+    // Actually close the socket. Without this, nulling `conn` leaves the
+    // AI-user WebSocket open with its conversation handlers registered — a
+    // "stopped" worker keeps serving turns as the AI user, and every
+    // reconcile churn cycle leaks another live connection. `stopped` is
+    // already true, so the onDisconnect handler won't schedule a reconnect.
+    try {
+      this.conn?.disconnect();
+    } catch (e) {
+      console.warn(`${this.logTag} disconnect failed:`, e);
+    }
     this.conn = null;
     this.aiUserIdentity = null;
     console.log(`${this.logTag} stopped`);
