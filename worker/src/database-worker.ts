@@ -32,6 +32,8 @@ const CAPABILITIES = [
   "tool-bash",
 ];
 const MAX_ORCHESTRATE_DEPTH = 3;
+/** How often the worker pings `heartbeat_agent` so the UI knows it's alive. */
+const HEARTBEAT_INTERVAL_MS = 30_000;
 
 function parseIntervalEnv(key: string): number | undefined {
   const raw = process.env[key];
@@ -166,6 +168,9 @@ export class DatabaseWorker {
   /** Debounce for AI-user discovery so a burst of row events coalesces. */
   private aiUserReconcileTimer: ReturnType<typeof setTimeout> | null = null;
 
+  /** Periodic liveness ping so the UI can tell this worker is alive. */
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
   readonly uri: string;
   readonly dbName: string;
   readonly agentId: string;
@@ -185,6 +190,28 @@ export class DatabaseWorker {
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+  }
+
+  /** Start (or restart) the periodic liveness ping to `heartbeat_agent`. */
+  private startHeartbeat(conn: DbConnection): void {
+    this.stopHeartbeat();
+    const ping = () => {
+      if (this.stopped) return;
+      void conn.reducers
+        .heartbeatAgent({ agentId: this.agentId })
+        .catch((e: unknown) =>
+          console.warn(`[worker:${this.dbName}] heartbeat_agent:`, e),
+        );
+    };
+    ping();
+    this.heartbeatTimer = setInterval(ping, HEARTBEAT_INTERVAL_MS);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer !== null) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
     }
   }
 
@@ -248,6 +275,7 @@ export class DatabaseWorker {
       })
       .onDisconnect(() => {
         console.log(`[worker:${this.dbName}] Disconnected`);
+        this.stopHeartbeat();
         if (this.sensors) {
           this.sensors.stop();
           this.sensors = null;
@@ -269,6 +297,7 @@ export class DatabaseWorker {
   async stop(): Promise<void> {
     this.stopped = true;
     this.clearReconnectTimer();
+    this.stopHeartbeat();
     if (this.aiUserReconcileTimer !== null) {
       clearTimeout(this.aiUserReconcileTimer);
       this.aiUserReconcileTimer = null;
@@ -471,6 +500,8 @@ export class DatabaseWorker {
         .catch((e: unknown) =>
           console.warn(`[worker:${this.dbName}] register_agent:`, e),
         );
+
+      this.startHeartbeat(conn);
 
       for (const task of conn.db.orcha_task.iter() as Iterable<TaskRow>) {
         this.checkAndClaim(conn, task);

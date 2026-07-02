@@ -95,6 +95,7 @@ import FindOrCreateDmReducer from "./find_or_create_dm_reducer";
 import GrantAutoApplyReducer from "./grant_auto_apply_reducer";
 import GrantBridgeDeviceReducer from "./grant_bridge_device_reducer";
 import GrantExtensionPermissionReducer from "./grant_extension_permission_reducer";
+import HeartbeatAgentReducer from "./heartbeat_agent_reducer";
 import ImportNotionReducer from "./import_notion_reducer";
 import ImportPearSnapshotV1Reducer from "./import_pear_snapshot_v_1_reducer";
 import InsertComponentReducer from "./insert_component_reducer";
@@ -1211,6 +1212,7 @@ const reducersSchema = __reducers(
   __reducerSchema("grant_auto_apply", GrantAutoApplyReducer),
   __reducerSchema("grant_bridge_device", GrantBridgeDeviceReducer),
   __reducerSchema("grant_extension_permission", GrantExtensionPermissionReducer),
+  __reducerSchema("heartbeat_agent", HeartbeatAgentReducer),
   __reducerSchema("import_notion", ImportNotionReducer),
   __reducerSchema("import_pear_snapshot_v_1", ImportPearSnapshotV1Reducer),
   __reducerSchema("insert_component", InsertComponentReducer),

@@ -14,4 +14,5 @@ export default __t.row({
   id: __t.string().primaryKey(),
   capabilities: __t.array(__t.string()),
   status: __t.string(),
+  lastHeartbeatAt: __t.option(__t.timestamp()).name("last_heartbeat_at"),
 });

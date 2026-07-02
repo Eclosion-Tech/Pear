@@ -699,6 +699,8 @@ export function PearEditor({
         // Unique token for read-back correlation (see OrchaJob::nonce). The
         // editor doesn't read the job back, but the reducer now requires it.
         nonce: crypto.randomUUID(),
+        // Top-level job started from the editor — no parent in the spawn tree.
+        parentJobId: undefined,
         // Always start with an orchestrate task — the worker decomposes the
         // prompt into a proper task graph and writes the subtasks back via
         // add_tasks_to_job before marking itself done.

@@ -485,6 +485,7 @@ export const BridgeCommand = __t.object("BridgeCommand", {
   confirmedBy: __t.option(__t.identity()),
   deviceIdentity: __t.identity(),
   ownerIdentity: __t.identity(),
+  nonce: __t.option(__t.string()),
 });
 export type BridgeCommand = __Infer<typeof BridgeCommand>;
 
@@ -948,6 +949,7 @@ export const OrchaAgent = __t.object("OrchaAgent", {
   id: __t.string(),
   capabilities: __t.array(__t.string()),
   status: __t.string(),
+  lastHeartbeatAt: __t.option(__t.timestamp()),
 });
 export type OrchaAgent = __Infer<typeof OrchaAgent>;
 
@@ -966,6 +968,10 @@ export const OrchaJob = __t.object("OrchaJob", {
   createdAt: __t.timestamp(),
   aiUserId: __t.option(__t.u64()),
   tier: __t.option(__t.string()),
+  nonce: __t.option(__t.string()),
+  parentJobId: __t.option(__t.u64()),
+  spawnDepth: __t.u32(),
+  spawningPrincipal: __t.identity(),
 });
 export type OrchaJob = __Infer<typeof OrchaJob>;
 

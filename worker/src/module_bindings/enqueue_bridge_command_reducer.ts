@@ -17,4 +17,5 @@ export default {
   conversationId: __t.u64(),
   jobId: __t.option(__t.u64()),
   taskId: __t.option(__t.u64()),
+  nonce: __t.string(),
 };

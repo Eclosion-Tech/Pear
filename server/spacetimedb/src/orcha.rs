@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use serde::Deserialize;
-use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
+use spacetimedb::{reducer, table, Identity, ReducerContext, ScheduleAt, Table, Timestamp};
 
 use crate::ai::ai_user_config;
 use crate::conversations::{
@@ -13,6 +13,10 @@ use crate::conversations::{
     ConversationMessage, ConversationStatus, MessageSender, MessageStatus,
 };
 use crate::id_counters::alloc_id;
+
+/// Max delegation depth (job spawning a job via `delegate`). A top-level job is
+/// depth 0; `create_job` refuses anything deeper than this.
+const MAX_SPAWN_DEPTH: u32 = 3;
 
 pub(crate) fn next_orcha_job_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "orcha_job", || {
@@ -104,11 +108,24 @@ pub struct OrchaJob {
     /// back exactly the job it created (match on `nonce`) instead of on
     /// `(user_id, prompt)` — two identical in-flight delegations no longer
     /// cross-match. Empty for legacy rows / callers that don't supply one.
+    #[default(None::<String>)]
+    pub nonce: Option<String>,
+    /// The job that spawned this one via `delegate` (`None` for a top-level job
+    /// from chat or the editor). With `spawn_depth`, makes the delegation tree
+    /// reconstructable.
+    #[default(None::<u64>)]
+    pub parent_job_id: Option<u64>,
+    /// Delegation depth: 0 for a top-level job, parent's depth + 1 for a spawned
+    /// one. `create_job` refuses to create a job past `MAX_SPAWN_DEPTH`.
+    #[default(0u32)]
+    pub spawn_depth: u32,
+    /// The principal that requested this job (`ctx.sender()` at create time) —
+    /// the human for editor jobs, the AI user for delegated ones.
     ///
     /// Must remain last for schema migration (STDB only allows additive changes
     /// at the end of a struct).
-    #[default(None::<String>)]
-    pub nonce: Option<String>,
+    #[default(Identity::ZERO)]
+    pub spawning_principal: Identity,
 }
 
 /// Atomic unit of work within a job. Supports DAG dependencies via depends_on.
@@ -147,6 +164,14 @@ pub struct OrchaAgent {
     pub capabilities: Vec<String>,
     /// "idle" | "busy" | "offline"
     pub status: String,
+    /// Last time the worker checked in (via `register_agent` on connect, then
+    /// `heartbeat_agent` on an interval). Lets the UI show whether the workspace's
+    /// worker is alive; `None` for agents that predate this column.
+    ///
+    /// Must remain last for schema migration (STDB only allows additive changes
+    /// at the end of a struct).
+    #[default(None::<Timestamp>)]
+    pub last_heartbeat_at: Option<Timestamp>,
 }
 
 /// Key/value handoff between workers on the same job.
@@ -374,8 +399,32 @@ pub fn create_job(
     // Client-generated unique token so the caller can read back exactly this job
     // (see `OrchaJob::nonce`). Pass "" if you don't need read-back correlation.
     nonce: String,
+    // The job this one is delegated from (`None` for a top-level chat/editor
+    // job). Drives `spawn_depth` and the delegation-tree reconstruction.
+    parent_job_id: Option<u64>,
     task_graph_json: String,
 ) -> Result<(), String> {
+    // Delegation-depth guard: derive this job's depth from its parent and refuse
+    // to spawn past the max, so a runaway delegate->delegate chain can't fan out
+    // unbounded across jobs (a different axis from the within-job orchestrate
+    // guard). Top-level jobs (no parent) are depth 0.
+    let spawn_depth = match parent_job_id {
+        Some(pid) => ctx
+            .db
+            .orcha_job()
+            .id()
+            .find(pid)
+            .map(|p| p.spawn_depth + 1)
+            .unwrap_or(0),
+        None => 0,
+    };
+    if spawn_depth > MAX_SPAWN_DEPTH {
+        return Err(format!(
+            "delegation depth {} exceeds the maximum of {}; refusing to spawn a deeper job",
+            spawn_depth, MAX_SPAWN_DEPTH
+        ));
+    }
+
     let specs: Vec<TaskSpec> = serde_json::from_str(&task_graph_json)
         .map_err(|e| format!("Invalid task graph JSON: {}", e))?;
 
@@ -394,6 +443,9 @@ pub fn create_job(
         created_at: ctx.timestamp,
         tier,
         nonce: if nonce.is_empty() { None } else { Some(nonce) },
+        parent_job_id,
+        spawn_depth,
+        spawning_principal: ctx.sender(),
     });
     let job_id = job.id;
 
@@ -451,6 +503,7 @@ pub fn register_agent(
         ctx.db.orcha_agent().id().update(OrchaAgent {
             capabilities,
             status: "idle".to_string(),
+            last_heartbeat_at: Some(ctx.timestamp),
             ..existing
         });
     } else {
@@ -458,6 +511,21 @@ pub fn register_agent(
             id: agent_id,
             capabilities,
             status: "idle".to_string(),
+            last_heartbeat_at: Some(ctx.timestamp),
+        });
+    }
+    Ok(())
+}
+
+/// Lightweight liveness ping — the worker calls this on an interval so the UI
+/// can tell whether the workspace's worker is still alive. No-op if the agent
+/// hasn't registered yet (register_agent will stamp it on the next connect).
+#[reducer]
+pub fn heartbeat_agent(ctx: &ReducerContext, agent_id: String) -> Result<(), String> {
+    if let Some(agent) = ctx.db.orcha_agent().id().find(agent_id) {
+        ctx.db.orcha_agent().id().update(OrchaAgent {
+            last_heartbeat_at: Some(ctx.timestamp),
+            ..agent
         });
     }
     Ok(())

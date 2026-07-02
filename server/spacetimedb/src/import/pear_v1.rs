@@ -1127,6 +1127,7 @@ fn decode_orcha_agent(v: &Value) -> Result<OrchaAgent, String> {
             })
             .collect::<Result<Vec<_>, String>>()?,
         status: string_at(m, "status")?,
+        last_heartbeat_at: None,
     })
 }
 
@@ -1142,6 +1143,9 @@ fn decode_orcha_job(v: &Value) -> Result<OrchaJob, String> {
         created_at: decode_timestamp(m.get("createdAt").ok_or("createdAt")?)?,
         tier: opt_string_at(m, "tier")?,
         nonce: opt_string_at(m, "nonce")?,
+        parent_job_id: opt_u64_at(m, "parentJobId")?,
+        spawn_depth: u64_at(m, "spawnDepth").unwrap_or(0) as u32,
+        spawning_principal: spacetimedb::Identity::ZERO,
     })
 }
 

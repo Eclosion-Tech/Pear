@@ -19,4 +19,8 @@ export default __t.row({
   createdAt: __t.timestamp().name("created_at"),
   aiUserId: __t.option(__t.u64()).name("ai_user_id"),
   tier: __t.option(__t.string()),
+  nonce: __t.option(__t.string()),
+  parentJobId: __t.option(__t.u64()).name("parent_job_id"),
+  spawnDepth: __t.u32().name("spawn_depth"),
+  spawningPrincipal: __t.identity().name("spawning_principal"),
 });

@@ -35,6 +35,33 @@ export function useOrchaAgents() {
   return agents;
 }
 
+/** Worker heartbeats older than this read as stale (worker likely down). The
+ * worker pings every 30s, so ~3 missed beats. */
+const WORKER_STALE_MS = 90_000;
+
+/**
+ * Liveness of the workspace's orcha worker, from the freshest `last_heartbeat_at`
+ * across registered agents. `alive` = a heartbeat within WORKER_STALE_MS;
+ * `unknown` = no agent/heartbeat seen yet (older workers, or none connected).
+ */
+export function useWorkerLiveness(): {
+  status: "alive" | "stale" | "unknown";
+  lastHeartbeatMs: number | null;
+} {
+  const agents = useOrchaAgents();
+  let latest = 0;
+  for (const a of agents) {
+    const hb = a.lastHeartbeatAt?.microsSinceUnixEpoch;
+    if (hb !== undefined && hb !== null) {
+      const ms = Number(hb / 1000n);
+      if (ms > latest) latest = ms;
+    }
+  }
+  if (latest === 0) return { status: "unknown", lastHeartbeatMs: null };
+  const alive = Date.now() - latest < WORKER_STALE_MS;
+  return { status: alive ? "alive" : "stale", lastHeartbeatMs: latest };
+}
+
 export function useCreateJob() {
   return useReducer(reducers.createJob);
 }

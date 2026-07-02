@@ -11,11 +11,5 @@ import {
 } from "spacetimedb";
 
 export default {
-  deviceId: __t.u64(),
-  command: __t.string(),
-  cwd: __t.option(__t.string()),
-  conversationId: __t.u64(),
-  jobId: __t.option(__t.u64()),
-  taskId: __t.option(__t.u64()),
-  nonce: __t.string(),
+  agentId: __t.string(),
 };

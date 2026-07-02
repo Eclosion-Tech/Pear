@@ -22,6 +22,7 @@ import {
   useUpdateAiUserSystemPrompt,
   type AiUserProfileRow,
 } from "@/src/hooks/useAiUsers";
+import { useWorkerLiveness } from "@/src/hooks/useOrcha";
 import {
   hostCreateAiUser,
   hostDeleteAiUser,
@@ -806,6 +807,34 @@ function RoutinesSection({
   );
 }
 
+/** Small pill showing whether the workspace's AI worker is alive, from its
+ * heartbeat. AI users can't respond if the worker is down, so this tells a
+ * human why an assistant might be silent. */
+function WorkerStatusBadge() {
+  const { status } = useWorkerLiveness();
+  if (status === "unknown") return null;
+  const alive = status === "alive";
+  return (
+    <span
+      title={
+        alive
+          ? "The AI worker is connected and sending heartbeats."
+          : "No recent heartbeat — the AI worker may be down; assistants won't respond until it reconnects."
+      }
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
+        alive
+          ? "bg-green-100 text-green-700 dark:bg-green-950/50 dark:text-green-400"
+          : "bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-400"
+      }`}
+    >
+      <span
+        className={`h-1.5 w-1.5 rounded-full ${alive ? "bg-green-500" : "bg-amber-500"}`}
+      />
+      {alive ? "Worker online" : "Worker offline"}
+    </span>
+  );
+}
+
 /**
  * Workspace settings: per–AI-user profile, system prompt, and private memory subtree.
  */
@@ -872,9 +901,12 @@ export function AiUsersSettings() {
   return (
     <section className="mb-10">
       <div className="flex items-center justify-between gap-3 mb-4">
-        <h2 className="text-sm font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide">
-          AI users
-        </h2>
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide">
+            AI users
+          </h2>
+          <WorkerStatusBadge />
+        </div>
         {isActive && !addOpen && (
           <button
             type="button"

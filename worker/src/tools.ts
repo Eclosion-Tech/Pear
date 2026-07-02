@@ -877,6 +877,50 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
     },
   },
   {
+    name: "delete_page",
+    description:
+      "Move a page to the trash (soft delete — reversible with restore_page). The page and its " +
+      "children stop appearing in the workspace but are not permanently erased. Use only when the user " +
+      "clearly asked to delete/remove a page; confirm the target id first.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        page_id: { type: "number", description: "The page to trash." },
+      },
+      required: ["page_id"],
+    },
+  },
+  {
+    name: "restore_page",
+    description:
+      "Restore a page previously moved to the trash (undo delete_page).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        page_id: { type: "number", description: "The trashed page to restore." },
+      },
+      required: ["page_id"],
+    },
+  },
+  {
+    name: "move_page",
+    description:
+      "Move a page to a new parent (re-parent it in the workspace tree). Pass new_parent_id = 0 (or " +
+      "omit it) to move the page to the workspace root. Requires write access on both the page and the " +
+      "destination parent.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        page_id: { type: "number", description: "The page to move." },
+        new_parent_id: {
+          type: "number",
+          description: "Destination parent page id; 0 or omitted = workspace root.",
+        },
+      },
+      required: ["page_id"],
+    },
+  },
+  {
     name: "delegate",
     description:
       "Delegate a complex, multi-step subtask to a background orchestration job (a 'subagent'). " +
@@ -1377,6 +1421,9 @@ function isPageWriteTool(toolName: string): boolean {
     "set_property_values",
     "update_page_content",
     "update_page_title",
+    "delete_page",
+    "restore_page",
+    "move_page",
   ].includes(toolName);
 }
 
@@ -2865,6 +2912,80 @@ export async function executeTool(
         });
       }
 
+      case "delete_page": {
+        const pageId = BigInt(input.page_id as number);
+        type PageRow = { id: bigint; title: string; deletedAt: unknown };
+        const before = [...(conn.db.page.iter() as Iterable<PageRow>)].find((p) => p.id === pageId);
+        if (!before) return JSON.stringify({ ok: false, error: "Page not found" });
+        await conn.reducers.deletePage({ pageId });
+        const gone = await waitFor(() => {
+          const row = [...(conn.db.page.iter() as Iterable<PageRow>)].find((p) => p.id === pageId);
+          return row?.deletedAt ? true : undefined;
+        });
+        if (!gone) {
+          return JSON.stringify({
+            ok: false,
+            page_id: Number(pageId),
+            error: "delete_page did not commit (page still shows as not deleted).",
+          });
+        }
+        return JSON.stringify({
+          ok: true,
+          page_id: Number(pageId),
+          title: before.title,
+          note: "Moved to trash. Reversible with restore_page.",
+        });
+      }
+
+      case "restore_page": {
+        const pageId = BigInt(input.page_id as number);
+        type PageRow = { id: bigint; title: string; deletedAt: unknown };
+        const before = [...(conn.db.page.iter() as Iterable<PageRow>)].find((p) => p.id === pageId);
+        if (!before) return JSON.stringify({ ok: false, error: "Page not found" });
+        await conn.reducers.restorePage({ pageId });
+        const back = await waitFor(() => {
+          const row = [...(conn.db.page.iter() as Iterable<PageRow>)].find((p) => p.id === pageId);
+          return row && !row.deletedAt ? true : undefined;
+        });
+        if (!back) {
+          return JSON.stringify({
+            ok: false,
+            page_id: Number(pageId),
+            error: "restore_page did not commit (page still shows as trashed).",
+          });
+        }
+        return JSON.stringify({ ok: true, page_id: Number(pageId), title: before.title });
+      }
+
+      case "move_page": {
+        const pageId = BigInt(input.page_id as number);
+        const rawParent = numericInputToBigInt(input.new_parent_id);
+        // 0 or omitted → workspace root (None).
+        const newParentId =
+          rawParent !== undefined && rawParent !== BigInt(0) ? rawParent : undefined;
+        type PageRow = { id: bigint; parentId: bigint | undefined; title: string };
+        const before = [...(conn.db.page.iter() as Iterable<PageRow>)].find((p) => p.id === pageId);
+        if (!before) return JSON.stringify({ ok: false, error: "Page not found" });
+        await conn.reducers.movePage({ pageId, newParentId, afterPageId: undefined });
+        const moved = await waitFor(() => {
+          const row = [...(conn.db.page.iter() as Iterable<PageRow>)].find((p) => p.id === pageId);
+          if (!row) return undefined;
+          return String(row.parentId ?? "") === String(newParentId ?? "") ? true : undefined;
+        });
+        if (!moved) {
+          return JSON.stringify({
+            ok: false,
+            page_id: Number(pageId),
+            error: "move_page did not commit (parent read-back mismatch).",
+          });
+        }
+        return JSON.stringify({
+          ok: true,
+          page_id: Number(pageId),
+          new_parent_id: newParentId !== undefined ? Number(newParentId) : null,
+        });
+      }
+
       case "get_context": {
         const key = input.key as string;
         const row = [...(conn.db.orcha_shared_context.iter() as Iterable<SharedContextRow>)].find(
@@ -2904,6 +3025,9 @@ export async function executeTool(
             // Optional capability tier the agent picked for this subagent.
             tier,
             nonce,
+            // If this delegate is itself running inside a job (nested subagent),
+            // that job is the parent — drives spawn_depth + the delegation tree.
+            parentJobId: jobId !== BigInt(0) ? jobId : undefined,
             taskGraphJson,
           });
         } catch (err) {

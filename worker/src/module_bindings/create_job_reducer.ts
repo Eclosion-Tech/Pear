@@ -16,5 +16,7 @@ export default {
   pageId: __t.option(__t.u64()),
   aiUserId: __t.option(__t.u64()),
   tier: __t.option(__t.string()),
+  nonce: __t.string(),
+  parentJobId: __t.option(__t.u64()),
   taskGraphJson: __t.string(),
 };
