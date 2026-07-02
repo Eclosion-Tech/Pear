@@ -147,22 +147,27 @@ function isFromOtherUser(
 }
 
 /**
- * True if `msg` is a server-posted job-completion trigger (see
- * `post_job_completion_trigger` in orcha.rs) — a `System("job_completion")`
- * message the worker must treat as a turn trigger even though it is not from
- * another user, so the AI verifies delegated work and reports the outcome.
+ * Server-posted `System(...)` messages the worker must treat as turn triggers
+ * even though they are not from another user: a delegated job finishing
+ * (`post_job_completion_trigger`) and a scheduled routine firing
+ * (`run_ai_user_routine`). Both are reconstructed as a user-role note so the AI
+ * runs the instruction and reports back.
  */
-function isJobCompletionTrigger(msg: ConversationMessageRow): boolean {
-  return msg.sender.tag === "System" && msg.sender.value === "job_completion";
+const SYSTEM_TRIGGER_TAGS = new Set(["job_completion", "routine"]);
+
+function isSystemTrigger(msg: ConversationMessageRow): boolean {
+  return (
+    msg.sender.tag === "System" && SYSTEM_TRIGGER_TAGS.has(String(msg.sender.value))
+  );
 }
 
 /** True if `msg` should wake the AI user for a turn: a message from another
- * user, or a job-completion trigger. */
+ * user, or a system trigger (job completion / routine). */
 function isTriggerMessage(
   msg: ConversationMessageRow,
   selfHex: string,
 ): boolean {
-  return isFromOtherUser(msg, selfHex) || isJobCompletionTrigger(msg);
+  return isFromOtherUser(msg, selfHex) || isSystemTrigger(msg);
 }
 
 /** Highest message id currently visible in `conversationId` (0 if none). Used
@@ -357,6 +362,7 @@ const READ_ONLY_TOOLS = new Set([
   "search_pages",
   "query_database",
   "check_job",
+  "list_sensor_findings",
   "fetch_url",
   "web_search",
   "read_memory",

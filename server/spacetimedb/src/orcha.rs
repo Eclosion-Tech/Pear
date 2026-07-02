@@ -751,8 +751,9 @@ fn month_to_date_tokens(ctx: &ReducerContext, ai_user_id: u64) -> u64 {
 }
 
 /// True if the AI user is at or over their hard monthly token cap. `None` cap
-/// (unlimited) or unknown user ⇒ never over. Shared with `claim_task` (#3).
-fn ai_user_at_hard_cap(ctx: &ReducerContext, ai_user_id: u64) -> bool {
+/// (unlimited) or unknown user ⇒ never over. Shared with `claim_task` (#3) and
+/// scheduled routines (which skip a run when the owning AI user is capped).
+pub(crate) fn ai_user_at_hard_cap(ctx: &ReducerContext, ai_user_id: u64) -> bool {
     let Some(cap) = ctx
         .db
         .ai_user_config()

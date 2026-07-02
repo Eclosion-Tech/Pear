@@ -964,6 +964,31 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
       required: ["page_id"],
     },
   },
+  {
+    name: "list_sensor_findings",
+    description:
+      "List the workspace's structural-sensor findings — background health checks over pages, schemas, " +
+      "and relations. Returns open (unresolved) findings by default with their sensor kind, code, severity, " +
+      "target, and message, most severe first. Use it to triage: fix trivial issues directly and propose the " +
+      "rest for human review. Read-only.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        limit: {
+          type: "number",
+          description: "Max findings to return (default 50, capped at 200).",
+        },
+        include_resolved: {
+          type: "boolean",
+          description: "Include already-resolved findings too (default false).",
+        },
+        sensor_kind: {
+          type: "string",
+          description: "Filter to a single sensor kind (e.g. \"orphan_detector\").",
+        },
+      },
+    },
+  },
 ];
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -2544,6 +2569,64 @@ export async function executeTool(
           `[tools] query_database: page ${Number(pageId)} → ${rows.length}/${totalRows} row(s), ${props.length} col(s)`,
         );
         return payload;
+      }
+
+      case "list_sensor_findings": {
+        type FindingRow = {
+          id: bigint;
+          sensorKind: string;
+          code: string;
+          targetKind: string;
+          targetId: bigint;
+          message: string;
+          severity: string;
+          resolvedAt?: unknown;
+        };
+        const table = (
+          conn.db as { structural_sensor_finding?: { iter(): Iterable<FindingRow> } }
+        ).structural_sensor_finding;
+        if (!table?.iter) {
+          return JSON.stringify({
+            ok: false,
+            error: "Structural sensor findings are not available in this workspace build.",
+          });
+        }
+        const includeResolved = input.include_resolved === true;
+        const sensorKind =
+          typeof input.sensor_kind === "string" && input.sensor_kind.trim()
+            ? input.sensor_kind.trim()
+            : undefined;
+        let limit = Number(input.limit);
+        if (!Number.isFinite(limit) || limit <= 0) limit = 50;
+        limit = Math.min(limit, 200);
+
+        const open = [...table.iter()].filter((f) => includeResolved || !f.resolvedAt);
+        const filtered = sensorKind ? open.filter((f) => f.sensorKind === sensorKind) : open;
+        // Most severe first (error > warn > info), then most-recent id.
+        const sevRank: Record<string, number> = { error: 0, warn: 1, info: 2 };
+        filtered.sort(
+          (a, b) =>
+            (sevRank[a.severity] ?? 3) - (sevRank[b.severity] ?? 3) || Number(b.id - a.id),
+        );
+        const findings = filtered.slice(0, limit).map((f) => ({
+          finding_id: Number(f.id),
+          sensor_kind: f.sensorKind,
+          code: f.code,
+          severity: f.severity,
+          target_kind: f.targetKind,
+          target_id: Number(f.targetId),
+          message: f.message,
+        }));
+        console.log(
+          `[tools] list_sensor_findings: ${findings.length}/${filtered.length} finding(s) (open=${open.length})`,
+        );
+        return JSON.stringify({
+          ok: true,
+          total_open: open.length,
+          returned: findings.length,
+          truncated: findings.length < filtered.length,
+          findings,
+        });
       }
 
       case "create_row": {

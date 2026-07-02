@@ -37,6 +37,7 @@ pub use crate::access_control::{
 };
 pub use crate::ai::evaluations::{ai_evaluation, AiEvaluation};
 pub use crate::ai::memory::{ai_user_memory, AiUserMemory};
+pub use crate::ai::routines::{ai_user_routine, AiUserRoutine};
 pub use crate::ai::{
     ai_user_config, ai_user_profile, AiUserConfig, AiUserProfile, AiUserRole, InferenceProvider,
 };

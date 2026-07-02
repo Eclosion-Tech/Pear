@@ -121,11 +121,15 @@ export function reconstructSessionTail(
 
   for (const msg of tail) {
     if (msg.sender.tag === "System") {
-      // A job-completion trigger (orcha.rs post_job_completion_trigger) is
-      // reconstructed as a user-role note so the model sees the finished job's
-      // outcome and produces a verify+report turn. All other system messages
-      // (compaction markers, etc.) are handled via the system prompt / skipped.
-      if (msg.sender.value === "job_completion" && msg.content) {
+      // System triggers — a delegated job finishing ("job_completion") or a
+      // scheduled routine firing ("routine") — are reconstructed as a user-role
+      // note so the model sees the instruction/outcome and produces a turn. All
+      // other system messages (compaction markers, etc.) are handled via the
+      // system prompt / skipped.
+      if (
+        (msg.sender.value === "job_completion" || msg.sender.value === "routine") &&
+        msg.content
+      ) {
         result.push({ role: "user", content: msg.content });
       }
       continue;
