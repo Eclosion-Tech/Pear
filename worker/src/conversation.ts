@@ -149,11 +149,13 @@ function isFromOtherUser(
 /**
  * Server-posted `System(...)` messages the worker must treat as turn triggers
  * even though they are not from another user: a delegated job finishing
- * (`post_job_completion_trigger`) and a scheduled routine firing
- * (`run_ai_user_routine`). Both are reconstructed as a user-role note so the AI
- * runs the instruction and reports back.
+ * (`post_job_completion_trigger`), a scheduled routine firing
+ * (`run_ai_user_routine`), and a human thumbs-down with a note
+ * (`post_feedback_trigger` — the AI can't read the RLS-scoped feedback itself).
+ * Each is reconstructed as a user-role note so the AI runs the instruction /
+ * addresses the feedback and reports back.
  */
-const SYSTEM_TRIGGER_TAGS = new Set(["job_completion", "routine"]);
+const SYSTEM_TRIGGER_TAGS = new Set(["job_completion", "routine", "feedback"]);
 
 function isSystemTrigger(msg: ConversationMessageRow): boolean {
   return (

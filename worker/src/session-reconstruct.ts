@@ -121,13 +121,15 @@ export function reconstructSessionTail(
 
   for (const msg of tail) {
     if (msg.sender.tag === "System") {
-      // System triggers — a delegated job finishing ("job_completion") or a
-      // scheduled routine firing ("routine") — are reconstructed as a user-role
-      // note so the model sees the instruction/outcome and produces a turn. All
-      // other system messages (compaction markers, etc.) are handled via the
-      // system prompt / skipped.
+      // System triggers — a delegated job finishing ("job_completion"), a
+      // scheduled routine firing ("routine"), or a human thumbs-down with a note
+      // ("feedback") — are reconstructed as a user-role note so the model sees
+      // the instruction/outcome and produces a turn. All other system messages
+      // (compaction markers, etc.) are handled via the system prompt / skipped.
       if (
-        (msg.sender.value === "job_completion" || msg.sender.value === "routine") &&
+        (msg.sender.value === "job_completion" ||
+          msg.sender.value === "routine" ||
+          msg.sender.value === "feedback") &&
         msg.content
       ) {
         result.push({ role: "user", content: msg.content });
