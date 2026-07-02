@@ -147,6 +147,18 @@ const MEMORY_TOOLS: Anthropic.Messages.Tool[] = [
       required: ["query"],
     },
   },
+  {
+    name: "mark_memory_consolidated",
+    description:
+      "Record that you've finished consolidating your private memory (stamps the last-consolidated " +
+      "time). Call this once at the END of a memory-consolidation pass — after you've merged " +
+      "duplicates, pruned stale notes, and written the changelog page. Only meaningful when you have " +
+      "provisioned memory.",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+    },
+  },
 ];
 
 // ── Web tools (search & fetch) ────────────────────────────────────────────────
@@ -3045,6 +3057,21 @@ export async function executeTool(
             snippet: m.snippet,
           })),
         });
+      }
+
+      case "mark_memory_consolidated": {
+        if (toolContext.aiUserId === undefined) {
+          return JSON.stringify({ ok: false, error: "Memory tools are only available in AI-user chat." });
+        }
+        try {
+          await conn.reducers.markAiMemoryConsolidated({ aiUserId: toolContext.aiUserId });
+        } catch (err) {
+          return JSON.stringify({
+            ok: false,
+            error: `mark_memory_consolidated failed: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+        return JSON.stringify({ ok: true, note: "Recorded memory-consolidation timestamp." });
       }
 
       default:

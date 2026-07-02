@@ -121,6 +121,21 @@ export const AiUserRole = __t.enum("AiUserRole", {
 });
 export type AiUserRole = __Infer<typeof AiUserRole>;
 
+export const AiUserRoutine = __t.object("AiUserRoutine", {
+  scheduledId: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+  aiUserId: __t.u64(),
+  prompt: __t.string(),
+  enabled: __t.bool(),
+  createdBy: __t.identity(),
+  conversationId: __t.option(__t.u64()),
+  intervalSecs: __t.u64(),
+  lastRunAt: __t.option(__t.timestamp()),
+  lastStatus: __t.option(__t.string()),
+  createdAt: __t.timestamp(),
+});
+export type AiUserRoutine = __Infer<typeof AiUserRoutine>;
+
 export const ApiCallLog = __t.object("ApiCallLog", {
   id: __t.u64(),
   endpointId: __t.u64(),
