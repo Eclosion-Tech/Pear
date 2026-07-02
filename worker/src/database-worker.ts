@@ -580,6 +580,14 @@ export class DatabaseWorker {
             llmOverrides,
             exec,
           );
+          // A subagent that self-reported it couldn't finish (TASK_FAILED:) must
+          // fail the task, not report success — otherwise a blocked subtask shows
+          // as done and the job reports full completion for work it didn't do.
+          // Throwing routes through the catch, which calls fail_task + records
+          // usage (matching every other task-failure path).
+          if (llmOut.failed) {
+            throw new Error(llmOut.text);
+          }
           result = llmOut.text;
           usage = llmOut.usage;
           break;

@@ -46,7 +46,13 @@ When the user asks you to "build a database", "add a column", or "create a schem
  * longer restated here — it comes from the one `SystemPromptBuilder` source via
  * `buildOrchaTaskSystem` (#18). Keep only what's genuinely Orcha-task-specific.
  */
-const ORCHA_TOOL_RULES = `You have tools to directly create and modify pages in Pear. ALWAYS use tools to make changes — never just describe what the user should do manually.
+const ORCHA_TOOL_RULES = `You are a BACKGROUND worker agent with NO interactive user. Nobody is reading your replies and there is no way to ask a question — any request for clarification is a dead end that silently fails the task. Therefore:
+- NEVER ask for input, confirmation, or clarification. Everything you need is already in your task instructions; act on it.
+- If some detail is genuinely missing, make a reasonable assumption, state it in one line, and proceed — do not stop and do not ask.
+- Do the WHOLE task, not a shell of it. If the task is "create a page with this content", you must create the page AND write the content in this same task (call \`update_page_content\`). A page created with an empty body is NOT success.
+- Only report completion for work you actually performed and verified via tool results. If you truly cannot finish (a required tool returned an error, or a hard prerequisite is absent), make your FINAL reply begin with "TASK_FAILED:" and one line on why — do not report success for work you did not do.
+
+You have tools to directly create and modify pages in Pear. ALWAYS use tools to make changes — never just describe what the user should do manually.
 
 Tool-use rules:
 - When asked to create a database with columns: call \`create_page\` (type=Database) first — this also creates the schema. The result includes a \`schema_id\` and a \`next_step\` hint. You MUST then call \`add_property\` for EVERY specified column before writing your final summary. Never stop after just \`create_page\`.
@@ -176,6 +182,10 @@ function extractTextFromBlocks(blocks: unknown[]): string {
 export interface LlmResult {
   text: string;
   usage: TokenUsage;
+  /** Set when the executor self-reported it could not complete (final reply
+   * began with "TASK_FAILED:"), so the caller marks the task failed instead of
+   * letting a blocked task report success. */
+  failed?: boolean;
 }
 
 /**
@@ -306,7 +316,8 @@ export async function callLlm(
     if (toolCalls.length === 0 || response.stopReason === "end_turn") {
       const textBlock = response.content.find((b) => b.type === "text");
       const summary = textBlock?.type === "text" ? textBlock.text : "Done.";
-      return { text: appendArtifacts(summary, artifactPageIds), usage };
+      const failed = /^\s*TASK_FAILED:/i.test(summary);
+      return { text: appendArtifacts(summary, artifactPageIds), usage, failed };
     }
 
     messages.push({ role: "assistant", content: response.content });
