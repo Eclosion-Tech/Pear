@@ -154,6 +154,35 @@ pub fn provision_ai_user_memory(ctx: &ReducerContext, ai_user_id: u64) -> Result
     Ok(())
 }
 
+/// Stamp `last_consolidated_at` on an AI user's memory row — called at the end
+/// of a consolidation pass so the next pass (and the UI) can see when memory was
+/// last tidied. Callable by the AI user itself (its own consolidation turn) or
+/// by the creator/admin.
+#[reducer]
+pub fn mark_ai_memory_consolidated(ctx: &ReducerContext, ai_user_id: u64) -> Result<(), String> {
+    let ai_user = ctx
+        .db
+        .ai_user_config()
+        .id()
+        .find(ai_user_id)
+        .ok_or("AI user not found")?;
+    // The AI user may stamp its own memory; anyone else must be creator/admin.
+    if ctx.sender() != ai_user.identity {
+        require_creator_or_admin(ctx, ai_user.created_by, "mark memory consolidated")?;
+    }
+    let mem = ctx
+        .db
+        .ai_user_memory()
+        .ai_user_id()
+        .find(ai_user_id)
+        .ok_or("AI user has no provisioned memory")?;
+    ctx.db.ai_user_memory().id().update(AiUserMemory {
+        last_consolidated_at: Some(ctx.timestamp),
+        ..mem
+    });
+    Ok(())
+}
+
 /// Live pages in the subtree rooted at `root_id` (BFS), excluding already soft-deleted pages.
 pub(crate) fn collect_live_subtree_page_ids(ctx: &ReducerContext, root_id: u64) -> Vec<u64> {
     let mut out = Vec::new();

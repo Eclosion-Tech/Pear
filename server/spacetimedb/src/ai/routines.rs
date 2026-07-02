@@ -14,6 +14,7 @@ use std::time::Duration;
 use spacetimedb::{reducer, table, Identity, ReducerContext, ScheduleAt, Table, Timestamp};
 
 use crate::access_control::helpers::require_creator_or_admin;
+use crate::ai::memory::ai_user_memory;
 use crate::ai::{ai_user_config, AiUserConfig};
 use crate::conversations::{
     conversation, conversation_message, conversation_participant, next_conversation_id,
@@ -37,6 +38,18 @@ pub const SENSOR_TRIAGE_PROMPT: &str = "Review the workspace's open structural-s
     change it — instead compile a short triage summary grouped by sensor kind, citing finding ids and \
     target ids, and post it here as a proposal for a human to review. Be concise. If there are no open \
     findings, say so in one line.";
+
+/// Canned prompt for the memory-consolidation routine (the minimal "dream
+/// cycle"): the AI reviews its own memory subtree, merges near-duplicates,
+/// prunes stale notes, and writes a dated changelog page — conservatively.
+pub const MEMORY_CONSOLIDATION_PROMPT: &str = "Consolidate your private memory. Review your memory \
+    subtree (use `search_memory` / `read_memory` to open pages), then do three things and stop: \
+    (1) Merge near-duplicates — for each repeated topic keep the best page, fold in anything unique \
+    from the others, and blank/retire the redundant ones. (2) Prune notes that are stale, superseded, \
+    or were proven wrong. (3) Write a short changelog page under your memory root titled \
+    \"Consolidation — <today's date>\" summarizing what you merged, pruned, and kept, and why. Be \
+    conservative: when unsure whether a note is still useful, keep it. Do not consolidate the \
+    changelog pages themselves.";
 
 /// A scheduled, human-authored routine for one AI user. This IS the schedule
 /// row (SpacetimeDB `scheduled` table): `scheduled_at` carries the recurring
@@ -122,6 +135,28 @@ pub fn create_sensor_triage_routine(
         ctx,
         ai_user_id,
         SENSOR_TRIAGE_PROMPT.to_string(),
+        interval_secs,
+        conversation_id,
+    )
+}
+
+/// Convenience: create the weekly memory-consolidation routine with the canned
+/// `MEMORY_CONSOLIDATION_PROMPT`. Requires the AI user to have provisioned
+/// memory (nothing to consolidate otherwise). Same creator/admin gate.
+#[reducer]
+pub fn create_memory_consolidation_routine(
+    ctx: &ReducerContext,
+    ai_user_id: u64,
+    interval_secs: u64,
+    conversation_id: Option<u64>,
+) -> Result<(), String> {
+    if ctx.db.ai_user_memory().ai_user_id().find(ai_user_id).is_none() {
+        return Err("AI user has no provisioned memory to consolidate".to_string());
+    }
+    create_ai_user_routine(
+        ctx,
+        ai_user_id,
+        MEMORY_CONSOLIDATION_PROMPT.to_string(),
         interval_secs,
         conversation_id,
     )
