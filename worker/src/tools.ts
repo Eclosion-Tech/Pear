@@ -74,7 +74,11 @@ type SharedContextRow = { jobId: bigint; key: string; value: string };
  * Returns the tool list, including context tools pre-seeded with the current
  * job's shared context so Claude can see what sibling tasks already created.
  */
-export function getPearTools(conn: ConnLike, jobId: bigint): Anthropic.Messages.Tool[] {
+export function getPearTools(
+  conn: ConnLike,
+  jobId: bigint,
+  opts: { includeMemoryTools?: boolean } = {},
+): Anthropic.Messages.Tool[] {
   // Snapshot current shared context for this job so Claude knows what exists.
   const ctx: Record<string, string> = {};
   for (const row of conn.db.orcha_shared_context.iter() as Iterable<SharedContextRow>) {
@@ -87,6 +91,9 @@ export function getPearTools(conn: ConnLike, jobId: bigint): Anthropic.Messages.
   return [
     ...PEAR_TOOLS,
     ...WEB_TOOLS,
+    // Delegated jobs attributed to an AI user get its read-only memory tools, so
+    // a subagent can consult the same memory the chat agent has.
+    ...(opts.includeMemoryTools ? MEMORY_TOOLS : []),
     {
       name: "get_context",
       description:
@@ -908,6 +915,87 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
       required: ["effort"],
     },
   },
+  {
+    name: "check_job",
+    description:
+      "Check the live status of a delegated background job (from `delegate`) by its job_id. " +
+      "Returns the job's overall status ('executing' | 'complete' | 'failed'), its task tree with " +
+      "per-task status, and any results produced so far. Use it to poll a job you started earlier in " +
+      "this turn, or to inspect a job referenced in a completion note before you report to the user. " +
+      "Read-only — it never modifies anything.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        job_id: { type: "number" },
+      },
+      required: ["job_id"],
+    },
+  },
+  {
+    name: "query_database",
+    description:
+      "Read rows from a Database page. Returns the database's columns (name + type) and its rows with " +
+      "their cell values, respecting your page access. Use this to answer questions over structured data " +
+      "or to read back a row you just created — `get_page` does NOT return database rows. Optionally " +
+      "filter with `property_filter` (simple equality/contains on ONE named column, or the special " +
+      "\"title\" column). Output is capped; `total_rows` vs `returned_rows` and a `truncated` flag tell " +
+      "you when there is more — narrow with `property_filter` or a lower `limit` to see specific rows. " +
+      "Read-only.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        page_id: { type: "number", description: "The Database page's id." },
+        limit: {
+          type: "number",
+          description: "Max rows to return (default 50, capped at 100).",
+        },
+        property_filter: {
+          type: "object",
+          description:
+            "Optional filter on a single column. Set `property` to a column name (or \"title\") and " +
+            "provide `equals` and/or `contains`.",
+          properties: {
+            property: { type: "string" },
+            equals: {
+              description: "Keep rows whose column value equals this (compared as text).",
+            },
+            contains: {
+              type: "string",
+              description:
+                "Keep rows whose column value contains this substring (case-insensitive).",
+            },
+          },
+          required: ["property"],
+        },
+      },
+      required: ["page_id"],
+    },
+  },
+  {
+    name: "list_sensor_findings",
+    description:
+      "List the workspace's structural-sensor findings — background health checks over pages, schemas, " +
+      "and relations. Returns open (unresolved) findings by default with their sensor kind, code, severity, " +
+      "target, and message, most severe first. Use it to triage: fix trivial issues directly and propose the " +
+      "rest for human review. Read-only.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        limit: {
+          type: "number",
+          description: "Max findings to return (default 50, capped at 200).",
+        },
+        include_resolved: {
+          type: "boolean",
+          description: "Include already-resolved findings too (default false).",
+        },
+        sensor_kind: {
+          type: "string",
+          description: "Filter to a single sensor kind (e.g. \"orphan_detector\").",
+        },
+      },
+    },
+  },
 ];
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -1503,6 +1591,40 @@ function propertyValueMatches(
   if (!row.value || row.value.tag !== expected.tag) return false;
   const eq = PROPERTY_VALUE_EQ[expected.tag] ?? ((a, e) => stableStringify(a) === stableStringify(e));
   return eq(row.value.value, expected.value);
+}
+
+/**
+ * Render a stored tagged property value as a JSON-safe scalar/array for
+ * `query_database` output. BigInt (Date, Relation ids) is converted so the
+ * result can be `JSON.stringify`d, and each type collapses to the plainest
+ * shape the model can reason over.
+ */
+function renderCellValue(v: { tag: string; value: unknown } | undefined): unknown {
+  if (!v) return null;
+  switch (v.tag) {
+    case "Text":
+    case "Url":
+    case "Select":
+      return v.value == null ? null : String(v.value);
+    case "Number":
+      return typeof v.value === "number" ? v.value : Number(v.value as number);
+    case "Checkbox":
+      return Boolean(v.value);
+    case "Date": {
+      const ms = Number(v.value as number | bigint);
+      return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+    }
+    case "MultiSelect":
+    case "Person":
+      return Array.isArray(v.value) ? (v.value as unknown[]).map(String) : [String(v.value)];
+    default:
+      // Relation / unknown — best-effort BigInt-safe rendering.
+      if (Array.isArray(v.value)) {
+        return (v.value as unknown[]).map((x) => (typeof x === "bigint" ? Number(x) : x));
+      }
+      if (typeof v.value === "bigint") return Number(v.value);
+      return v.value ?? null;
+  }
 }
 
 /** Count child rows belonging to `automationId` (string-compared for bigint safety). */
@@ -2315,6 +2437,205 @@ export async function executeTool(
         return JSON.stringify({ ok: true, properties: props });
       }
 
+      case "query_database": {
+        if (!Number.isFinite(Number(input.page_id))) {
+          return JSON.stringify({ ok: false, error: "page_id is required" });
+        }
+        const pageId = BigInt(Math.trunc(Number(input.page_id)));
+        type QPageRow = {
+          id: bigint;
+          parentId: bigint | undefined;
+          title: string;
+          pageType: { tag: string };
+          deletedAt: unknown;
+        };
+        const dbPage = [...(conn.db.page.iter() as Iterable<QPageRow>)].find(
+          (p) => p.id === pageId,
+        );
+        if (!dbPage) {
+          return JSON.stringify({
+            ok: false,
+            error: `Page ${Number(pageId)} not found or not accessible`,
+          });
+        }
+        if (dbPage.pageType.tag !== "Database") {
+          return JSON.stringify({
+            ok: false,
+            error: `Page ${Number(pageId)} is a ${dbPage.pageType.tag} page, not a Database. Use get_page for non-database pages.`,
+          });
+        }
+
+        type QSchemaRow = { id: bigint; pageId: bigint; name: string };
+        const schema = [...(conn.db.database_schema.iter() as Iterable<QSchemaRow>)].find(
+          (s) => String(s.pageId) === String(pageId),
+        );
+        if (!schema) {
+          return JSON.stringify({
+            ok: false,
+            error: `Database page ${Number(pageId)} has no schema`,
+          });
+        }
+
+        type QPropRow = {
+          id: bigint;
+          schemaId: bigint;
+          name: string;
+          propertyType: { tag: string };
+          order: number;
+        };
+        const props = [...(conn.db.property_definition.iter() as Iterable<QPropRow>)]
+          .filter((p) => String(p.schemaId) === String(schema.id))
+          .sort((a, b) => a.order - b.order);
+
+        // Cell values grouped by row page id → propertyDefinitionId → value.
+        type QPVRow = {
+          pageId: bigint;
+          propertyDefinitionId: bigint;
+          value: { tag: string; value: unknown };
+        };
+        const valuesByRow = new Map<string, Map<string, { tag: string; value: unknown }>>();
+        for (const pv of conn.db.page_property_value.iter() as Iterable<QPVRow>) {
+          const rid = String(pv.pageId);
+          let m = valuesByRow.get(rid);
+          if (!m) {
+            m = new Map();
+            valuesByRow.set(rid, m);
+          }
+          m.set(String(pv.propertyDefinitionId), pv.value);
+        }
+
+        const renderRow = (r: QPageRow): Record<string, unknown> => {
+          const cells = valuesByRow.get(String(r.id));
+          const out: Record<string, unknown> = { page_id: Number(r.id), title: r.title };
+          for (const p of props) out[p.name] = renderCellValue(cells?.get(String(p.id)));
+          return out;
+        };
+
+        let matched = [...(conn.db.page.iter() as Iterable<QPageRow>)]
+          .filter((p) => !p.deletedAt && String(p.parentId) === String(pageId))
+          .sort((a, b) => Number(a.id - b.id))
+          .map(renderRow);
+
+        const filter = input.property_filter as
+          | { property?: string; equals?: unknown; contains?: string }
+          | undefined;
+        if (filter?.property) {
+          const propName = filter.property;
+          const known = propName === "title" || props.some((p) => p.name === propName);
+          if (!known) {
+            return JSON.stringify({
+              ok: false,
+              error: `Unknown property "${propName}". Known columns: ${["title", ...props.map((p) => p.name)].join(", ")}`,
+            });
+          }
+          const eq = filter.equals;
+          const contains =
+            typeof filter.contains === "string" ? filter.contains.toLowerCase() : undefined;
+          matched = matched.filter((row) => {
+            const cell = row[propName];
+            const text =
+              cell == null ? "" : Array.isArray(cell) ? cell.join(", ") : String(cell);
+            if (eq !== undefined && String(eq).toLowerCase() !== text.toLowerCase()) return false;
+            if (contains !== undefined && !text.toLowerCase().includes(contains)) return false;
+            return true;
+          });
+        }
+
+        const totalRows = matched.length;
+        let limit = Number(input.limit);
+        if (!Number.isFinite(limit) || limit <= 0) limit = 50;
+        limit = Math.min(limit, 100);
+        let rows = matched.slice(0, limit);
+
+        // Keep the payload under a char budget so a wide/large table can't blow
+        // up the context: halve the row set until it fits (the `truncated` flag
+        // already tells the model there's more).
+        const CHAR_BUDGET = 8000;
+        const build = () => {
+          const truncated = rows.length < totalRows;
+          return JSON.stringify({
+            ok: true,
+            page_id: Number(pageId),
+            database_title: dbPage.title,
+            columns: props.map((p) => ({ name: p.name, type: p.propertyType.tag })),
+            total_rows: totalRows,
+            returned_rows: rows.length,
+            truncated,
+            note: truncated
+              ? "Showing a subset of rows — narrow with property_filter or a lower limit to see specific rows."
+              : undefined,
+            rows,
+          });
+        };
+        let payload = build();
+        while (payload.length > CHAR_BUDGET && rows.length > 1) {
+          rows = rows.slice(0, Math.ceil(rows.length / 2));
+          payload = build();
+        }
+        console.log(
+          `[tools] query_database: page ${Number(pageId)} → ${rows.length}/${totalRows} row(s), ${props.length} col(s)`,
+        );
+        return payload;
+      }
+
+      case "list_sensor_findings": {
+        type FindingRow = {
+          id: bigint;
+          sensorKind: string;
+          code: string;
+          targetKind: string;
+          targetId: bigint;
+          message: string;
+          severity: string;
+          resolvedAt?: unknown;
+        };
+        const table = (
+          conn.db as { structural_sensor_finding?: { iter(): Iterable<FindingRow> } }
+        ).structural_sensor_finding;
+        if (!table?.iter) {
+          return JSON.stringify({
+            ok: false,
+            error: "Structural sensor findings are not available in this workspace build.",
+          });
+        }
+        const includeResolved = input.include_resolved === true;
+        const sensorKind =
+          typeof input.sensor_kind === "string" && input.sensor_kind.trim()
+            ? input.sensor_kind.trim()
+            : undefined;
+        let limit = Number(input.limit);
+        if (!Number.isFinite(limit) || limit <= 0) limit = 50;
+        limit = Math.min(limit, 200);
+
+        const open = [...table.iter()].filter((f) => includeResolved || !f.resolvedAt);
+        const filtered = sensorKind ? open.filter((f) => f.sensorKind === sensorKind) : open;
+        // Most severe first (error > warn > info), then most-recent id.
+        const sevRank: Record<string, number> = { error: 0, warn: 1, info: 2 };
+        filtered.sort(
+          (a, b) =>
+            (sevRank[a.severity] ?? 3) - (sevRank[b.severity] ?? 3) || Number(b.id - a.id),
+        );
+        const findings = filtered.slice(0, limit).map((f) => ({
+          finding_id: Number(f.id),
+          sensor_kind: f.sensorKind,
+          code: f.code,
+          severity: f.severity,
+          target_kind: f.targetKind,
+          target_id: Number(f.targetId),
+          message: f.message,
+        }));
+        console.log(
+          `[tools] list_sensor_findings: ${findings.length}/${filtered.length} finding(s) (open=${open.length})`,
+        );
+        return JSON.stringify({
+          ok: true,
+          total_open: open.length,
+          returned: findings.length,
+          truncated: findings.length < filtered.length,
+          findings,
+        });
+      }
+
       case "create_row": {
         const dbPageId = BigInt(input.database_page_id as number);
         let title = (input.title as string) || "Untitled";
@@ -2523,6 +2844,12 @@ export async function executeTool(
           page_type: page.pageType.tag,
           parent_id: page.parentId ? Number(page.parentId) : null,
           content: content.slice(0, 5000),
+          // A Database page's rows live in property tables, not `content` — point
+          // the model at the tool that can actually read them.
+          next_step:
+            page.pageType.tag === "Database"
+              ? "This is a Database page; its rows are NOT in `content`. Call query_database(page_id) to read its columns and rows."
+              : undefined,
         });
       }
 
@@ -2616,6 +2943,59 @@ export async function executeTool(
           note: effort
             ? `Effort set to "${effort}" for this conversation (applies if the active model supports it).`
             : "Effort reset to the model default for this conversation.",
+        });
+      }
+
+      case "check_job": {
+        const jobIdArg = Number(input.job_id);
+        if (!Number.isFinite(jobIdArg)) {
+          return JSON.stringify({ ok: false, error: "job_id is required" });
+        }
+        const target = BigInt(Math.trunc(jobIdArg));
+        type CheckJobRow = {
+          id: bigint;
+          userId: string;
+          prompt: string;
+          status: string;
+          pageId?: bigint;
+        };
+        type CheckTaskRow = {
+          id: bigint;
+          jobId: bigint;
+          description: string;
+          taskType: string;
+          status: string;
+          result?: string;
+        };
+        const job = [...(conn.db.orcha_job.iter() as Iterable<CheckJobRow>)].find(
+          (j) => j.id === target,
+        );
+        if (!job) {
+          return JSON.stringify({ ok: false, error: `Job ${jobIdArg} not found` });
+        }
+        const trunc = (s: string | undefined, n: number): string => {
+          const v = s ?? "";
+          return v.length > n ? `${v.slice(0, n)}…` : v;
+        };
+        const tasks = [...(conn.db.orcha_task.iter() as Iterable<CheckTaskRow>)]
+          .filter((t) => t.jobId === target)
+          .sort((a, b) => Number(a.id - b.id));
+        return JSON.stringify({
+          ok: true,
+          job_id: Number(job.id),
+          status: job.status,
+          prompt: trunc(job.prompt, 300),
+          page_id: job.pageId !== undefined ? Number(job.pageId) : null,
+          task_count: tasks.length,
+          done_count: tasks.filter((t) => t.status === "done").length,
+          failed_count: tasks.filter((t) => t.status === "failed").length,
+          tasks: tasks.map((t) => ({
+            task_id: Number(t.id),
+            type: t.taskType,
+            status: t.status,
+            description: trunc(t.description, 200),
+            result: trunc(t.result, 500),
+          })),
         });
       }
 

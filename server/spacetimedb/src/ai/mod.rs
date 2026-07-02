@@ -25,6 +25,7 @@ pub(crate) fn next_ai_user_config_id(ctx: &ReducerContext) -> u64 {
 
 pub(crate) mod evaluations;
 pub(crate) mod memory;
+pub(crate) mod routines;
 #[derive(SpacetimeType, Clone, Debug, PartialEq)]
 pub enum InferenceProvider {
     Anthropic,

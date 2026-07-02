@@ -31,6 +31,18 @@ export function useMessagesForConversation(conversationId: bigint) {
   const messages = useConversationMessages();
   return messages
     .filter((m) => m.conversationId === conversationId)
+    // Hide server-posted system triggers (job completion, scheduled routines,
+    // feedback): they exist only to wake the AI user's worker for a turn. The
+    // AI's follow-up message is the human-facing artifact.
+    .filter(
+      (m) =>
+        !(
+          m.sender.tag === "System" &&
+          (m.sender.value === "job_completion" ||
+            m.sender.value === "routine" ||
+            m.sender.value === "feedback")
+        ),
+    )
     .sort(
       (a, b) =>
         Number(a.createdAt.microsSinceUnixEpoch - b.createdAt.microsSinceUnixEpoch)

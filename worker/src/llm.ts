@@ -6,8 +6,18 @@ import {
   type TokenUsage,
   getDefaultProvider,
 } from "./providers.js";
-import { getPearTools, executeTool, type ConnLike } from "./tools.js";
+import {
+  getPearTools,
+  executeTool,
+  type ConnLike,
+  type ToolCallContext,
+} from "./tools.js";
 import { SystemPromptBuilder } from "./prompt-builder.js";
+import { extractAffected } from "./tool-call-record.js";
+import {
+  buildAiUserMemoryIndex,
+  discoverAccessibleResources,
+} from "./workspace-context.js";
 
 let _defaults: { provider: InferenceProvider; model: string; plannerModel: string; maxTokens: number } | null = null;
 function defaults() {
@@ -168,26 +178,98 @@ export interface LlmResult {
   usage: TokenUsage;
 }
 
+/**
+ * Context handed off from the delegating chat into a subagent's prompt: the AI
+ * user's memory index and its granted pages, so the executor doesn't rely on the
+ * delegator re-typing everything into the task description. Empty for non-AI-user
+ * (human-initiated) jobs.
+ */
+function buildSubagentContext(conn: ConnLike, toolContext: ToolCallContext): string {
+  if (toolContext.aiUserId === undefined) return "";
+  const parts: string[] = [];
+  try {
+    const mem = buildAiUserMemoryIndex(conn, toolContext.aiUserId);
+    if (mem.length > 0) {
+      parts.push(
+        "Your memory pages (open with read_memory):\n" +
+          mem
+            .slice(0, 30)
+            .map((e) => `- ${e.title} (page ${e.pageId})${e.snippet ? `: ${e.snippet}` : ""}`)
+            .join("\n"),
+      );
+    }
+  } catch {
+    /* memory not provisioned — fine */
+  }
+  if (toolContext.aiIdentityHex) {
+    try {
+      const grants = discoverAccessibleResources(conn, toolContext.aiIdentityHex);
+      if (grants.length > 0) {
+        parts.push(
+          "Pages you have been granted access to:\n" +
+            grants
+              .slice(0, 30)
+              .map((r) => `- ${r.title} (page ${r.pageId}, ${r.permission})`)
+              .join("\n"),
+        );
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return parts.length
+    ? `\n\n---\nContext from the delegating chat:\n${parts.join("\n\n")}`
+    : "";
+}
+
+/** Append a compact artifacts footer (deep-linkable page ids the job touched) to
+ * a task result, so the completion trigger and the delegator can point at them.
+ * No-op when the job created/edited no pages. */
+function appendArtifacts(text: string, pageIds: Set<number>): string {
+  if (pageIds.size === 0) return text;
+  const list = [...pageIds]
+    .sort((a, b) => a - b)
+    .map((id) => `page ${id}`)
+    .join(", ");
+  return `${text}\n\nArtifacts: ${list}`;
+}
+
 export async function callLlm(
   taskDescription: string,
   conn: ConnLike,
   jobId: bigint,
   extraContext = "",
   overrides?: { provider: InferenceProvider; model: string; maxTokens?: number },
+  // Execution context for the tool loop. When a delegated job belongs to an AI
+  // user, the caller passes that AI user's connection here so Pear mutation tools
+  // run with the AI user's identity + access rules (governed), instead of the
+  // admin `conn` used for reads. Defaults to `conn` for
+  // human-initiated jobs, preserving prior behaviour.
+  exec?: { conn: ConnLike; toolContext?: ToolCallContext },
 ): Promise<LlmResult> {
   const inf = overrides?.provider ?? defaults().provider;
   const model = overrides?.model ?? defaults().model;
   const maxTokens = overrides?.maxTokens ?? defaults().maxTokens;
 
-  const userMessage = extraContext
+  const execConn = exec?.conn ?? conn;
+  const toolContext = exec?.toolContext ?? {};
+
+  let userMessage = extraContext
     ? `${taskDescription}\n\n---\n${extraContext}`
     : taskDescription;
+  userMessage += buildSubagentContext(execConn, toolContext);
 
   const messages: Message[] = [
     { role: "user", content: userMessage },
   ];
 
-  const tools: ToolDef[] = getPearTools(conn, jobId) as ToolDef[];
+  // AI-attributed jobs get the AI user's read-only memory tools.
+  const tools: ToolDef[] = getPearTools(execConn, jobId, {
+    includeMemoryTools: toolContext.aiUserId !== undefined,
+  }) as ToolDef[];
+
+  // Page ids this job created/edited, surfaced as artifacts in the result.
+  const artifactPageIds = new Set<number>();
 
   const usage: TokenUsage = {
     inputTokens: 0,
@@ -197,7 +279,7 @@ export async function callLlm(
   };
 
   let iterations = 0;
-  const MAX_ITERATIONS = 10;
+  const MAX_ITERATIONS = 25;
 
   while (iterations++ < MAX_ITERATIONS) {
     const response = await inf.chat({
@@ -223,7 +305,8 @@ export async function callLlm(
 
     if (toolCalls.length === 0 || response.stopReason === "end_turn") {
       const textBlock = response.content.find((b) => b.type === "text");
-      return { text: textBlock?.type === "text" ? textBlock.text : "Done.", usage };
+      const summary = textBlock?.type === "text" ? textBlock.text : "Done.";
+      return { text: appendArtifacts(summary, artifactPageIds), usage };
     }
 
     messages.push({ role: "assistant", content: response.content });
@@ -231,15 +314,20 @@ export async function callLlm(
     const toolResults: { type: "tool_result"; tool_use_id: string; content: string }[] = [];
     for (const block of toolCalls) {
       console.log(`[worker] Tool call [${block.name}]: ${JSON.stringify(block.input)}`);
-      const result = await executeTool(conn, block.name, block.input, jobId);
+      const result = await executeTool(execConn, block.name, block.input, jobId, toolContext);
       console.log(`[worker] Tool result [${block.name}]: ${result}`);
+      const affected = extractAffected(result);
+      if (affected?.pageId !== undefined) artifactPageIds.add(affected.pageId);
       toolResults.push({ type: "tool_result", tool_use_id: block.id, content: result });
     }
 
     messages.push({ role: "user", content: toolResults });
   }
 
-  return { text: "Reached maximum tool iterations.", usage };
+  return {
+    text: appendArtifacts("Reached maximum tool iterations.", artifactPageIds),
+    usage,
+  };
 }
 
 // ── Task planner ───────────────────────────────────────────────────────────────

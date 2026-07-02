@@ -930,16 +930,26 @@ pub fn set_message_feedback(
     let rater = ctx.sender();
     let note = note.unwrap_or_default();
 
-    if let Some(existing) = ctx
+    // Fire a learning trigger only when a rating newly *becomes* a thumbs-down
+    // that carries a note — the actionable signal. Editing the note on an
+    // existing down-vote, or an up-vote, does not re-trigger (avoids spam).
+    let existing = ctx
         .db
         .message_feedback()
         .message_id()
         .filter(message_id)
-        .find(|f| f.rater == rater)
-    {
+        .find(|f| f.rater == rater);
+    let was_down = existing
+        .as_ref()
+        .map(|e| e.rating == MessageFeedbackRating::Down)
+        .unwrap_or(false);
+    let should_trigger =
+        rating == MessageFeedbackRating::Down && !note.trim().is_empty() && !was_down;
+
+    if let Some(existing) = existing {
         ctx.db.message_feedback().id().update(MessageFeedback {
-            rating,
-            note,
+            rating: rating.clone(),
+            note: note.clone(),
             updated_at: ctx.timestamp,
             ..existing
         });
@@ -950,12 +960,58 @@ pub fn set_message_feedback(
             conversation_id: msg.conversation_id,
             rater,
             rating,
-            note,
+            note: note.clone(),
             created_at: ctx.timestamp,
             updated_at: ctx.timestamp,
         });
     }
+
+    if should_trigger {
+        post_feedback_trigger(ctx, msg.conversation_id, &note);
+    }
     Ok(())
+}
+
+/// Post a `System("feedback")` trigger into the conversation so the AI user's
+/// worker wakes and addresses a thumbs-down. Mirrors the job-completion /
+/// routine triggers: `message_feedback` is RLS-scoped to its rater, so the AI's
+/// own connection can't read it — the actionable content is delivered as a
+/// visible conversation message instead. The AI reconstructs it as a user-role
+/// note and responds (and records a corrective memory when durable).
+fn post_feedback_trigger(ctx: &ReducerContext, conversation_id: u64, note: &str) {
+    let bounded: String = note.chars().take(1000).collect();
+    let body = format!(
+        "A human gave a thumbs-down on your earlier reply in this conversation, with this note:\n\n\
+         \"{}\"\n\n\
+         Take it seriously: acknowledge the correction, fix or redo what they flagged where you can, \
+         and briefly say what you'll do differently. If this reflects a durable preference or a \
+         correction worth remembering, record it as a memory page (create or update one) so you \
+         apply it next time. Don't be defensive.",
+        bounded
+    );
+    ctx.db.conversation_message().insert(ConversationMessage {
+        id: next_conversation_message_id(ctx),
+        conversation_id,
+        sender: MessageSender::System("feedback".to_string()),
+        content: body,
+        job_id: None,
+        created_at: ctx.timestamp,
+        status: MessageStatus::Complete,
+        thinking: None,
+        tool_calls_json: None,
+        timeline_json: None,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        linked_conversation_id: None,
+    });
+    if let Some(conv) = ctx.db.conversation().id().find(conversation_id) {
+        ctx.db.conversation().id().update(Conversation {
+            updated_at: ctx.timestamp,
+            ..conv
+        });
+    }
 }
 
 /// Remove the calling user's rating on a message (toggle off). No-op if none.

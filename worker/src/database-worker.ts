@@ -23,6 +23,7 @@ import { AiUserWorker } from "./ai-user-worker.js";
 import { handleAiPrimitiveTask } from "./ai-primitive-task.js";
 import { StructuralSensorsScheduler } from "./structural-sensors.js";
 import { subscribeToAvailableTables } from "./subscriptions.js";
+import type { ConnLike, ToolCallContext } from "./tools.js";
 
 const CAPABILITIES = [
   "orchestrate",
@@ -119,6 +120,42 @@ export class DatabaseWorker {
       { tier },
     );
     return { ...base, model: routed.model };
+  }
+
+  /**
+   * Resolve the connection + tool context a delegated job's Pear tools must
+   * execute on. Human-initiated jobs (no `ai_user_id`) keep
+   * running on the admin connection with the default provider. An AI-attributed
+   * job runs its tool loop on that AI user's own connection, so writes are
+   * governed by its access rules and attributed to it (`created_by`). If the
+   * owning worker isn't connected we THROW — the caller fails the task rather
+   * than silently escalating to admin authority (which would bypass governance).
+   */
+  private resolveExecForJob(
+    conn: DbConnection,
+    job: JobRow | undefined,
+    jobId: bigint,
+  ): { conn: ConnLike; toolContext: ToolCallContext } {
+    if (!job?.aiUserId) {
+      return { conn: conn as unknown as ConnLike, toolContext: {} };
+    }
+    const worker = this.aiUserWorkers.get(job.aiUserId);
+    const aiConn = worker?.getConnLike();
+    if (!worker || !aiConn) {
+      throw new Error(
+        `Delegated job ${jobId}: AI user ${job.aiUserId}'s worker is not connected — ` +
+          `refusing to execute on admin authority (would bypass its access rules).`,
+      );
+    }
+    return {
+      conn: aiConn,
+      toolContext: {
+        aiUserId: job.aiUserId,
+        aiIdentityHex: worker.identity?.toHexString(),
+        conversationId: this.findConversationIdForJob(conn, jobId),
+        currentPageId: job.pageId,
+      },
+    };
   }
 
   private sensors: StructuralSensorsScheduler | null = null;
@@ -530,7 +567,19 @@ export class DatabaseWorker {
         default: {
           const llmJob = conn.db.orcha_job.id.find(task.jobId) as JobRow | undefined;
           const llmOverrides = this.resolveProviderForJob(llmJob);
-          const llmOut = await callLlm(task.description, conn, task.jobId, "", llmOverrides);
+          // Route the tool loop through the AI user's own connection so writes
+          // are governed by its access rules and attributed to it — never the
+          // admin connection. Throws (→ fail_task) for an
+          // AI-attributed job whose worker isn't connected.
+          const exec = this.resolveExecForJob(conn, llmJob, task.jobId);
+          const llmOut = await callLlm(
+            task.description,
+            conn,
+            task.jobId,
+            "",
+            llmOverrides,
+            exec,
+          );
           result = llmOut.text;
           usage = llmOut.usage;
           break;

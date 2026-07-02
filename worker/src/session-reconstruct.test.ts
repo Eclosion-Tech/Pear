@@ -173,3 +173,31 @@ test("compaction floor discards messages at or before the most recent floor", ()
   const msgs = reconstructSessionTail(conn, 1n, ASSISTANT);
   assert.deepEqual(msgs, [{ role: "user", content: "new" }]);
 });
+
+// ── System triggers (job completion / routine / feedback) ───────────────────────
+
+function system(tag: string): Row["sender"] {
+  return { tag: "System", value: tag };
+}
+
+for (const tag of ["job_completion", "routine", "feedback"]) {
+  test(`System("${tag}") trigger reconstructs as a user-role note`, () => {
+    const conn = makeConn([
+      row({ sender: user(HUMAN), content: "start" }),
+      row({ sender: user(ASSISTANT), content: "ok" }),
+      row({ sender: system(tag), content: `trigger:${tag}` }),
+    ]);
+    const msgs = reconstructSessionTail(conn, 1n, ASSISTANT);
+    const last = msgs[msgs.length - 1];
+    assert.deepEqual(last, { role: "user", content: `trigger:${tag}` });
+  });
+}
+
+test("unknown System tag is skipped in reconstruction", () => {
+  const conn = makeConn([
+    row({ sender: user(HUMAN), content: "hi" }),
+    row({ sender: system("something_else"), content: "ignored" }),
+  ]);
+  const msgs = reconstructSessionTail(conn, 1n, ASSISTANT);
+  assert.ok(!msgs.some((m) => m.content === "ignored"));
+});

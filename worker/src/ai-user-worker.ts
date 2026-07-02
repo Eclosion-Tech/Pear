@@ -80,6 +80,18 @@ export class AiUserWorker {
   }
 
   /**
+   * This AI user's own connection, typed as the tool executor's `ConnLike`.
+   * Returned so a delegated Orcha job attributed to this AI user runs its Pear
+   * tools with the AI user's identity + access rules — not the admin connection,
+   * which would silently escalate write authority. `null` before
+   * onConnect / after disconnect; callers MUST treat that as "not connected" and
+   * refuse to fall back to admin authority rather than run the job ungoverned.
+   */
+  getConnLike(): ConnLike | null {
+    return this.conn ? (this.conn as unknown as ConnLike) : null;
+  }
+
+  /**
    * Resolve this AI user's inference provider on its own connection — the only
    * one where the `ai_user_config` row (with the API key) is RLS-visible.
    * Returns undefined if not connected yet or the config/key isn't available,

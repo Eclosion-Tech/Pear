@@ -146,6 +146,32 @@ function isFromOtherUser(
   return identityHex(msg.sender.value) !== selfHex;
 }
 
+/**
+ * Server-posted `System(...)` messages the worker must treat as turn triggers
+ * even though they are not from another user: a delegated job finishing
+ * (`post_job_completion_trigger`), a scheduled routine firing
+ * (`run_ai_user_routine`), and a human thumbs-down with a note
+ * (`post_feedback_trigger` — the AI can't read the RLS-scoped feedback itself).
+ * Each is reconstructed as a user-role note so the AI runs the instruction /
+ * addresses the feedback and reports back.
+ */
+const SYSTEM_TRIGGER_TAGS = new Set(["job_completion", "routine", "feedback"]);
+
+function isSystemTrigger(msg: ConversationMessageRow): boolean {
+  return (
+    msg.sender.tag === "System" && SYSTEM_TRIGGER_TAGS.has(String(msg.sender.value))
+  );
+}
+
+/** True if `msg` should wake the AI user for a turn: a message from another
+ * user, or a system trigger (job completion / routine). */
+function isTriggerMessage(
+  msg: ConversationMessageRow,
+  selfHex: string,
+): boolean {
+  return isFromOtherUser(msg, selfHex) || isSystemTrigger(msg);
+}
+
 /** Highest message id currently visible in `conversationId` (0 if none). Used
  * as a correlation boundary: the placeholder we are about to post will have an
  * id strictly greater than this. */
@@ -337,6 +363,8 @@ const READ_ONLY_TOOLS = new Set([
   "list_databases",
   "search_pages",
   "query_database",
+  "check_job",
+  "list_sensor_findings",
   "fetch_url",
   "web_search",
   "read_memory",
@@ -423,7 +451,9 @@ function isParticipant(
   return false;
 }
 
-function latestForeignMessage(
+/** Latest message in `conversationId` that should trigger a reply — from
+ * another user or a job-completion trigger. */
+function latestTriggerMessage(
   conn: ConnLike,
   conversationId: bigint,
   selfHex: string,
@@ -431,7 +461,7 @@ function latestForeignMessage(
   let latest: ConversationMessageRow | undefined;
   for (const m of conn.db.conversation_message.iter() as Iterable<ConversationMessageRow>) {
     if (m.conversationId !== conversationId) continue;
-    if (!isFromOtherUser(m, selfHex)) continue;
+    if (!isTriggerMessage(m, selfHex)) continue;
     if (!latest || m.id > latest.id) latest = m;
   }
   return latest;
@@ -1089,7 +1119,7 @@ async function handleConversationMessage(
     // Queue-on-release: pick up the newest one now, bypassing the timestamp
     // watermark (the reply we just sent post-dates it).
     if (turnLock.end(convKey)) {
-      const latest = latestForeignMessage(conn, msg.conversationId, selfHex);
+      const latest = latestTriggerMessage(conn, msg.conversationId, selfHex);
       if (latest && latest.id > msg.id) {
         void handleConversationMessage(conn, latest, selfHex, logTag, {
           bypassWatermark: true,
@@ -1115,7 +1145,10 @@ export function registerConversationHandlers(
 
   conn.db.conversation_message.onInsert(
     (_ctx: unknown, msg: ConversationMessageRow) => {
-      if (isFromOtherUser(msg, selfHex)) {
+      // Wake on a message from another user, or on a job-completion trigger the
+      // server posted for a job this AI delegated. `isParticipant` +
+      // watermark guards inside handleConversationMessage keep this scoped.
+      if (isTriggerMessage(msg, selfHex)) {
         void handleConversationMessage(conn, msg, selfHex, logTag);
       }
     },
@@ -1139,10 +1172,13 @@ export async function processRecentConversationMessages(
 ): Promise<void> {
   const selfHex = selfIdentity.toHexString();
 
-  // Latest foreign message per conversation.
+  // Latest trigger (foreign message or job-completion trigger) per conversation.
+  // A job that completed while this worker was offline left a trigger we still
+  // owe a verify+report turn on; the reply watermark inside
+  // handleConversationMessage dedups anything already answered.
   const latestByConv = new Map<bigint, ConversationMessageRow>();
   for (const msg of conn.db.conversation_message.iter() as Iterable<ConversationMessageRow>) {
-    if (!isFromOtherUser(msg, selfHex)) continue;
+    if (!isTriggerMessage(msg, selfHex)) continue;
     const current = latestByConv.get(msg.conversationId);
     if (
       !current ||
@@ -1155,7 +1191,7 @@ export async function processRecentConversationMessages(
   if (latestByConv.size === 0) return;
 
   console.log(
-    `${logTag} catch-up: ${latestByConv.size} conversation(s) with a latest user message`,
+    `${logTag} catch-up: ${latestByConv.size} conversation(s) with a pending trigger`,
   );
   for (const msg of latestByConv.values()) {
     await handleConversationMessage(conn, msg, selfHex, logTag);

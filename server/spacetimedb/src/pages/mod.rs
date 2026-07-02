@@ -430,6 +430,7 @@ pub fn set_page_embedding(
             embedding.len()
         ));
     }
+    require_page_write(ctx, page_id)?;
     let page = ctx.db.page().id().find(page_id).ok_or("Page not found")?;
     ctx.db.page().id().update(Page {
         embedding: Some(embedding),
@@ -566,6 +567,7 @@ pub fn create_attachment(
     size_bytes: u64,
 ) -> Result<(), String> {
     ctx.db.page().id().find(page_id).ok_or("Page not found")?;
+    require_page_write(ctx, page_id)?;
     if filename.is_empty() || storage_key.is_empty() {
         return Err("filename and storage_key are required".to_string());
     }
@@ -584,11 +586,13 @@ pub fn create_attachment(
 /// Remove an attachment record. Call after deleting the blob from S3 (or leave orphaned blobs for later cleanup).
 #[reducer]
 pub fn delete_attachment(ctx: &ReducerContext, attachment_id: u64) -> Result<(), String> {
-    ctx.db
+    let attachment = ctx
+        .db
         .attachment()
         .id()
         .find(attachment_id)
         .ok_or("Attachment not found")?;
+    require_page_write(ctx, attachment.page_id)?;
     ctx.db.attachment().id().delete(attachment_id);
     Ok(())
 }
