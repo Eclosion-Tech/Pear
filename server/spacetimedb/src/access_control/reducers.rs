@@ -99,12 +99,17 @@ fn insert_access_request_resolution_message(
         )
     };
 
+    // Post as a System("access_resolution") trigger, not a User message: the
+    // AI user's worker treats it as a wake signal (reconstructed as a user-role
+    // note) so it continues the stranded task, and the client hides it from the
+    // thread. Attributing it as a human chat turn made it render like a typed
+    // message and queue behind the turn lock as if the human had spoken.
     ctx.db
         .conversation_message()
         .insert(ConversationMessage {
             id: next_conversation_message_id(ctx),
             conversation_id: request.conversation_id,
-            sender: MessageSender::User(ctx.sender()),
+            sender: MessageSender::System("access_resolution".to_string()),
             content,
             job_id: None,
             created_at: ctx.timestamp,

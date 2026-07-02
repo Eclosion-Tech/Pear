@@ -40,7 +40,8 @@ export function useMessagesForConversation(conversationId: bigint) {
           m.sender.tag === "System" &&
           (m.sender.value === "job_completion" ||
             m.sender.value === "routine" ||
-            m.sender.value === "feedback")
+            m.sender.value === "feedback" ||
+            m.sender.value === "access_resolution")
         ),
     )
     .sort(

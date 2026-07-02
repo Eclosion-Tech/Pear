@@ -180,7 +180,7 @@ function system(tag: string): Row["sender"] {
   return { tag: "System", value: tag };
 }
 
-for (const tag of ["job_completion", "routine", "feedback"]) {
+for (const tag of ["job_completion", "routine", "feedback", "access_resolution"]) {
   test(`System("${tag}") trigger reconstructs as a user-role note`, () => {
     const conn = makeConn([
       row({ sender: user(HUMAN), content: "start" }),

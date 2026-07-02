@@ -155,7 +155,12 @@ function isFromOtherUser(
  * Each is reconstructed as a user-role note so the AI runs the instruction /
  * addresses the feedback and reports back.
  */
-const SYSTEM_TRIGGER_TAGS = new Set(["job_completion", "routine", "feedback"]);
+const SYSTEM_TRIGGER_TAGS = new Set([
+  "job_completion",
+  "routine",
+  "feedback",
+  "access_resolution",
+]);
 
 function isSystemTrigger(msg: ConversationMessageRow): boolean {
   return (

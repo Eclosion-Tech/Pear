@@ -1466,10 +1466,22 @@ function hasChatPageGrant(
   const rows = conn.db.page_access_rule?.iter?.() as Iterable<AnyRow> | undefined;
   if (!rows) return false;
   const allowedPageIds = new Set(pageAndAncestorIds(conn, pageId).map(String));
+  // Open-by-default, mirroring the server's can_write_page: if NO access rule
+  // exists on the page or any ancestor, anyone may act. Only once a rule exists
+  // is an explicit grant required. Without this the pre-check was stricter than
+  // the authoritative server — it denied writes to open pages (e.g. a subagent
+  // writing to a page it just created at root, which has no rules), stranding
+  // the job on a permission request the server would never have raised.
+  let anyRuleOnChain = false;
+  const matchingGrants: { tag?: string }[] = [];
   for (const row of rows) {
     if (!allowedPageIds.has(String(row.pageId))) continue;
+    anyRuleOnChain = true;
     if (principalIdentityHex(row.principal) !== ctx.aiIdentityHex) continue;
-    const permission = row.permission as { tag?: string } | undefined;
+    matchingGrants.push(row.permission as { tag?: string } | undefined ?? {});
+  }
+  if (!anyRuleOnChain) return true;
+  for (const permission of matchingGrants) {
     if (permissionAllows(permission?.tag, needed)) return true;
   }
   return false;
