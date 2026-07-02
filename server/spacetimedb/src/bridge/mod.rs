@@ -214,10 +214,17 @@ pub struct BridgeCommand {
     /// their devices' commands in the UI. `Identity::ZERO` for rows enqueued
     /// before this column existed (invisible to the owner — only historical).
     ///
-    /// Must remain last for schema migration (STDB only allows additive changes
-    /// at the end of a struct).
     #[default(Identity::ZERO)]
     pub owner_identity: Identity,
+    /// Client-generated unique token for the enqueue call, so the worker can read
+    /// back exactly the command it enqueued (match on `nonce`) instead of on
+    /// `(device_id, command)` — two identical in-flight commands no longer
+    /// cross-match. Empty for legacy rows / callers that don't supply one.
+    ///
+    /// Must remain last for schema migration (STDB only allows additive changes
+    /// at the end of a struct).
+    #[default(None::<String>)]
+    pub nonce: Option<String>,
 }
 
 /// Output and result for a completed command. 1:1 with BridgeCommand.

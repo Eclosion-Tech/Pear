@@ -2881,10 +2881,10 @@ export async function executeTool(
         }
         const tier = String((input.tier as string) ?? "").trim() || undefined;
         const userId = toolContext.aiIdentityHex ?? "";
-        type JobRow = { id: bigint; userId: string; prompt: string };
-        const existingJobIds = new Set(
-          [...(conn.db.orcha_job.iter() as Iterable<JobRow>)].map((j) => j.id),
-        );
+        type JobRow = { id: bigint; userId: string; prompt: string; nonce?: string };
+        // Client nonce so we read back exactly the job we created, not a
+        // concurrent identical delegation (same userId+prompt) that cross-matches.
+        const nonce = crypto.randomUUID();
         const taskGraphJson = JSON.stringify([
           {
             description,
@@ -2903,6 +2903,7 @@ export async function executeTool(
             aiUserId: toolContext.aiUserId,
             // Optional capability tier the agent picked for this subagent.
             tier,
+            nonce,
             taskGraphJson,
           });
         } catch (err) {
@@ -2911,10 +2912,10 @@ export async function executeTool(
             error: `delegate failed: ${err instanceof Error ? err.message : String(err)}`,
           });
         }
-        // Reducers don't return ids — read back the job we just inserted.
+        // Reducers don't return ids — read back the job by its unique nonce.
         const job = await waitFor(() =>
           [...(conn.db.orcha_job.iter() as Iterable<JobRow>)].find(
-            (j) => !existingJobIds.has(j.id) && j.userId === userId && j.prompt === description,
+            (j) => j.nonce === nonce,
           ),
         );
         if (!job) {

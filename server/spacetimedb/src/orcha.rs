@@ -100,6 +100,15 @@ pub struct OrchaJob {
     /// a data change.
     #[default(None::<String>)]
     pub tier: Option<String>,
+    /// Client-generated unique token for the create call, so the caller can read
+    /// back exactly the job it created (match on `nonce`) instead of on
+    /// `(user_id, prompt)` — two identical in-flight delegations no longer
+    /// cross-match. Empty for legacy rows / callers that don't supply one.
+    ///
+    /// Must remain last for schema migration (STDB only allows additive changes
+    /// at the end of a struct).
+    #[default(None::<String>)]
+    pub nonce: Option<String>,
 }
 
 /// Atomic unit of work within a job. Supports DAG dependencies via depends_on.
@@ -362,6 +371,9 @@ pub fn create_job(
     // Capability tier for this job's inference, chosen by the delegating agent
     // (None for human-initiated jobs → the AI user's default model).
     tier: Option<String>,
+    // Client-generated unique token so the caller can read back exactly this job
+    // (see `OrchaJob::nonce`). Pass "" if you don't need read-back correlation.
+    nonce: String,
     task_graph_json: String,
 ) -> Result<(), String> {
     let specs: Vec<TaskSpec> = serde_json::from_str(&task_graph_json)
@@ -381,6 +393,7 @@ pub fn create_job(
         status: "executing".to_string(),
         created_at: ctx.timestamp,
         tier,
+        nonce: if nonce.is_empty() { None } else { Some(nonce) },
     });
     let job_id = job.id;
 

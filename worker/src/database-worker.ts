@@ -626,6 +626,7 @@ export class DatabaseWorker {
       cwd?: string;
       status: { tag: string };
       enqueuedAt: unknown;
+      nonce?: string;
     };
     type BridgeResultRow = {
       commandId: bigint;
@@ -681,9 +682,9 @@ export class DatabaseWorker {
     const jobIdArg = coerceBigint(parsed.job_id) ?? task.jobId;
     const taskIdArg = coerceBigint(parsed.task_id) ?? task.id;
 
-    const before = new Set(
-      [...(conn.db.bridge_command.iter() as Iterable<BridgeCommandRow>)].map((r) => String(r.id)),
-    );
+    // Client nonce so we read back exactly the command we enqueued, not a
+    // concurrent identical one (same deviceId+command) that cross-matches.
+    const nonce = crypto.randomUUID();
 
     await conn.reducers.enqueueBridgeCommand({
       deviceId,
@@ -692,6 +693,7 @@ export class DatabaseWorker {
       conversationId,
       jobId: jobIdArg,
       taskId: taskIdArg,
+      nonce,
     });
 
     const waitFor = async <T>(
@@ -711,10 +713,7 @@ export class DatabaseWorker {
     const enqueued = await waitFor(
       () =>
         [...(conn.db.bridge_command.iter() as Iterable<BridgeCommandRow>)].find(
-          (r) =>
-            !before.has(String(r.id)) &&
-            String(r.deviceId) === String(deviceId) &&
-            r.command === command,
+          (r) => r.nonce === nonce,
         ),
       10_000,
     );

@@ -1141,6 +1141,7 @@ fn decode_orcha_job(v: &Value) -> Result<OrchaJob, String> {
         status: string_at(m, "status")?,
         created_at: decode_timestamp(m.get("createdAt").ok_or("createdAt")?)?,
         tier: opt_string_at(m, "tier")?,
+        nonce: opt_string_at(m, "nonce")?,
     })
 }
 

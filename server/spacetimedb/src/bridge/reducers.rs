@@ -402,6 +402,9 @@ pub fn enqueue_bridge_command(
     conversation_id: u64,
     job_id: Option<u64>,
     task_id: Option<u64>,
+    // Client-generated unique token so the worker can read back exactly this
+    // command (see `BridgeCommand::nonce`). Pass "" to skip read-back correlation.
+    nonce: String,
 ) -> Result<(), String> {
     if command.trim().is_empty() {
         return Err("Command cannot be empty".to_string());
@@ -448,6 +451,7 @@ pub fn enqueue_bridge_command(
         // Stamp the owner so they can see + approve/deny this command in the UI
         // (BRIDGE_COMMAND_OWNER_FILTER).
         owner_identity: device.owner,
+        nonce: if nonce.is_empty() { None } else { Some(nonce) },
     });
     Ok(())
 }
