@@ -924,6 +924,46 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
       required: ["job_id"],
     },
   },
+  {
+    name: "query_database",
+    description:
+      "Read rows from a Database page. Returns the database's columns (name + type) and its rows with " +
+      "their cell values, respecting your page access. Use this to answer questions over structured data " +
+      "or to read back a row you just created — `get_page` does NOT return database rows. Optionally " +
+      "filter with `property_filter` (simple equality/contains on ONE named column, or the special " +
+      "\"title\" column). Output is capped; `total_rows` vs `returned_rows` and a `truncated` flag tell " +
+      "you when there is more — narrow with `property_filter` or a lower `limit` to see specific rows. " +
+      "Read-only.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        page_id: { type: "number", description: "The Database page's id." },
+        limit: {
+          type: "number",
+          description: "Max rows to return (default 50, capped at 100).",
+        },
+        property_filter: {
+          type: "object",
+          description:
+            "Optional filter on a single column. Set `property` to a column name (or \"title\") and " +
+            "provide `equals` and/or `contains`.",
+          properties: {
+            property: { type: "string" },
+            equals: {
+              description: "Keep rows whose column value equals this (compared as text).",
+            },
+            contains: {
+              type: "string",
+              description:
+                "Keep rows whose column value contains this substring (case-insensitive).",
+            },
+          },
+          required: ["property"],
+        },
+      },
+      required: ["page_id"],
+    },
+  },
 ];
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -1519,6 +1559,40 @@ function propertyValueMatches(
   if (!row.value || row.value.tag !== expected.tag) return false;
   const eq = PROPERTY_VALUE_EQ[expected.tag] ?? ((a, e) => stableStringify(a) === stableStringify(e));
   return eq(row.value.value, expected.value);
+}
+
+/**
+ * Render a stored tagged property value as a JSON-safe scalar/array for
+ * `query_database` output. BigInt (Date, Relation ids) is converted so the
+ * result can be `JSON.stringify`d, and each type collapses to the plainest
+ * shape the model can reason over.
+ */
+function renderCellValue(v: { tag: string; value: unknown } | undefined): unknown {
+  if (!v) return null;
+  switch (v.tag) {
+    case "Text":
+    case "Url":
+    case "Select":
+      return v.value == null ? null : String(v.value);
+    case "Number":
+      return typeof v.value === "number" ? v.value : Number(v.value as number);
+    case "Checkbox":
+      return Boolean(v.value);
+    case "Date": {
+      const ms = Number(v.value as number | bigint);
+      return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+    }
+    case "MultiSelect":
+    case "Person":
+      return Array.isArray(v.value) ? (v.value as unknown[]).map(String) : [String(v.value)];
+    default:
+      // Relation / unknown — best-effort BigInt-safe rendering.
+      if (Array.isArray(v.value)) {
+        return (v.value as unknown[]).map((x) => (typeof x === "bigint" ? Number(x) : x));
+      }
+      if (typeof v.value === "bigint") return Number(v.value);
+      return v.value ?? null;
+  }
 }
 
 /** Count child rows belonging to `automationId` (string-compared for bigint safety). */
@@ -2331,6 +2405,147 @@ export async function executeTool(
         return JSON.stringify({ ok: true, properties: props });
       }
 
+      case "query_database": {
+        if (!Number.isFinite(Number(input.page_id))) {
+          return JSON.stringify({ ok: false, error: "page_id is required" });
+        }
+        const pageId = BigInt(Math.trunc(Number(input.page_id)));
+        type QPageRow = {
+          id: bigint;
+          parentId: bigint | undefined;
+          title: string;
+          pageType: { tag: string };
+          deletedAt: unknown;
+        };
+        const dbPage = [...(conn.db.page.iter() as Iterable<QPageRow>)].find(
+          (p) => p.id === pageId,
+        );
+        if (!dbPage) {
+          return JSON.stringify({
+            ok: false,
+            error: `Page ${Number(pageId)} not found or not accessible`,
+          });
+        }
+        if (dbPage.pageType.tag !== "Database") {
+          return JSON.stringify({
+            ok: false,
+            error: `Page ${Number(pageId)} is a ${dbPage.pageType.tag} page, not a Database. Use get_page for non-database pages.`,
+          });
+        }
+
+        type QSchemaRow = { id: bigint; pageId: bigint; name: string };
+        const schema = [...(conn.db.database_schema.iter() as Iterable<QSchemaRow>)].find(
+          (s) => String(s.pageId) === String(pageId),
+        );
+        if (!schema) {
+          return JSON.stringify({
+            ok: false,
+            error: `Database page ${Number(pageId)} has no schema`,
+          });
+        }
+
+        type QPropRow = {
+          id: bigint;
+          schemaId: bigint;
+          name: string;
+          propertyType: { tag: string };
+          order: number;
+        };
+        const props = [...(conn.db.property_definition.iter() as Iterable<QPropRow>)]
+          .filter((p) => String(p.schemaId) === String(schema.id))
+          .sort((a, b) => a.order - b.order);
+
+        // Cell values grouped by row page id → propertyDefinitionId → value.
+        type QPVRow = {
+          pageId: bigint;
+          propertyDefinitionId: bigint;
+          value: { tag: string; value: unknown };
+        };
+        const valuesByRow = new Map<string, Map<string, { tag: string; value: unknown }>>();
+        for (const pv of conn.db.page_property_value.iter() as Iterable<QPVRow>) {
+          const rid = String(pv.pageId);
+          let m = valuesByRow.get(rid);
+          if (!m) {
+            m = new Map();
+            valuesByRow.set(rid, m);
+          }
+          m.set(String(pv.propertyDefinitionId), pv.value);
+        }
+
+        const renderRow = (r: QPageRow): Record<string, unknown> => {
+          const cells = valuesByRow.get(String(r.id));
+          const out: Record<string, unknown> = { page_id: Number(r.id), title: r.title };
+          for (const p of props) out[p.name] = renderCellValue(cells?.get(String(p.id)));
+          return out;
+        };
+
+        let matched = [...(conn.db.page.iter() as Iterable<QPageRow>)]
+          .filter((p) => !p.deletedAt && String(p.parentId) === String(pageId))
+          .sort((a, b) => Number(a.id - b.id))
+          .map(renderRow);
+
+        const filter = input.property_filter as
+          | { property?: string; equals?: unknown; contains?: string }
+          | undefined;
+        if (filter?.property) {
+          const propName = filter.property;
+          const known = propName === "title" || props.some((p) => p.name === propName);
+          if (!known) {
+            return JSON.stringify({
+              ok: false,
+              error: `Unknown property "${propName}". Known columns: ${["title", ...props.map((p) => p.name)].join(", ")}`,
+            });
+          }
+          const eq = filter.equals;
+          const contains =
+            typeof filter.contains === "string" ? filter.contains.toLowerCase() : undefined;
+          matched = matched.filter((row) => {
+            const cell = row[propName];
+            const text =
+              cell == null ? "" : Array.isArray(cell) ? cell.join(", ") : String(cell);
+            if (eq !== undefined && String(eq).toLowerCase() !== text.toLowerCase()) return false;
+            if (contains !== undefined && !text.toLowerCase().includes(contains)) return false;
+            return true;
+          });
+        }
+
+        const totalRows = matched.length;
+        let limit = Number(input.limit);
+        if (!Number.isFinite(limit) || limit <= 0) limit = 50;
+        limit = Math.min(limit, 100);
+        let rows = matched.slice(0, limit);
+
+        // Keep the payload under a char budget so a wide/large table can't blow
+        // up the context: halve the row set until it fits (the `truncated` flag
+        // already tells the model there's more).
+        const CHAR_BUDGET = 8000;
+        const build = () => {
+          const truncated = rows.length < totalRows;
+          return JSON.stringify({
+            ok: true,
+            page_id: Number(pageId),
+            database_title: dbPage.title,
+            columns: props.map((p) => ({ name: p.name, type: p.propertyType.tag })),
+            total_rows: totalRows,
+            returned_rows: rows.length,
+            truncated,
+            note: truncated
+              ? "Showing a subset of rows — narrow with property_filter or a lower limit to see specific rows."
+              : undefined,
+            rows,
+          });
+        };
+        let payload = build();
+        while (payload.length > CHAR_BUDGET && rows.length > 1) {
+          rows = rows.slice(0, Math.ceil(rows.length / 2));
+          payload = build();
+        }
+        console.log(
+          `[tools] query_database: page ${Number(pageId)} → ${rows.length}/${totalRows} row(s), ${props.length} col(s)`,
+        );
+        return payload;
+      }
+
       case "create_row": {
         const dbPageId = BigInt(input.database_page_id as number);
         let title = (input.title as string) || "Untitled";
@@ -2539,6 +2754,12 @@ export async function executeTool(
           page_type: page.pageType.tag,
           parent_id: page.parentId ? Number(page.parentId) : null,
           content: content.slice(0, 5000),
+          // A Database page's rows live in property tables, not `content` — point
+          // the model at the tool that can actually read them.
+          next_step:
+            page.pageType.tag === "Database"
+              ? "This is a Database page; its rows are NOT in `content`. Call query_database(page_id) to read its columns and rows."
+              : undefined,
         });
       }
 
