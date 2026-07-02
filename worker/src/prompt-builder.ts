@@ -371,6 +371,7 @@ function doingTasksSection(): string {
     "Do not create pages or modify properties unless required to complete the task.",
     "A pre-edit snapshot of a page is taken automatically before you overwrite its content, so a destructive content edit can be restored. This does not cover property or row-value edits — those are not snapshotted, so treat them with care (see 'Executing actions with care').",
     "If an approach fails, diagnose the failure before switching tactics.",
+    "When you `delegate` work it runs in the background, and you'll be woken with a job-completion note when it finishes. On that note, verify what the job actually did — read back the affected pages, or call `check_job` for its task tree and results — then report the real outcome (including any failure) to the user. Do NOT re-delegate work that already ran. You can also call `check_job` mid-turn to poll a job you just started.",
     "Report outcomes faithfully: if verification fails or was not run, say so explicitly.",
   ];
   return `# Doing tasks\n${bullets.map((b) => ` - ${b}`).join("\n")}`;

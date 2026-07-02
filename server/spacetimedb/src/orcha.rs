@@ -8,6 +8,10 @@ use serde::Deserialize;
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
 use crate::ai::ai_user_config;
+use crate::conversations::{
+    conversation, conversation_message, next_conversation_message_id, Conversation,
+    ConversationMessage, ConversationStatus, MessageSender, MessageStatus,
+};
 use crate::id_counters::alloc_id;
 
 pub(crate) fn next_orcha_job_id(ctx: &ReducerContext) -> u64 {
@@ -188,6 +192,9 @@ fn check_orcha_job_completion(ctx: &ReducerContext, job_id: u64) {
     }
     let any_failed = tasks.iter().any(|t| t.status == "failed");
     if let Some(job) = ctx.db.orcha_job().id().find(job_id) {
+        // Only act on the *transition* into a terminal state. Guards against a
+        // double-post if this fn is ever re-entered for an already-finished job.
+        let was_terminal = job.status == "complete" || job.status == "failed";
         ctx.db.orcha_job().id().update(OrchaJob {
             status: if any_failed {
                 "failed".to_string()
@@ -197,7 +204,140 @@ fn check_orcha_job_completion(ctx: &ReducerContext, job_id: u64) {
             ..job
         });
         log::info!("Orcha: job {} complete (any_failed={})", job_id, any_failed);
+        if !was_terminal {
+            // Close the delegation loop: if this job was spawned from a
+            // conversation (a message carries its job_id), post a system-attributed
+            // completion trigger into that thread so the AI user's worker wakes up,
+            // verifies the work, and reports to the human (assessment 1.1).
+            post_job_completion_trigger(ctx, job_id, &tasks, any_failed);
+        }
     }
+}
+
+/// Locate the conversation a job was delegated from, by finding a
+/// `conversation_message` carrying the job's id (the same link the worker's
+/// `findConversationIdForJob` reads). `None` for jobs not tied to a thread
+/// (e.g. human-initiated editor jobs).
+fn find_conversation_for_job(ctx: &ReducerContext, job_id: u64) -> Option<u64> {
+    ctx.db
+        .conversation_message()
+        .iter()
+        .find(|m| m.job_id == Some(job_id))
+        .map(|m| m.conversation_id)
+}
+
+/// Insert a `System("job_completion")` message into the delegating conversation.
+/// The worker treats this sender/marker as a turn trigger (not a self-message to
+/// skip) and reconstructs it as a user-role note, so the AI user verifies the
+/// delegated work and reports the outcome. No-op when the job has no linked
+/// conversation or that conversation is closed.
+fn post_job_completion_trigger(
+    ctx: &ReducerContext,
+    job_id: u64,
+    tasks: &[OrchaTask],
+    any_failed: bool,
+) {
+    let Some(conversation_id) = find_conversation_for_job(ctx, job_id) else {
+        return;
+    };
+    let Some(conv) = ctx.db.conversation().id().find(conversation_id) else {
+        return;
+    };
+    if conv.status != ConversationStatus::Active {
+        return;
+    }
+    let body = job_outcome_body(job_id, tasks, any_failed);
+    ctx.db.conversation_message().insert(ConversationMessage {
+        id: next_conversation_message_id(ctx),
+        conversation_id,
+        sender: MessageSender::System("job_completion".to_string()),
+        content: body,
+        job_id: Some(job_id),
+        created_at: ctx.timestamp,
+        status: MessageStatus::Complete,
+        thinking: None,
+        tool_calls_json: None,
+        timeline_json: None,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        linked_conversation_id: None,
+    });
+    // Bump the conversation so inbox ordering surfaces the completion.
+    ctx.db.conversation().id().update(Conversation {
+        updated_at: ctx.timestamp,
+        ..conv
+    });
+    log::info!(
+        "Orcha: posted job_completion trigger for job {} into conversation {}",
+        job_id,
+        conversation_id
+    );
+}
+
+/// Compact, LLM-facing summary of a finished job: overall status, per-task
+/// outcomes (with a tail of each result), and an instruction to verify and
+/// report. Hard-capped so a job with many verbose task results can't blow up
+/// the trigger message.
+fn job_outcome_body(job_id: u64, tasks: &[OrchaTask], any_failed: bool) -> String {
+    let done = tasks.iter().filter(|t| t.status == "done").count();
+    let failed = tasks.iter().filter(|t| t.status == "failed").count();
+    let total = tasks.len();
+    let status = if any_failed { "failed" } else { "completed" };
+    let mut body = format!(
+        "Delegated job {} {}: {}/{} task(s) done{}.\n\nPer-task outcome:\n",
+        job_id,
+        status,
+        done,
+        total,
+        if failed > 0 {
+            format!(", {} failed", failed)
+        } else {
+            String::new()
+        },
+    );
+    for t in tasks {
+        let icon = if t.status == "done" { "✓" } else { "✗" };
+        let desc = truncate_chars(&t.description, 100);
+        let result_tail = t
+            .result
+            .as_deref()
+            .map(|r| tail_chars(r, 300))
+            .unwrap_or_default();
+        if result_tail.is_empty() {
+            body.push_str(&format!("- {} {}\n", icon, desc));
+        } else {
+            body.push_str(&format!("- {} {} → {}\n", icon, desc, result_tail));
+        }
+    }
+    body.push_str(
+        "\nThis job was delegated earlier in this conversation. Verify the work by \
+         reading back any affected pages, then report the outcome to the user in your \
+         own words. If it failed, explain what went wrong. Do not re-delegate the same work.",
+    );
+    truncate_chars(&body, 4000)
+}
+
+/// Char-boundary-safe head truncation with an ellipsis (byte slicing a UTF-8
+/// string can panic mid-codepoint).
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let head: String = s.chars().take(max.saturating_sub(1)).collect();
+    format!("{}…", head)
+}
+
+/// Char-boundary-safe tail truncation with a leading ellipsis.
+fn tail_chars(s: &str, max: usize) -> String {
+    let count = s.chars().count();
+    if count <= max {
+        return s.to_string();
+    }
+    let skip = count - max.saturating_sub(1);
+    let t: String = s.chars().skip(skip).collect();
+    format!("…{}", t)
 }
 
 /// Create a job with a full task graph.

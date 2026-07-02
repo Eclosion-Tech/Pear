@@ -121,7 +121,13 @@ export function reconstructSessionTail(
 
   for (const msg of tail) {
     if (msg.sender.tag === "System") {
-      // Compaction markers or other system messages within the tail are skipped
+      // A job-completion trigger (orcha.rs post_job_completion_trigger) is
+      // reconstructed as a user-role note so the model sees the finished job's
+      // outcome and produces a verify+report turn. All other system messages
+      // (compaction markers, etc.) are handled via the system prompt / skipped.
+      if (msg.sender.value === "job_completion" && msg.content) {
+        result.push({ role: "user", content: msg.content });
+      }
       continue;
     }
 

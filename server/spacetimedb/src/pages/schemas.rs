@@ -9,6 +9,33 @@ use crate::automations::enqueue_property_changed;
 use crate::id_counters::alloc_id;
 use crate::pages::{page, ActorType};
 
+/// Resolve a schema to its owning page and require write access on it.
+/// Structural schema reducers (columns, config, inheritance) carry only a
+/// `schema_id`; this maps that back to the page the access rules live on.
+pub(crate) fn require_schema_write(ctx: &ReducerContext, schema_id: u64) -> Result<(), String> {
+    let schema = ctx
+        .db
+        .database_schema()
+        .id()
+        .find(schema_id)
+        .ok_or("Schema not found")?;
+    require_page_write(ctx, schema.page_id)
+}
+
+/// Resolve a property definition -> schema -> owning page and require write.
+pub(crate) fn require_property_write(
+    ctx: &ReducerContext,
+    property_definition_id: u64,
+) -> Result<(), String> {
+    let prop = ctx
+        .db
+        .property_definition()
+        .id()
+        .find(property_definition_id)
+        .ok_or("PropertyDefinition not found")?;
+    require_schema_write(ctx, prop.schema_id)
+}
+
 pub(crate) fn next_database_schema_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "database_schema", || {
         ctx.db
@@ -309,6 +336,7 @@ pub fn create_database_schema(
     name: String,
 ) -> Result<(), String> {
     ctx.db.page().id().find(page_id).ok_or("Page not found")?;
+    require_page_write(ctx, page_id)?;
     ctx.db.database_schema().insert(DatabaseSchema {
         id: next_database_schema_id(ctx),
         page_id,
@@ -330,6 +358,7 @@ pub fn set_schema_parent(
     schema_id: u64,
     parent_schema_id: Option<u64>,
 ) -> Result<(), String> {
+    require_schema_write(ctx, schema_id)?;
     let schema = ctx
         .db
         .database_schema()
@@ -394,6 +423,7 @@ pub fn update_database_schema_config(
     schema_id: u64,
     config: String,
 ) -> Result<(), String> {
+    require_schema_write(ctx, schema_id)?;
     let mut schema = ctx
         .db
         .database_schema()
@@ -413,6 +443,7 @@ pub fn add_property(
     property_type: PropertyType,
     config: String,
 ) -> Result<(), String> {
+    require_schema_write(ctx, schema_id)?;
     ctx.db
         .database_schema()
         .id()
@@ -448,6 +479,7 @@ pub fn reorder_property(
     property_definition_id: u64,
     new_order: u32,
 ) -> Result<(), String> {
+    require_property_write(ctx, property_definition_id)?;
     let prop = ctx
         .db
         .property_definition()
@@ -466,6 +498,7 @@ pub fn reorder_property(
 
 #[reducer]
 pub fn delete_property(ctx: &ReducerContext, property_definition_id: u64) -> Result<(), String> {
+    require_property_write(ctx, property_definition_id)?;
     ctx.db
         .property_definition()
         .id()
@@ -479,6 +512,7 @@ pub fn rename_property(
     property_definition_id: u64,
     name: String,
 ) -> Result<(), String> {
+    require_property_write(ctx, property_definition_id)?;
     let prop = ctx
         .db
         .property_definition()
@@ -505,6 +539,7 @@ pub fn update_property_config(
     property_definition_id: u64,
     config: String,
 ) -> Result<(), String> {
+    require_property_write(ctx, property_definition_id)?;
     let prop = ctx
         .db
         .property_definition()
@@ -524,6 +559,7 @@ pub fn update_property_type(
     property_definition_id: u64,
     property_type: PropertyType,
 ) -> Result<(), String> {
+    require_property_write(ctx, property_definition_id)?;
     let prop = ctx
         .db
         .property_definition()

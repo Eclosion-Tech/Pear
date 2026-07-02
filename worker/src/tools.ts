@@ -908,6 +908,22 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
       required: ["effort"],
     },
   },
+  {
+    name: "check_job",
+    description:
+      "Check the live status of a delegated background job (from `delegate`) by its job_id. " +
+      "Returns the job's overall status ('executing' | 'complete' | 'failed'), its task tree with " +
+      "per-task status, and any results produced so far. Use it to poll a job you started earlier in " +
+      "this turn, or to inspect a job referenced in a completion note before you report to the user. " +
+      "Read-only — it never modifies anything.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        job_id: { type: "number" },
+      },
+      required: ["job_id"],
+    },
+  },
 ];
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -2616,6 +2632,59 @@ export async function executeTool(
           note: effort
             ? `Effort set to "${effort}" for this conversation (applies if the active model supports it).`
             : "Effort reset to the model default for this conversation.",
+        });
+      }
+
+      case "check_job": {
+        const jobIdArg = Number(input.job_id);
+        if (!Number.isFinite(jobIdArg)) {
+          return JSON.stringify({ ok: false, error: "job_id is required" });
+        }
+        const target = BigInt(Math.trunc(jobIdArg));
+        type CheckJobRow = {
+          id: bigint;
+          userId: string;
+          prompt: string;
+          status: string;
+          pageId?: bigint;
+        };
+        type CheckTaskRow = {
+          id: bigint;
+          jobId: bigint;
+          description: string;
+          taskType: string;
+          status: string;
+          result?: string;
+        };
+        const job = [...(conn.db.orcha_job.iter() as Iterable<CheckJobRow>)].find(
+          (j) => j.id === target,
+        );
+        if (!job) {
+          return JSON.stringify({ ok: false, error: `Job ${jobIdArg} not found` });
+        }
+        const trunc = (s: string | undefined, n: number): string => {
+          const v = s ?? "";
+          return v.length > n ? `${v.slice(0, n)}…` : v;
+        };
+        const tasks = [...(conn.db.orcha_task.iter() as Iterable<CheckTaskRow>)]
+          .filter((t) => t.jobId === target)
+          .sort((a, b) => Number(a.id - b.id));
+        return JSON.stringify({
+          ok: true,
+          job_id: Number(job.id),
+          status: job.status,
+          prompt: trunc(job.prompt, 300),
+          page_id: job.pageId !== undefined ? Number(job.pageId) : null,
+          task_count: tasks.length,
+          done_count: tasks.filter((t) => t.status === "done").length,
+          failed_count: tasks.filter((t) => t.status === "failed").length,
+          tasks: tasks.map((t) => ({
+            task_id: Number(t.id),
+            type: t.taskType,
+            status: t.status,
+            description: trunc(t.description, 200),
+            result: trunc(t.result, 500),
+          })),
         });
       }
 
