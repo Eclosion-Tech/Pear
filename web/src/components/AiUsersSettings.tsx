@@ -6,12 +6,17 @@ import { useTable, useSpacetimeDB } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
 import {
   useAiUserProfiles,
+  useAiUserRoutines,
   useCreateAiUser,
+  useCreateMemoryConsolidationRoutine,
+  useCreateSensorTriageRoutine,
   useDeleteAiUser,
+  useDeleteAiUserRoutine,
   useDisableAiUserMemory,
   usePatchAiUserProfileSettings,
   useProvisionAiUserMemory,
   useSetAiUserModel,
+  useSetAiUserRoutineEnabled,
   useSetAiUserSerperApiKey,
   useSetAiUserWorkerToken,
   useUpdateAiUserSystemPrompt,
@@ -643,8 +648,161 @@ function AiUserRowEditor({
             />
           </button>
         </div>
+
+        <RoutinesSection aiUserId={profile.aiUserId} hasMemory={hasMemory} />
       </div>
     </li>
+  );
+}
+
+/** One-line label for a routine, derived from its prompt. */
+function routineLabel(prompt: string): string {
+  const flat = prompt.replace(/\s+/g, " ").trim();
+  return flat.length > 70 ? `${flat.slice(0, 70)}…` : flat;
+}
+
+/** Human-friendly interval, e.g. 3600 → "1h", 604800 → "7d". */
+function formatInterval(secs: number): string {
+  if (secs > 0 && secs % 86400 === 0) return `${secs / 86400}d`;
+  if (secs > 0 && secs % 3600 === 0) return `${secs / 3600}h`;
+  if (secs > 0 && secs % 60 === 0) return `${secs / 60}m`;
+  return `${secs}s`;
+}
+
+/**
+ * Scheduled routines for one AI user: list existing routines (pause/resume,
+ * delete) and add the two built-in ones (sensor triage, weekly consolidation).
+ * Creator/admin-gated server-side; the AI user cannot author its own routines.
+ */
+function RoutinesSection({
+  aiUserId,
+  hasMemory,
+}: {
+  aiUserId: bigint;
+  hasMemory: boolean;
+}) {
+  const allRoutines = useAiUserRoutines();
+  const createTriage = useCreateSensorTriageRoutine();
+  const createConsolidation = useCreateMemoryConsolidationRoutine();
+  const setEnabled = useSetAiUserRoutineEnabled();
+  const deleteRoutine = useDeleteAiUserRoutine();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const routines = allRoutines
+    .filter((r) => r.aiUserId === aiUserId)
+    .sort((a, b) => Number(a.scheduledId - b.scheduledId));
+
+  const run = async (fn: () => Promise<unknown>) => {
+    setErr(null);
+    setBusy(true);
+    try {
+      await fn();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  // Auto-create the routine conversation on first run (no explicit target).
+  const noneConv = undefined;
+
+  return (
+    <div className="pt-3 mt-2 border-t border-neutral-200 dark:border-neutral-800">
+      <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">
+        Scheduled routines
+      </div>
+      <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1 max-w-md">
+        Standing instructions this assistant runs on a schedule (as itself). Only creators and
+        admins can change these.
+      </p>
+
+      {routines.length > 0 && (
+        <ul className="mt-2 space-y-1.5">
+          {routines.map((r) => {
+            const last = optionStringFromRow(r.lastStatus);
+            return (
+              <li
+                key={String(r.scheduledId)}
+                className="flex items-start justify-between gap-2 text-xs"
+              >
+                <div className="min-w-0">
+                  <div className="truncate text-neutral-700 dark:text-neutral-300">
+                    {routineLabel(r.prompt)}
+                  </div>
+                  <div className="text-neutral-400 dark:text-neutral-500">
+                    every {formatInterval(Number(r.intervalSecs))}
+                    {last ? ` · last: ${last}` : ""}
+                    {!r.enabled ? " · paused" : ""}
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 shrink-0">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      void run(() =>
+                        setEnabled({ scheduledId: r.scheduledId, enabled: !r.enabled }),
+                      )
+                    }
+                    className="text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 disabled:opacity-50"
+                  >
+                    {r.enabled ? "Pause" : "Resume"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void run(() => deleteRoutine({ scheduledId: r.scheduledId }))}
+                    className="text-red-500 hover:text-red-700 disabled:opacity-50"
+                    aria-label="Delete routine"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      <div className="mt-2 flex flex-wrap gap-2">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            void run(() =>
+              createTriage({ aiUserId, intervalSecs: 3600n, conversationId: noneConv }),
+            )
+          }
+          className="rounded-md border border-neutral-200 dark:border-neutral-700 px-2 py-1 text-xs text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors disabled:opacity-50"
+        >
+          + Sensor triage (hourly)
+        </button>
+        {hasMemory && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              void run(() =>
+                createConsolidation({
+                  aiUserId,
+                  intervalSecs: 604800n,
+                  conversationId: noneConv,
+                }),
+              )
+            }
+            className="rounded-md border border-neutral-200 dark:border-neutral-700 px-2 py-1 text-xs text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors disabled:opacity-50"
+          >
+            + Weekly memory consolidation
+          </button>
+        )}
+      </div>
+      {err ? (
+        <p className="mt-1 text-xs text-red-600 dark:text-red-400" role="alert">
+          {err}
+        </p>
+      ) : null}
+    </div>
   );
 }
 

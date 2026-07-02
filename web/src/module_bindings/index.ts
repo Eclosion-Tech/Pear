@@ -53,6 +53,7 @@ import CompleteBridgeCommandReducer from "./complete_bridge_command_reducer";
 import ConfirmBridgeCommandReducer from "./confirm_bridge_command_reducer";
 import ConfirmExtensionInstallReducer from "./confirm_extension_install_reducer";
 import CreateAiUserReducer from "./create_ai_user_reducer";
+import CreateAiUserRoutineReducer from "./create_ai_user_routine_reducer";
 import CreateApiEndpointReducer from "./create_api_endpoint_reducer";
 import CreateApiEndpointKeyReducer from "./create_api_endpoint_key_reducer";
 import CreateApiFieldMappingReducer from "./create_api_field_mapping_reducer";
@@ -64,10 +65,13 @@ import CreateDatabaseRowReducer from "./create_database_row_reducer";
 import CreateDatabaseSchemaReducer from "./create_database_schema_reducer";
 import CreateJobReducer from "./create_job_reducer";
 import CreateLocalUserReducer from "./create_local_user_reducer";
+import CreateMemoryConsolidationRoutineReducer from "./create_memory_consolidation_routine_reducer";
 import CreatePageReducer from "./create_page_reducer";
 import CreateReviewAgentBindingReducer from "./create_review_agent_binding_reducer";
+import CreateSensorTriageRoutineReducer from "./create_sensor_triage_routine_reducer";
 import CreateViewReducer from "./create_view_reducer";
 import DeleteAiUserReducer from "./delete_ai_user_reducer";
+import DeleteAiUserRoutineReducer from "./delete_ai_user_routine_reducer";
 import DeleteApiEndpointReducer from "./delete_api_endpoint_reducer";
 import DeleteApiFieldMappingReducer from "./delete_api_field_mapping_reducer";
 import DeleteAttachmentReducer from "./delete_attachment_reducer";
@@ -99,6 +103,7 @@ import InvalidateAiEvaluationsForRowReducer from "./invalidate_ai_evaluations_fo
 import LogApiCallReducer from "./log_api_call_reducer";
 import LoginReducer from "./login_reducer";
 import LogoutReducer from "./logout_reducer";
+import MarkAiMemoryConsolidatedReducer from "./mark_ai_memory_consolidated_reducer";
 import MarkConversationReadReducer from "./mark_conversation_read_reducer";
 import MigratePageToComponentTreeReducer from "./migrate_page_to_component_tree_reducer";
 import MoveComponentReducer from "./move_component_reducer";
@@ -152,6 +157,7 @@ import SendMessageReducer from "./send_message_reducer";
 import SendUserMessageReducer from "./send_user_message_reducer";
 import SetAiUserApiKeyReducer from "./set_ai_user_api_key_reducer";
 import SetAiUserModelReducer from "./set_ai_user_model_reducer";
+import SetAiUserRoutineEnabledReducer from "./set_ai_user_routine_enabled_reducer";
 import SetAiUserSerperApiKeyReducer from "./set_ai_user_serper_api_key_reducer";
 import SetAiUserToolSecretsJsonReducer from "./set_ai_user_tool_secrets_json_reducer";
 import SetAiUserWorkerTokenReducer from "./set_ai_user_worker_token_reducer";
@@ -211,6 +217,7 @@ import AiEvaluationRow from "./ai_evaluation_table";
 import AiUserConfigRow from "./ai_user_config_table";
 import AiUserMemoryRow from "./ai_user_memory_table";
 import AiUserProfileRow from "./ai_user_profile_table";
+import AiUserRoutineRow from "./ai_user_routine_table";
 import ApiCallLogRow from "./api_call_log_table";
 import ApiEndpointRow from "./api_endpoint_table";
 import ApiEndpointKeyRow from "./api_endpoint_key_table";
@@ -342,6 +349,17 @@ const tablesSchema = __schema({
       { name: 'ai_user_profile_identity_key', constraint: 'unique', columns: ['identity'] },
     ],
   }, AiUserProfileRow),
+  ai_user_routine: __table({
+    name: 'ai_user_routine',
+    indexes: [
+      { name: 'scheduled_id', algorithm: 'btree', columns: [
+        'scheduledId',
+      ] },
+    ],
+    constraints: [
+      { name: 'ai_user_routine_scheduled_id_key', constraint: 'unique', columns: ['scheduledId'] },
+    ],
+  }, AiUserRoutineRow),
   api_call_log: __table({
     name: 'api_call_log',
     indexes: [
@@ -1151,6 +1169,7 @@ const reducersSchema = __reducers(
   __reducerSchema("confirm_bridge_command", ConfirmBridgeCommandReducer),
   __reducerSchema("confirm_extension_install", ConfirmExtensionInstallReducer),
   __reducerSchema("create_ai_user", CreateAiUserReducer),
+  __reducerSchema("create_ai_user_routine", CreateAiUserRoutineReducer),
   __reducerSchema("create_api_endpoint", CreateApiEndpointReducer),
   __reducerSchema("create_api_endpoint_key", CreateApiEndpointKeyReducer),
   __reducerSchema("create_api_field_mapping", CreateApiFieldMappingReducer),
@@ -1162,10 +1181,13 @@ const reducersSchema = __reducers(
   __reducerSchema("create_database_schema", CreateDatabaseSchemaReducer),
   __reducerSchema("create_job", CreateJobReducer),
   __reducerSchema("create_local_user", CreateLocalUserReducer),
+  __reducerSchema("create_memory_consolidation_routine", CreateMemoryConsolidationRoutineReducer),
   __reducerSchema("create_page", CreatePageReducer),
   __reducerSchema("create_review_agent_binding", CreateReviewAgentBindingReducer),
+  __reducerSchema("create_sensor_triage_routine", CreateSensorTriageRoutineReducer),
   __reducerSchema("create_view", CreateViewReducer),
   __reducerSchema("delete_ai_user", DeleteAiUserReducer),
+  __reducerSchema("delete_ai_user_routine", DeleteAiUserRoutineReducer),
   __reducerSchema("delete_api_endpoint", DeleteApiEndpointReducer),
   __reducerSchema("delete_api_field_mapping", DeleteApiFieldMappingReducer),
   __reducerSchema("delete_attachment", DeleteAttachmentReducer),
@@ -1197,6 +1219,7 @@ const reducersSchema = __reducers(
   __reducerSchema("log_api_call", LogApiCallReducer),
   __reducerSchema("login", LoginReducer),
   __reducerSchema("logout", LogoutReducer),
+  __reducerSchema("mark_ai_memory_consolidated", MarkAiMemoryConsolidatedReducer),
   __reducerSchema("mark_conversation_read", MarkConversationReadReducer),
   __reducerSchema("migrate_page_to_component_tree", MigratePageToComponentTreeReducer),
   __reducerSchema("move_component", MoveComponentReducer),
@@ -1250,6 +1273,7 @@ const reducersSchema = __reducers(
   __reducerSchema("send_user_message", SendUserMessageReducer),
   __reducerSchema("set_ai_user_api_key", SetAiUserApiKeyReducer),
   __reducerSchema("set_ai_user_model", SetAiUserModelReducer),
+  __reducerSchema("set_ai_user_routine_enabled", SetAiUserRoutineEnabledReducer),
   __reducerSchema("set_ai_user_serper_api_key", SetAiUserSerperApiKeyReducer),
   __reducerSchema("set_ai_user_tool_secrets_json", SetAiUserToolSecretsJsonReducer),
   __reducerSchema("set_ai_user_worker_token", SetAiUserWorkerTokenReducer),

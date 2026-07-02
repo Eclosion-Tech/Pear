@@ -103,6 +103,30 @@ export function useProvisionAiUserMemory() {
   return useReducer(reducers.provisionAiUserMemory);
 }
 
+// ── Scheduled routines ──────────────────────────────────────────────────────────
+
+/** All AiUserRoutine rows (scheduled proactive routines). Filter by aiUserId. */
+export function useAiUserRoutines() {
+  const [routines] = useTable(tables.ai_user_routine);
+  return routines;
+}
+
+export function useCreateSensorTriageRoutine() {
+  return useReducer(reducers.createSensorTriageRoutine);
+}
+
+export function useCreateMemoryConsolidationRoutine() {
+  return useReducer(reducers.createMemoryConsolidationRoutine);
+}
+
+export function useSetAiUserRoutineEnabled() {
+  return useReducer(reducers.setAiUserRoutineEnabled);
+}
+
+export function useDeleteAiUserRoutine() {
+  return useReducer(reducers.deleteAiUserRoutine);
+}
+
 export function useDisableAiUserMemory() {
   return useReducer(reducers.disableAiUserMemory);
 }
