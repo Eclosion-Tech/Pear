@@ -74,7 +74,11 @@ type SharedContextRow = { jobId: bigint; key: string; value: string };
  * Returns the tool list, including context tools pre-seeded with the current
  * job's shared context so Claude can see what sibling tasks already created.
  */
-export function getPearTools(conn: ConnLike, jobId: bigint): Anthropic.Messages.Tool[] {
+export function getPearTools(
+  conn: ConnLike,
+  jobId: bigint,
+  opts: { includeMemoryTools?: boolean } = {},
+): Anthropic.Messages.Tool[] {
   // Snapshot current shared context for this job so Claude knows what exists.
   const ctx: Record<string, string> = {};
   for (const row of conn.db.orcha_shared_context.iter() as Iterable<SharedContextRow>) {
@@ -87,6 +91,9 @@ export function getPearTools(conn: ConnLike, jobId: bigint): Anthropic.Messages.
   return [
     ...PEAR_TOOLS,
     ...WEB_TOOLS,
+    // Delegated jobs attributed to an AI user get its read-only memory tools, so
+    // a subagent can consult the same memory the chat agent has.
+    ...(opts.includeMemoryTools ? MEMORY_TOOLS : []),
     {
       name: "get_context",
       description:
