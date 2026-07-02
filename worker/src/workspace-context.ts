@@ -64,6 +64,7 @@ type PageRow = {
   title: string;
   sortOrder: number;
   deletedAt?: unknown;
+  updatedAt?: { microsSinceUnixEpoch: bigint };
 };
 
 type PropertyDefinitionRow = {
@@ -339,6 +340,14 @@ function snippetOf(content: string, max = 200): string {
   return flat.length > max ? `${flat.slice(0, max)}…` : flat;
 }
 
+/** SpacetimeDB micros-since-epoch → `YYYY-MM-DD`, or undefined if unset. */
+function microsToIsoDate(micros: bigint | undefined): string | undefined {
+  if (micros === undefined) return undefined;
+  const ms = Number(micros / 1000n);
+  if (!Number.isFinite(ms) || ms <= 0) return undefined;
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
 function memoryPageContent(conn: ConnLike, pageId: bigint): string {
   // Memory pages are ComponentTree, whose body lives in `ComponentNode` rows —
   // `page_content` is empty for them. Fall back to `page_content` for any
@@ -357,6 +366,8 @@ export interface AiUserMemoryEntry {
   snippet: string;
   /** Full body length, so the model can judge whether to open it. */
   chars: number;
+  /** Last-updated date (`YYYY-MM-DD`), so the model can judge staleness. */
+  updated?: string;
 }
 
 /**
@@ -379,6 +390,7 @@ export function buildAiUserMemoryIndex(
       depth: tree.depthMap.get(p.id) ?? 0,
       snippet: snippetOf(body),
       chars: body.length,
+      updated: microsToIsoDate(p.updatedAt?.microsSinceUnixEpoch),
     };
   });
 }
@@ -408,8 +420,12 @@ export interface AiUserMemoryMatch {
 }
 
 /**
- * Case-insensitive substring search across this AI user's memory pages (title +
- * body). Returns up to `limit` matches with a snippet around the hit.
+ * Tokenized, scored search across this AI user's memory pages (title + body).
+ * The query is split into terms; a page scores on how many terms it matches and
+ * where — a title hit weighs more than a body hit, and matching *all* terms beats
+ * matching only some. Ties break toward the most recently updated page. Returns
+ * the top `limit` matches, each with a snippet centered on the first body hit
+ * (or the page head when only the title matched).
  */
 export function searchAiUserMemory(
   conn: ConnLike,
@@ -419,27 +435,56 @@ export function searchAiUserMemory(
 ): AiUserMemoryMatch[] {
   const tree = resolveMemorySubtree(conn, aiUserId);
   if (!tree) return [];
-  const q = query.trim().toLowerCase();
-  if (!q) return [];
+  const terms = query
+    .toLowerCase()
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+  if (terms.length === 0) return [];
 
-  const matches: AiUserMemoryMatch[] = [];
+  type Scored = { match: AiUserMemoryMatch; score: number; updatedMicros: bigint };
+  const scored: Scored[] = [];
+
   for (const page of tree.ordered) {
-    if (matches.length >= limit) break;
     const body = memoryPageContent(conn, page.id);
     const hayTitle = page.title.toLowerCase();
     const hayBody = body.toLowerCase();
-    const titleHit = hayTitle.includes(q);
-    const bodyIdx = hayBody.indexOf(q);
-    if (!titleHit && bodyIdx < 0) continue;
 
-    let snippet: string;
-    if (bodyIdx >= 0) {
-      const start = Math.max(0, bodyIdx - 80);
-      snippet = snippetOf(body.slice(start, bodyIdx + q.length + 120), 240);
-    } else {
-      snippet = snippetOf(body);
+    let score = 0;
+    let termsMatched = 0;
+    let firstBodyIdx = -1;
+    for (const term of terms) {
+      const inTitle = hayTitle.includes(term);
+      const bodyIdx = hayBody.indexOf(term);
+      const inBody = bodyIdx >= 0;
+      if (!inTitle && !inBody) continue;
+      termsMatched++;
+      if (inTitle) score += 3; // title hits weigh more than body hits
+      if (inBody) score += 1;
+      if (inBody && (firstBodyIdx < 0 || bodyIdx < firstBodyIdx)) firstBodyIdx = bodyIdx;
     }
-    matches.push({ pageId: page.id, title: page.title, snippet });
+    if (termsMatched === 0) continue;
+    if (termsMatched === terms.length) score += 5; // all-terms beats some-terms
+
+    const snippet =
+      firstBodyIdx >= 0
+        ? snippetOf(body.slice(Math.max(0, firstBodyIdx - 80), firstBodyIdx + 200), 240)
+        : snippetOf(body);
+    scored.push({
+      match: { pageId: page.id, title: page.title, snippet },
+      score,
+      updatedMicros: page.updatedAt?.microsSinceUnixEpoch ?? 0n,
+    });
   }
-  return matches;
+
+  scored.sort(
+    (a, b) =>
+      b.score - a.score ||
+      (a.updatedMicros < b.updatedMicros
+        ? 1
+        : a.updatedMicros > b.updatedMicros
+          ? -1
+          : 0),
+  );
+  return scored.slice(0, limit).map((s) => s.match);
 }

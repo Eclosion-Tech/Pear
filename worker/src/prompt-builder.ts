@@ -342,7 +342,8 @@ function renderAiUserMemoryIndex(entries: AiUserMemoryEntry[]): string {
   ];
   for (const e of entries) {
     const indent = "  ".repeat(Math.min(e.depth, 8));
-    const head = `${indent}- ${e.title} (page ${e.pageId}, ~${e.chars} chars)`;
+    const meta = `page ${e.pageId}, ~${e.chars} chars${e.updated ? `, updated ${e.updated}` : ""}`;
+    const head = `${indent}- ${e.title} (${meta})`;
     lines.push(e.snippet ? `${head}: ${e.snippet}` : head);
   }
   return lines.join("\n").trimEnd();

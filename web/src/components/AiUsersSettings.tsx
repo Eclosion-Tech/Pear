@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useTable, useSpacetimeDB } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
 import {
@@ -294,6 +295,7 @@ function CreateAiUserForm({ onDone }: { onDone: () => void }) {
 function AiUserRowEditor({
   profile,
   hasMemory,
+  memoryRootPageId,
   memoryBusy,
   onToggleMemory,
   onDelete,
@@ -301,11 +303,13 @@ function AiUserRowEditor({
 }: {
   profile: AiUserProfileRow;
   hasMemory: boolean;
+  memoryRootPageId?: bigint;
   memoryBusy: boolean;
   onToggleMemory: () => void;
   onDelete: () => void;
   deleteBusy: boolean;
 }) {
+  const router = useRouter();
   const patchProfile = usePatchAiUserProfileSettings();
   const updateSystemPrompt = useUpdateAiUserSystemPrompt();
   const setSerperApiKey = useSetAiUserSerperApiKey();
@@ -610,6 +614,15 @@ function AiUserRowEditor({
               Hidden Doc subtree injected into this assistant&apos;s system context for persona, notes,
               and long-term memory. Only creators and admins can change this.
             </p>
+            {hasMemory && memoryRootPageId !== undefined ? (
+              <button
+                type="button"
+                onClick={() => router.push(`/workspace/${memoryRootPageId}`)}
+                className="mt-2 text-xs font-medium text-green-700 dark:text-green-400 hover:underline"
+              >
+                View memory →
+              </button>
+            ) : null}
           </div>
           <button
             type="button"
@@ -739,6 +752,7 @@ export function AiUsersSettings() {
                   key={p.aiUserId.toString()}
                   profile={p}
                   hasMemory={memoryRowFor(p.aiUserId) !== undefined}
+                  memoryRootPageId={memoryRowFor(p.aiUserId)?.rootPageId}
                   memoryBusy={busyId === p.aiUserId}
                   onToggleMemory={() => void onToggleMemory(p.aiUserId, !memoryRowFor(p.aiUserId))}
                   onDelete={() => void onDelete(p.aiUserId)}

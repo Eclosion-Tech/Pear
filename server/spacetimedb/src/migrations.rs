@@ -5,11 +5,13 @@
 use sha2::{Digest, Sha256};
 use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 
-use crate::access_control::helpers::page_has_any_rule;
+use crate::access_control::helpers::{explicit_page_access_rule_allows, page_has_any_rule};
 use crate::ai::ai_user_config;
 use crate::ai::memory::{
-    ai_user_memory, collect_live_subtree_page_ids, grant_ai_memory_page_access,
+    ai_user_memory, collect_live_subtree_page_ids, grant_ai_memory_creator_read,
+    grant_ai_memory_page_access,
 };
+use crate::types::Permission;
 use crate::automations::seed_automation_primitives_inner;
 use crate::harness::{harness_template, HarnessTemplate};
 use crate::module_install::ensure_publisher_identity_recorded;
@@ -182,6 +184,36 @@ pub fn run_pending_migrations(ctx: &ReducerContext) -> Result<(), String> {
         "bridge_device_grant_backfill_v1",
         backfill_bridge_device_grants_inner
     );
+    run_step!(
+        ctx,
+        "ai_user_memory_creator_read_v1",
+        backfill_ai_user_memory_creator_read_inner
+    );
+    Ok(())
+}
+
+/// Grant each AI user's human creator read access to its memory root, so a
+/// non-admin creator can inspect/correct the AI's memory. Before this, the
+/// AI-only rule locked the creator out of the memory they're accountable for.
+/// A rule on the root covers the whole subtree; idempotent — skips a root the
+/// creator can already read.
+fn backfill_ai_user_memory_creator_read_inner(ctx: &ReducerContext) -> Result<(), String> {
+    let mut n = 0u64;
+    for mem in ctx.db.ai_user_memory().iter() {
+        let Some(cfg) = ctx.db.ai_user_config().id().find(mem.ai_user_id) else {
+            continue;
+        };
+        if cfg.created_by == cfg.identity {
+            continue;
+        }
+        if explicit_page_access_rule_allows(ctx, mem.root_page_id, cfg.created_by, &Permission::Read)
+        {
+            continue;
+        }
+        grant_ai_memory_creator_read(ctx, mem.root_page_id, cfg.created_by);
+        n += 1;
+    }
+    log::info!("ai_user_memory_creator_read_v1: added creator-read rules on {n} memory roots");
     Ok(())
 }
 

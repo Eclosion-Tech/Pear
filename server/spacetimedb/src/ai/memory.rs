@@ -44,6 +44,27 @@ pub(crate) fn grant_ai_memory_page_access(
         granted_at: ctx.timestamp,
     });
 }
+
+/// Grants the AI user's human creator *read* access to a memory page. The AI
+/// keeps Write (via `grant_ai_memory_page_access`); the creator is read-only, so
+/// a non-admin creator can inspect and correct what the AI has stored without
+/// being able to author its memory directly. Without this, once the AI-only rule
+/// exists only the AI or an admin can see the subtree — the creator is locked
+/// out of the memory they're accountable for.
+pub(crate) fn grant_ai_memory_creator_read(
+    ctx: &ReducerContext,
+    page_id: u64,
+    creator: Identity,
+) {
+    ctx.db.page_access_rule().insert(PageAccessRule {
+        id: next_page_access_rule_id(ctx),
+        page_id,
+        principal: workspace_member(creator),
+        permission: Permission::Read,
+        granted_by: ctx.sender(),
+        granted_at: ctx.timestamp,
+    });
+}
 /// AI-user memory: a hidden subtree per AI user, two-tier (working /
 /// long-term). `working` memory stays small and is rewritten freely;
 /// `long_term` is consolidated by a weekly Orcha job. Both are just Page
@@ -116,6 +137,11 @@ pub fn provision_ai_user_memory(ctx: &ReducerContext, ai_user_id: u64) -> Result
     // seed the same root Container + empty RichText that a normal Doc gets.
     seed_default_component_tree(ctx, root.id);
     grant_ai_memory_page_access(ctx, root.id, ai_user.identity);
+    // The human creator gets read-only visibility into the AI's memory so they
+    // can inspect/correct it — a rule on the root covers the whole subtree.
+    if ai_user.created_by != ai_user.identity {
+        grant_ai_memory_creator_read(ctx, root.id, ai_user.created_by);
+    }
     ctx.db.ai_user_memory().insert(AiUserMemory {
         id: next_ai_user_memory_id(ctx),
         ai_user_id,
