@@ -6,7 +6,12 @@ import {
   type TokenUsage,
   getDefaultProvider,
 } from "./providers.js";
-import { getPearTools, executeTool, type ConnLike } from "./tools.js";
+import {
+  getPearTools,
+  executeTool,
+  type ConnLike,
+  type ToolCallContext,
+} from "./tools.js";
 import { SystemPromptBuilder } from "./prompt-builder.js";
 
 let _defaults: { provider: InferenceProvider; model: string; plannerModel: string; maxTokens: number } | null = null;
@@ -174,10 +179,19 @@ export async function callLlm(
   jobId: bigint,
   extraContext = "",
   overrides?: { provider: InferenceProvider; model: string; maxTokens?: number },
+  // Execution context for the tool loop. When a delegated job belongs to an AI
+  // user, the caller passes that AI user's connection here so Pear mutation tools
+  // run with the AI user's identity + access rules (governed), instead of the
+  // admin `conn` used for reads. Defaults to `conn` for
+  // human-initiated jobs, preserving prior behaviour.
+  exec?: { conn: ConnLike; toolContext?: ToolCallContext },
 ): Promise<LlmResult> {
   const inf = overrides?.provider ?? defaults().provider;
   const model = overrides?.model ?? defaults().model;
   const maxTokens = overrides?.maxTokens ?? defaults().maxTokens;
+
+  const execConn = exec?.conn ?? conn;
+  const toolContext = exec?.toolContext ?? {};
 
   const userMessage = extraContext
     ? `${taskDescription}\n\n---\n${extraContext}`
@@ -187,7 +201,7 @@ export async function callLlm(
     { role: "user", content: userMessage },
   ];
 
-  const tools: ToolDef[] = getPearTools(conn, jobId) as ToolDef[];
+  const tools: ToolDef[] = getPearTools(execConn, jobId) as ToolDef[];
 
   const usage: TokenUsage = {
     inputTokens: 0,
@@ -231,7 +245,7 @@ export async function callLlm(
     const toolResults: { type: "tool_result"; tool_use_id: string; content: string }[] = [];
     for (const block of toolCalls) {
       console.log(`[worker] Tool call [${block.name}]: ${JSON.stringify(block.input)}`);
-      const result = await executeTool(conn, block.name, block.input, jobId);
+      const result = await executeTool(execConn, block.name, block.input, jobId, toolContext);
       console.log(`[worker] Tool result [${block.name}]: ${result}`);
       toolResults.push({ type: "tool_result", tool_use_id: block.id, content: result });
     }

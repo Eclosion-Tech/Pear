@@ -150,7 +150,7 @@ function isFromOtherUser(
  * True if `msg` is a server-posted job-completion trigger (see
  * `post_job_completion_trigger` in orcha.rs) — a `System("job_completion")`
  * message the worker must treat as a turn trigger even though it is not from
- * another user, so the AI verifies delegated work and reports the outcome (1.1).
+ * another user, so the AI verifies delegated work and reports the outcome.
  */
 function isJobCompletionTrigger(msg: ConversationMessageRow): boolean {
   return msg.sender.tag === "System" && msg.sender.value === "job_completion";
@@ -444,7 +444,7 @@ function isParticipant(
 }
 
 /** Latest message in `conversationId` that should trigger a reply — from
- * another user or a job-completion trigger (1.1). */
+ * another user or a job-completion trigger. */
 function latestTriggerMessage(
   conn: ConnLike,
   conversationId: bigint,
@@ -1138,7 +1138,7 @@ export function registerConversationHandlers(
   conn.db.conversation_message.onInsert(
     (_ctx: unknown, msg: ConversationMessageRow) => {
       // Wake on a message from another user, or on a job-completion trigger the
-      // server posted for a job this AI delegated (1.1). `isParticipant` +
+      // server posted for a job this AI delegated. `isParticipant` +
       // watermark guards inside handleConversationMessage keep this scoped.
       if (isTriggerMessage(msg, selfHex)) {
         void handleConversationMessage(conn, msg, selfHex, logTag);
@@ -1166,7 +1166,7 @@ export async function processRecentConversationMessages(
 
   // Latest trigger (foreign message or job-completion trigger) per conversation.
   // A job that completed while this worker was offline left a trigger we still
-  // owe a verify+report turn on (1.1); the reply watermark inside
+  // owe a verify+report turn on; the reply watermark inside
   // handleConversationMessage dedups anything already answered.
   const latestByConv = new Map<bigint, ConversationMessageRow>();
   for (const msg of conn.db.conversation_message.iter() as Iterable<ConversationMessageRow>) {

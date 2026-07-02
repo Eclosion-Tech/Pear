@@ -208,7 +208,7 @@ fn check_orcha_job_completion(ctx: &ReducerContext, job_id: u64) {
             // Close the delegation loop: if this job was spawned from a
             // conversation (a message carries its job_id), post a system-attributed
             // completion trigger into that thread so the AI user's worker wakes up,
-            // verifies the work, and reports to the human (assessment 1.1).
+            // verifies the work, and reports to the human.
             post_job_completion_trigger(ctx, job_id, &tasks, any_failed);
         }
     }
