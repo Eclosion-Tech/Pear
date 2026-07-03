@@ -9,7 +9,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { writeComponentTreeDoc, readComponentTreeDoc } from "./component-authoring.js";
 import {
-  buildComponentTreeV1Blob,
+  appendPanelToBlob,
   specHasContent,
   type RenderUiSpec,
   type UiControl,
@@ -125,6 +125,15 @@ export function getConversationTools(): Anthropic.Messages.Tool[] {
   return [...PEAR_TOOLS, ...WEB_TOOLS, ...MEMORY_TOOLS, ...UI_TOOLS];
 }
 
+/**
+ * Static tool definitions for surfaces outside the chat loop (e.g. the MCP
+ * server). Excludes UI_TOOLS and the per-job context tool, both of which only
+ * make sense inside a conversation/Orcha turn.
+ */
+export function getStaticToolDefs(): Anthropic.Messages.Tool[] {
+  return [...PEAR_TOOLS, ...WEB_TOOLS, ...MEMORY_TOOLS];
+}
+
 // ── Generative UI tool (custom-view runtime, M1b-lite) ────────────────────────
 
 const UI_TOOLS: Anthropic.Messages.Tool[] = [
@@ -138,7 +147,9 @@ const UI_TOOLS: Anthropic.Messages.Tool[] = [
       "work. It binds to no workspace data (not a database/table view). You can also write a normal " +
       "text reply alongside it. Content: an optional title (heading), a markdown body (#/## " +
       "headings, paragraphs, - bullets, 1. numbered, - [ ] checklists; inline **bold**/*italic* ok), " +
-      "and optional controls (Button, Input).",
+      "and optional controls (Button, Input). You may call it more than once in a " +
+      "reply — panels accumulate in order on the message — but prefer one call with " +
+      "a fuller markdown body when the content is one logical panel.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -1821,12 +1832,32 @@ export async function executeTool(
             error: "render_ui needs at least a title, markdown, or one control.",
           });
         }
-        const blob = buildComponentTreeV1Blob(spec);
+        // A message holds one component tree; append so multiple render_ui
+        // calls in a turn accumulate instead of overwriting (last-write-wins
+        // would silently drop earlier panels).
+        const existingRow = [
+          ...(conn.db.conversation_message.iter() as Iterable<AnyRow>),
+        ].find((m) => (m.id as bigint) === toolContext.messageId);
+        const existing = existingRow
+          ? readOptionStringFromRow(existingRow.componentTreeJson)
+          : null;
+        const blob = appendPanelToBlob(existing, spec);
         await conn.reducers.setMessageComponentTree({
           messageId: toolContext.messageId,
           componentTreeJson: blob,
         });
-        return JSON.stringify({ ok: true, rendered: true });
+        // Reducer calls are fire-and-forget; wait until the write is visible in
+        // the subscription so a *second* render_ui this turn appends onto it
+        // rather than reading a stale value and clobbering this panel.
+        await waitFor(() => {
+          const row = [
+            ...(conn.db.conversation_message.iter() as Iterable<AnyRow>),
+          ].find((m) => (m.id as bigint) === toolContext.messageId);
+          return row && readOptionStringFromRow(row.componentTreeJson) === blob
+            ? true
+            : undefined;
+        });
+        return JSON.stringify({ ok: true, rendered: true, appended: existing != null });
       }
       case "create_page": {
         // parent_id=0 means root (no parent). Map to undefined so the SDK

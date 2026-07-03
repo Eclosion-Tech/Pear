@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import * as Y from "yjs";
 import { yDocToPlainText } from "@eclosion-tech/pulp/rich-text/yjsToHtml";
 import {
+  appendPanelToBlob,
   buildComponentTreeV1Blob,
   specHasContent,
   type RenderUiSpec,
@@ -93,6 +94,52 @@ test("builds a component_tree_v1 tree: Container root + title + body + controls"
   );
   assert.equal(inputProps.label, "Note");
   assert.equal(inputProps.placeholder, "type…");
+});
+
+test("append accumulates panels under one root (multiple render_ui in a turn)", () => {
+  // First call → fresh tree.
+  const first = appendPanelToBlob(null, { title: "Card" });
+  const firstWire = JSON.parse(first) as Wire;
+  assert.equal(firstWire.nodes.filter((n) => n.id !== firstWire.root_id).length, 1);
+
+  // Second call appends onto the existing blob (does NOT overwrite).
+  const second = appendPanelToBlob(first, {
+    title: "Checklist",
+    markdown: "- [ ] a\n- [x] b",
+  });
+  const wire = JSON.parse(second) as Wire;
+
+  // Single shared root; the first panel's Heading survives alongside the new one.
+  assert.equal(wire.nodes.filter((n) => n.parent_id === null).length, 1);
+  assert.equal(wire.root_id, firstWire.root_id);
+  const children = wire.nodes.filter((n) => n.id !== wire.root_id);
+  assert.ok(children.every((n) => n.parent_id === wire.root_id));
+
+  // Ids stay unique and orders are strictly ascending across both panels.
+  assert.equal(new Set(children.map((n) => n.id)).size, children.length);
+  const orders = children.map((n) => n.order);
+  assert.deepEqual(orders, [...orders].sort((a, b) => a - b));
+  assert.equal(new Set(orders).size, orders.length);
+
+  // Content from both panels present: two headings + two checklist items.
+  assert.equal(children.filter((n) => n.component_type === "Heading").length, 2);
+  assert.equal(
+    children.filter((n) => n.component_type === "ChecklistItem").length,
+    2,
+  );
+});
+
+test("append falls back to a fresh build when the existing blob is unusable", () => {
+  // (Yjs bytes carry a random clientID, so assert structure, not byte-equality.)
+  for (const bad of [null, undefined, "", "{not json", '{"v":"component_tree_v2"}']) {
+    const wire = JSON.parse(appendPanelToBlob(bad, { title: "X" })) as Wire;
+    const roots = wire.nodes.filter((n) => n.parent_id === null);
+    assert.equal(roots.length, 1);
+    assert.equal(roots[0].component_type, "Container");
+    const children = wire.nodes.filter((n) => n.id !== wire.root_id);
+    assert.equal(children.length, 1); // fresh single panel, not appended/duplicated
+    assert.equal(children[0].component_type, "Heading");
+  }
 });
 
 test("produces valid JSON for a controls-only spec (no text nodes)", () => {
