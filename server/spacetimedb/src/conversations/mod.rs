@@ -279,9 +279,16 @@ pub struct ConversationMessage {
     /// they occurred, so the client can interleave tool cards between text
     /// segments instead of stacking all tools at the top. Ignored by session
     /// reconstruction (which uses `content` + `tool_calls_json`); purely cosmetic.
-    /// MUST stay last: AutoMigrate only supports columns appended at the end.
     #[default(None::<String>)]
     pub timeline_json: Option<String>,
+    /// Optional inline generative-UI payload: a `component_tree_v1` JSON blob
+    /// (same shape as `serialize_component_tree`) that the client renders
+    /// read-only in the thread via `<StaticComponentTree>` / pulp `<BlockView>`.
+    /// Authored by an AI turn (see `set_message_component_tree`); render-only,
+    /// no interactive return-path yet (custom-view runtime ADR D7).
+    /// MUST stay last: AutoMigrate only supports columns appended at the end.
+    #[default(None::<String>)]
+    pub component_tree_json: Option<String>,
 }
 
 /// What a `ConversationAttachment` carries.
@@ -497,6 +504,7 @@ pub fn send_message(
         sender: MessageSender::User(ctx.sender()),
         content,
         job_id,
+        component_tree_json: None,
         created_at: ctx.timestamp,
         status: status.unwrap_or(MessageStatus::Complete),
         thinking,
@@ -559,6 +567,7 @@ pub fn send_user_message(
         cache_creation_input_tokens: 0,
         cache_read_input_tokens: 0,
         linked_conversation_id: None,
+        component_tree_json: None,
     });
 
     for spec in attachments {
@@ -665,6 +674,64 @@ pub fn update_message(
     Ok(())
 }
 
+/// Set (or clear, with `None`) the inline `component_tree_v1` generative-UI
+/// payload on an assistant message. Same authority model as `update_message`
+/// (only the original AI sender may write it); kept separate so streaming
+/// `update_message` flushes don't have to thread the blob and so `..msg`
+/// preserves it across them. Idempotent; render-only per ADR D7.
+#[reducer]
+pub fn set_message_component_tree(
+    ctx: &ReducerContext,
+    message_id: u64,
+    component_tree_json: Option<String>,
+) -> Result<(), String> {
+    let msg = ctx
+        .db
+        .conversation_message()
+        .id()
+        .find(message_id)
+        .ok_or("Message not found")?;
+
+    let sender_identity = match &msg.sender {
+        MessageSender::User(id) => *id,
+        MessageSender::System(_) => {
+            return Err("Cannot update a system message".to_string());
+        }
+    };
+    if sender_identity != ctx.sender() {
+        return Err("Only the original sender can update this message".to_string());
+    }
+    if ctx
+        .db
+        .ai_user_profile()
+        .identity()
+        .find(sender_identity)
+        .is_none()
+    {
+        return Err("Cannot update a human message".to_string());
+    }
+
+    let conv = ctx
+        .db
+        .conversation()
+        .id()
+        .find(msg.conversation_id)
+        .ok_or("Conversation not found")?;
+    if conv.status != ConversationStatus::Active {
+        return Err("Conversation is closed".to_string());
+    }
+
+    ctx.db
+        .conversation_message()
+        .id()
+        .update(ConversationMessage {
+            component_tree_json,
+            ..msg
+        });
+
+    Ok(())
+}
+
 /// Close a conversation. No further messages can be added.
 #[reducer]
 pub fn close_conversation(ctx: &ReducerContext, conversation_id: u64) -> Result<(), String> {
@@ -763,6 +830,7 @@ pub fn record_compaction(
         id: next_conversation_message_id(ctx),
         conversation_id,
         sender: MessageSender::System("compaction".to_string()),
+        component_tree_json: None,
         content: summary,
         job_id: None,
         created_at: ctx.timestamp,
@@ -993,6 +1061,7 @@ fn post_feedback_trigger(ctx: &ReducerContext, conversation_id: u64, note: &str)
         id: next_conversation_message_id(ctx),
         conversation_id,
         sender: MessageSender::System("feedback".to_string()),
+        component_tree_json: None,
         content: body,
         job_id: None,
         created_at: ctx.timestamp,

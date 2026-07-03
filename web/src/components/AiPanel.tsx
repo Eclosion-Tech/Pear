@@ -52,6 +52,7 @@ import {
   type AiUserProfileRow,
 } from "@/src/hooks/useAiUsers";
 import { ContextBar } from "@/src/components/ContextBar";
+import { StaticComponentTree } from "@/src/components/component-renderers/StaticComponentTree";
 import { useTable, useReducer } from "spacetimedb/react";
 import { tables, reducers } from "@/src/module_bindings";
 import type { Identity } from "spacetimedb";
@@ -559,6 +560,13 @@ function AiMessageContent({ msg, aiName }: { msg: ConversationMessageRow; aiName
             </div>
           )}
         </>
+      )}
+
+      {/* Inline generative UI — a read-only component tree the assistant
+          emitted (custom-view runtime ADR D7). Render-only: no interactive
+          return-path yet. */}
+      {msg.componentTreeJson && (
+        <StaticComponentTree json={msg.componentTreeJson} />
       )}
 
       {/* Thinking indicator (no thinking text yet) */}

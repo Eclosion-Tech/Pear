@@ -47,7 +47,9 @@ export const BlockNodeView = memo(function BlockNodeView({
       {renderedChildren}
     </Renderer>
   );
-  if (node.parentId == null) return rendered;
+  // Root never gets chrome; read-only mode gets no chrome anywhere (no drag
+  // grip, insert +, or block menu) — the surface is structurally immutable.
+  if (node.parentId == null || pulp?.config.readOnly) return rendered;
 
   const gutterMode =
     def.acceptsChildren && children.length > 0 ? "header" : "side";
