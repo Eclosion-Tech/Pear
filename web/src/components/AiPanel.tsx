@@ -3,7 +3,8 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useSpacetimeDB } from "spacetimedb/react";
-import Markdown from "react-markdown";
+import Markdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   useOrchaTasksForJob,
   type OrchaJobRow,
@@ -169,6 +170,19 @@ function InlineJobCard({ jobId }: { jobId: bigint }) {
 }
 
 // ── Thinking block (collapsible) ──────────────────────────────────────────────
+
+// Shared markdown config for AI message content. `remark-gfm` enables GitHub
+// tables, task lists, strikethrough, and autolinks (react-markdown ships these
+// OFF by default — without it a GFM table renders as one line of raw pipes).
+// Wide tables scroll within the narrow chat panel instead of overflowing it.
+const MD_REMARK_PLUGINS = [remarkGfm];
+const MD_COMPONENTS: Components = {
+  table: ({ node: _node, ...props }) => (
+    <div className="overflow-x-auto">
+      <table {...props} />
+    </div>
+  ),
+};
 
 function ThinkingBlock({ thinking, isStreaming }: { thinking: string; isStreaming: boolean }) {
   const [expanded, setExpanded] = useState(isStreaming);
@@ -495,7 +509,9 @@ function TimelineDisplay({
               key={i}
               className="ai-message-md text-sm leading-relaxed prose prose-sm prose-neutral dark:prose-invert max-w-none"
             >
-              <Markdown>{b.text}</Markdown>
+              <Markdown remarkPlugins={MD_REMARK_PLUGINS} components={MD_COMPONENTS}>
+                {b.text}
+              </Markdown>
             </div>
           ) : null;
         }
@@ -555,7 +571,9 @@ function AiMessageContent({ msg, aiName }: { msg: ConversationMessageRow; aiName
           {/* Message content */}
           {msg.content && (
             <div className="ai-message-md text-sm leading-relaxed prose prose-sm prose-neutral dark:prose-invert max-w-none">
-              <Markdown>{msg.content}</Markdown>
+              <Markdown remarkPlugins={MD_REMARK_PLUGINS} components={MD_COMPONENTS}>
+                {msg.content}
+              </Markdown>
               {status === "Streaming" && <span className="animate-pulse">|</span>}
             </div>
           )}
