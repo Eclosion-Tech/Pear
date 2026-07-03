@@ -8,6 +8,12 @@
 
 import type Anthropic from "@anthropic-ai/sdk";
 import { writeComponentTreeDoc, readComponentTreeDoc } from "./component-authoring.js";
+import {
+  buildComponentTreeV1Blob,
+  specHasContent,
+  type RenderUiSpec,
+  type UiControl,
+} from "./component-tree-ui.js";
 import { ssrfSafeFetch } from "./ssrf.js";
 import { getBridgeSql } from "./bridge-sql.js";
 import {
@@ -34,6 +40,8 @@ export type ToolCallContext = {
   aiIdentityHex?: string;
   /** Numeric id of the AI user executing this chat turn (for memory tools). */
   aiUserId?: bigint;
+  /** The assistant message being authored this turn; target for `render_ui`. */
+  messageId?: bigint;
 };
 
 function readOptionStringFromRow(v: unknown): string | null {
@@ -114,8 +122,56 @@ export function getPearTools(
  * create pages, databases, add properties, etc. directly in chat.
  */
 export function getConversationTools(): Anthropic.Messages.Tool[] {
-  return [...PEAR_TOOLS, ...WEB_TOOLS, ...MEMORY_TOOLS];
+  return [...PEAR_TOOLS, ...WEB_TOOLS, ...MEMORY_TOOLS, ...UI_TOOLS];
 }
+
+// ── Generative UI tool (custom-view runtime, M1b-lite) ────────────────────────
+
+const UI_TOOLS: Anthropic.Messages.Tool[] = [
+  {
+    name: "render_ui",
+    description:
+      "Render a small READ-ONLY interface inline in your chat reply — a titled panel with " +
+      "formatted text and optional simple controls. Use when a visual layout communicates better " +
+      "than prose: a summary card, a checklist, a form mock-up, a labeled result. The rendered UI " +
+      "is display-only — buttons and inputs are shown but do NOT act yet, so don't promise they " +
+      "work. It binds to no workspace data (not a database/table view). You can also write a normal " +
+      "text reply alongside it. Content: an optional title (heading), a markdown body (#/## " +
+      "headings, paragraphs, - bullets, 1. numbered, - [ ] checklists; inline **bold**/*italic* ok), " +
+      "and optional controls (Button, Input).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        title: {
+          type: "string",
+          description: "Optional panel title, rendered as a level-1 heading.",
+        },
+        markdown: {
+          type: "string",
+          description:
+            "Optional body as markdown. Headings, paragraphs, and bullet/numbered/checklist lists.",
+        },
+        controls: {
+          type: "array",
+          description:
+            "Optional display-only controls, rendered in order after the body.",
+          items: {
+            type: "object" as const,
+            properties: {
+              kind: { type: "string", enum: ["Button", "Input"] },
+              label: { type: "string", description: "Button text / input label." },
+              placeholder: {
+                type: "string",
+                description: "Input placeholder (Input only).",
+              },
+            },
+            required: ["kind"],
+          },
+        },
+      },
+    },
+  },
+];
 
 // ── Memory tools (on-demand private-memory access, assessment #19) ────────────
 
@@ -1742,6 +1798,36 @@ export async function executeTool(
   try {
     requireChatWriteGrant(conn, toolName, input, toolContext);
     switch (toolName) {
+      case "render_ui": {
+        // Emits a read-only component_tree_v1 onto the current assistant
+        // message (custom-view runtime, M1b-lite). Only meaningful in a chat
+        // turn, where the message id is known.
+        if (!toolContext.messageId) {
+          return JSON.stringify({
+            ok: false,
+            error: "render_ui is only available during a chat turn.",
+          });
+        }
+        const spec: RenderUiSpec = {
+          title: typeof input.title === "string" ? input.title : undefined,
+          markdown: typeof input.markdown === "string" ? input.markdown : undefined,
+          controls: Array.isArray(input.controls)
+            ? (input.controls as UiControl[])
+            : undefined,
+        };
+        if (!specHasContent(spec)) {
+          return JSON.stringify({
+            ok: false,
+            error: "render_ui needs at least a title, markdown, or one control.",
+          });
+        }
+        const blob = buildComponentTreeV1Blob(spec);
+        await conn.reducers.setMessageComponentTree({
+          messageId: toolContext.messageId,
+          componentTreeJson: blob,
+        });
+        return JSON.stringify({ ok: true, rendered: true });
+      }
       case "create_page": {
         // parent_id=0 means root (no parent). Map to undefined so the SDK
         // sends Option::None rather than Option::Some(0) which is an invalid page id.

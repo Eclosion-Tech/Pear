@@ -372,6 +372,8 @@ const READ_ONLY_TOOLS = new Set([
   "list_sensor_findings",
   "fetch_url",
   "web_search",
+  // Renders a display-only UI on the message; changes no workspace data.
+  "render_ui",
   "read_memory",
   "search_memory",
 ]);
@@ -690,6 +692,8 @@ async function handleConversationMessage(
       currentPageId: conv.pageId,
       aiIdentityHex: selfHex,
       aiUserId: aiProfile.aiUserId,
+      // Target for the render_ui tool — the assistant message being authored.
+      messageId: aiMsgId,
     };
 
     const tools: ToolDef[] = getConversationTools() as ToolDef[];
