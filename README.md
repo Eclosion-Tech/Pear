@@ -69,6 +69,7 @@ Pages and database rows are the same entity — a page viewed in a grid is a row
 - **Agent edit review** — AI edits are bracketed with before/after snapshots; review and accept/reject them per page.
 - **Orcha** — Job/task coordination tables and reducers embedded in the same module (or point workers at an external Orcha DB). Page-scoped jobs from the in-app panel.
 - **Extensions** — Install MCP servers and config bundles; permissioned tool execution with audit logging. Built-in workspace tools extension seeded for new databases.
+- **MCP server** — Let external AI models (Claude Code, Claude Desktop, Cursor, …) use Pear as a persistent memory store and notes backend over stdio or HTTP. Each client acts as a Pear AI user with its own private memory subtree. See [`docs/MCP_SERVER.md`](./docs/MCP_SERVER.md).
 
 For a finer-grained shipped vs planned list, see [`ROADMAP.md`](./ROADMAP.md).
 

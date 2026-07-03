@@ -137,6 +137,35 @@ services:
     networks:
       - pear
 
+  # ── Pear MCP Server (optional) ─────────────────────────────────────────────
+  # Streamable-HTTP MCP endpoint so external AI models (Claude Code, Cursor, …)
+  # can use Pear as a memory store / notes backend. Clients authenticate with
+  # an AI user's worker token as a Bearer token (mint one: `pnpm mcp:provision`).
+  # Opt-in: docker compose --profile mcp up
+  mcp:
+    image: ${WORKER_IMAGE:-pear-worker:latest}
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    container_name: pear-mcp
+    command: ["pnpm", "--filter", "@pear/worker", "mcp:http"]
+    profiles: ["mcp"]
+    depends_on:
+      - spacetimedb
+    ports:
+      - "${PEAR_MCP_HTTP_PORT:-3888}:3888"
+    environment:
+      SPACETIMEDB_URI: ws://spacetimedb:3000
+      SPACETIMEDB_DB_NAME: ${SPACETIMEDB_DB_NAME:-pear-dev}
+      PEAR_MCP_HTTP_HOST: 0.0.0.0
+      PEAR_MCP_HTTP_PORT: 3888
+      # Host-header allowlist for DNS-rebinding protection. Add your public
+      # hostname:port when exposing this beyond localhost.
+      PEAR_MCP_ALLOWED_HOSTS: ${PEAR_MCP_ALLOWED_HOSTS:-localhost:3888,127.0.0.1:3888}
+    restart: unless-stopped
+    networks:
+      - pear
+
 networks:
   pear:
     driver: bridge
