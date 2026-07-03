@@ -7,6 +7,7 @@
     "start": "next start",
     "generate": "cd ../server && spacetime generate",
     "smoke": "tsx scripts/component-tree-smoke.ts",
+    "bench:repeater": "tsx scripts/repeater-churn-bench.ts",
     "migrate-blocknote": "tsx scripts/migrate-blocknote-pages.ts"
   },
   "dependencies": {
