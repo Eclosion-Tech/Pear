@@ -699,6 +699,7 @@ export const ConversationMessage = __t.object("ConversationMessage", {
   cacheReadInputTokens: __t.u32(),
   linkedConversationId: __t.option(__t.u64()),
   timelineJson: __t.option(__t.string()),
+  componentTreeJson: __t.option(__t.string()),
 });
 export type ConversationMessage = __Infer<typeof ConversationMessage>;
 

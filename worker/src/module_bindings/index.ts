@@ -174,6 +174,7 @@ import SetConversationVisibilityReducer from "./set_conversation_visibility_redu
 import SetDefaultViewReducer from "./set_default_view_reducer";
 import SetExtensionEnabledReducer from "./set_extension_enabled_reducer";
 import SetMcpServerApiKeyReducer from "./set_mcp_server_api_key_reducer";
+import SetMessageComponentTreeReducer from "./set_message_component_tree_reducer";
 import SetMessageFeedbackReducer from "./set_message_feedback_reducer";
 import SetPageAccessRuleReducer from "./set_page_access_rule_reducer";
 import SetPageEmbeddingReducer from "./set_page_embedding_reducer";
@@ -1291,6 +1292,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_default_view", SetDefaultViewReducer),
   __reducerSchema("set_extension_enabled", SetExtensionEnabledReducer),
   __reducerSchema("set_mcp_server_api_key", SetMcpServerApiKeyReducer),
+  __reducerSchema("set_message_component_tree", SetMessageComponentTreeReducer),
   __reducerSchema("set_message_feedback", SetMessageFeedbackReducer),
   __reducerSchema("set_page_access_rule", SetPageAccessRuleReducer),
   __reducerSchema("set_page_embedding", SetPageEmbeddingReducer),

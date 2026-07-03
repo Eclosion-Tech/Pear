@@ -35,4 +35,5 @@ export default __t.row({
   cacheReadInputTokens: __t.u32().name("cache_read_input_tokens"),
   linkedConversationId: __t.option(__t.u64()).name("linked_conversation_id"),
   timelineJson: __t.option(__t.string()).name("timeline_json"),
+  componentTreeJson: __t.option(__t.string()).name("component_tree_json"),
 });
