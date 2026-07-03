@@ -89,7 +89,54 @@ const STATIC_PROSE_DEFAULT =
 const STATIC_PROSE_LIST_ITEM =
   "my-0 text-neutral-900 dark:text-neutral-100 leading-normal [&_p]:my-0 [&_a]:underline [&_code]:rounded [&_code]:bg-neutral-100 [&_code]:dark:bg-neutral-800 [&_code]:px-1 [&_code]:py-0.5 [&_strong]:font-semibold [&_em]:italic [&_u]:underline [&_s]:line-through";
 
-export function RichTextRenderer({
+/**
+ * Public `RichText` renderer — a thin dispatcher. In read-only mode
+ * (`config.readOnly`, set by `<BlockView>`) it renders the static HTML body
+ * with no ProseMirror / IndexedDB / focus / observer machinery; otherwise the
+ * full viewport-aware editable renderer.
+ */
+export function RichTextRenderer(
+  props: BlockRendererProps & { textDensity?: RichTextTextDensity },
+) {
+  const { config } = usePulp();
+  if (config.readOnly) return <StaticRichText {...props} />;
+  return <EditableRichText {...props} />;
+}
+
+/**
+ * Read-only RichText — builds the HTML once from the node's Yjs blob and
+ * renders it statically. No editor, no mutations, no IndexedDB, no focus or
+ * intersection wiring. Safe outside the editing contexts.
+ */
+function StaticRichText({
+  node,
+  tree,
+  textDensity = "default",
+}: BlockRendererProps & { textDensity?: RichTextTextDensity }) {
+  const props = useMemo<RichTextProps>(() => safeParse(node.props), [node.props]);
+  const state = tree.yjs.get(node.id);
+  const html = useMemo(() => {
+    if (!state?.data || state.data.byteLength === 0) return "";
+    const doc = new Y.Doc();
+    try {
+      Y.applyUpdate(doc, state.data, "remote");
+      return yDocToHtml(doc);
+    } catch {
+      return "";
+    } finally {
+      doc.destroy();
+    }
+  }, [state?.data]);
+  return (
+    <StaticBody
+      html={html}
+      placeholder={props.placeholder ?? ""}
+      textDensity={textDensity}
+    />
+  );
+}
+
+function EditableRichText({
   node,
   tree,
   textDensity = "default",

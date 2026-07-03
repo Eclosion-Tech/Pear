@@ -94,6 +94,14 @@ export type PulpConfig = {
    * The host app is responsible for creating the anchored thread.
    */
   onCommentBlock?: (nodeId: BlockId) => void;
+  /**
+   * Ephemeral read-only render mode. When set, the tree renders with no
+   * editor machinery: no block chrome (drag / insert / menu), and leaf
+   * editors (RichText, Heading) render their static HTML body instead of
+   * mounting ProseMirror / IndexedDB. Used by `<BlockView>` for custom-view
+   * and generative-chat rendering. Mutations are never invoked in this mode.
+   */
+  readOnly?: boolean;
 };
 
 export type PulpContextValue = {

@@ -62,7 +62,84 @@ const HEADING_STATIC_CLASS: Record<number, string> = {
   6: "text-base font-medium leading-tight my-2",
 };
 
-export function HeadingRenderer({ node, tree, children }: BlockRendererProps) {
+/**
+ * Public `Heading` renderer — a thin dispatcher. In read-only mode
+ * (`config.readOnly`, set by `<BlockView>`) it renders a static heading with
+ * no editor machinery; otherwise the full editable renderer.
+ */
+export function HeadingRenderer(props: BlockRendererProps) {
+  const { config } = usePulp();
+  if (config.readOnly) return <StaticHeading {...props} />;
+  return <EditableHeading {...props} />;
+}
+
+/**
+ * Read-only Heading — static HTML from the Yjs blob, non-interactive section
+ * chevron, children rendered when expanded. No ProseMirror / IndexedDB / focus.
+ */
+function StaticHeading({ node, tree, children }: BlockRendererProps) {
+  const props = useMemo<HeadingProps>(() => safeParse(node.props), [node.props]);
+  const level = clampLevel(props.level);
+  const textAlign = normalizeTextAlign(props.textAlign);
+  const collapsed = props.collapsed ?? false;
+  const sectionFlag = props.section === true;
+  const legacyText = props.text ?? "";
+
+  const sectionChildren = tree.byParent.get(node.id) ?? [];
+  const hasSection = sectionFlag || sectionChildren.length > 0;
+
+  const state = tree.yjs.get(node.id);
+  const html = useMemo(() => {
+    if (!state?.data || state.data.byteLength === 0) {
+      return legacyText ? escapeHtml(legacyText) : "";
+    }
+    const doc = new Y.Doc();
+    try {
+      Y.applyUpdate(doc, state.data, "remote");
+      return yDocToHtml(doc);
+    } catch {
+      return "";
+    } finally {
+      doc.destroy();
+    }
+  }, [state?.data, legacyText]);
+
+  const alignStyle =
+    textAlign === "left" ? undefined : ({ textAlign } as const);
+
+  return (
+    <div className="min-w-0">
+      <div className="flex min-w-0 items-start gap-1">
+        {hasSection ? (
+          <span
+            className="mt-2 flex h-6 w-6 shrink-0 items-center justify-center text-neutral-400 dark:text-neutral-500"
+            aria-hidden
+          >
+            <ChevronIcon collapsed={collapsed} />
+          </span>
+        ) : (
+          <span className="w-6 shrink-0" aria-hidden />
+        )}
+        <div className="min-h-[1.5em] min-w-0 flex-1" style={alignStyle}>
+          <div
+            className={`${HEADING_STATIC_CLASS[level]} text-neutral-900 dark:text-neutral-100 [&_p]:my-0`}
+            dangerouslySetInnerHTML={{
+              __html:
+                html || `<p class="italic text-neutral-400">Heading ${level}</p>`,
+            }}
+          />
+        </div>
+      </div>
+      {hasSection && !collapsed ? (
+        <div className="ml-7 border-l border-neutral-200 pl-3 dark:border-neutral-700">
+          {children}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function EditableHeading({ node, tree, children }: BlockRendererProps) {
   const props = useMemo<HeadingProps>(() => safeParse(node.props), [node.props]);
   const level = clampLevel(props.level);
   const textAlign = normalizeTextAlign(props.textAlign);
@@ -489,4 +566,14 @@ function safeParse(s: string): HeadingProps {
   } catch {
     return {};
   }
+}
+
+/** Escape a legacy plain-text title for static (read-only) rendering. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }

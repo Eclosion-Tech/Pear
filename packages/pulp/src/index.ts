@@ -30,6 +30,7 @@ export { knownSiblingIdsForParent, siblingsForParent } from "./focus/insertFocus
 
 // Editor shell
 export { BlockEditor, ComponentTreeRenderer } from "./BlockEditor";
+export { BlockView } from "./BlockView";
 export { BlockNodeView, ComponentNodeView } from "./BlockNodeView";
 export {
   registerRenderer,

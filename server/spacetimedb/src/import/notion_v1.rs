@@ -642,6 +642,7 @@ fn decode_conversation_message(v: &Value) -> Result<ConversationMessage, String>
         cache_creation_input_tokens: u64_at(m, "cacheCreationInputTokens")? as u32,
         cache_read_input_tokens: u64_at(m, "cacheReadInputTokens")? as u32,
         linked_conversation_id: opt_u64_at(m, "linkedConversationId")?,
+        component_tree_json: opt_string_at(m, "componentTreeJson")?,
     })
 }
 
