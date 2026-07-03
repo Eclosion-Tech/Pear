@@ -1,0 +1,4 @@
+{
+  "//": "Marks this shared library as ESM for Node hosts that import it as source (the pear worker's MCP entrypoints import it via ../mcp). Bundlers (Next, wrangler/esbuild, vitest) are unaffected.",
+  "type": "module"
+}

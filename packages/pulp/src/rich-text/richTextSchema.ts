@@ -21,6 +21,18 @@ import { Schema, type DOMOutputSpec } from "prosemirror-model";
  * `<u>`, `<s>`, `<code>`).
  */
 
+/**
+ * Structural view of the element bits parseDOM handlers read. Typed
+ * structurally (not as `HTMLElement`) so this module typechecks in non-DOM
+ * environments — the Cloudflare gateway bundles it transitively via the MCP
+ * core, where prosemirror-model's DOM type stubs have no `style`. The
+ * handlers themselves only ever run in real browsers.
+ */
+type StyledElement = {
+  style: Record<string, string>;
+  getAttribute(name: string): string | null;
+};
+
 const emDOM: DOMOutputSpec = ["em", 0];
 const strongDOM: DOMOutputSpec = ["strong", 0];
 const underlineDOM: DOMOutputSpec = ["u", 0];
@@ -40,7 +52,7 @@ export const richTextSchema = new Schema({
         {
           tag: "p",
           getAttrs: (dom) => ({
-            textAlign: readTextAlignAttr(dom as HTMLElement),
+            textAlign: readTextAlignAttr(dom as unknown as StyledElement),
           }),
         },
       ],
@@ -133,7 +145,7 @@ export const richTextSchema = new Schema({
         {
           tag: "span",
           getAttrs: (dom) => {
-            const color = (dom as HTMLElement).style.color;
+            const color = (dom as unknown as StyledElement).style.color;
             return color ? { color } : false;
           },
         },
@@ -156,7 +168,7 @@ export const richTextSchema = new Schema({
         {
           tag: "span",
           getAttrs: (dom) => {
-            const bg = (dom as HTMLElement).style.backgroundColor;
+            const bg = (dom as unknown as StyledElement).style.backgroundColor;
             return bg ? { backgroundColor: bg } : false;
           },
         },
@@ -171,7 +183,7 @@ export const richTextSchema = new Schema({
   },
 });
 
-function readTextAlignAttr(el: HTMLElement): string | null {
+function readTextAlignAttr(el: StyledElement): string | null {
   const align = el.style.textAlign || el.getAttribute("data-text-align");
   if (align === "center" || align === "right") return align;
   return null;

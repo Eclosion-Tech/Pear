@@ -17,6 +17,12 @@ export {
   decodePropertyValue,
   encodeHttpMethod,
   encodeOption,
+  // Generic /sql wire-shape decoders, consumed by the sibling `../mcp` lib.
+  decodeEnumVariant,
+  decodeOptionSome,
+  isOptionNone,
+  unwrapScalar,
+  normaliseTs,
 } from "./codec";
 export { buildOpenApiSpec } from "./openapi";
 export { EndpointConfigCache } from "./cache";

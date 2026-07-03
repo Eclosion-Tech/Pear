@@ -6,21 +6,18 @@
  * the text/marks survive. This proves the worker's bytes are editor-compatible
  * without needing a running SpacetimeDB.
  *
- * Run: `npm test` (node:test via tsx).
+ * Run: pulp vitest (`pnpm --filter @eclosion-tech/pulp test`).
  */
 
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import * as Y from "yjs";
-import {
-  yDocToPlainText,
-  yDocToHtml,
-} from "@eclosion-tech/pulp/rich-text/yjsToHtml";
+import { yDocToPlainText, yDocToHtml } from "./yjsToHtml";
 import {
   richTextBlockToYjsBytes,
   parseInlineMarkdown,
   markdownToComponentBlocks,
-} from "./rich-text-encode.js";
+} from "./encode";
 
 function decode(bytes: Uint8Array): Y.Doc {
   const doc = new Y.Doc();

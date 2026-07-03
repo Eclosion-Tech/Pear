@@ -7,7 +7,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./rich-text/richTextSchema": "./src/rich-text/richTextSchema.ts",
-    "./rich-text/yjsToHtml": "./src/rich-text/yjsToHtml.ts"
+    "./rich-text/yjsToHtml": "./src/rich-text/yjsToHtml.ts",
+    "./rich-text/encode": "./src/rich-text/encode.ts"
   },
   "peerDependencies": {
     "react": "^19.0.0",

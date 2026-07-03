@@ -294,3 +294,128 @@ export function encodeOption<T>(value: T | null | undefined):
   if (value === null || value === undefined) return { none: [] };
   return { some: value };
 }
+
+// ── Generic STDB `/sql` wire-shape decoders ────────────────────────────────────
+// Relocated from dispatcher.ts so other shared libs (e.g. `../mcp`) can reuse
+// them — they encode hard-won lessons about STDB's HTTP wire shapes.
+
+/**
+ * Generic decoder for STDB sum-type variants. Returns the upper-cased
+ * variant name if it matches one of the provided tags, otherwise null.
+ */
+export function decodeEnumVariant<T extends readonly string[]>(
+  v: unknown,
+  tags: T,
+): T[number] | null {
+  if (typeof v === "string") {
+    const upper = v.toUpperCase();
+    return (tags as readonly string[]).includes(upper)
+      ? (upper as T[number])
+      : null;
+  }
+  if (typeof v === "number") {
+    return (tags[v] ?? null) as T[number] | null;
+  }
+  if (Array.isArray(v) && v.length >= 1) {
+    return decodeEnumVariant(v[0], tags);
+  }
+  if (typeof v === "object" && v !== null) {
+    const obj = v as Record<string, unknown>;
+    if ("tag" in obj) {
+      return decodeEnumVariant(obj.tag, tags);
+    }
+    const firstKey = Object.keys(obj)[0];
+    if (firstKey !== undefined) {
+      const upper = firstKey.toUpperCase();
+      return (tags as readonly string[]).includes(upper)
+        ? (upper as T[number])
+        : null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Wire shapes for `Option<T>` observed from STDB's HTTP `/sql` endpoint:
+ *   • `null`            — absence (rare; SDK-shaped paths only)
+ *   • `{ none: [] }`    — object form for None
+ *   • `{ some: <T> }`   — object form for Some
+ *   • `[1, []]`         — positional sum, variant 1 = None
+ *   • `[0, <T>]`        — positional sum, variant 0 = Some
+ *
+ * `decodeOptionSome` returns the inner value if the option is Some, or
+ * `undefined` if it's None / absent. `isOptionNone` is the dual.
+ *
+ * These exist because earlier code compared option columns directly to JS
+ * `null` (e.g. `deleted_at === null`), which silently mis-classified every
+ * row as deleted once STDB started returning `[1, []]` for None — every
+ * list/get/update would 404 or come back with `data: []`.
+ */
+export function decodeOptionSome(raw: unknown): unknown {
+  if (raw == null) return undefined;
+  if (Array.isArray(raw)) {
+    if (raw.length >= 2 && raw[0] === 0) return raw[1];
+    return undefined;
+  }
+  if (typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    if ("some" in obj) return obj.some;
+    if ("none" in obj) return undefined;
+  }
+  // Bare value (some non-Option SQL projections fall here) — treat as Some.
+  return raw;
+}
+
+export function isOptionNone(raw: unknown): boolean {
+  return decodeOptionSome(raw) === undefined;
+}
+
+/**
+ * Coerce a STDB-returned scalar that *might* be wrapped in an Option or a
+ * single-element Product (Timestamp's wire form is `[micros]`) down to a
+ * primitive comparable value. Used for parent_id / page_id checks where we
+ * only need string equality, not the structured shape.
+ */
+export function unwrapScalar(raw: unknown): string | number | null {
+  // A single-element array is a bare Product (e.g. a non-Option Timestamp's
+  // wire form `[micros]`), NOT an Option — Options are always 2-element
+  // positional sums (`[0, v]` / `[1, []]`). Peel it before Option decoding,
+  // otherwise `[micros]` is mis-read as "not Some" and dropped.
+  if (Array.isArray(raw) && raw.length === 1) return unwrapScalar(raw[0]);
+  const some = decodeOptionSome(raw);
+  if (some === undefined) return null;
+  if (Array.isArray(some)) {
+    if (some.length === 1) return unwrapScalar(some[0]);
+    return null;
+  }
+  if (typeof some === "object" && some !== null) {
+    const obj = some as Record<string, unknown>;
+    // Timestamp / TimeDuration object shape.
+    const v =
+      obj.__timestamp_micros_since_unix_epoch__ ??
+      obj.__time_duration_micros__ ??
+      obj.microsSinceUnixEpoch;
+    if (typeof v === "number" || typeof v === "string") return v;
+    return null;
+  }
+  if (typeof some === "string" || typeof some === "number") return some;
+  return null;
+}
+
+/**
+ * STDB's HTTP `/sql` returns Timestamp columns as a single-element Product
+ * `[<i64 micros>]` (the wire shape of `Timestamp { __timestamp_micros... }`),
+ * not a millisecond number. Earlier code did `new Date(Number(raw))` which:
+ *   • only worked accidentally when `raw` was already a number (it isn't), and
+ *   • interpreted micros as ms — producing year ~58294 ISO strings.
+ * Use `unwrapScalar` to peel both Option<Timestamp> and bare Timestamp into
+ * a numeric micros value, then divide.
+ */
+export function normaliseTs(raw: unknown): string | undefined {
+  if (raw == null) return undefined;
+  const v = unwrapScalar(raw);
+  if (v == null) return undefined;
+  const micros = typeof v === "string" ? Number(v) : v;
+  if (!Number.isFinite(micros)) return undefined;
+  return new Date(micros / 1000).toISOString();
+}

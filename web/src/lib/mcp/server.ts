@@ -1,8 +1,11 @@
 /**
- * MCP server core — wires the tool registry onto an MCP `Server` instance.
+ * MCP server core — binds the tool registry onto an SDK `Server` instance.
  *
- * Transport-agnostic: stdio.ts and http.ts create the transport and connect
- * it. One server instance serves one PearMcpBackend (one AI-user identity).
+ * Transport-agnostic: hosts create the transport and connect it —
+ *   • worker stdio  → StdioServerTransport
+ *   • worker http   → StreamableHTTPServerTransport (Node req/res)
+ *   • CF gateway    → WebStandardStreamableHTTPServerTransport (Request/Response)
+ * One server instance serves one McpContext (one AI-user token).
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -10,12 +13,12 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import type { PearMcpBackend } from "./backend.js";
-import { buildToolRegistry, type McpToolEntry } from "./tool-registry.js";
+import type { McpContext, McpToolEntry } from "./types";
+import { buildToolRegistry } from "./tools";
 
-export const SERVER_INFO = { name: "pear", version: "0.1.0" };
+export const SERVER_INFO = { name: "pear", version: "0.2.0" };
 
-export function createPearMcpServer(backend: PearMcpBackend): Server {
+export function createPearMcpServer(ctx: McpContext): Server {
   const registry = buildToolRegistry();
   const byName = new Map<string, McpToolEntry>(registry.map((t) => [t.name, t]));
 
@@ -34,18 +37,15 @@ export function createPearMcpServer(backend: PearMcpBackend): Server {
     const entry = byName.get(name);
     if (!entry) {
       return {
-        content: [{ type: "text", text: JSON.stringify({ ok: false, error: `Unknown tool: ${name}` }) }],
+        content: [
+          { type: "text", text: JSON.stringify({ ok: false, error: `Unknown tool: ${name}` }) },
+        ],
         isError: true,
       };
     }
-    backend.lastUsedAt = Date.now();
     let result: string;
     try {
-      result = await entry.handler(
-        backend.getConn(),
-        (args ?? {}) as Record<string, unknown>,
-        backend.getToolContext(),
-      );
+      result = await entry.execute(ctx, (args ?? {}) as Record<string, unknown>);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return {
@@ -53,14 +53,14 @@ export function createPearMcpServer(backend: PearMcpBackend): Server {
         isError: true,
       };
     }
-    // Executor results are JSON strings with an `ok` field; surface failures
-    // as MCP tool errors so clients treat them accordingly.
+    // Tool results are JSON strings with an `ok` field; surface failures as
+    // MCP tool errors so clients treat them accordingly.
     let isError = false;
     try {
       const parsed = JSON.parse(result) as { ok?: boolean };
       isError = parsed.ok === false;
     } catch {
-      // Non-JSON result (e.g. web_search text) — treat as success.
+      // Non-JSON result — treat as success.
     }
     return { content: [{ type: "text", text: result }], isError };
   });

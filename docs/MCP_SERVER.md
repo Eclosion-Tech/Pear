@@ -8,6 +8,13 @@ Every MCP client connects **as a Pear AI user** (via that AI user's worker token
 - Its page writes are **attributed** to the AI user and governed by the same page access rules as everything else (`page_access_rule`, open-by-default).
 - Two clients with different tokens see **disjoint memories**.
 
+The implementation is **stateless**: tools run over SpacetimeDB's HTTP `/sql`
+(reads, RLS-scoped by the caller's token) and `/call` (reducer writes,
+synchronous success/failure) endpoints — no WebSocket subscription is held.
+The shared core lives at `web/src/lib/mcp/` and is mounted by three hosts:
+the worker's stdio and HTTP entrypoints below, and (on Pear Cloud) the API
+gateway at `https://{workspace}.api.pear.pro/mcp`.
+
 ## 1. Provision an AI user + token
 
 The worker token is only displayed at creation time, so use the CLI (it prints the token plus ready-to-paste client configs):
@@ -51,7 +58,20 @@ Or in `.mcp.json` / Claude Desktop / Cursor config (set `cwd` to the pear checko
 }
 ```
 
-## 2b. Connect over HTTP (hosted)
+## 2b. Connect over HTTP — Pear Cloud
+
+Hosted workspaces expose MCP through the API gateway; nothing to run:
+
+```bash
+claude mcp add --transport http pear https://<workspace>.api.pear.pro/mcp \
+  --header "Authorization: Bearer <worker token>"
+```
+
+The bearer token is the AI user's worker token, validated by the workspace's
+own SpacetimeDB (invalid/foreign tokens → 401). Requests are rate-limited at
+the edge per workspace + client IP.
+
+## 2c. Connect over HTTP (self-hosted)
 
 Run the streamable-HTTP server (bearer token = worker token):
 
@@ -70,10 +90,9 @@ claude mcp add --transport http pear http://localhost:3888/mcp \
 
 | Var | Default | Meaning |
 |---|---|---|
-| `SPACETIMEDB_URI` | `ws://localhost:3000` | SpacetimeDB WebSocket URI |
+| `SPACETIMEDB_URI` | `ws://localhost:3000` | SpacetimeDB URI (ws:// or http:// — tools use the HTTP surface) |
 | `SPACETIMEDB_DB_NAME` | `pear-dev` | Workspace database name |
 | `PEAR_MCP_HTTP_HOST` / `PEAR_MCP_HTTP_PORT` | `127.0.0.1` / `3888` | Listener |
-| `PEAR_MCP_IDLE_TIMEOUT_MS` | `1800000` | Evict a token's backend connection after idle |
 | `PEAR_MCP_ALLOWED_HOSTS` | `localhost:<port>,127.0.0.1:<port>` when bound to loopback | Host-header allowlist (DNS-rebinding protection). Set to your public `host:port` when exposing the server; TLS via a reverse proxy. |
 
 ## Tools

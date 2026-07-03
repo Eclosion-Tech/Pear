@@ -8,7 +8,8 @@
     "generate": "cd ../server && spacetime generate",
     "smoke": "tsx scripts/component-tree-smoke.ts",
     "bench:repeater": "tsx scripts/repeater-churn-bench.ts",
-    "migrate-blocknote": "tsx scripts/migrate-blocknote-pages.ts"
+    "migrate-blocknote": "tsx scripts/migrate-blocknote-pages.ts",
+    "test": "vitest run"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1009.0",
@@ -22,6 +23,7 @@
     "@eclosion-tech/pulp": "workspace:*",
     "@mantine/core": "^8.3.16",
     "@mantine/hooks": "^8.3.16",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@stoplight/elements": "^9.0.19",
     "@xenova/transformers": "^2.17.2",
     "next": "16.1.6",
@@ -52,6 +54,7 @@
     "postcss": "^8",
     "tailwindcss": "^3.4.0",
     "tsx": "^4.19.0",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^3.2.4"
   }
 }
