@@ -542,6 +542,7 @@ export const BridgeDeviceAllowlist = __t.object("BridgeDeviceAllowlist", {
   get unlistedCommandPolicy() {
     return UnlistedCommandPolicy;
   },
+  deviceIdentity: __t.identity(),
 });
 export type BridgeDeviceAllowlist = __Infer<typeof BridgeDeviceAllowlist>;
 

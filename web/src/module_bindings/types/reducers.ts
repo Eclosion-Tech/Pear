@@ -19,6 +19,7 @@ import ClearBlockAccessRuleReducer from "../clear_block_access_rule_reducer";
 import ClearMessageFeedbackReducer from "../clear_message_feedback_reducer";
 import ClearPageAccessRuleReducer from "../clear_page_access_rule_reducer";
 import ClearPropertyValueReducer from "../clear_property_value_reducer";
+import CloseBridgeDeviceSessionsReducer from "../close_bridge_device_sessions_reducer";
 import CloseBridgeSessionReducer from "../close_bridge_session_reducer";
 import CloseConversationReducer from "../close_conversation_reducer";
 import CompleteBridgeCommandReducer from "../complete_bridge_command_reducer";
@@ -197,6 +198,7 @@ export type ClearBlockAccessRuleParams = __Infer<typeof ClearBlockAccessRuleRedu
 export type ClearMessageFeedbackParams = __Infer<typeof ClearMessageFeedbackReducer>;
 export type ClearPageAccessRuleParams = __Infer<typeof ClearPageAccessRuleReducer>;
 export type ClearPropertyValueParams = __Infer<typeof ClearPropertyValueReducer>;
+export type CloseBridgeDeviceSessionsParams = __Infer<typeof CloseBridgeDeviceSessionsReducer>;
 export type CloseBridgeSessionParams = __Infer<typeof CloseBridgeSessionReducer>;
 export type CloseConversationParams = __Infer<typeof CloseConversationReducer>;
 export type CompleteBridgeCommandParams = __Infer<typeof CompleteBridgeCommandReducer>;

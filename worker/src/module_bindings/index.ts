@@ -47,6 +47,7 @@ import ClearBlockAccessRuleReducer from "./clear_block_access_rule_reducer";
 import ClearMessageFeedbackReducer from "./clear_message_feedback_reducer";
 import ClearPageAccessRuleReducer from "./clear_page_access_rule_reducer";
 import ClearPropertyValueReducer from "./clear_property_value_reducer";
+import CloseBridgeDeviceSessionsReducer from "./close_bridge_device_sessions_reducer";
 import CloseBridgeSessionReducer from "./close_bridge_session_reducer";
 import CloseConversationReducer from "./close_conversation_reducer";
 import CompleteBridgeCommandReducer from "./complete_bridge_command_reducer";
@@ -1165,6 +1166,7 @@ const reducersSchema = __reducers(
   __reducerSchema("clear_message_feedback", ClearMessageFeedbackReducer),
   __reducerSchema("clear_page_access_rule", ClearPageAccessRuleReducer),
   __reducerSchema("clear_property_value", ClearPropertyValueReducer),
+  __reducerSchema("close_bridge_device_sessions", CloseBridgeDeviceSessionsReducer),
   __reducerSchema("close_bridge_session", CloseBridgeSessionReducer),
   __reducerSchema("close_conversation", CloseConversationReducer),
   __reducerSchema("complete_bridge_command", CompleteBridgeCommandReducer),

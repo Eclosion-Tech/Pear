@@ -27,4 +27,5 @@ export default __t.row({
   get unlistedCommandPolicy() {
     return UnlistedCommandPolicy.name("unlisted_command_policy");
   },
+  deviceIdentity: __t.identity().name("device_identity"),
 });
