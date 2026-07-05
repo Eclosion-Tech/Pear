@@ -1,14 +1,14 @@
 import { S3Client } from "@aws-sdk/client-s3";
 
 const S3_ENDPOINT = process.env.S3_ENDPOINT;
-/** Optional override. If unset, presigned URLs use the request host + port 9000 (so browser uploads work with zero config when app and MinIO are on the same host). */
+/** Optional override. If unset, presigned URLs use the request host + port 9000 (so browser uploads work with zero config when app and the bundled Garage are on the same host). */
 const S3_PUBLIC_ENDPOINT = process.env.S3_PUBLIC_ENDPOINT;
 const S3_BUCKET = process.env.S3_BUCKET ?? "pear-attachments";
 const S3_REGION = process.env.S3_REGION ?? "us-east-1";
 const S3_ACCESS_KEY = process.env.S3_ACCESS_KEY;
 const S3_SECRET_KEY = process.env.S3_SECRET_KEY;
 
-/** Default MinIO port when deriving public URL from request host. */
+/** Default storage port when deriving public URL from request host (compose publishes Garage on 9000). */
 export const S3_PUBLIC_DEFAULT_PORT = 9000;
 
 export function isS3Configured(): boolean {
@@ -28,6 +28,20 @@ function getPresigningEndpoint(override?: string): string {
   return override ?? S3_PUBLIC_ENDPOINT ?? S3_ENDPOINT!;
 }
 
+/**
+ * Shared client options for S3-compatible stores.
+ *
+ * `requestChecksumCalculation: "WHEN_REQUIRED"` matters: AWS SDK v3 defaults
+ * flexible checksums to WHEN_SUPPORTED, which bakes a CRC32 placeholder into
+ * presigned PUT URLs. The browser then uploads real bytes, the checksum can't
+ * match, and strict stores (Garage) reject the upload with InvalidDigest.
+ */
+const S3_COMPAT_OPTIONS = {
+  forcePathStyle: true, // required for Garage (and MinIO-era deployments)
+  requestChecksumCalculation: "WHEN_REQUIRED",
+  responseChecksumValidation: "WHEN_REQUIRED",
+} as const;
+
 /** S3 client for server-side calls (e.g. GET in proxy). Uses S3_ENDPOINT (internal hostname OK). */
 export function getS3Client(): S3Client {
   if (!isS3Configured()) {
@@ -40,7 +54,7 @@ export function getS3Client(): S3Client {
       accessKeyId: S3_ACCESS_KEY!,
       secretAccessKey: S3_SECRET_KEY!,
     },
-    forcePathStyle: true, // required for MinIO
+    ...S3_COMPAT_OPTIONS,
   });
 }
 
@@ -56,7 +70,7 @@ export function getS3PresigningClient(endpointOverride?: string): S3Client {
       accessKeyId: S3_ACCESS_KEY!,
       secretAccessKey: S3_SECRET_KEY!,
     },
-    forcePathStyle: true,
+    ...S3_COMPAT_OPTIONS,
   });
 }
 
@@ -64,7 +78,7 @@ export function getS3PresigningClient(endpointOverride?: string): S3Client {
 const INTERNAL_HOST_PATTERN = /^(localhost|127\.0\.0\.1|[a-f0-9]{12})$|\.local$/i;
 
 /**
- * Derive a browser-reachable MinIO URL from the request (same host, port 9000).
+ * Derive a browser-reachable storage URL from the request (same host, port 9000).
  * Uses Host or X-Forwarded-Host so it works when the app is in Docker and the
  * client connects via host IP. Ignores request.url which may be the internal
  * container URL (e.g. http://05e31a5cb840:3001). Returns undefined if the

@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "next-themes";
 import { Providers } from "@/src/providers/Providers";
+import { EnginesPanel } from "@/src/components/engines/EnginesPanel";
+import { WorkspaceQueryBootstrap } from "@/src/components/WorkspaceQueryBootstrap";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -33,7 +35,12 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-white dark:bg-neutral-950 text-neutral-900 dark:text-neutral-200`}
       >
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+          {/* Must render before Providers so ?ws/?db deep links set the
+              active workspace before WorkspaceProvider reads localStorage. */}
+          <WorkspaceQueryBootstrap />
           <Providers>{children}</Providers>
+          {/* Desktop-only (renders nothing in a plain browser). */}
+          <EnginesPanel />
         </ThemeProvider>
       </body>
     </html>

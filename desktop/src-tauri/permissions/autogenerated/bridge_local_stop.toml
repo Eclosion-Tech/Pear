@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-bridge-local-stop"
+description = "Enables the bridge_local_stop command without any pre-configured scope."
+commands.allow = ["bridge_local_stop"]
+
+[[permission]]
+identifier = "deny-bridge-local-stop"
+description = "Denies the bridge_local_stop command without any pre-configured scope."
+commands.deny = ["bridge_local_stop"]

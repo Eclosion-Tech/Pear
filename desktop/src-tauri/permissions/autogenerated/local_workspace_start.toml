@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-local-workspace-start"
+description = "Enables the local_workspace_start command without any pre-configured scope."
+commands.allow = ["local_workspace_start"]
+
+[[permission]]
+identifier = "deny-local-workspace-start"
+description = "Denies the local_workspace_start command without any pre-configured scope."
+commands.deny = ["local_workspace_start"]

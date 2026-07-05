@@ -30,7 +30,11 @@ function getS3Client(): S3Client {
       accessKeyId: S3_ACCESS_KEY!,
       secretAccessKey: S3_SECRET_KEY!,
     },
-    forcePathStyle: true, // required for MinIO
+    forcePathStyle: true, // required for Garage (and MinIO-era deployments)
+    // Match web/src/lib/s3.ts: strict stores (Garage) reject the SDK's
+    // default flexible-checksum injection.
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
   });
   return client;
 }

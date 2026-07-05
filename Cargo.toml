@@ -1,0 +1,18 @@
+# Cargo workspace for pear's native (non-WASM) Rust crates.
+#
+# `server/spacetimedb` is deliberately NOT a member: it is the SpacetimeDB
+# module, built for wasm32-unknown-unknown by the `spacetime` CLI with its own
+# lockfile and target dir — pulling it into this workspace would entangle its
+# build with the daemon crates for no benefit.
+#
+# Members:
+#   crates/pear-bridge — the local-shell execution daemon (lib + bin). The lib
+#     target is consumed by the desktop app (device pairing, keychain,
+#     allowlist, audit, PTY); the bin is the standalone headless daemon.
+#     Moved here from the pear-cloud parent repo — it was always designed to
+#     be OSS (see docs/PEAR_BRIDGE.md in pear-cloud, and the crate docs).
+
+[workspace]
+resolver = "2"
+members = ["crates/pear-bridge", "desktop/src-tauri"]
+exclude = ["server/spacetimedb"]

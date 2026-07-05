@@ -1,41 +1,45 @@
 services:
-  # ── MinIO (S3-compatible blob storage) ───────────────────────────────────────
+  # ── Garage (S3-compatible blob storage) ──────────────────────────────────────
   # Used for file uploads (images, audio, attachments). Same API as AWS S3 / R2.
-  # Override S3_* env on the web service to use external storage (e.g. R2) instead.
-  minio:
-    image: minio/minio:latest
-    container_name: pear-minio
-    command: server /data
+  # Replaces MinIO (EOL — upstream repo archived April 2026). The entrypoint
+  # self-provisions layout + bucket + key, importing S3_ACCESS_KEY/S3_SECRET_KEY
+  # so the S3_* env contract on web/worker is unchanged. Host port 9000 is kept
+  # (Garage's S3 API listens on 3900 internally) so derived public endpoints
+  # keep working. Override S3_* env to use external storage (e.g. R2) instead.
+  garage:
+    image: dxflrs/garage:v2.3.0
+    container_name: pear-garage
     ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # Web console (optional)
+      - "9000:3900"   # S3 API (host 9000 preserved from the MinIO era)
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      # Secrets read by Garage when absent from garage.toml. Compose-network
+      # internal (RPC/admin ports are not published); defaults are fine for
+      # local self-hosting, override in .env for anything exposed.
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:-9dd7325b40c1f0ab926e0a35e6592f9026fda9ec7d5c0d1fa1c4c05dfa79dc44}
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN:-pear-garage-admin}
     volumes:
-      - minio-data:/data
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+      - ./server/docker/garage.toml:/etc/garage.toml:ro
     restart: unless-stopped
     networks:
       - pear
 
-  # Create the default bucket so the app can upload without extra setup.
-  minio-init:
-    image: minio/mc:latest
-    container_name: pear-minio-init
+  # One-shot provisioner: layout + bucket + key import via the admin API.
+  garage-init:
+    image: alpine:3.20
+    container_name: pear-garage-init
     depends_on:
-      - minio
-    entrypoint: >
-      /bin/sh -c "
-      echo 'Waiting for MinIO...';
-      sleep 5;
-      mc alias set myminio http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD};
-      mc mb myminio/$${S3_BUCKET:-pear-attachments} --ignore-existing;
-      echo 'Bucket ready';
-      "
+      - garage
+    entrypoint: ["/bin/sh", "/garage-init.sh"]
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN:-pear-garage-admin}
       S3_BUCKET: ${S3_BUCKET:-pear-attachments}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-pear-access-key}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-pear-secret-key-change-me}
+    volumes:
+      - ./server/docker/garage-init.sh:/garage-init.sh:ro
+    restart: "no"
     networks:
       - pear
 
@@ -92,16 +96,16 @@ services:
       - "3001:3001"
     depends_on:
       - spacetimedb
-      - minio-init
+      - garage
     environment:
-      # S3-compatible blob storage (default: MinIO in this stack)
+      # S3-compatible blob storage (default: Garage in this stack)
       # Override to use external storage (e.g. R2, S3): set S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY.
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
-      # Optional. Browser upload URL (presigned URLs). If unset, derived from request host + :9000 (zero config when app and MinIO are on the same host). Set only when MinIO is on another host/port.
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://garage:3900}
+      # Optional. Browser upload URL (presigned URLs). If unset, derived from request host + :9000 (zero config when app and Garage are on the same host — Garage's S3 API is published on host port 9000). Set only when storage is on another host/port.
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
       S3_BUCKET: ${S3_BUCKET:-pear-attachments}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-pear-access-key}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-pear-secret-key-change-me}
       S3_REGION: ${S3_REGION:-us-east-1}
     restart: unless-stopped
     networks:
@@ -128,10 +132,10 @@ services:
       ORCHA_AGENT_ID: ${ORCHA_AGENT_ID:-pear-llm-worker}
       # Same storage as the web service — the worker fetches image attachments
       # to hand to AI providers as base64.
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://garage:3900}
       S3_BUCKET: ${S3_BUCKET:-pear-attachments}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-pear-access-key}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-pear-secret-key-change-me}
       S3_REGION: ${S3_REGION:-us-east-1}
     restart: unless-stopped
     networks:
@@ -173,4 +177,5 @@ networks:
 volumes:
   spacetimedb-data:
   spacetimedb-config:
-  minio-data:
+  garage-meta:
+  garage-data:

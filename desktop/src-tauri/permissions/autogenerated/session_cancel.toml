@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-session-cancel"
+description = "Enables the session_cancel command without any pre-configured scope."
+commands.allow = ["session_cancel"]
+
+[[permission]]
+identifier = "deny-session-cancel"
+description = "Denies the session_cancel command without any pre-configured scope."
+commands.deny = ["session_cancel"]

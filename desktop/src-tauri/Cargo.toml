@@ -1,0 +1,30 @@
+[package]
+name = "pear-desktop"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Pear desktop shell — agent engine manager + workspace client."
+
+[lib]
+name = "pear_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time"] }
+uuid = { version = "1", features = ["v4"] }
+# Keychain-backed engine token storage. Same backend selection story as
+# crates/pear-bridge/src/keychain.rs (see its Cargo.toml comments).
+keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service"] }
+libc = "0.2"
+# Embedded pear-bridge: allowlist enforcement, PTY executor, audit chain. The
+# desktop supplies its own CommandSource/ResultSink over SpacetimeDB HTTP.
+pear-bridge = { path = "../../crates/pear-bridge" }
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+sha2 = "0.10"
+hex = "0.4"

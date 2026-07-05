@@ -24,7 +24,7 @@ Pages and database rows are the same entity — a page viewed in a grid is a row
 | Editor | Component-tree editor (`packages/pulp`) — typed `ComponentNode` rows in SpacetimeDB, per-block Yjs rich text via ProseMirror. [BlockNote](https://blocknotejs.org) retained as a legacy read path for unmigrated pages. |
 | Worker | Node (optional) — AI conversations, Orcha task execution, tool runtime |
 | Auth | Native SpacetimeDB email/password (default) · Any OIDC provider (optional) |
-| Attachments | S3-compatible storage (MinIO in Docker Compose by default) |
+| Attachments | S3-compatible storage (Garage in Docker Compose by default) |
 | Containerisation | Docker Compose |
 
 ---
@@ -87,6 +87,8 @@ Pear/
 │   └── spacetime.json       # Module path, TS bindings output dir
 ├── web/                     # Next.js app (UI, API routes, embeddings, uploads)
 ├── worker/                  # Optional Node worker (AI / Orcha / tools)
+├── crates/
+│   └── pear-bridge/         # Local-shell execution daemon (device pairing, allowlisted tool_bash)
 ├── packages/
 │   └── pulp/                # Storage-agnostic component-tree editor library
 ├── extensions/              # Example / built-in extension manifests
@@ -122,7 +124,7 @@ Docker builds the Next.js client and the SpacetimeDB WASM module; the entrypoint
 | SpacetimeDB | `http://localhost:3000` |
 | Web client | `http://localhost:3001` |
 
-Compose also brings up **MinIO** (or your configured S3-compatible backend) for attachment uploads — see `docker-compose.yml` and `.env.example` for variables.
+Compose also brings up **Garage** (or your configured S3-compatible backend) for attachment uploads — see `docker-compose.yml` and `.env.example` for variables.
 
 ### 2. Create an account
 

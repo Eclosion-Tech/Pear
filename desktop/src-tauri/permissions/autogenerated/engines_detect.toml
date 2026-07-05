@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-engines-detect"
+description = "Enables the engines_detect command without any pre-configured scope."
+commands.allow = ["engines_detect"]
+
+[[permission]]
+identifier = "deny-engines-detect"
+description = "Denies the engines_detect command without any pre-configured scope."
+commands.deny = ["engines_detect"]

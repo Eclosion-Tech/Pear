@@ -1,0 +1,28 @@
+# Garage config for the pear docker-compose stack (single node).
+#
+# Secrets are NOT in this file: `rpc_secret` and `admin_token` come from the
+# GARAGE_RPC_SECRET / GARAGE_ADMIN_TOKEN env vars set on the service (Garage
+# reads them when the config omits the fields). The RPC and admin ports are
+# not published to the host — only the S3 API (3900 → host 9000) is.
+#
+# First-run provisioning (layout, bucket, key import) is done by the
+# `garage-init` sidecar via the admin API: see garage-init.sh.
+
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "sqlite"
+
+replication_factor = 1
+
+rpc_bind_addr = "[::]:3901"
+rpc_public_addr = "127.0.0.1:3901"
+
+[s3_api]
+# Garage validates the SigV4 region scope strictly — keep this equal to the
+# stack's S3_REGION default (us-east-1) so existing client env keeps working.
+s3_region = "us-east-1"
+api_bind_addr = "[::]:3900"
+root_domain = ".s3.garage.localhost"
+
+[admin]
+api_bind_addr = "[::]:3903"

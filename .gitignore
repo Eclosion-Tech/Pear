@@ -62,3 +62,6 @@ deploy.sh
 *.log
 npm-debug.log*
 pnpm-debug.log*
+
+# Cargo workspace build artifacts (crates/*)
+/target/

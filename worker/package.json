@@ -10,6 +10,7 @@
     "mcp:stdio": "node --import tsx/esm src/mcp/stdio.ts",
     "mcp:http": "node --import tsx/esm src/mcp/http.ts",
     "mcp:provision": "node --import tsx/esm src/mcp/provision-cli.ts",
+    "scribe:stdio": "node --import tsx/esm src/scribe/stdio.ts",
     "test": "node --import tsx/esm --test src/**/*.test.ts",
     "generate": "spacetime generate --lang typescript --out-dir src/module_bindings --module-path ../server/spacetimedb"
   },

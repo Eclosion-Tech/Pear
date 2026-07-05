@@ -26,7 +26,11 @@ import { useReducer, useSpacetimeDB } from "spacetimedb/react";
 import { useAuth } from "react-oidc-context";
 import { reducers } from "@/src/module_bindings";
 import { useWorkspace } from "@/src/providers/WorkspaceProvider";
-import { resolveWorkspaceWsUri } from "@/src/lib/workspaceConnections";
+import {
+  resolveWorkspaceDbName,
+  resolveWorkspaceWsUri,
+} from "@/src/lib/workspaceConnections";
+import { bridgeLocalPairPrepare, bridgeLocalStart, isTauri } from "@/src/lib/tauri";
 
 /** ws(s):// workspace URI → the lifecycle HTTP base (http(s)://host). */
 function lifecycleBase(wsUri: string | undefined): string {
@@ -64,6 +68,38 @@ function PairInner() {
   const [message, setMessage] = useState("");
   const [shownToken, setShownToken] = useState("");
 
+  // Desktop app (Tauri): the embedded bridge pairs without the lifecycle
+  // service or OIDC. Rust mints the device identity + token straight into the
+  // OS keychain (raw secrets never enter this webview); we pair as the
+  // signed-in owner and start the in-process bridge.
+  async function onPairDesktop(allowedDirectories: string[]) {
+    const wsUri = resolveWorkspaceWsUri(activeWorkspace?.wsUri);
+    const dbName = resolveWorkspaceDbName(activeWorkspace?.dbName);
+    const workspaceKey = `${wsUri}::${dbName}`;
+
+    const prep = await bridgeLocalPairPrepare(workspaceKey, wsUri);
+    await pairDevice({
+      deviceName: deviceName.trim() || "This computer",
+      deviceTokenHash: prep.deviceTokenHash,
+      platform: prep.platform,
+      bridgeVersion: prep.bridgeVersion,
+      deviceIdentity: Identity.fromString(prep.deviceIdentityHex),
+      // No relay in the embedded path — the device holds its own STDB token
+      // (keychain), so there is nothing for a relay to decrypt.
+      deviceStdbTokenCiphertext: "embedded-desktop",
+      allowedDirectories,
+    });
+    const status = await bridgeLocalStart(workspaceKey, wsUri, dbName);
+    if (status.status !== "running") {
+      throw new Error(`bridge failed to start: ${status.message}`);
+    }
+    setPhase("done");
+    setMessage(
+      "Paired — the embedded bridge is running. AI users you grant access can now run " +
+        "allowlisted commands on this machine.",
+    );
+  }
+
   async function onPair() {
     setPhase("working");
     setMessage("");
@@ -75,6 +111,10 @@ function PairInner() {
         .filter(Boolean);
       if (allowedDirectories.length === 0) {
         throw new Error("Add at least one allowed directory (e.g. /Users/you/project).");
+      }
+      if (isTauri()) {
+        await onPairDesktop(allowedDirectories);
+        return;
       }
       const oidcToken = auth.user?.id_token ?? auth.user?.access_token;
       if (!oidcToken) {

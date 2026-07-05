@@ -1,0 +1,27 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "App-origin launcher page: core APIs + engine detection.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "allow-engines-detect",
+    "allow-engine-bind",
+    "allow-engines-bindings",
+    "allow-session-start",
+    "allow-session-resume",
+    "allow-session-send",
+    "allow-session-cancel",
+    "allow-sessions-list",
+    "allow-session-meta",
+    "allow-local-workspace-start",
+    "allow-local-workspace-stop",
+    "allow-local-workspace-status",
+    "allow-bridge-local-pair-prepare",
+    "allow-bridge-local-start",
+    "allow-bridge-local-stop",
+    "allow-bridge-local-status"
+  ]
+}

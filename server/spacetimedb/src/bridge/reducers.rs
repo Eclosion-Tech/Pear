@@ -203,6 +203,8 @@ pub fn pair_bridge_device(
         // New devices default to prompting for unlisted commands (the owner can
         // Allow / Deny in the UI) rather than hard-rejecting them.
         unlisted_command_policy: UnlistedCommandPolicy::Prompt,
+        // Let the device read its own allowlist (desktop-embedded bridge).
+        device_identity,
     });
     Ok(())
 }
@@ -339,6 +341,40 @@ pub fn close_bridge_session(ctx: &ReducerContext, session_id: u64) -> Result<(),
         disconnected_at: Some(ctx.timestamp),
         ..session
     });
+    set_summary_connected(ctx, device_id, false);
+    Ok(())
+}
+
+/// Close ALL open sessions for the device that presented this token hash.
+/// The desktop-embedded bridge calls this on shutdown: it cannot read the
+/// PRIVATE `bridge_session` table to learn its own session id, so it closes
+/// by device instead. Auth = knowledge of the device token, mirroring
+/// `open_bridge_session`. Idempotent.
+#[reducer]
+pub fn close_bridge_device_sessions(
+    ctx: &ReducerContext,
+    device_token_hash: String,
+) -> Result<(), String> {
+    let device = ctx
+        .db
+        .bridge_device()
+        .iter()
+        .find(|d| d.device_token_hash == device_token_hash)
+        .ok_or_else(|| "No device matches the presented token".to_string())?;
+    let device_id = device.id;
+    let open: Vec<BridgeSession> = ctx
+        .db
+        .bridge_session()
+        .device_id()
+        .filter(&device_id)
+        .filter(|s| s.disconnected_at.is_none())
+        .collect();
+    for session in open {
+        ctx.db.bridge_session().id().update(BridgeSession {
+            disconnected_at: Some(ctx.timestamp),
+            ..session
+        });
+    }
     set_summary_connected(ctx, device_id, false);
     Ok(())
 }
@@ -718,6 +754,13 @@ pub fn set_bridge_allowlist(
             .as_ref()
             .map(|e| e.unlisted_command_policy.clone())
             .unwrap_or(UnlistedCommandPolicy::Prompt),
+        // Preserve (or backfill) the device's identity so the device-scoped
+        // allowlist read keeps working across edits.
+        device_identity: existing
+            .as_ref()
+            .map(|e| e.device_identity)
+            .filter(|i| *i != Identity::ZERO)
+            .unwrap_or(device.device_identity),
     };
     if existing.is_some() {
         ctx.db.bridge_device_allowlist().device_id().update(row);

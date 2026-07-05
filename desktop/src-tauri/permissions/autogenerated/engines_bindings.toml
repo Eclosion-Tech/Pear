@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-engines-bindings"
+description = "Enables the engines_bindings command without any pre-configured scope."
+commands.allow = ["engines_bindings"]
+
+[[permission]]
+identifier = "deny-engines-bindings"
+description = "Denies the engines_bindings command without any pre-configured scope."
+commands.deny = ["engines_bindings"]

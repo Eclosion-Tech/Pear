@@ -270,6 +270,16 @@ pub struct BridgeCommandResult {
 const BRIDGE_DEVICE_ALLOWLIST_FILTER: Filter =
     Filter::Sql("SELECT * FROM bridge_device_allowlist WHERE updated_by = :sender");
 
+/// Second allowlist rule, **unioned (OR)** with the owner filter above: the
+/// device's own STDB identity can read its allowlist row. The desktop-embedded
+/// bridge connects directly to STDB as the device identity (no relay to ship it
+/// an allowlist bootstrap frame), so it must be able to fetch its own config.
+/// Backed by the denormalized `device_identity` column, stamped at pair time
+/// and preserved by `set_bridge_allowlist`.
+#[client_visibility_filter]
+const BRIDGE_DEVICE_ALLOWLIST_DEVICE_FILTER: Filter =
+    Filter::Sql("SELECT * FROM bridge_device_allowlist WHERE device_identity = :sender");
+
 /// Non-sensitive, workspace-readable view of paired devices. `bridge_device`
 /// itself is PRIVATE (it holds token hashes + the encrypted STDB token), so AI
 /// users and the device-management UI cannot read it to discover which devices
@@ -352,8 +362,14 @@ pub struct BridgeDeviceAllowlist {
     pub updated_by: Identity,
     /// What to do with a command whose leader is not in `allowed_commands`:
     /// `Prompt` (default) routes it to human confirmation; `Reject` hard-denies.
-    /// Must remain last for schema migration (STDB only allows additive changes
-    /// at the end of a struct).
     #[default(UnlistedCommandPolicy::Prompt)]
     pub unlisted_command_policy: UnlistedCommandPolicy,
+    /// The device's own STDB identity, denormalized from `BridgeDevice` so the
+    /// desktop-embedded bridge can read its allowlist row via
+    /// `BRIDGE_DEVICE_ALLOWLIST_DEVICE_FILTER`. `Identity::ZERO` for rows from
+    /// before this column existed (relay-served devices don't need it).
+    /// Must remain last for schema migration (STDB only allows additive changes
+    /// at the end of a struct).
+    #[default(Identity::ZERO)]
+    pub device_identity: Identity,
 }

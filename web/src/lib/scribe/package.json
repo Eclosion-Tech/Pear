@@ -1,0 +1,4 @@
+{
+  "//": "Marks this shared library as ESM for Node hosts that import it as source (the desktop transcript scribe runs it via tsx). Bundlers (Next, vitest) are unaffected. Same trick as ../mcp/package.json.",
+  "type": "module"
+}

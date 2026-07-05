@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-bridge-local-pair-prepare"
+description = "Enables the bridge_local_pair_prepare command without any pre-configured scope."
+commands.allow = ["bridge_local_pair_prepare"]
+
+[[permission]]
+identifier = "deny-bridge-local-pair-prepare"
+description = "Denies the bridge_local_pair_prepare command without any pre-configured scope."
+commands.deny = ["bridge_local_pair_prepare"]
