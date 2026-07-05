@@ -18,8 +18,25 @@ import { buildToolRegistry } from "./tools";
 
 export const SERVER_INFO = { name: "pear", version: "0.2.0" };
 
-export function createPearMcpServer(ctx: McpContext): Server {
-  const registry = buildToolRegistry();
+export interface CreatePearMcpServerOptions {
+  /**
+   * Capability boundary for OAuth-authenticated clients: tools failing the
+   * predicate are hidden from tools/list and rejected in tools/call with an
+   * error naming the missing scope (see mcp-oauth/scopes.ts). Omitted =
+   * full registry (worker-token callers).
+   */
+  toolFilter?: (name: string) => boolean;
+  /** Human-readable hint appended to filtered-tool rejections. */
+  missingScopeHint?: (name: string) => string | undefined;
+}
+
+export function createPearMcpServer(
+  ctx: McpContext,
+  options: CreatePearMcpServerOptions = {},
+): Server {
+  const registry = buildToolRegistry().filter(
+    (t) => !options.toolFilter || options.toolFilter(t.name),
+  );
   const byName = new Map<string, McpToolEntry>(registry.map((t) => [t.name, t]));
 
   const server = new Server(SERVER_INFO, { capabilities: { tools: {} } });
@@ -36,9 +53,16 @@ export function createPearMcpServer(ctx: McpContext): Server {
     const { name, arguments: args } = request.params;
     const entry = byName.get(name);
     if (!entry) {
+      const hint = options.missingScopeHint?.(name);
       return {
         content: [
-          { type: "text", text: JSON.stringify({ ok: false, error: `Unknown tool: ${name}` }) },
+          {
+            type: "text",
+            text: JSON.stringify({
+              ok: false,
+              error: hint ?? `Unknown tool: ${name}`,
+            }),
+          },
         ],
         isError: true,
       };
