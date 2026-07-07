@@ -70,14 +70,21 @@ export interface OAuthStore {
     rotatedFromId: string | null;
     expiresAtMs: number;
   }): Promise<void>;
-  /** Look up by hash; if the token was already used (rotation replay), the
-   * caller revokes the family via revokeRefreshFamily. */
+  /** Atomically claim an unused refresh token (single UPDATE, never a
+   * cached read — see the Hyperdrive-cache replay incident, 2026-07-07).
+   * Returns null when the token is unknown OR already used; callers
+   * disambiguate via findRefreshToken and revoke the family on reuse. */
+  claimRefreshToken(
+    tokenHash: Uint8Array,
+    nowMs: number,
+  ): Promise<{ id: string; grantId: string; expiresAtMs: number } | null>;
+  /** Diagnostic lookup by hash (may be served from a stale cache; never
+   * use it to authorize a refresh — that's claimRefreshToken's job). */
   findRefreshToken(tokenHash: Uint8Array): Promise<{
     id: string;
     grantId: string;
     usedAtMs: number | null;
     expiresAtMs: number;
   } | null>;
-  markRefreshTokenUsed(id: string, nowMs: number): Promise<void>;
   revokeRefreshFamily(grantId: string): Promise<void>;
 }
