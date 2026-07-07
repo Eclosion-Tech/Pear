@@ -34,21 +34,38 @@ export type AuthorizeValidation =
   | { ok: false; redirectable: false; error: string; description: string }
   | { ok: false; redirectable: true; redirectUri: string; state: string | null; error: string; description: string };
 
-/** localhost (loopback) or HTTPS only, exact string match against registered. */
+/**
+ * localhost (loopback) or HTTPS only. HTTPS URIs must match a registered URI
+ * exactly; loopback URIs match on scheme+host+path with the port IGNORED
+ * (RFC 8252 §7.3 — native clients bind an ephemeral port per run, so
+ * registered docs list portless loopback URIs, e.g. Claude Code's CIMD).
+ */
 export function redirectUriAllowed(uri: string, registered: readonly string[]): boolean {
-  if (!registered.includes(uri)) return false;
   let url: URL;
   try {
     url = new URL(uri);
   } catch {
     return false;
   }
-  if (url.protocol === "https:") return true;
-  if (url.protocol === "http:") {
-    const host = url.hostname;
-    return host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "::1";
-  }
-  return false;
+  if (url.protocol === "https:") return registered.includes(uri);
+  if (url.protocol !== "http:") return false;
+  const host = url.hostname;
+  const loopback = host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "::1";
+  if (!loopback) return false;
+  return registered.some((r) => {
+    let reg: URL;
+    try {
+      reg = new URL(r);
+    } catch {
+      return false;
+    }
+    return (
+      reg.protocol === "http:" &&
+      reg.hostname === url.hostname &&
+      reg.pathname === url.pathname &&
+      reg.search === url.search
+    );
+  });
 }
 
 export function isLoopbackRedirect(uri: string): boolean {

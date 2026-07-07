@@ -85,14 +85,19 @@ export async function fetchCimdDocument(
 
   let res: Response;
   try {
-    // redirect: "error" — a redirecting metadata URL is rejected outright,
-    // which also closes the redirect-to-internal-host SSRF hole.
+    // redirect: "manual" — workerd's fetch does not implement "error", so we
+    // ask for the raw response and reject any 3xx below. A redirecting
+    // metadata URL is refused outright, which also closes the
+    // redirect-to-internal-host SSRF hole.
     res = await fetchImpl(clientId, {
-      redirect: "error",
+      redirect: "manual",
       headers: { Accept: "application/json" },
     });
   } catch (e) {
     return { ok: false, error: `metadata fetch failed: ${e instanceof Error ? e.message : e}` };
+  }
+  if (res.status >= 300 && res.status < 400) {
+    return { ok: false, error: "metadata URL must not redirect" };
   }
   if (!res.ok) return { ok: false, error: `metadata fetch returned ${res.status}` };
 

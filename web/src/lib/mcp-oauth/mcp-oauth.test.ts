@@ -155,6 +155,22 @@ describe("cimd", () => {
     );
     expect(notJson.ok).toBe(false);
   });
+
+  it("rejects a redirecting metadata URL (workerd fetch has no redirect:'error')", async () => {
+    // Response() refuses 3xx statuses, so fake the shape that
+    // fetch(…, {redirect:"manual"}) actually returns at the edge.
+    const redirecting = {
+      status: 302,
+      ok: false,
+      headers: new Headers({ location: "https://internal.example" }),
+      text: () => Promise.resolve(""),
+    } as unknown as Response;
+    const res = await fetchCimdDocument("https://app.example.com/client.json", () =>
+      Promise.resolve(redirecting),
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain("redirect");
+  });
 });
 
 describe("scopes", () => {
@@ -230,11 +246,19 @@ describe("authorize validation", () => {
     }
   });
 
-  it("redirect URI rules: exact match, https or loopback only", () => {
+  it("redirect URI rules: https exact match, loopback ignores port", () => {
     expect(redirectUriAllowed("http://localhost:3000/callback", registered)).toBe(true);
     expect(redirectUriAllowed("http://localhost:3000/callback/", registered)).toBe(false);
     expect(redirectUriAllowed("https://app.example.com/cb", registered)).toBe(true);
     expect(redirectUriAllowed("http://app.example.com/cb", ["http://app.example.com/cb"])).toBe(false);
+    // RFC 8252 §7.3: native clients bind an ephemeral loopback port per run —
+    // Claude Code registers portless http://localhost/callback via CIMD.
+    expect(redirectUriAllowed("http://localhost:3118/callback", ["http://localhost/callback"])).toBe(true);
+    expect(redirectUriAllowed("http://127.0.0.1:49152/callback", ["http://127.0.0.1/callback"])).toBe(true);
+    expect(redirectUriAllowed("http://localhost:3118/callback", ["http://127.0.0.1/callback"])).toBe(false);
+    expect(redirectUriAllowed("http://localhost:3118/other", ["http://localhost/callback"])).toBe(false);
+    // https never gets the port leniency
+    expect(redirectUriAllowed("https://app.example.com:8443/cb", ["https://app.example.com/cb"])).toBe(false);
   });
 });
 
