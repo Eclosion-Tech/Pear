@@ -518,6 +518,12 @@ function ensureJsonObjectString(
 
 // ── Pear workspace tools ──────────────────────────────────────────────────────
 
+/**
+ * Max characters of page content returned per get_page call. Content beyond
+ * this is reachable via the `offset` param — never silently dropped (#317).
+ */
+const GET_PAGE_WINDOW_CHARS = 20_000;
+
 const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
   {
     name: "list_automation_primitives",
@@ -934,11 +940,19 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
   {
     name: "get_page",
     description:
-      "Get details about a specific page by ID, including its title, type, parent, and content.",
+      "Get details about a specific page by ID, including its title, type, parent, and content. " +
+      "Long pages are returned in windows: when the response has `truncated: true`, call again with " +
+      "`offset` set to the returned `next_offset` to read the rest.",
     input_schema: {
       type: "object" as const,
       properties: {
         page_id: { type: "number" },
+        offset: {
+          type: "number",
+          description:
+            "Character offset to start reading from (default 0). Use the `next_offset` from a " +
+            "truncated response to continue reading a long page.",
+        },
       },
       required: ["page_id"],
     },
@@ -3025,13 +3039,24 @@ export async function executeTool(
           content = contentRow?.content ?? "";
         }
 
+        // Window long pages instead of silently clipping them (#317): the read
+        // is a local cache walk so size costs nothing here — the bound exists
+        // only to keep a single tool result from flooding the model's context.
+        const offset = Math.max(0, Math.trunc((input.offset as number | undefined) ?? 0));
+        const window = content.slice(offset, offset + GET_PAGE_WINDOW_CHARS);
+        const truncated = offset + window.length < content.length;
+
         return JSON.stringify({
           ok: true,
           page_id: Number(page.id),
           title: page.title,
           page_type: page.pageType.tag,
           parent_id: page.parentId ? Number(page.parentId) : null,
-          content: content.slice(0, 5000),
+          content: window,
+          total_chars: content.length,
+          offset,
+          truncated,
+          next_offset: truncated ? offset + window.length : undefined,
           // A Database page's rows live in property tables, not `content` — point
           // the model at the tool that can actually read them.
           next_step:
