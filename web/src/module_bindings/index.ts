@@ -40,6 +40,7 @@ import AddAutomationConditionReducer from "./add_automation_condition_reducer";
 import AddConversationParticipantReducer from "./add_conversation_participant_reducer";
 import AddPropertyReducer from "./add_property_reducer";
 import AddTasksToJobReducer from "./add_tasks_to_job_reducer";
+import AppendPageDocReducer from "./append_page_doc_reducer";
 import AwaitBridgeCommandConfirmationReducer from "./await_bridge_command_confirmation_reducer";
 import CancelExtensionInstallReducer from "./cancel_extension_install_reducer";
 import ClaimTaskReducer from "./claim_task_reducer";
@@ -133,6 +134,7 @@ import RenameBridgeDeviceReducer from "./rename_bridge_device_reducer";
 import RenamePropertyReducer from "./rename_property_reducer";
 import RenameViewReducer from "./rename_view_reducer";
 import ReorderPropertyReducer from "./reorder_property_reducer";
+import ReplacePageDocReducer from "./replace_page_doc_reducer";
 import RequestPageAccessReducer from "./request_page_access_reducer";
 import ResolvePageAccessRequestReducer from "./resolve_page_access_request_reducer";
 import ResolveStructuralFindingReducer from "./resolve_structural_finding_reducer";
@@ -1159,6 +1161,7 @@ const reducersSchema = __reducers(
   __reducerSchema("add_conversation_participant", AddConversationParticipantReducer),
   __reducerSchema("add_property", AddPropertyReducer),
   __reducerSchema("add_tasks_to_job", AddTasksToJobReducer),
+  __reducerSchema("append_page_doc", AppendPageDocReducer),
   __reducerSchema("await_bridge_command_confirmation", AwaitBridgeCommandConfirmationReducer),
   __reducerSchema("cancel_extension_install", CancelExtensionInstallReducer),
   __reducerSchema("claim_task", ClaimTaskReducer),
@@ -1252,6 +1255,7 @@ const reducersSchema = __reducers(
   __reducerSchema("rename_property", RenamePropertyReducer),
   __reducerSchema("rename_view", RenameViewReducer),
   __reducerSchema("reorder_property", ReorderPropertyReducer),
+  __reducerSchema("replace_page_doc", ReplacePageDocReducer),
   __reducerSchema("request_page_access", RequestPageAccessReducer),
   __reducerSchema("resolve_page_access_request", ResolvePageAccessRequestReducer),
   __reducerSchema("resolve_structural_finding", ResolveStructuralFindingReducer),

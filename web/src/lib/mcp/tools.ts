@@ -56,13 +56,29 @@ const createPageTool: McpToolEntry = {
   },
 };
 
+/**
+ * Max characters of page content returned per get_page call. Content beyond
+ * this is reachable via the `offset` param — never silently dropped (#211).
+ */
+const GET_PAGE_WINDOW_CHARS = 20_000;
+
 const getPageTool: McpToolEntry = {
   name: "get_page",
   description:
-    "Get details about a specific page by ID, including its title, type, parent, and content.",
+    "Get details about a specific page by ID, including its title, type, parent, and content. " +
+    "Long pages are returned in windows: when the response has `truncated: true`, call again with " +
+    "`offset` set to the returned `next_offset` to read the rest.",
   inputSchema: {
     type: "object",
-    properties: { page_id: { type: "number" } },
+    properties: {
+      page_id: { type: "number" },
+      offset: {
+        type: "number",
+        description:
+          "Character offset to start reading from (default 0). Use the `next_offset` from a " +
+          "truncated response to continue reading a long page.",
+      },
+    },
     required: ["page_id"],
   },
   execute: async (ctx, input) => {
@@ -77,13 +93,21 @@ const getPageTool: McpToolEntry = {
     const content =
       treeContent !== undefined ? treeContent : await getPageContent(ctx.transport, pageId);
 
+    const offset = Math.max(0, Math.trunc(Number(input.offset ?? 0)) || 0);
+    const window = content.slice(offset, offset + GET_PAGE_WINDOW_CHARS);
+    const truncated = offset + window.length < content.length;
+
     return JSON.stringify({
       ok: true,
       page_id: page.id,
       title: page.title,
       page_type: page.pageType,
       parent_id: page.parentId,
-      content: content.slice(0, 5000),
+      content: window,
+      total_chars: content.length,
+      offset,
+      truncated,
+      next_offset: truncated ? offset + window.length : undefined,
       next_step:
         page.pageType === "Database"
           ? "This is a Database page; its rows are NOT in `content`. Call query_database(page_id) to read its columns and rows."

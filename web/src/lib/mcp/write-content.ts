@@ -9,9 +9,10 @@
 
 import type { StdbTransport } from "../api-endpoint";
 import { markdownToBlockNote } from "./blocknote";
-import { writeComponentTreeDoc } from "./component-tree";
+import { appendComponentTreeDoc, writeComponentTreeDoc } from "./component-tree";
 import { encodeSnapshotTypePreAgentEdit, encodeU64 } from "./encode";
 import { discoverAllocatedId, readCounter } from "./ids";
+import { getPageContent } from "./pages";
 import { reducerErrorMessage } from "./errors";
 
 export interface WriteContentResult {
@@ -55,23 +56,35 @@ export async function writePageContent(
   transport: StdbTransport,
   page: { id: number; contentFormat: "BlockNote" | "ComponentTree" },
   markdown: string,
-  opts: { snapshot: boolean },
+  opts: { snapshot: boolean; mode?: "replace" | "append" },
 ): Promise<WriteContentResult> {
+  const mode = opts.mode ?? "replace";
   const snapshotId = opts.snapshot
     ? await takePreEditSnapshot(transport, page.id)
     : undefined;
 
   if (page.contentFormat === "ComponentTree") {
-    const result = await writeComponentTreeDoc(transport, page.id, markdown);
+    // Append rides its own reducer — existing nodes are never read or
+    // rewritten, so cost is O(new blocks) and concurrent edits are safe.
+    const result =
+      mode === "append"
+        ? await appendComponentTreeDoc(transport, page.id, markdown)
+        : await writeComponentTreeDoc(transport, page.id, markdown);
     return { ...result, snapshot_id: snapshotId };
   }
 
   // Legacy BlockNote path — reducer rejects ComponentTree pages server-side,
-  // but we already routed those above.
+  // but we already routed those above. No batched append exists for the
+  // legacy blob: append = read + merge + full replace.
+  let finalMarkdown = markdown;
+  if (mode === "append") {
+    const body = await getPageContent(transport, page.id);
+    finalMarkdown = body.trim() ? `${body.replace(/\s+$/, "")}\n\n${markdown}` : markdown;
+  }
   try {
     await transport.call("update_page_content", [
       encodeU64(page.id),
-      markdownToBlockNote(markdown),
+      markdownToBlockNote(finalMarkdown),
     ]);
   } catch (err) {
     return {

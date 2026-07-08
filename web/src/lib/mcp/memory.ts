@@ -14,7 +14,7 @@
 import type { StdbTransport } from "../api-endpoint";
 import type { McpContext, PageRow } from "./types";
 import { allLivePages, getPageContent } from "./pages";
-import { readComponentTreeDoc } from "./component-tree";
+import { readComponentTreeDoc, readComponentTreeDocs } from "./component-tree";
 import { writePageContent } from "./write-content";
 import { createPage } from "./create-page";
 
@@ -101,6 +101,25 @@ async function memoryPageContent(
   return getPageContent(transport, pageId);
 }
 
+/**
+ * Bulk body read for a whole subtree: one batched ComponentTree pass for
+ * every page, then a per-page `page_content` fallback only for the (rare,
+ * legacy BlockNote) pages the tree pass didn't cover. Keeps list/search
+ * subrequest cost flat in subtree size (#241).
+ */
+async function memoryPageContents(
+  transport: StdbTransport,
+  pageIds: number[],
+): Promise<Map<number, string>> {
+  const contents = await readComponentTreeDocs(transport, pageIds);
+  for (const pageId of pageIds) {
+    if (!contents.has(pageId)) {
+      contents.set(pageId, await getPageContent(transport, pageId));
+    }
+  }
+  return contents;
+}
+
 function snippetOf(content: string, max = 200): string {
   const flat = content.replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max)}…` : flat;
@@ -123,9 +142,13 @@ export async function executeListMemory(ctx: McpContext): Promise<string> {
   const tree = await resolveMemorySubtree(ctx.transport, ctx.aiUserId);
   if (!tree) return JSON.stringify({ ok: false, error: UNPROVISIONED_ERROR });
 
+  const bodies = await memoryPageContents(
+    ctx.transport,
+    tree.ordered.map((p) => p.id),
+  );
   const pages = [];
   for (const p of tree.ordered) {
-    const body = await memoryPageContent(ctx.transport, p.id);
+    const body = bodies.get(p.id) ?? "";
     pages.push({
       page_id: p.id,
       title: p.title,
@@ -179,8 +202,12 @@ export async function executeSearchMemory(
   };
   const scored: Scored[] = [];
 
+  const bodies = await memoryPageContents(
+    ctx.transport,
+    tree.ordered.map((p) => p.id),
+  );
   for (const page of tree.ordered) {
-    const body = await memoryPageContent(ctx.transport, page.id);
+    const body = bodies.get(page.id) ?? "";
     const hayTitle = page.title.toLowerCase();
     const hayBody = body.toLowerCase();
 
@@ -247,13 +274,11 @@ export async function executeRemember(
         error: `No memory page ${pageId} in your memory subtree. Use list_memory to see valid ids, or omit memory_page_id to create a new page.`,
       });
     }
-    const body = await memoryPageContent(ctx.transport, pageId);
-    const markdown =
-      mode === "append" && body.trim()
-        ? `${body.replace(/\s+$/, "")}\n\n${content}`
-        : content;
-    const result = await writePageContent(ctx.transport, existing, markdown, {
+    // Append rides the batched append reducer inside writePageContent — no
+    // read-merge-rewrite of the existing body (#242).
+    const result = await writePageContent(ctx.transport, existing, content, {
       snapshot: true,
+      mode,
     });
     return JSON.stringify({ ...result, page_id: pageId, mode });
   }

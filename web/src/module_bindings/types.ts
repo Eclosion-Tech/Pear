@@ -767,6 +767,13 @@ export const DatabaseView = __t.object("DatabaseView", {
 });
 export type DatabaseView = __Infer<typeof DatabaseView>;
 
+export const DocBlockInput = __t.object("DocBlockInput", {
+  componentType: __t.string(),
+  propsJson: __t.string(),
+  yjsState: __t.option(__t.byteArray()),
+});
+export type DocBlockInput = __Infer<typeof DocBlockInput>;
+
 export const ExtensionManifest = __t.object("ExtensionManifest", {
   id: __t.u64(),
   name: __t.string(),

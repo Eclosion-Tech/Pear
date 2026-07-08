@@ -1377,6 +1377,143 @@ pub fn save_component_yjs_state(
 }
 
 // ============================================================
+// Reducers — batched document writes
+// ============================================================
+
+/// One block of a batched page-body write. Carried by [`replace_page_doc`]
+/// and [`append_page_doc`] so an entire document lands in a single reducer
+/// call — one transaction, one subrequest from HTTP callers — instead of an
+/// `insert_component` + `save_component_yjs_state` round-trip per block.
+#[derive(SpacetimeType, Clone, Debug)]
+pub struct DocBlockInput {
+    /// Looked up in [`ComponentTypeDefinition`]; unknown types reject the
+    /// whole batch.
+    pub component_type: String,
+    /// JSON-encoded props (`{}` for none) — same contract as
+    /// `insert_component`.
+    pub props_json: String,
+    /// Encoded Yjs state (`Y.encodeStateAsUpdate` output) for Yjs-backed
+    /// types. Must be `None` for types with `has_yjs_state = false`.
+    pub yjs_state: Option<Vec<u8>>,
+}
+
+/// Defensive ceiling on blocks per batched write. Far above any real
+/// document write; exists so a malformed call can't insert unbounded rows.
+const MAX_DOC_BLOCKS_PER_CALL: usize = 2_000;
+
+/// Replace a page's document body in one transaction: soft-delete the live
+/// children of the surface root, then insert `blocks` in order as new
+/// children (with their Yjs state, where given). Any validation failure
+/// rolls the whole write back — no half-written pages.
+#[reducer]
+pub fn replace_page_doc(
+    ctx: &ReducerContext,
+    page_id: u64,
+    blocks: Vec<DocBlockInput>,
+) -> Result<(), String> {
+    write_page_doc(ctx, page_id, blocks, true)
+}
+
+/// Append `blocks` after the last live child of the surface root, in one
+/// transaction. Existing content is untouched — the safe primitive for
+/// "add to this page" flows (e.g. memory appends).
+#[reducer]
+pub fn append_page_doc(
+    ctx: &ReducerContext,
+    page_id: u64,
+    blocks: Vec<DocBlockInput>,
+) -> Result<(), String> {
+    write_page_doc(ctx, page_id, blocks, false)
+}
+
+fn write_page_doc(
+    ctx: &ReducerContext,
+    page_id: u64,
+    blocks: Vec<DocBlockInput>,
+    replace: bool,
+) -> Result<(), String> {
+    if blocks.len() > MAX_DOC_BLOCKS_PER_CALL {
+        return Err(format!(
+            "Too many blocks in one call ({} > {MAX_DOC_BLOCKS_PER_CALL})",
+            blocks.len()
+        ));
+    }
+    let page = require_component_tree_page(ctx, page_id)?;
+    require_page_write(ctx, page_id)?;
+
+    let root = ctx
+        .db
+        .component_node()
+        .surface_id()
+        .filter(page_id)
+        .find(|n| n.parent_id.is_none() && n.deleted_at.is_none())
+        .ok_or("No root component node for this page — cannot author content")?;
+    let root_type = require_type_def(ctx, &root.component_type)?;
+    if !root_type.accepts_children {
+        return Err(format!(
+            "Root component type {:?} does not accept children",
+            root.component_type
+        ));
+    }
+
+    // Validate the whole batch before touching any row, so rejections carry
+    // a clean per-block error (the transaction would roll back either way).
+    for (i, block) in blocks.iter().enumerate() {
+        let type_def = require_type_def(ctx, &block.component_type)?;
+        if block.yjs_state.is_some() && !type_def.has_yjs_state {
+            return Err(format!(
+                "Block {i}: component type {:?} does not support Yjs state",
+                block.component_type
+            ));
+        }
+    }
+
+    let existing = live_siblings_sorted(ctx, page_id, root.id, None);
+    let mut next_order = if replace {
+        for child in existing {
+            ctx.db.component_node().id().update(ComponentNode {
+                deleted_at: Some(ctx.timestamp),
+                updated_by: ActorType::Human,
+                updated_at: ctx.timestamp,
+                ..child
+            });
+        }
+        1000u32
+    } else {
+        existing.last().map_or(1000, |n| n.order.saturating_add(1000))
+    };
+
+    for block in blocks {
+        let id = next_component_node_id(ctx);
+        ctx.db.component_node().insert(ComponentNode {
+            id,
+            surface_id: page_id,
+            parent_id: Some(root.id),
+            component_type: block.component_type,
+            props: block.props_json,
+            order: next_order,
+            created_by: ActorType::Human,
+            updated_by: ActorType::Human,
+            created_at: ctx.timestamp,
+            updated_at: ctx.timestamp,
+            deleted_at: None,
+        });
+        next_order = next_order.saturating_add(1000);
+
+        if let Some(data) = block.yjs_state {
+            ctx.db.component_yjs_state().insert(ComponentYjsState {
+                component_node_id: id,
+                data,
+                updated_at: ctx.timestamp,
+            });
+        }
+    }
+
+    touch_page(ctx, page);
+    Ok(())
+}
+
+// ============================================================
 // Reducers — registry
 // ============================================================
 

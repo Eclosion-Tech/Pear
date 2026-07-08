@@ -63,6 +63,8 @@ class FakeStdb implements StdbTransport {
   /** Extra ids to burn per insert_component — simulates a concurrent writer. */
   interleavePerInsert = 0;
   calls: string[] = [];
+  /** Every `/sql` query issued — with `calls`, the subrequest count. */
+  sqlQueries: string[] = [];
 
   alloc(name: string): number {
     const next = (this.counters.get(name) ?? 0) + 1;
@@ -117,6 +119,7 @@ class FakeStdb implements StdbTransport {
   private nodeWire(n: FakeNode): Record<string, unknown> {
     return {
       id: n.id,
+      surface_id: n.surfaceId,
       parent_id: this.optNum(n.parentId),
       component_type: n.componentType,
       order: n.order,
@@ -128,6 +131,7 @@ class FakeStdb implements StdbTransport {
 
   async sql<Row = unknown>(query: string, params: unknown[] = []): Promise<Row[]> {
     const q = query.replace(/\s+/g, " ").trim();
+    this.sqlQueries.push(q);
 
     if (q.includes("FROM ai_user_config")) {
       return this.aiUserConfig as Row[];
@@ -156,9 +160,11 @@ class FakeStdb implements StdbTransport {
       return this.schemas.filter((s) => s.pageId === pageId) as Row[];
     }
     if (q.includes("FROM component_node")) {
-      const surfaceId = Number(params[0]);
+      // Single-surface (`surface_id = ?`) and bulk OR-chain forms both filter
+      // on surface_id — every param is a surface id.
+      const surfaceIds = new Set(params.map(Number));
       return this.nodes
-        .filter((n) => n.surfaceId === surfaceId)
+        .filter((n) => surfaceIds.has(n.surfaceId))
         .map((n) => this.nodeWire(n)) as Row[];
     }
     if (q.includes("FROM component_yjs_state")) {
@@ -247,6 +253,51 @@ class FakeStdb implements StdbTransport {
           order,
           deletedAtMicros: null,
         });
+        return;
+      }
+      case "replace_page_doc":
+      case "append_page_doc": {
+        const [pageId, blocks] = args as [
+          number,
+          Array<[string, string, { some?: number[]; none?: [] }]>,
+        ];
+        const page = this.pages.find((p) => p.id === Number(pageId));
+        if (!page) fail("Surface page not found");
+        if (page!.contentFormat !== "ComponentTree") {
+          fail("Page is not in ComponentTree format — component mutations are rejected");
+        }
+        const root = this.nodes.find(
+          (n) =>
+            n.surfaceId === Number(pageId) && n.parentId === null && n.deletedAtMicros === null,
+        );
+        if (!root) fail("No root component node for this page — cannot author content");
+        const live = this.nodes
+          .filter((n) => n.parentId === root!.id && n.deletedAtMicros === null)
+          .sort((a, b) => a.order - b.order);
+        let order: number;
+        if (reducer === "replace_page_doc") {
+          for (const child of live) child.deletedAtMicros = NOW_MICROS;
+          order = 1000;
+        } else {
+          order = (live.at(-1)?.order ?? 0) + 1000;
+        }
+        for (const [componentType, , yjsOpt] of blocks) {
+          // Simulated concurrent writer: burn ids before ours.
+          for (let i = 0; i < this.interleavePerInsert; i++) this.alloc("component_node");
+          const id = this.alloc("component_node");
+          this.nodes.push({
+            id,
+            surfaceId: Number(pageId),
+            parentId: root!.id,
+            componentType,
+            order,
+            deletedAtMicros: null,
+          });
+          order += 1000;
+          if (yjsOpt.some !== undefined) {
+            this.yjs.set(id, toHex(new Uint8Array(yjsOpt.some)));
+          }
+        }
         return;
       }
       case "delete_component": {
@@ -571,6 +622,101 @@ describe("pages", () => {
     expect(res.error).toMatch(/Title is required/);
     // The transport wrapper prefix is stripped down to the reducer's message.
     expect(res.error).not.toMatch(/SpacetimeDB reducer/);
+  });
+});
+
+// ── Subrequest-cost regressions (#242 acceptance) ──────────────────────────────
+
+describe("subrequest cost stays flat", () => {
+  test("a 30-block page write is one reducer call, not one per block", async () => {
+    const fake = memoryFake();
+    const markdown = Array.from({ length: 30 }, (_, i) => `Paragraph number ${i + 1}.`).join(
+      "\n\n",
+    );
+    const opsBefore = fake.calls.length + fake.sqlQueries.length;
+    const res = await run(fake, "update_page_content", { page_id: 101, markdown });
+    expect(res.ok).toBe(true);
+    expect((res.created_node_ids as number[]).length).toBe(30);
+
+    expect(fake.calls.filter((c) => c === "replace_page_doc")).toHaveLength(1);
+    expect(fake.calls).not.toContain("insert_component");
+    expect(fake.calls).not.toContain("save_component_yjs_state");
+    expect(fake.calls).not.toContain("delete_component");
+    // Whole write (incl. pre-edit snapshot + id readback) in a handful of
+    // subrequests — the O(n)-in-blocks pattern is the #210/#242 regression.
+    expect(fake.calls.length + fake.sqlQueries.length - opsBefore).toBeLessThanOrEqual(8);
+
+    const read = await run(fake, "read_memory", { page_id: 101 });
+    expect(read.content).toMatch(/Paragraph number 1\./);
+    expect(read.content).toMatch(/Paragraph number 30\./);
+  });
+
+  test("remember append is one reducer call and never rewrites existing nodes", async () => {
+    const fake = memoryFake();
+    const res = await run(fake, "remember", {
+      memory_page_id: 101,
+      content: "one\n\ntwo\n\nthree\n\nfour\n\nfive\n\nsix",
+    });
+    expect(res.ok).toBe(true);
+    expect(fake.calls.filter((c) => c === "append_page_doc")).toHaveLength(1);
+    expect(fake.calls).not.toContain("replace_page_doc");
+    expect(fake.calls).not.toContain("delete_component");
+    const read = await run(fake, "read_memory", { page_id: 101 });
+    expect(read.content).toMatch(/old note/);
+    expect(read.content).toMatch(/six/);
+  });
+
+  test("list_memory and search_memory cost stays flat on a 50-page subtree (#241)", async () => {
+    const fake = memoryFake();
+    for (let i = 0; i < 50; i++) {
+      const page = fake.seedPage({
+        id: 500 + i,
+        title: `Note ${i}`,
+        parentId: 100,
+        contentFormat: "ComponentTree",
+      });
+      fake.seedTree(page.id, `body of note ${i}`);
+    }
+    fake.sqlQueries = [];
+    const list = await run(fake, "list_memory");
+    expect(list.ok).toBe(true);
+    expect((list.pages as unknown[]).length).toBe(52); // root + Notes + 50
+    // Old shape: 2+ queries per page (>100 here) — the #241 killer.
+    expect(fake.sqlQueries.length).toBeLessThanOrEqual(12);
+
+    fake.sqlQueries = [];
+    const search = await run(fake, "search_memory", { query: "note 42" });
+    expect(search.ok).toBe(true);
+    expect(fake.sqlQueries.length).toBeLessThanOrEqual(12);
+  });
+});
+
+// ── get_page windowing (#211) ──────────────────────────────────────────────────
+
+describe("get_page windowing", () => {
+  test("long pages window with explicit truncation metadata instead of a silent clip", async () => {
+    const fake = memoryFake();
+    fake.seedPage({ id: 600, title: "Long legacy", contentFormat: "BlockNote" });
+    fake.pageContent.set(600, "x".repeat(45_000));
+
+    const first = await run(fake, "get_page", { page_id: 600 });
+    expect(first.ok).toBe(true);
+    expect((first.content as string).length).toBe(20_000);
+    expect(first.total_chars).toBe(45_000);
+    expect(first.truncated).toBe(true);
+    expect(first.next_offset).toBe(20_000);
+
+    const last = await run(fake, "get_page", { page_id: 600, offset: 40_000 });
+    expect((last.content as string).length).toBe(5_000);
+    expect(last.truncated).toBe(false);
+    expect(last.next_offset).toBeUndefined();
+  });
+
+  test("short pages return complete content with truncated:false", async () => {
+    const res = await run(memoryFake(), "get_page", { page_id: 101 });
+    expect(res.ok).toBe(true);
+    expect(res.truncated).toBe(false);
+    expect(res.content).toMatch(/old note/);
   });
 });
 
