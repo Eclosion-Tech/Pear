@@ -1,8 +1,16 @@
 # Pear
 
-**A self-hosted, relational-first Notion alternative built on SpacetimeDB.**
+**A self-hosted, relational-first workspace where AI agents are first-class users — built on SpacetimeDB.**
+
+[pear.pro](https://pear.pro) · [Roadmap](./ROADMAP.md) · [MCP server](./docs/MCP_SERVER.md) · [API endpoints](./docs/API_ENDPOINTS.md) · AGPL-3.0
+
+> Primary repository: [codeberg.org/Eclosion-Tech/pear](https://codeberg.org/Eclosion-Tech/pear). The GitHub repository is a mirror.
 
 Pages and database rows are the same entity — a page viewed in a grid is a row, a row opened fully is a page. Real-time data syncs over SpacetimeDB subscriptions; documents are typed component trees with Yjs-backed rich text, synced live through the database.
+
+Most "AI workspace" tools are either closed SaaS with AI bolted on, or open-source apps that treat AI as an external API call. Pear treats agents as native participants in the data model: AI users hold identities, permissions, persistent memory, and audited tool access alongside human users — a workspace your agents live in, on infrastructure you own.
+
+![A Pear database built by an AI user — Kira adds the schema via tool calls in the chat panel while the populated grid renders live](./docs/assets/pear-workspace.png)
 
 ---
 
@@ -10,6 +18,7 @@ Pages and database rows are the same entity — a page viewed in a grid is a row
 
 - **Pages are database entries.** No distinction between a "page" and a "row". Same entity, different lens.
 - **Relations are first-class.** Linking two databases is a core primitive, not a power-user feature.
+- **Agents are users.** AI users get identities, permissions, memory, and audit trails in the same tables as humans — not a chat sidebar.
 - **Self-hostable by default.** Your data lives where you put it. No vendor lock-in.
 - **The client is sovereign.** A workspace is just a server you connect to. No central registry, no platform that can enumerate or revoke your access.
 
@@ -30,6 +39,16 @@ Pages and database rows are the same entity — a page viewed in a grid is a row
 ---
 
 ## Features
+
+### AI users, agents & extensions
+
+- **AI users** — Configurable model providers; **conversations** attached to pages or anchored to individual blocks (@mention a block to start a thread), persisted in SpacetimeDB.
+- **Agent edit review** — AI edits are bracketed with before/after snapshots; review and accept/reject them per page.
+- **Orcha** — Job/task coordination tables and reducers embedded in the same module (or point workers at an external Orcha DB). Page-scoped jobs from the in-app panel.
+- **Extensions** — Install MCP servers and config bundles; permissioned tool execution with audit logging. Built-in workspace tools extension seeded for new databases.
+- **MCP server** — Let external AI models (Claude Code, Claude Desktop, Cursor, …) use Pear as a persistent memory store and notes backend over stdio or HTTP. Each client acts as a Pear AI user with its own private memory subtree. See [`docs/MCP_SERVER.md`](./docs/MCP_SERVER.md).
+
+All AI features are optional — Pear runs fully without the worker or any model provider configured.
 
 ### Workspace & navigation
 
@@ -62,14 +81,6 @@ Pages and database rows are the same entity — a page viewed in a grid is a row
 
 - **Custom API endpoints** — Expose any database as a versioned REST API (`/api/e/{slug}`) with field-level mappings, per-property type coercion, optional API-key auth, and an auto-generated OpenAPI 3.1 spec. See [`docs/API_ENDPOINTS.md`](./docs/API_ENDPOINTS.md).
 - **Notion import** — The `import_notion` reducer rebuilds a Notion workspace (pages, databases, properties, content) into an empty workspace; the bundled settings panel drives it through an external OAuth + transform service.
-
-### AI & extensions (optional)
-
-- **AI users** — Configurable model providers; **conversations** attached to pages or anchored to individual blocks (@mention a block to start a thread), persisted in SpacetimeDB.
-- **Agent edit review** — AI edits are bracketed with before/after snapshots; review and accept/reject them per page.
-- **Orcha** — Job/task coordination tables and reducers embedded in the same module (or point workers at an external Orcha DB). Page-scoped jobs from the in-app panel.
-- **Extensions** — Install MCP servers and config bundles; permissioned tool execution with audit logging. Built-in workspace tools extension seeded for new databases.
-- **MCP server** — Let external AI models (Claude Code, Claude Desktop, Cursor, …) use Pear as a persistent memory store and notes backend over stdio or HTTP. Each client acts as a Pear AI user with its own private memory subtree. See [`docs/MCP_SERVER.md`](./docs/MCP_SERVER.md).
 
 For a finer-grained shipped vs planned list, see [`ROADMAP.md`](./ROADMAP.md).
 
