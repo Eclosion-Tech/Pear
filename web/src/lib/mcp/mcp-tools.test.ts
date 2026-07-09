@@ -53,7 +53,12 @@ class FakeStdb implements StdbTransport {
   aiUserConfig: Array<{ id: number }> = [{ id: 7 }];
   aiUserMemory: Array<{ aiUserId: number; rootPageId: number }> = [];
   snapshots: Array<{ id: number; pageId: number }> = [];
-  schemas: Array<{ id: number; pageId: number }> = [];
+  schemas: Array<{ id: number; pageId: number; parentSchemaId?: number | null }> = [];
+  /** property_type is the PropertyType variant INDEX (Text=0 … Rollup=11). */
+  propDefs: Array<{ id: number; schemaId: number; name: string; type: number; order: number }> =
+    [];
+  /** value is the wire-shaped PropertyValue sum `[variantIndex, payload]`. */
+  propValues: Array<{ pageId: number; propDefId: number; value: [number, unknown] }> = [];
   counters = new Map<string, number>([
     ["page", 1000],
     ["component_node", 2000],
@@ -156,8 +161,38 @@ class FakeStdb implements StdbTransport {
       return this.snapshots.filter((s) => s.pageId === pageId) as Row[];
     }
     if (q.includes("FROM database_schema")) {
+      if (params.length === 0) {
+        // resolveDatabase fetches the whole (workspace-small) table.
+        return this.schemas.map((s) => ({
+          id: s.id,
+          page_id: s.pageId,
+          parent_schema_id: this.optNum(s.parentSchemaId ?? null),
+        })) as Row[];
+      }
       const pageId = Number(params[0]);
       return this.schemas.filter((s) => s.pageId === pageId) as Row[];
+    }
+    if (q.includes("FROM property_definition")) {
+      const schemaIds = new Set(params.map(Number));
+      return this.propDefs
+        .filter((p) => schemaIds.has(p.schemaId))
+        .map((p) => ({
+          id: p.id,
+          schema_id: p.schemaId,
+          name: p.name,
+          property_type: [p.type, []],
+          order: p.order,
+        })) as Row[];
+    }
+    if (q.includes("FROM page_property_value")) {
+      const pageIds = new Set(params.map(Number));
+      return this.propValues
+        .filter((v) => pageIds.has(v.pageId))
+        .map((v) => ({
+          page_id: v.pageId,
+          property_definition_id: v.propDefId,
+          value: v.value,
+        })) as Row[];
     }
     if (q.includes("FROM component_node")) {
       // Single-surface (`surface_id = ?`) and bulk OR-chain forms both filter
@@ -338,6 +373,32 @@ class FakeStdb implements StdbTransport {
         page!.deletedAtMicros = NOW_MICROS;
         return;
       }
+      case "restore_page": {
+        const page = this.pages.find((p) => p.id === Number(args[0]));
+        if (!page) fail("Page not found");
+        if (page!.deletedAtMicros === null) fail("Page is not deleted");
+        page!.deletedAtMicros = null;
+        return;
+      }
+      case "set_property_value": {
+        const [pageId, propDefId, wire] = args as [number, number, Record<string, unknown>];
+        if (!this.pages.find((p) => p.id === Number(pageId))) fail("Page not found");
+        if (!this.propDefs.find((d) => d.id === Number(propDefId))) {
+          fail("PropertyDefinition not found");
+        }
+        // Client sends `{variantName: payload}` (lowerCamel); store as the
+        // read-side positional sum so query_database exercises the decoder.
+        const VARIANTS = ["text", "number", "date", "select", "multiSelect", "relation", "checkbox", "url", "person", "ai"];
+        const [name, payload] = Object.entries(wire)[0] ?? [];
+        const idx = VARIANTS.indexOf(String(name));
+        if (idx < 0) fail(`Unknown PropertyValue variant: ${name}`);
+        const existing = this.propValues.find(
+          (v) => v.pageId === Number(pageId) && v.propDefId === Number(propDefId),
+        );
+        if (existing) existing.value = [idx, payload];
+        else this.propValues.push({ pageId: Number(pageId), propDefId: Number(propDefId), value: [idx, payload] });
+        return;
+      }
       case "move_page": {
         const [pageId, parentOpt] = args as [number, { some?: number; none?: [] }];
         const page = this.pages.find((p) => p.id === Number(pageId));
@@ -409,10 +470,13 @@ describe("registry", () => {
       "list_child_pages",
       "list_memory",
       "move_page",
+      "query_database",
       "read_memory",
       "remember",
+      "restore_page",
       "search_memory",
       "search_pages",
+      "set_row_properties",
       "update_page_content",
       "update_page_title",
     ]);
@@ -622,6 +686,144 @@ describe("pages", () => {
     expect(res.error).toMatch(/Title is required/);
     // The transport wrapper prefix is stripped down to the reducer's message.
     expect(res.error).not.toMatch(/SpacetimeDB reducer/);
+  });
+});
+
+// ── Database tools (#213/#215/#263) ────────────────────────────────────────────
+
+/** Seed a Tasks-like database: Status (Select), Project (Relation), Due (Date). */
+function tasksFake(): FakeStdb {
+  const fake = memoryFake();
+  fake.seedPage({ id: 800, title: "Tasks", pageType: "Database", contentFormat: "BlockNote" });
+  fake.schemas.push({ id: 50, pageId: 800 });
+  fake.propDefs.push(
+    { id: 501, schemaId: 50, name: "Status", type: 3, order: 1000 }, // Select
+    { id: 502, schemaId: 50, name: "Project", type: 5, order: 2000 }, // Relation
+    { id: 503, schemaId: 50, name: "Due", type: 2, order: 3000 }, // Date
+  );
+  for (let i = 0; i < 3; i++) {
+    fake.seedPage({ id: 810 + i, title: `Task ${i}`, parentId: 800 });
+  }
+  fake.propValues.push(
+    { pageId: 810, propDefId: 501, value: [3, "Done"] },
+    { pageId: 811, propDefId: 501, value: [3, "In Progress"] },
+    { pageId: 811, propDefId: 502, value: [5, [68]] },
+  );
+  return fake;
+}
+
+describe("database tools", () => {
+  test("query_database returns columns and decoded rows", async () => {
+    const res = await run(tasksFake(), "query_database", { page_id: 800 });
+    expect(res.ok).toBe(true);
+    expect(res.columns).toEqual([
+      { name: "Status", type: "Select" },
+      { name: "Project", type: "Relation" },
+      { name: "Due", type: "Date" },
+    ]);
+    const rows = res.rows as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toMatchObject({ page_id: 810, title: "Task 0", Status: "Done" });
+    expect(rows[1].Project).toEqual([68]);
+    expect(rows[2].Status).toBeNull();
+    expect(res.truncated).toBe(false);
+  });
+
+  test("query_database rejects non-Database pages and unknown filter columns", async () => {
+    const fake = tasksFake();
+    const notDb = await run(fake, "query_database", { page_id: 200 });
+    expect(notDb.ok).toBe(false);
+    expect(notDb.error).toMatch(/not a Database/);
+    const badCol = await run(fake, "query_database", {
+      page_id: 800,
+      property_filter: { property: "Nope" },
+    });
+    expect(badCol.ok).toBe(false);
+    expect(badCol.error).toMatch(/Known columns: title, Status, Project, Due/);
+  });
+
+  test("query_database filters and paginates with explicit next_offset (#263)", async () => {
+    const fake = tasksFake();
+    const filtered = await run(fake, "query_database", {
+      page_id: 800,
+      property_filter: { property: "Status", equals: "done" },
+    });
+    expect((filtered.rows as unknown[]).length).toBe(1);
+
+    const page1 = await run(fake, "query_database", { page_id: 800, limit: 2 });
+    expect(page1.returned_rows).toBe(2);
+    expect(page1.truncated).toBe(true);
+    expect(page1.next_offset).toBe(2);
+    const page2 = await run(fake, "query_database", { page_id: 800, offset: 2 });
+    expect((page2.rows as Array<{ page_id: number }>)[0].page_id).toBe(812);
+    expect(page2.truncated).toBe(false);
+  });
+
+  test("set_row_properties coerces by column type and round-trips (#215)", async () => {
+    const fake = tasksFake();
+    const res = await run(fake, "set_row_properties", {
+      page_id: 812,
+      properties: { Status: "To Do", Project: [68], Due: "2026-07-15" },
+    });
+    expect(res.ok).toBe(true);
+    expect(res.applied).toEqual(["Status", "Project", "Due"]);
+
+    const read = await run(fake, "query_database", {
+      page_id: 800,
+      property_filter: { property: "Status", equals: "To Do" },
+    });
+    const row = (read.rows as Array<Record<string, unknown>>)[0];
+    expect(row.page_id).toBe(812);
+    expect(row.Project).toEqual([68]);
+    expect(row.Due).toMatch(/^2026-07-15T/);
+  });
+
+  test("set_row_properties rejects unknown columns and bad values with what landed", async () => {
+    const fake = tasksFake();
+    const unknown = await run(fake, "set_row_properties", {
+      page_id: 812,
+      properties: { Nope: 1 },
+    });
+    expect(unknown.ok).toBe(false);
+    expect(unknown.error).toMatch(/Unknown column "Nope"/);
+
+    const bad = await run(fake, "set_row_properties", {
+      page_id: 812,
+      properties: { Status: "Blocked", Due: "not-a-date" },
+    });
+    expect(bad.ok).toBe(false);
+    expect(bad.error).toMatch(/Due.*Date/);
+    expect(bad.applied).toEqual(["Status"]); // partial progress reported
+  });
+
+  test("create_page into a Database applies properties in the same call", async () => {
+    const fake = tasksFake();
+    const res = await run(fake, "create_page", {
+      parent_id: 800,
+      page_type: "Doc",
+      title: "Filed by agent",
+      properties: { Status: "To Do", Project: [68] },
+    });
+    expect(res.ok).toBe(true);
+    expect(res.properties_applied).toEqual(["Status", "Project"]);
+    expect(res.properties_error).toBeUndefined();
+
+    const read = await run(fake, "query_database", {
+      page_id: 800,
+      property_filter: { property: "title", contains: "filed by agent" },
+    });
+    const row = (read.rows as Array<Record<string, unknown>>)[0];
+    expect(row.Status).toBe("To Do");
+    expect(row.Project).toEqual([68]);
+  });
+
+  test("restore_page undoes delete_page (#213 gap 1)", async () => {
+    const fake = tasksFake();
+    await run(fake, "delete_page", { page_id: 812 });
+    expect(fake.pages.find((p) => p.id === 812)!.deletedAtMicros).not.toBeNull();
+    const res = await run(fake, "restore_page", { page_id: 812 });
+    expect(res.ok).toBe(true);
+    expect(fake.pages.find((p) => p.id === 812)!.deletedAtMicros).toBeNull();
   });
 });
 

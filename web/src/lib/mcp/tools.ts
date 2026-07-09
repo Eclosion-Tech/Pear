@@ -16,6 +16,7 @@ import type { McpContext, McpToolEntry } from "./types";
 import { getPageRow, listChildren, allLivePages, getPageContent } from "./pages";
 import { readComponentTreeDoc } from "./component-tree";
 import { createPage } from "./create-page";
+import { queryDatabase, setRowProperties } from "./database";
 import { writePageContent } from "./write-content";
 import {
   executeListMemory,
@@ -32,7 +33,9 @@ const createPageTool: McpToolEntry = {
   name: "create_page",
   description:
     "Create a new Pear page as a child of an existing page. " +
-    "Use page_type 'Database' for structured data with columns, 'Doc' for rich text.",
+    "Use page_type 'Database' for structured data with columns, 'Doc' for rich text. " +
+    "When the parent is a Database page, the new page is a row — pass `properties` to set its " +
+    "column values in the same call (same shapes as set_row_properties).",
   inputSchema: {
     type: "object",
     properties: {
@@ -43,6 +46,12 @@ const createPageTool: McpToolEntry = {
       },
       page_type: { type: "string", enum: ["Doc", "Database"] },
       title: { type: "string" },
+      properties: {
+        type: "object",
+        description:
+          "Only when the parent is a Database: column name → value map to set on the new row " +
+          '(e.g. {"Status": "To Do", "Project": [68]}).',
+      },
     },
     required: ["parent_id", "page_type", "title"],
   },
@@ -52,7 +61,18 @@ const createPageTool: McpToolEntry = {
       pageType: input.page_type === "Database" ? "Database" : "Doc",
       title: String(input.title ?? ""),
     });
-    return JSON.stringify(result);
+    const props = input.properties as Record<string, unknown> | undefined;
+    if (!result.ok || result.page_id === undefined || !props || Object.keys(props).length === 0) {
+      return JSON.stringify(result);
+    }
+    // Row-property pass — the page exists either way, so report property
+    // failures alongside the successful create rather than masking it.
+    const propResult = JSON.parse(await setRowProperties(ctx.transport, result.page_id, props));
+    return JSON.stringify({
+      ...result,
+      properties_applied: propResult.applied ?? [],
+      properties_error: propResult.ok ? undefined : propResult.error,
+    });
   },
 };
 
@@ -293,6 +313,96 @@ const movePageTool: McpToolEntry = {
   },
 };
 
+const restorePageTool: McpToolEntry = {
+  name: "restore_page",
+  description: "Restore a page previously moved to the trash (undo delete_page).",
+  inputSchema: {
+    type: "object",
+    properties: { page_id: { type: "number", description: "The trashed page to restore." } },
+    required: ["page_id"],
+  },
+  execute: async (ctx, input) => {
+    const pageId = Number(input.page_id);
+    try {
+      await ctx.transport.call("restore_page", [encodeU64(pageId)]);
+    } catch (err) {
+      return JSON.stringify({ ok: false, page_id: pageId, error: reducerErrorMessage(err) });
+    }
+    return JSON.stringify({ ok: true, page_id: pageId });
+  },
+};
+
+// ── Database tools ────────────────────────────────────────────────────────────
+
+const queryDatabaseTool: McpToolEntry = {
+  name: "query_database",
+  description:
+    "Read rows from a Database page. Returns the database's columns (name + type) and its rows with " +
+    "their cell values — `get_page` does NOT return database rows. Optionally filter with " +
+    "`property_filter` (equality/contains on ONE named column, or the special \"title\" column). " +
+    "Responses are windowed: when `truncated: true`, call again with `offset` set to the returned " +
+    "`next_offset` to read the rest. Read-only.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      page_id: { type: "number", description: "The Database page's id." },
+      limit: { type: "number", description: "Max rows to return (default 50, capped at 200)." },
+      offset: {
+        type: "number",
+        description:
+          "Row offset to start from (default 0). Use the `next_offset` from a truncated " +
+          "response to page through large databases.",
+      },
+      property_filter: {
+        type: "object",
+        description:
+          'Optional filter on a single column. Set `property` to a column name (or "title") and ' +
+          "provide `equals` and/or `contains`.",
+        properties: {
+          property: { type: "string" },
+          equals: { description: "Keep rows whose column value equals this (compared as text)." },
+          contains: {
+            type: "string",
+            description: "Keep rows whose column value contains this substring (case-insensitive).",
+          },
+        },
+        required: ["property"],
+      },
+    },
+    required: ["page_id"],
+  },
+  execute: (ctx, input) =>
+    queryDatabase(ctx.transport, input as unknown as Parameters<typeof queryDatabase>[1]),
+};
+
+const setRowPropertiesTool: McpToolEntry = {
+  name: "set_row_properties",
+  description:
+    "Set column values on a database row (a page whose parent is a Database), by column NAME. " +
+    "Pass `properties` as an object mapping column names to values. Value shapes by column type: " +
+    "Text/Url→string, Select→string (one option), Number→number, Checkbox→boolean, " +
+    "Date→ISO date string or unix ms, MultiSelect→string[], Relation→page-id number[], " +
+    "Person→identity-hex string[]. Use query_database on the parent to see column names and types. " +
+    "Computed columns (Ai/Formula/Rollup) cannot be set.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      page_id: { type: "number", description: "The row's page id (a child of a Database page)." },
+      properties: {
+        type: "object",
+        description: 'Column name → value map, e.g. {"Status": "In Progress", "Project": [68]}.',
+      },
+    },
+    required: ["page_id", "properties"],
+  },
+  execute: (ctx, input) =>
+    setRowProperties(
+      ctx.transport,
+      Number(input.page_id),
+      (input.properties ?? {}) as Record<string, unknown>,
+    ),
+};
+
 // ── Memory tools ──────────────────────────────────────────────────────────────
 
 const rememberTool: McpToolEntry = {
@@ -378,7 +488,10 @@ export function buildToolRegistry(): McpToolEntry[] {
     updatePageTitleTool,
     listChildPagesTool,
     searchPagesTool,
+    queryDatabaseTool,
+    setRowPropertiesTool,
     deletePageTool,
+    restorePageTool,
     movePageTool,
   ];
 }

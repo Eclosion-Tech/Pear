@@ -19,7 +19,7 @@ import {
   unwrapScalar,
 } from "../api-endpoint";
 
-export { decodeOptionSome, isOptionNone, normaliseTs, unwrapScalar };
+export { decodeEnumVariant, decodeOptionSome, isOptionNone, normaliseTs, unwrapScalar };
 
 const PAGE_TYPE_TAGS = ["DOC", "DATABASE"] as const;
 const CONTENT_FORMAT_TAGS = ["BLOCKNOTE", "COMPONENTTREE"] as const;
