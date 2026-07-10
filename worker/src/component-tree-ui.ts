@@ -101,7 +101,11 @@ function buildPanelChildren(
   }
   if (spec.markdown && spec.markdown.trim()) {
     for (const block of markdownToComponentBlocks(spec.markdown)) {
-      pushText(block.componentType, block.props, block.text);
+      if (block.componentType === "MarkdownTable") {
+        pushControl(block.componentType, block.props);
+      } else {
+        pushText(block.componentType, block.props, block.text);
+      }
     }
   }
   for (const c of spec.controls ?? []) {

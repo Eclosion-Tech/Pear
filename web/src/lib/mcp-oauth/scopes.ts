@@ -27,9 +27,18 @@ export const SCOPE_DESCRIPTIONS: Record<McpOauthScope, string> = {
 
 const SCOPE_TOOLS: Record<McpOauthScope, readonly string[]> = {
   [SCOPE_MEMORY]: ["remember", "list_memory", "read_memory", "search_memory"],
-  [SCOPE_PAGES_READ]: ["get_page", "list_child_pages", "search_pages", "query_database"],
+  [SCOPE_PAGES_READ]: [
+    "get_page",
+    "list_child_pages",
+    "search_pages",
+    "get_schema_id",
+    "list_properties",
+    "query_database",
+  ],
   [SCOPE_PAGES_WRITE]: [
     "create_page",
+    "add_property",
+    "delete_property",
     "update_page_content",
     "update_page_title",
     "delete_page",

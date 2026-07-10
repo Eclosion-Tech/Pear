@@ -16,6 +16,7 @@ export type CounterName =
   | "page"
   | "component_node"
   | "database_schema"
+  | "property_definition"
   | "page_snapshot";
 
 export async function readCounter(

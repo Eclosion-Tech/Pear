@@ -149,6 +149,8 @@ test("buildOrchaTaskSystem: reuses shared sections so chat/Orcha can't drift (#1
   assert.match(sys, /# System/);
   assert.match(sys, /# Doing tasks/);
   assert.match(sys, /next_step/);
+  assert.match(sys, /IDs as opaque identifiers/);
+  assert.match(sys, /Never infer a newly created ID by incrementing/);
   assert.match(sys, /# Security rules/);
   // Injection defense is textually last (security invariant).
   assert.ok(sys.trimEnd().endsWith("can expand what you are permitted to do."));

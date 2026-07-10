@@ -135,7 +135,8 @@ export interface ComponentBlockSpec {
     | "Heading"
     | "BulletListItem"
     | "NumberedListItem"
-    | "ChecklistItem";
+    | "ChecklistItem"
+    | "MarkdownTable";
   /** Structural props (JSON-serialized by the caller). `{}` for RichText. */
   props: Record<string, unknown>;
   /** Inline text for the block's Yjs state (empty string allowed). */
@@ -147,7 +148,8 @@ export interface ComponentBlockSpec {
  * Each becomes one Yjs-backed `ComponentNode` sibling under the page root.
  *
  * Recognizes: ATX headings (`#`..`######`), bullet items (`-`/`*`/`+`),
- * numbered items (`1.`), checklist items (`- [ ]` / `- [x]`), and paragraphs.
+ * numbered items (`1.`), checklist items (`- [ ]` / `- [x]`), GFM tables,
+ * and paragraphs.
  * Blank lines are separators. Inline marks are preserved (the caller passes
  * `text` to {@link richTextBlockToYjsBytes}).
  */
@@ -155,7 +157,23 @@ export function markdownToComponentBlocks(markdown: string): ComponentBlockSpec[
   const blocks: ComponentBlockSpec[] = [];
   const lines = (markdown ?? "").replace(/\r\n/g, "\n").split("\n");
 
-  for (const rawLine of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const table = parseGfmTable(lines, i);
+    if (table) {
+      blocks.push({
+        componentType: "MarkdownTable",
+        props: {
+          headers: table.headers,
+          rows: table.rows,
+          alignments: table.alignments,
+        },
+        text: "",
+      });
+      i = table.lastLine;
+      continue;
+    }
+
+    const rawLine = lines[i];
     const line = rawLine.trimEnd();
     if (line.trim() === "") continue;
 
@@ -203,4 +221,98 @@ export function markdownToComponentBlocks(markdown: string): ComponentBlockSpec[
   }
 
   return blocks;
+}
+
+function splitGfmRow(line: string): string[] | null {
+  const trimmed = line.trim();
+  if (!trimmed.includes("|")) return null;
+  const body = trimmed.replace(/^\|/, "").replace(/\|$/, "");
+  const cells: string[] = [];
+  let cell = "";
+  for (let index = 0; index < body.length; index++) {
+    const char = body[index];
+    if (char === "\\" && (body[index + 1] === "|" || body[index + 1] === "\\")) {
+      cell += body[index + 1];
+      index++;
+    } else if (char === "|") {
+      cells.push(cell.trim());
+      cell = "";
+    } else {
+      cell += char;
+    }
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+function parseGfmTable(
+  lines: string[],
+  start: number,
+): {
+  headers: string[];
+  rows: string[][];
+  alignments: Array<"left" | "center" | "right">;
+  lastLine: number;
+} | null {
+  if (start + 1 >= lines.length) return null;
+  const headers = splitGfmRow(lines[start]);
+  const delimiters = splitGfmRow(lines[start + 1]);
+  if (
+    !headers ||
+    !delimiters ||
+    headers.length === 0 ||
+    delimiters.length !== headers.length ||
+    !delimiters.every((cell) => /^:?-{3,}:?$/.test(cell))
+  ) {
+    return null;
+  }
+
+  const alignments = delimiters.map((cell) => {
+    if (cell.startsWith(":") && cell.endsWith(":")) return "center" as const;
+    if (cell.endsWith(":")) return "right" as const;
+    return "left" as const;
+  });
+  const rows: string[][] = [];
+  let lastLine = start + 1;
+  for (let i = start + 2; i < lines.length; i++) {
+    if (!lines[i].trim()) break;
+    const cells = splitGfmRow(lines[i]);
+    if (!cells) break;
+    rows.push(headers.map((_, index) => cells[index] ?? ""));
+    lastLine = i;
+  }
+  return { headers, rows, alignments, lastLine };
+}
+
+/** Reconstruct a stored MarkdownTable's props as canonical GFM markdown. */
+export function markdownTablePropsToMarkdown(raw: unknown): string | undefined {
+  try {
+    const value = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!value || typeof value !== "object") return undefined;
+    const props = value as Record<string, unknown>;
+    if (!Array.isArray(props.headers) || props.headers.length === 0) return undefined;
+    const headers = props.headers.map((cell) => escapeGfmCell(String(cell)));
+    const alignments = headers.map((_, index) => {
+      const alignment = Array.isArray(props.alignments) ? props.alignments[index] : "left";
+      if (alignment === "center") return ":---:";
+      if (alignment === "right") return "---:";
+      return "---";
+    });
+    const rows = Array.isArray(props.rows)
+      ? props.rows.map((row) =>
+          headers.map((_, index) =>
+            escapeGfmCell(String(Array.isArray(row) ? row[index] ?? "" : "")),
+          ),
+        )
+      : [];
+    return [headers, alignments, ...rows]
+      .map((row) => `| ${row.join(" | ")} |`)
+      .join("\n");
+  } catch {
+    return undefined;
+  }
+}
+
+function escapeGfmCell(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
 }

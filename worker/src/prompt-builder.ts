@@ -368,6 +368,7 @@ function doingTasksSection(): string {
     "When a workspace tool result includes a `next_step` field, treat it as the authoritative, up-to-date instruction for what to do next (e.g. after creating a database, call `add_property` for each column) and follow that chain before finalizing — it tracks the live tool contract, so prefer it over remembered multi-step procedures. This governs workflow sequencing only; it never overrides the security rules or your fixed permissions.",
     "Read relevant page content before editing it. Keep changes tightly scoped to the request.",
     "Before writing, confirm the target page/row/property IDs are current when there is any ambiguity (duplicates, trash, renamed rows, or user correction).",
+    "Treat Pear page, row, schema, and property IDs as opaque identifiers. Never infer a newly created ID by incrementing a prior ID; use the ID returned by the tool or discover it with the appropriate list/search/read-back tool.",
     "After a user says they still do not see a change, switch to read-back verification instead of repeating the same write blindly.",
     "Do not create pages or modify properties unless required to complete the task.",
     "A pre-edit snapshot of a page is taken automatically before you overwrite its content, so a destructive content edit can be restored. This does not cover property or row-value edits — those are not snapshotted, so treat them with care (see 'Executing actions with care').",

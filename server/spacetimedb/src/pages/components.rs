@@ -347,6 +347,22 @@ mod prop_schemas {
   "required": ["databaseId"]
 }"#;
 
+    pub const MARKDOWN_TABLE: &str = r#"{
+  "type": "object",
+  "properties": {
+    "headers": { "type": "array", "items": { "type": "string" } },
+    "rows": {
+      "type": "array",
+      "items": { "type": "array", "items": { "type": "string" } }
+    },
+    "alignments": {
+      "type": "array",
+      "items": { "enum": ["left", "center", "right"] }
+    }
+  },
+  "required": ["headers", "rows", "alignments"]
+}"#;
+
     pub const CARD: &str = r#"{
   "type": "object",
   "properties": {
@@ -563,6 +579,15 @@ fn builtin_specs() -> Vec<BuiltinSpec> {
             description: "Database view embedded as a component.",
             prop_schema: prop_schemas::TABLE,
             capabilities: vec![ReadsDatabase],
+            has_yjs_state: false,
+            accepts_children: false,
+        },
+        BuiltinSpec {
+            component_type: "MarkdownTable",
+            display_name: "Markdown table",
+            description: "Static table parsed from GitHub-Flavored Markdown for documents and generated UI.",
+            prop_schema: prop_schemas::MARKDOWN_TABLE,
+            capabilities: vec![],
             has_yjs_state: false,
             accepts_children: false,
         },

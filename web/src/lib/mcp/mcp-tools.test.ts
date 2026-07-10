@@ -35,6 +35,7 @@ interface FakeNode {
   surfaceId: number;
   parentId: number | null;
   componentType: string;
+  props?: string;
   order: number;
   deletedAtMicros: number | null;
 }
@@ -63,6 +64,7 @@ class FakeStdb implements StdbTransport {
     ["page", 1000],
     ["component_node", 2000],
     ["database_schema", 100],
+    ["property_definition", 600],
     ["page_snapshot", 10],
   ]);
   /** Extra ids to burn per insert_component — simulates a concurrent writer. */
@@ -127,6 +129,7 @@ class FakeStdb implements StdbTransport {
       surface_id: n.surfaceId,
       parent_id: this.optNum(n.parentId),
       component_type: n.componentType,
+      props: n.props ?? "{}",
       order: n.order,
       deleted_at: this.optTs(n.deletedAtMicros),
     };
@@ -173,9 +176,10 @@ class FakeStdb implements StdbTransport {
       return this.schemas.filter((s) => s.pageId === pageId) as Row[];
     }
     if (q.includes("FROM property_definition")) {
-      const schemaIds = new Set(params.map(Number));
-      return this.propDefs
-        .filter((p) => schemaIds.has(p.schemaId))
+      const rows = q.includes("WHERE id = ?")
+        ? this.propDefs.filter((p) => p.id === Number(params[0]))
+        : this.propDefs.filter((p) => new Set(params.map(Number)).has(p.schemaId));
+      return rows
         .map((p) => ({
           id: p.id,
           schema_id: p.schemaId,
@@ -316,7 +320,7 @@ class FakeStdb implements StdbTransport {
         } else {
           order = (live.at(-1)?.order ?? 0) + 1000;
         }
-        for (const [componentType, , yjsOpt] of blocks) {
+        for (const [componentType, props, yjsOpt] of blocks) {
           // Simulated concurrent writer: burn ids before ours.
           for (let i = 0; i < this.interleavePerInsert; i++) this.alloc("component_node");
           const id = this.alloc("component_node");
@@ -325,6 +329,7 @@ class FakeStdb implements StdbTransport {
             surfaceId: Number(pageId),
             parentId: root!.id,
             componentType,
+            props,
             order,
             deletedAtMicros: null,
           });
@@ -416,6 +421,54 @@ class FakeStdb implements StdbTransport {
         this.schemas.push({ id: this.alloc("database_schema"), pageId });
         return;
       }
+      case "add_property": {
+        const [schemaId, name, propertyType] = args as [
+          number,
+          string,
+          Record<string, []>,
+          string,
+        ];
+        if (!this.schemas.some((schema) => schema.id === Number(schemaId))) {
+          fail("Schema not found");
+        }
+        if (
+          this.propDefs.some(
+            (prop) => prop.schemaId === Number(schemaId) && prop.name === String(name),
+          )
+        ) {
+          fail(`Property "${name}" already exists`);
+        }
+        const variants = [
+          "text",
+          "number",
+          "date",
+          "select",
+          "multiSelect",
+          "relation",
+          "checkbox",
+          "url",
+          "person",
+        ];
+        const type = variants.indexOf(Object.keys(propertyType)[0]);
+        if (type < 0) fail("Unknown PropertyType variant");
+        const id = this.alloc("property_definition");
+        const order =
+          Math.max(
+            0,
+            ...this.propDefs
+              .filter((prop) => prop.schemaId === Number(schemaId))
+              .map((prop) => prop.order),
+          ) + 1;
+        this.propDefs.push({ id, schemaId: Number(schemaId), name: String(name), type, order });
+        return;
+      }
+      case "delete_property": {
+        const propertyDefinitionId = Number(args[0]);
+        const index = this.propDefs.findIndex((prop) => prop.id === propertyDefinitionId);
+        if (index < 0) fail("PropertyDefinition not found");
+        this.propDefs.splice(index, 1);
+        return;
+      }
       default:
         fail(`Unknown reducer: ${reducer}`);
     }
@@ -464,11 +517,15 @@ async function run(
 describe("registry", () => {
   test("exposes exactly the v1 tool surface", () => {
     expect([...tools.keys()].sort()).toEqual([
+      "add_property",
       "create_page",
       "delete_page",
+      "delete_property",
       "get_page",
+      "get_schema_id",
       "list_child_pages",
       "list_memory",
+      "list_properties",
       "move_page",
       "query_database",
       "read_memory",
@@ -644,12 +701,119 @@ describe("pages", () => {
     expect(res.next_step).toMatch(/add_property/);
   });
 
+  test("get_schema_id and add_property complete the Database creation flow (#379)", async () => {
+    const fake = memoryFake();
+    const created = await run(fake, "create_page", {
+      parent_id: 0,
+      page_type: "Database",
+      title: "Launch Plan",
+    });
+    const schemaId = created.schema_id as number;
+
+    const schema = await run(fake, "get_schema_id", { page_id: created.page_id });
+    expect(schema).toEqual({ ok: true, schema_id: schemaId });
+
+    const added = await run(fake, "add_property", {
+      schema_id: schemaId,
+      name: "Status",
+      property_type: "Select",
+      config: '{"options":["To Do","Done"]}',
+    });
+    expect(added).toMatchObject({
+      ok: true,
+      property_id: 601,
+      name: "Status",
+      property_type: "Select",
+    });
+    expect(fake.calls).toContain("add_property");
+    expect(fake.propDefs.find((prop) => prop.id === 601)).toMatchObject({
+      schemaId,
+      name: "Status",
+      type: 3,
+    });
+  });
+
+  test("add_property validates config and reports reducer errors (#379)", async () => {
+    const fake = tasksFake();
+    const badConfig = await run(fake, "add_property", {
+      schema_id: 50,
+      name: "Priority",
+      property_type: "Select",
+      config: "not-json",
+    });
+    expect(badConfig).toEqual({ ok: false, error: "config must be a valid JSON string" });
+
+    const duplicate = await run(fake, "add_property", {
+      schema_id: 50,
+      name: "Status",
+      property_type: "Select",
+    });
+    expect(duplicate.ok).toBe(false);
+    expect(duplicate.error).toMatch(/already exists/);
+  });
+
+  test("delete_property removes one confirmed schema column (#70)", async () => {
+    const fake = tasksFake();
+    const listed = await run(fake, "list_properties", { schema_id: 50 });
+    expect(listed.ok).toBe(true);
+    expect(listed.properties).toEqual([
+      {
+        property_definition_id: 501,
+        name: "Status",
+        property_type: "Select",
+        config: "{}",
+        order: 1000,
+      },
+      {
+        property_definition_id: 502,
+        name: "Project",
+        property_type: "Relation",
+        config: "{}",
+        order: 2000,
+      },
+      {
+        property_definition_id: 503,
+        name: "Due",
+        property_type: "Date",
+        config: "{}",
+        order: 3000,
+      },
+    ]);
+    const deleted = await run(fake, "delete_property", {
+      property_definition_id: 503,
+    });
+    expect(deleted).toEqual({
+      ok: true,
+      property_definition_id: 503,
+      name: "Due",
+    });
+    expect(fake.propDefs.some((prop) => prop.id === 503)).toBe(false);
+
+    const missing = await run(fake, "delete_property", {
+      property_definition_id: 999,
+    });
+    expect(missing).toEqual({ ok: false, error: "Property definition not found" });
+  });
+
   test("update_page_content writes BlockNote for legacy pages", async () => {
     const fake = memoryFake();
     fake.seedPage({ id: 300, title: "Legacy", contentFormat: "BlockNote" });
     const res = await run(fake, "update_page_content", { page_id: 300, markdown: "hello" });
     expect(res.ok).toBe(true);
     expect(fake.pageContent.get(300)).toMatch(/hello/);
+  });
+
+  test("ComponentTree table writes read back as GFM instead of raw pipes (#197)", async () => {
+    const fake = memoryFake();
+    const markdown = "| Name | Status |\n| --- | :---: |\n| Pear | Ready |";
+    const wrote = await run(fake, "update_page_content", {
+      page_id: 101,
+      markdown,
+    });
+    expect(wrote.ok).toBe(true);
+
+    const read = await run(fake, "get_page", { page_id: 101 });
+    expect(read.content).toBe(markdown);
   });
 
   test("get_page returns Page not found for unknown ids", async () => {

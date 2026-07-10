@@ -10,5 +10,6 @@ export {
   parseInlineMarkdown,
   richTextBlockToYjsBytes,
   markdownToComponentBlocks,
+  markdownTablePropsToMarkdown,
   type ComponentBlockSpec,
 } from "@eclosion-tech/pulp/rich-text/encode";

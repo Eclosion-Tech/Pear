@@ -1,5 +1,5 @@
 /**
- * The Pear MCP tool surface: 12 stateless tools over `/sql` + `/call`.
+ * The Pear MCP tool surface: stateless tools over `/sql` + `/call`.
  *
  * Descriptions and input schemas are carried over verbatim from the worker's
  * tool catalog (worker/src/tools.ts) with the MCP-specific overrides that the
@@ -17,6 +17,12 @@ import { getPageRow, listChildren, allLivePages, getPageContent } from "./pages"
 import { readComponentTreeDoc } from "./component-tree";
 import { createPage } from "./create-page";
 import { queryDatabase, setRowProperties } from "./database";
+import {
+  addProperty,
+  deleteProperty,
+  getSchemaId,
+  listProperties,
+} from "./database-schema";
 import { writePageContent } from "./write-content";
 import {
   executeListMemory,
@@ -403,6 +409,94 @@ const setRowPropertiesTool: McpToolEntry = {
     ),
 };
 
+const addPropertyTool: McpToolEntry = {
+  name: "add_property",
+  description:
+    "Add a property (column) to a Database page. First call create_page with " +
+    "page_type='Database', then use the returned schema_id to add properties. " +
+    "For Select/MultiSelect include config: '{\"options\":[\"A\",\"B\"]}'.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      schema_id: {
+        type: "number",
+        description: "Database schema ID returned by create_page or get_schema_id.",
+      },
+      name: { type: "string" },
+      property_type: {
+        type: "string",
+        enum: [
+          "Text",
+          "Number",
+          "Date",
+          "Select",
+          "MultiSelect",
+          "Relation",
+          "Checkbox",
+          "Url",
+          "Person",
+        ],
+      },
+      config: {
+        type: "string",
+        description:
+          "JSON string. For Select/MultiSelect: '{\"options\":[\"Option1\",\"Option2\"]}'. Otherwise '{}'.",
+      },
+    },
+    required: ["schema_id", "name", "property_type"],
+  },
+  execute: (ctx, input) => addProperty(ctx.transport, input),
+};
+
+const getSchemaIdTool: McpToolEntry = {
+  name: "get_schema_id",
+  description: "Get the database schema ID for an existing Database page.",
+  inputSchema: {
+    type: "object",
+    properties: { page_id: { type: "number" } },
+    required: ["page_id"],
+  },
+  execute: (ctx, input) => getSchemaId(ctx.transport, Number(input.page_id)),
+};
+
+const deletePropertyTool: McpToolEntry = {
+  name: "delete_property",
+  description:
+    "Permanently delete one Database property (column) by property_definition_id. " +
+    "Existing values in that column become inaccessible. Use only when the user clearly asked " +
+    "to remove that specific column; call list_properties first to confirm its id and name.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      property_definition_id: {
+        type: "number",
+        description: "The exact property definition id to delete.",
+      },
+    },
+    required: ["property_definition_id"],
+  },
+  execute: (ctx, input) =>
+    deleteProperty(ctx.transport, Number(input.property_definition_id)),
+};
+
+const listPropertiesTool: McpToolEntry = {
+  name: "list_properties",
+  description:
+    "List the property definitions (columns) for a database schema, including the exact " +
+    "property_definition_id needed by delete_property.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      schema_id: {
+        type: "number",
+        description: "Database schema ID returned by create_page or get_schema_id.",
+      },
+    },
+    required: ["schema_id"],
+  },
+  execute: (ctx, input) => listProperties(ctx.transport, Number(input.schema_id)),
+};
+
 // ── Memory tools ──────────────────────────────────────────────────────────────
 
 const rememberTool: McpToolEntry = {
@@ -488,7 +582,11 @@ export function buildToolRegistry(): McpToolEntry[] {
     updatePageTitleTool,
     listChildPagesTool,
     searchPagesTool,
+    getSchemaIdTool,
+    listPropertiesTool,
     queryDatabaseTool,
+    addPropertyTool,
+    deletePropertyTool,
     setRowPropertiesTool,
     deletePageTool,
     restorePageTool,

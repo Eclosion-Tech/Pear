@@ -11,6 +11,7 @@ import {
   useCreateView,
   useSetPropertyValue,
   useDeletePage,
+  useUpdatePageTitle,
 } from "@/src/hooks/usePages";
 import type { PageRow } from "@/src/hooks/usePages";
 import {
@@ -29,6 +30,7 @@ import {
 } from "@/src/hooks/useDatabase";
 import type { PropertyDefinitionRow } from "@/src/hooks/useDatabase";
 import { PropertyCell } from "./PropertyCell";
+import { dateOnlyKey } from "../lib/date-only";
 import {
   buildSiblingValues,
   parseSelectConfig,
@@ -274,7 +276,7 @@ function matchesFilter(
       if (operator === "before") return rowTs < inputTs;
       if (operator === "after") return rowTs > inputTs;
       if (operator === "on")
-        return new Date(rowTs).toDateString() === new Date(inputTs).toDateString();
+        return dateOnlyKey(rowTs) === dateOnlyKey(inputTs);
       return true;
     }
     case "Relation": {
@@ -315,8 +317,9 @@ export function GridView({ page }: GridViewProps) {
   const { schema, isReady: schemaReady } = useDatabaseSchema(page.id);
   const properties = usePropertyDefinitions(schema?.id ?? BigInt(0));
   const { children: rows } = useChildPages(page.id);
-  const { views } = useDatabaseViews(page.id);
+  const { views, isReady: viewsReady } = useDatabaseViews(page.id);
   const view = views[0] ?? null;
+  const defaultViewPendingRef = useRef(false);
   const { identity } = useSpacetimeDB();
 
   const createPage = useCreatePage();
@@ -325,6 +328,31 @@ export function GridView({ page }: GridViewProps) {
   const createView = useCreateView();
   const updateViewConfig = useUpdateViewConfig();
   const updateSchemaConfig = useUpdateDatabaseSchemaConfig();
+
+  // Databases created by agents/MCP already have a schema, so they skip the
+  // browser's brand-new-DB seeding path below. Ensure those databases still
+  // receive the default view that persists board group-by and column config.
+  useEffect(() => {
+    if (view) {
+      defaultViewPendingRef.current = false;
+      return;
+    }
+    if (
+      !schemaReady ||
+      !viewsReady ||
+      !schema ||
+      defaultViewPendingRef.current
+    ) {
+      return;
+    }
+    defaultViewPendingRef.current = true;
+    createView({
+      pageId: page.id,
+      name: "Default Grid",
+      viewType: { tag: "Grid" },
+      ownerIdentity: undefined,
+    });
+  }, [createView, page.id, schema, schemaReady, view, viewsReady]);
 
   // Name column default
   const [nameDefaultOpen, setNameDefaultOpen] = useState(false);
@@ -530,12 +558,15 @@ export function GridView({ page }: GridViewProps) {
     if (!schemaReady || schema || seedingRef.current !== "idle") return;
     seedingRef.current = "schema-pending";
     createSchema({ pageId: page.id, name: page.title });
-    createView({
-      pageId: page.id,
-      name: "Default Grid",
-      viewType: { tag: "Grid" },
-      ownerIdentity: undefined,
-    });
+    if (!defaultViewPendingRef.current) {
+      defaultViewPendingRef.current = true;
+      createView({
+        pageId: page.id,
+        name: "Default Grid",
+        viewType: { tag: "Grid" },
+        ownerIdentity: undefined,
+      });
+    }
   }, [schemaReady, schema]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -686,6 +717,7 @@ export function GridView({ page }: GridViewProps) {
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const setPropertyValue = useSetPropertyValue();
   const deletePage = useDeletePage();
+  const updatePageTitle = useUpdatePageTitle();
   const clearPropertyValue = useClearPropertyValue();
 
   // ── Fill handle ─────────────────────────────────────────────────────────────
@@ -1424,6 +1456,7 @@ export function GridView({ page }: GridViewProps) {
                   clearRowSelection();
                   setSelectedRow(r);
                 }}
+                onRenameRow={(pageId, title) => updatePageTitle({ pageId, title })}
                 onRowContextMenu={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -2468,6 +2501,7 @@ function GridRow({
   onCellClick,
   onCellNavigate,
   onOpenRow,
+  onRenameRow,
   onRowContextMenu,
   onCellContextMenu,
   fillRangeCells,
@@ -2486,6 +2520,7 @@ function GridRow({
   onCellClick: (rowId: bigint, propId: bigint, e: React.MouseEvent) => void;
   onCellNavigate: (dir: "down" | "right" | "left" | "escape") => void;
   onOpenRow: (p: PageRow) => void;
+  onRenameRow: (pageId: bigint, title: string) => void;
   onRowContextMenu?: (e: React.MouseEvent) => void;
   onCellContextMenu?: (e: React.MouseEvent, propId: bigint) => void;
   fillRangeCells: Set<string>;
@@ -2494,6 +2529,25 @@ function GridRow({
   onFillDragEnter: (rowId: bigint, propId: bigint) => void;
 }) {
   const values = usePagePropertyValues(row.id);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(row.title);
+  const titleInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!editingTitle) return;
+    titleInputRef.current?.focus();
+    titleInputRef.current?.select();
+  }, [editingTitle]);
+
+  function commitTitle() {
+    const title = titleDraft.trim();
+    setEditingTitle(false);
+    if (!title) {
+      setTitleDraft(row.title);
+      return;
+    }
+    if (title !== row.title) onRenameRow(row.id, title);
+  }
 
   // Build { propName → currentStringValue } for conditional option evaluation.
   const siblingValues = useMemo(
@@ -2515,12 +2569,39 @@ function GridRow({
             onClick={(e) => { e.stopPropagation(); onRowSelect(e.shiftKey); }}
             className={`h-3.5 w-3.5 flex-shrink-0 rounded border-neutral-300 dark:border-neutral-600 text-blue-600 cursor-pointer transition-opacity ${anyRowsSelected || isRowSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
           />
-          <button
-            onClick={() => onOpenRow(row)}
-            className="text-sm text-neutral-800 dark:text-neutral-200 hover:text-neutral-900 dark:hover:text-white hover:underline truncate"
-          >
-            {row.title || "Untitled"}
-          </button>
+          {editingTitle ? (
+            <input
+              ref={titleInputRef}
+              value={titleDraft}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onBlur={commitTitle}
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  e.currentTarget.blur();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setTitleDraft(row.title);
+                  setEditingTitle(false);
+                }
+              }}
+              className="min-w-0 flex-1 rounded-sm border border-blue-500/70 bg-transparent px-1 py-0.5 text-sm text-neutral-900 outline-none dark:text-white"
+              aria-label="Row name"
+            />
+          ) : (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setTitleDraft(row.title);
+                setEditingTitle(true);
+              }}
+              className="min-w-0 flex-1 truncate text-left text-sm text-neutral-800 hover:text-neutral-900 dark:text-neutral-200 dark:hover:text-white"
+              title="Edit row name"
+            >
+              {row.title || "Untitled"}
+            </button>
+          )}
           <button
             onClick={() => onOpenRow(row)}
             className="opacity-0 group-hover:opacity-100 text-xs text-neutral-400 dark:text-neutral-500 hover:text-neutral-900 dark:hover:text-white transition-all flex-shrink-0"

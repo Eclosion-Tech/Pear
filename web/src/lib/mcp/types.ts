@@ -47,6 +47,7 @@ export interface ComponentNodeRow {
   id: number;
   parentId: number | null;
   componentType: string;
+  props?: string;
   order: number;
   deleted: boolean;
 }

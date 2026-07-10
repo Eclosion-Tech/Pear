@@ -20,6 +20,7 @@ import * as Y from "yjs";
 import { yDocToPlainText } from "@eclosion-tech/pulp/rich-text/yjsToHtml";
 import type { ConnLike } from "./tools.js";
 import {
+  markdownTablePropsToMarkdown,
   markdownToComponentBlocks,
   richTextBlockToYjsBytes,
   type ComponentBlockSpec,
@@ -30,6 +31,7 @@ type ComponentNodeRow = {
   surfaceId: bigint;
   parentId: bigint | undefined;
   componentType: string;
+  props: string;
   order: number;
   deletedAt: unknown;
 };
@@ -118,6 +120,10 @@ export function readComponentTreeDoc(conn: ConnLike, pageId: bigint): string | u
     if (YJS_BACKED.has(child.componentType)) {
       const prefix = MARKDOWN_PREFIX[child.componentType] ?? "";
       blocks.push(prefix + decodeNodeText(conn, child.id));
+      continue;
+    }
+    if (child.componentType === "MarkdownTable") {
+      blocks.push(markdownTablePropsToMarkdown(child.props) ?? "[MarkdownTable]");
       continue;
     }
     const grandchildren = liveChildrenOf(conn, pageId, child.id).sort((a, b) => a.order - b.order);

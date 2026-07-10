@@ -192,7 +192,11 @@ describe("scopes", () => {
 
     const readWrite = toolFilterForScopes(["pages:read", "pages:write"]);
     expect(readWrite("get_page")).toBe(true);
+    expect(readWrite("get_schema_id")).toBe(true);
+    expect(readWrite("list_properties")).toBe(true);
     expect(readWrite("create_page")).toBe(true);
+    expect(readWrite("add_property")).toBe(true);
+    expect(readWrite("delete_property")).toBe(true);
     expect(readWrite("query_database")).toBe(true);
     expect(readWrite("set_row_properties")).toBe(true);
     expect(readWrite("restore_page")).toBe(true);
@@ -200,6 +204,10 @@ describe("scopes", () => {
     expect(memoryOnly("query_database")).toBe(false);
 
     expect(scopeForTool("update_page_content")).toBe("pages:write");
+    expect(scopeForTool("get_schema_id")).toBe("pages:read");
+    expect(scopeForTool("list_properties")).toBe("pages:read");
+    expect(scopeForTool("add_property")).toBe("pages:write");
+    expect(scopeForTool("delete_property")).toBe("pages:write");
     expect(scopeForTool("query_database")).toBe("pages:read");
     expect(scopeForTool("set_row_properties")).toBe("pages:write");
     expect(scopeForTool("restore_page")).toBe("pages:write");

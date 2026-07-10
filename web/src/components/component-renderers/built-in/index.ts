@@ -12,6 +12,7 @@ import { ConversationRenderer } from "./Conversation";
 import { AudioRenderer } from "./Audio";
 import { FormRenderer } from "./Form";
 import { DataBoundPlaceholder } from "./DataBoundPlaceholder";
+import { MarkdownTableRenderer } from "./MarkdownTable";
 import {
   BulletListItemRenderer,
   ChecklistItemRenderer,
@@ -41,6 +42,7 @@ export function registerPearBuiltinRenderers(): void {
   registerRenderer("BulletListItem", BulletListItemRenderer);
   registerRenderer("NumberedListItem", NumberedListItemRenderer);
   registerRenderer("ChecklistItem", ChecklistItemRenderer);
+  registerRenderer("MarkdownTable", MarkdownTableRenderer);
 
   registerRenderer("Table", DataBoundPlaceholder);
   registerRenderer("Card", DataBoundPlaceholder);

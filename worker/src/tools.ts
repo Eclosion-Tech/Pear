@@ -343,7 +343,11 @@ async function serperWebSearch(query: string, apiKey: string): Promise<string> {
     });
     const body = await res.text();
     if (!res.ok) {
-      return JSON.stringify({ ok: false, error: `Serper HTTP ${res.status}: ${body.slice(0, 200)}` });
+      return JSON.stringify({
+        ok: false,
+        source: "serper",
+        error: `Serper HTTP ${res.status}: ${body.slice(0, 200)}`,
+      });
     }
     const data = JSON.parse(body) as {
       organic?: { title?: string; link?: string; snippet?: string }[];
@@ -355,14 +359,22 @@ async function serperWebSearch(query: string, apiKey: string): Promise<string> {
       snippet: r.snippet ?? "",
     }));
     if (results.length === 0) {
-      return JSON.stringify({ ok: true, results: [], note: "No results from Serper." });
+      return JSON.stringify({
+        ok: false,
+        source: "serper",
+        error: "Serper returned no results",
+      });
     }
     return JSON.stringify({ ok: true, results, source: "serper" });
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
-      return JSON.stringify({ ok: false, error: "Serper request timed out" });
+      return JSON.stringify({ ok: false, source: "serper", error: "Serper request timed out" });
     }
-    return JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    return JSON.stringify({
+      ok: false,
+      source: "serper",
+      error: err instanceof Error ? err.message : String(err),
+    });
   } finally {
     clearTimeout(timeout);
   }
@@ -372,6 +384,60 @@ async function serperWebSearch(query: string, apiKey: string): Promise<string> {
  * Search the web using DuckDuckGo's HTML lite endpoint.
  * Returns parsed search results with titles, URLs, and snippets.
  */
+export interface WebSearchResult {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+function htmlAttribute(attrs: string, name: string): string | undefined {
+  const match = new RegExp(`\\b${name}\\s*=\\s*(["'])([\\s\\S]*?)\\1`, "i").exec(attrs);
+  return match?.[2];
+}
+
+function unwrapDuckDuckGoUrl(rawHref: string): string {
+  const decoded = rawHref.replace(/&amp;/gi, "&");
+  const absolute = decoded.startsWith("//") ? `https:${decoded}` : decoded;
+  try {
+    const url = new URL(absolute);
+    if (url.hostname.endsWith("duckduckgo.com") && url.pathname.startsWith("/l/")) {
+      return url.searchParams.get("uddg") ?? absolute;
+    }
+  } catch {
+    // A relative/non-URL href is returned verbatim below.
+  }
+  return absolute;
+}
+
+/** Parse DDG HTML without depending on attribute order or one exact wrapper. */
+export function parseDuckDuckGoResults(html: string): WebSearchResult[] {
+  const results: WebSearchResult[] = [];
+  const anchors = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = anchors.exec(html)) && results.length < 8) {
+    const attrs = match[1];
+    const classes = htmlAttribute(attrs, "class")?.split(/\s+/) ?? [];
+    if (!classes.includes("result__a")) continue;
+    const href = htmlAttribute(attrs, "href");
+    if (!href) continue;
+
+    const nextResult = html.slice(anchors.lastIndex).search(/class\s*=\s*["'][^"']*\bresult__body\b/i);
+    const tail = html.slice(
+      anchors.lastIndex,
+      nextResult >= 0 ? anchors.lastIndex + nextResult : anchors.lastIndex + 5_000,
+    );
+    const snippetMatch = /<([a-z0-9]+)\b[^>]*class\s*=\s*["'][^"']*\bresult__snippet\b[^"']*["'][^>]*>([\s\S]*?)<\/\1>/i.exec(
+      tail,
+    );
+    results.push({
+      title: htmlToText(match[2]),
+      url: unwrapDuckDuckGoUrl(href),
+      snippet: snippetMatch ? htmlToText(snippetMatch[2]) : "",
+    });
+  }
+  return results;
+}
+
 async function webSearchDuckDuckGo(query: string): Promise<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10_000);
@@ -386,46 +452,34 @@ async function webSearchDuckDuckGo(query: string): Promise<string> {
     });
 
     if (!res.ok) {
-      return JSON.stringify({ ok: false, error: `Search returned HTTP ${res.status}` });
+      return JSON.stringify({
+        ok: false,
+        source: "duckduckgo",
+        error: `DuckDuckGo returned HTTP ${res.status}`,
+      });
     }
 
     const html = await res.text();
-    const results: { title: string; url: string; snippet: string }[] = [];
-
-    const resultBlocks = html.split(/class="result__body"/);
-    for (let i = 1; i < resultBlocks.length && results.length < 8; i++) {
-      const block = resultBlocks[i];
-
-      const titleMatch = block.match(/class="result__a"[^>]*>([^<]+)</);
-      const hrefMatch = block.match(/class="result__a"\s+href="([^"]+)"/);
-      const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/);
-
-      if (titleMatch && hrefMatch) {
-        let href = hrefMatch[1];
-        if (href.startsWith("//duckduckgo.com/l/")) {
-          const uddg = href.match(/uddg=([^&]+)/);
-          if (uddg) href = decodeURIComponent(uddg[1]);
-        }
-        results.push({
-          title: titleMatch[1].trim(),
-          url: href,
-          snippet: snippetMatch
-            ? snippetMatch[1].replace(/<[^>]+>/g, "").trim()
-            : "",
-        });
-      }
-    }
+    const results = parseDuckDuckGoResults(html);
 
     if (results.length === 0) {
-      return JSON.stringify({ ok: true, results: [], note: "No results found. Try a different query." });
+      return JSON.stringify({
+        ok: false,
+        source: "duckduckgo",
+        error: "DuckDuckGo returned no parseable results (provider failure or bot challenge)",
+      });
     }
 
-    return JSON.stringify({ ok: true, results });
+    return JSON.stringify({ ok: true, results, source: "duckduckgo" });
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
-      return JSON.stringify({ ok: false, error: "Search timed out" });
+      return JSON.stringify({ ok: false, source: "duckduckgo", error: "Search timed out" });
     }
-    return JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    return JSON.stringify({
+      ok: false,
+      source: "duckduckgo",
+      error: err instanceof Error ? err.message : String(err),
+    });
   } finally {
     clearTimeout(timeout);
   }
@@ -446,7 +500,30 @@ async function webSearchWithContext(
   ctx: ToolCallContext | undefined,
 ): Promise<string> {
   const serper = resolveSerperApiKey(ctx);
-  if (serper) return serperWebSearch(query, serper);
+  if (serper) {
+    const primary = JSON.parse(await serperWebSearch(query, serper)) as {
+      ok: boolean;
+      error?: string;
+    };
+    if (primary.ok) return JSON.stringify(primary);
+    const fallback = JSON.parse(await webSearchDuckDuckGo(query)) as {
+      ok: boolean;
+      error?: string;
+      [key: string]: unknown;
+    };
+    if (fallback.ok) {
+      return JSON.stringify({
+        ...fallback,
+        fallback_from: "serper",
+        provider_error: primary.error,
+      });
+    }
+    return JSON.stringify({
+      ok: false,
+      source: "serper+duckduckgo",
+      error: `Serper failed: ${primary.error ?? "unknown error"}; DuckDuckGo failed: ${fallback.error ?? "unknown error"}`,
+    });
+  }
   return webSearchDuckDuckGo(query);
 }
 
@@ -736,6 +813,23 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
         page_id: { type: "number" },
       },
       required: ["page_id"],
+    },
+  },
+  {
+    name: "delete_property",
+    description:
+      "Permanently delete one Database property (column) by property_definition_id. " +
+      "Existing values in that column become inaccessible. Use only when the user clearly asked " +
+      "to remove that specific column; call list_properties first to confirm its id and name.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        property_definition_id: {
+          type: "number",
+          description: "The exact property id returned by list_properties.",
+        },
+      },
+      required: ["property_definition_id"],
     },
   },
   {
@@ -1470,6 +1564,14 @@ function schemaPageId(conn: ConnLike, schemaId: bigint): bigint | undefined {
   return numericInputToBigInt(schema?.pageId);
 }
 
+function propertyPageId(conn: ConnLike, propertyDefinitionId: bigint): bigint | undefined {
+  const property = [...(conn.db.property_definition.iter() as Iterable<AnyRow>)].find(
+    (p) => String(p.id) === String(propertyDefinitionId),
+  );
+  const schemaId = numericInputToBigInt(property?.schemaId);
+  return schemaId ? schemaPageId(conn, schemaId) : undefined;
+}
+
 function targetPageForAccessRequest(
   conn: ConnLike,
   toolName: string,
@@ -1486,6 +1588,12 @@ function targetPageForAccessRequest(
     const sid = numericInputToBigInt(input.schema_id);
     return sid ? schemaPageId(conn, sid) : undefined;
   }
+  if (toolName === "delete_property") {
+    const propertyDefinitionId = numericInputToBigInt(input.property_definition_id);
+    return propertyDefinitionId
+      ? propertyPageId(conn, propertyDefinitionId)
+      : undefined;
+  }
   return (
     numericInputToBigInt(input.page_id) ??
     numericInputToBigInt(input.pageId) ??
@@ -1497,6 +1605,7 @@ function isPageWriteTool(toolName: string): boolean {
   return [
     "create_page",
     "add_property",
+    "delete_property",
     "create_row",
     "set_property_value",
     "set_property_values",
@@ -2206,6 +2315,36 @@ export async function executeTool(
         );
         if (!schema) return JSON.stringify({ ok: false, error: "No schema found for this page" });
         return JSON.stringify({ ok: true, schema_id: Number(schema.id as bigint) });
+      }
+
+      case "delete_property": {
+        const propertyDefinitionId = BigInt(input.property_definition_id as number);
+        const property = [...(conn.db.property_definition.iter() as Iterable<AnyRow>)].find(
+          (p) => String(p.id) === String(propertyDefinitionId),
+        );
+        if (!property) {
+          return JSON.stringify({ ok: false, error: "Property definition not found" });
+        }
+        const name = String(property.name ?? "");
+        await conn.reducers.deleteProperty({ propertyDefinitionId });
+        const removed = await waitFor(() =>
+          [...(conn.db.property_definition.iter() as Iterable<AnyRow>)].some(
+            (p) => String(p.id) === String(propertyDefinitionId),
+          )
+            ? undefined
+            : true,
+        );
+        if (!removed) {
+          return JSON.stringify({
+            ok: false,
+            error: "delete_property reducer returned but the property still exists",
+          });
+        }
+        return JSON.stringify({
+          ok: true,
+          property_definition_id: Number(propertyDefinitionId),
+          name,
+        });
       }
 
       case "update_page_content": {

@@ -14,6 +14,7 @@
 import * as Y from "yjs";
 import { yDocToPlainText } from "@eclosion-tech/pulp/rich-text/yjsToHtml";
 import {
+  markdownTablePropsToMarkdown,
   markdownToComponentBlocks,
   richTextBlockToYjsBytes,
   type ComponentBlockSpec,
@@ -47,6 +48,7 @@ type RawNode = {
   surface_id?: number | string;
   parent_id: unknown;
   component_type: string;
+  props: string;
   order: number | string;
   deleted_at: unknown;
 };
@@ -56,6 +58,7 @@ function decodeNode(r: RawNode): ComponentNodeRow {
     id: Number(r.id),
     parentId: toNumberOrNull(r.parent_id),
     componentType: r.component_type,
+    props: r.props ?? "{}",
     order: Number(r.order ?? 0),
     deleted: !isOptionNone(r.deleted_at),
   };
@@ -70,7 +73,7 @@ export async function selectSurfaceNodes(
     // `parent_id`/`deleted_at` are Options — unfilterable in STDB SQL; fetch
     // by the non-null indexed surface_id and decode client-side. `order` is
     // a keyword and must be quoted.
-    `SELECT id, parent_id, component_type, "order", deleted_at FROM component_node WHERE surface_id = ?`,
+    `SELECT id, parent_id, component_type, props, "order", deleted_at FROM component_node WHERE surface_id = ?`,
     [pageId],
   );
   return rows.map(decodeNode);
@@ -153,6 +156,10 @@ function renderWalk(walk: DocWalk, textOf: (id: number) => string): string {
       blocks.push((MARKDOWN_PREFIX[node.componentType] ?? "") + textOf(node.id));
       continue;
     }
+    if (node.componentType === "MarkdownTable") {
+      blocks.push(markdownTablePropsToMarkdown(node.props) ?? "[MarkdownTable]");
+      continue;
+    }
     if (nested.length === 0) {
       blocks.push(`[${node.componentType}]`);
       continue;
@@ -201,7 +208,7 @@ export async function readComponentTreeDocs(
   for (let i = 0; i < pageIds.length; i += CHUNK) {
     const chunk = pageIds.slice(i, i + CHUNK);
     const rows = await transport.sql<RawNode>(
-      `SELECT id, surface_id, parent_id, component_type, "order", deleted_at FROM component_node WHERE ${orChain("surface_id", chunk.length)}`,
+      `SELECT id, surface_id, parent_id, component_type, props, "order", deleted_at FROM component_node WHERE ${orChain("surface_id", chunk.length)}`,
       chunk,
     );
     for (const r of rows) {

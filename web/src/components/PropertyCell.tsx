@@ -11,6 +11,7 @@ import { useUpdatePropertyConfig } from "@/src/hooks/useDatabase";
 import type { PropertyDefinitionRow, PagePropertyValueRow } from "@/src/hooks/useDatabase";
 import { useUsers, type UserRow } from "@/src/hooks/useUser";
 import { FloatingPopup } from "./FloatingPopup";
+import { formatDateOnly } from "../lib/date-only";
 import {
   parseSelectConfig,
   serializeSelectConfig,
@@ -842,7 +843,7 @@ function DateCell({
         onDoubleClick={() => setOpen(true)}
       >
         {dateStr ? (
-          new Date(dateStr).toLocaleDateString()
+          formatDateOnly(Number(value))
         ) : (
           <span className="text-neutral-400 dark:text-neutral-600 italic">—</span>
         )}
@@ -1248,7 +1249,7 @@ function renderValueFallback(value: PropertyValue): string {
     case "Person":
       return `${(value.value as string[]).length} assigned`;
     case "Date":
-      return new Date(Number(value.value as bigint)).toLocaleDateString();
+      return formatDateOnly(Number(value.value as bigint));
     default:
       return "";
   }

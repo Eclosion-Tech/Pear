@@ -149,3 +149,19 @@ test("produces valid JSON for a controls-only spec (no text nodes)", () => {
   const btn = wire.nodes.find((n) => n.component_type === "Button")!;
   assert.equal(JSON.parse(btn.props).label, "Button"); // default label
 });
+
+test("renders GFM markdown as one static table component (#197)", () => {
+  const wire = JSON.parse(
+    buildComponentTreeV1Blob({
+      markdown: "| Name | Status |\n| --- | :---: |\n| Pear | Ready |",
+    }),
+  ) as Wire;
+  const table = wire.nodes.find((node) => node.component_type === "MarkdownTable")!;
+  assert.ok(table);
+  assert.equal(table.yjs_b64, null);
+  assert.deepEqual(JSON.parse(table.props), {
+    headers: ["Name", "Status"],
+    rows: [["Pear", "Ready"]],
+    alignments: ["left", "center"],
+  });
+});

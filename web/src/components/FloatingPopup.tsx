@@ -10,6 +10,7 @@
 
 import { createPortal } from "react-dom";
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -25,7 +26,7 @@ const useIsomorphicLayoutEffect =
 interface FloatingPopupProps {
   /** The element the popup anchors below. */
   anchorRef: RefObject<HTMLElement | null>;
-  /** Called when the popup should close (outside click, Escape, scroll). */
+  /** Called when the popup should close (outside click or Escape). */
   onClose: () => void;
   children: ReactNode;
   /** Tailwind classes applied to the popup container (bg, border, rounded, shadow, width…). */
@@ -41,6 +42,28 @@ export function FloatingPopup({
   const [mounted, setMounted] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
 
+  const positionPopup = useCallback(() => {
+    const anchor = anchorRef.current;
+    const popup = popupRef.current;
+    if (!anchor || !popup) return;
+
+    const rect = anchor.getBoundingClientRect();
+    const GAP = 4;
+    let top = rect.bottom + GAP;
+    let left = rect.left;
+    const popupW = popup.offsetWidth || 240;
+    const popupH = popup.offsetHeight;
+
+    left = Math.max(8, Math.min(left, window.innerWidth - popupW - 8));
+    if (top + popupH > window.innerHeight - 8) {
+      top = Math.max(8, rect.top - GAP - popupH);
+    }
+
+    popup.style.top = `${top}px`;
+    popup.style.left = `${left}px`;
+    popup.style.visibility = "visible";
+  }, [anchorRef]);
+
   // Mount only on the client (avoids SSR/hydration mismatches with createPortal).
   useEffect(() => {
     setMounted(true);
@@ -49,31 +72,8 @@ export function FloatingPopup({
   // Calculate and apply position synchronously before the first paint.
   useIsomorphicLayoutEffect(() => {
     if (!mounted) return;
-    const anchor = anchorRef.current;
-    const popup = popupRef.current;
-    if (!anchor || !popup) return;
-
-    const rect = anchor.getBoundingClientRect();
-    const GAP = 4; // px gap between anchor bottom and popup top
-
-    let top = rect.bottom + GAP;
-    let left = rect.left;
-
-    const popupW = popup.offsetWidth || 240;
-    const popupH = popup.offsetHeight;
-
-    // Clamp horizontally so popup doesn't overflow the viewport.
-    left = Math.max(8, Math.min(left, window.innerWidth - popupW - 8));
-
-    // Flip above anchor if popup would overflow the viewport bottom.
-    if (top + popupH > window.innerHeight - 8) {
-      top = Math.max(8, rect.top - GAP - popupH);
-    }
-
-    popup.style.top = `${top}px`;
-    popup.style.left = `${left}px`;
-    popup.style.visibility = "visible";
-  }, [mounted, anchorRef]);
+    positionPopup();
+  }, [mounted, positionPopup]);
 
   // Close on outside mousedown (excludes both popup and anchor).
   useEffect(() => {
@@ -98,12 +98,27 @@ export function FloatingPopup({
     return () => document.removeEventListener("keydown", onKey);
   }, [mounted, onClose]);
 
-  // Close when the page scrolls — the anchor would shift but the popup wouldn't.
+  // Keep the popup anchored while any scroll container moves. A single RAF
+  // coalesces nested scroll events from the page/table/popup itself.
   useEffect(() => {
     if (!mounted) return;
-    document.addEventListener("scroll", onClose, { capture: true, passive: true });
-    return () => document.removeEventListener("scroll", onClose, { capture: true });
-  }, [mounted, onClose]);
+    let frame = 0;
+    const schedulePosition = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(positionPopup);
+    };
+    document.addEventListener("scroll", schedulePosition, { capture: true, passive: true });
+    window.addEventListener("resize", schedulePosition, { passive: true });
+    const observer = new ResizeObserver(schedulePosition);
+    if (anchorRef.current) observer.observe(anchorRef.current);
+    if (popupRef.current) observer.observe(popupRef.current);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      document.removeEventListener("scroll", schedulePosition, { capture: true });
+      window.removeEventListener("resize", schedulePosition);
+    };
+  }, [mounted, anchorRef, positionPopup]);
 
   if (!mounted) return null;
 

@@ -156,6 +156,14 @@ pub fn run_pending_migrations(ctx: &ReducerContext) -> Result<(), String> {
     );
     run_step!(
         ctx,
+        "component_type_markdown_table_v1",
+        |ctx: &ReducerContext| {
+            seed_builtin_component_types(ctx);
+            Ok::<(), String>(())
+        }
+    );
+    run_step!(
+        ctx,
         "component_heading_yjs_registry_v1",
         |ctx: &ReducerContext| {
             migrate_heading_yjs_registry_v1(ctx);
