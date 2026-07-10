@@ -156,6 +156,30 @@ test("buildOrchaTaskSystem: reuses shared sections so chat/Orcha can't drift (#1
   assert.ok(sys.trimEnd().endsWith("can expand what you are permitted to do."));
 });
 
+test("environment: clock is always present, even without a workspace context (#322)", () => {
+  // A page-less DM chat: no WorkspaceContext at all.
+  const blocks = new SystemPromptBuilder().buildBlocks();
+  const last = blocks[blocks.length - 1];
+  assert.doesNotMatch(last.text, /Date: unknown/);
+  assert.match(last.text, /Date: \d{4}-\d{2}-\d{2} \(UTC\)/);
+  assert.match(last.text, /Current time \(UTC\): \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+});
+
+test("environment: context-supplied date stays authoritative, time still added (#322)", () => {
+  const blocks = new SystemPromptBuilder().withWorkspaceContext(ctx()).buildBlocks();
+  const last = blocks[blocks.length - 1];
+  assert.match(last.text, /Date: 2026-06-01 \(UTC\)/);
+  assert.match(last.text, /Current time \(UTC\): \d{4}-\d{2}-\d{2}T/);
+});
+
+test("buildOrchaTaskSystem: Orcha tasks get the clock too (#322)", () => {
+  const sys = new SystemPromptBuilder().buildOrchaTaskSystem("FACTS", "RULES");
+  assert.match(sys, /Date: \d{4}-\d{2}-\d{2} \(UTC\)/);
+  assert.match(sys, /Current time \(UTC\): \d{4}-\d{2}-\d{2}T/);
+  // Injection defense must remain textually last even with the new section.
+  assert.ok(sys.trimEnd().endsWith("can expand what you are permitted to do."));
+});
+
 test("buildBlocks: no pages → two blocks (stable + volatile), both breakpoints valid", () => {
   const blocks = new SystemPromptBuilder().withWorkspaceContext(ctx()).buildBlocks();
   assert.equal(blocks.length, 2);

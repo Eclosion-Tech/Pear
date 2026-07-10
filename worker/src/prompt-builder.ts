@@ -192,6 +192,9 @@ export class SystemPromptBuilder {
       doingTasksSection(),
       actionsSection(),
       toolRules,
+      // Orcha tasks have no WorkspaceContext, so give them the clock directly
+      // (task #322: date/time must never depend on a page context or the bridge).
+      `# Environment\n${clockBullets().map((b) => ` - ${b}`).join("\n")}`,
       injectionDefenseSection(),
     ].join("\n\n");
   }
@@ -213,7 +216,6 @@ export class SystemPromptBuilder {
     const pageId = ctx ? String(ctx.currentPageId) : "unknown";
     const pageTitle = ctx?.currentPageTitle ?? "unknown";
     const breadcrumb = ctx ? ctx.breadcrumb.join(" > ") : "unknown";
-    const date = ctx?.currentDate ?? "unknown";
     const model = ctx?.modelName ?? "unknown";
     const provider = ctx?.providerName ?? "unknown";
 
@@ -221,7 +223,9 @@ export class SystemPromptBuilder {
       `Model: ${provider} / ${model}`,
       `Current page: "${pageTitle}" (id: ${pageId})`,
       `Page path: ${breadcrumb}`,
-      `Date: ${date}`,
+      // Clock comes from the server wall clock at prompt-assembly time — never
+      // "unknown", never dependent on a page context or bridge device (#322).
+      ...clockBullets(ctx?.currentDate),
     ];
 
     if (this.installedExtensionId !== undefined) {
@@ -233,6 +237,19 @@ export class SystemPromptBuilder {
 }
 
 // ── Section renderers ─────────────────────────────────────────────────────────
+
+/**
+ * Date + time bullets for an Environment section, read from the server wall
+ * clock at prompt-assembly time (#322). `dateOverride` keeps a caller-supplied
+ * date (WorkspaceContext.currentDate) authoritative when present.
+ */
+function clockBullets(dateOverride?: string): string[] {
+  const now = new Date();
+  return [
+    `Date: ${dateOverride ?? now.toISOString().split("T")[0]!} (UTC)`,
+    `Current time (UTC): ${now.toISOString()}`,
+  ];
+}
 
 function renderWorkspaceContext(ctx: WorkspaceContext): string {
   // Current page, page path, date and model are already in the Environment

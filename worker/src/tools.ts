@@ -16,6 +16,7 @@ import {
 } from "./component-tree-ui.js";
 import { ssrfSafeFetch } from "./ssrf.js";
 import { getBridgeSql } from "./bridge-sql.js";
+import { runSandboxBash } from "./sandbox-bash.js";
 import {
   readAiUserMemoryPage,
   searchAiUserMemory,
@@ -99,6 +100,7 @@ export function getPearTools(
   return [
     ...PEAR_TOOLS,
     ...WEB_TOOLS,
+    ...SANDBOX_TOOLS,
     // Delegated jobs attributed to an AI user get its read-only memory tools, so
     // a subagent can consult the same memory the chat agent has.
     ...(opts.includeMemoryTools ? MEMORY_TOOLS : []),
@@ -122,7 +124,7 @@ export function getPearTools(
  * create pages, databases, add properties, etc. directly in chat.
  */
 export function getConversationTools(): Anthropic.Messages.Tool[] {
-  return [...PEAR_TOOLS, ...WEB_TOOLS, ...MEMORY_TOOLS, ...UI_TOOLS];
+  return [...PEAR_TOOLS, ...WEB_TOOLS, ...SANDBOX_TOOLS, ...MEMORY_TOOLS, ...UI_TOOLS];
 }
 
 /**
@@ -256,6 +258,41 @@ const WEB_TOOLS: Anthropic.Messages.Tool[] = [
         url: { type: "string", description: "The URL to fetch" },
       },
       required: ["url"],
+    },
+  },
+];
+
+// ── Sandbox bash (emulated compute scratchpad, task #410) ─────────────────────
+
+const SANDBOX_TOOLS: Anthropic.Messages.Tool[] = [
+  {
+    name: "sandbox_bash",
+    description:
+      "Run a bash command in an EMULATED sandbox: a pure-software bash interpreter over an " +
+      "in-memory virtual filesystem. This is NOT a real machine and is completely separate from " +
+      "tool_bash (the Pear Bridge) — it has no network, no real filesystem, and nothing you do here " +
+      "touches any device; never present sandbox output as having run on real hardware. " +
+      "Supports coreutils, pipes/loops/globs, grep/sed/awk, jq, yq, sqlite3, sort/join/uniq, and " +
+      "`date` (real current UTC time from the server clock). Use it for computing over data: " +
+      "transforming JSON with jq, sorting/aggregating rows, text processing, date arithmetic, " +
+      "checksums. State is DISCARDED after every call — files do not persist between calls, so seed " +
+      "input data via `files` and emit results to stdout in the same call.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        command: { type: "string", description: "Bash command/script to run in the sandbox." },
+        files: {
+          type: "object",
+          description:
+            'Optional seed files for the virtual FS, absolute path → content, e.g. {"/data/rows.json": "..."}.',
+          additionalProperties: { type: "string" },
+        },
+        timeout_ms: {
+          type: "number",
+          description: "Optional wall-clock cap in ms (default 10000, max 30000).",
+        },
+      },
+      required: ["command"],
     },
   },
 ];
@@ -3434,6 +3471,18 @@ export async function executeTool(
         const via = resolveSerperApiKey(toolContext) ? "serper" : "duckduckgo";
         console.log(`[tools] web_search: "${query}" (via ${via})`);
         return await webSearchWithContext(query, toolContext);
+      }
+
+      case "sandbox_bash": {
+        const command = typeof input.command === "string" ? input.command : "";
+        const files =
+          input.files && typeof input.files === "object" && !Array.isArray(input.files)
+            ? (input.files as Record<string, string>)
+            : undefined;
+        const timeoutMs =
+          typeof input.timeout_ms === "number" ? input.timeout_ms : undefined;
+        const result = await runSandboxBash(command, { files, timeoutMs });
+        return JSON.stringify(result);
       }
 
       case "fetch_url": {
