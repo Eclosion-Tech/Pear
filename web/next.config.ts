@@ -16,7 +16,7 @@ const spacetimeProxyOrigin = process.env.SPACETIMEDB_PROXY_ORIGIN;
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  transpilePackages: ["@eclosion-tech/pulp"],
+  transpilePackages: ["@eclosion-tech/pulp", "@eclosion-tech/snapshot-core"],
 
   async rewrites() {
     const rules = [];

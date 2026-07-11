@@ -72,6 +72,10 @@ import GrantExtensionPermissionReducer from "../grant_extension_permission_reduc
 import HeartbeatAgentReducer from "../heartbeat_agent_reducer";
 import ImportNotionReducer from "../import_notion_reducer";
 import ImportPearSnapshotV1Reducer from "../import_pear_snapshot_v_1_reducer";
+import ImportV2AbortReducer from "../import_v_2_abort_reducer";
+import ImportV2BeginReducer from "../import_v_2_begin_reducer";
+import ImportV2ChunkReducer from "../import_v_2_chunk_reducer";
+import ImportV2CommitReducer from "../import_v_2_commit_reducer";
 import InsertComponentReducer from "../insert_component_reducer";
 import InstallExtensionReducer from "../install_extension_reducer";
 import InvalidateAiEvaluationsForRowReducer from "../invalidate_ai_evaluations_for_row_reducer";
@@ -253,6 +257,10 @@ export type GrantExtensionPermissionParams = __Infer<typeof GrantExtensionPermis
 export type HeartbeatAgentParams = __Infer<typeof HeartbeatAgentReducer>;
 export type ImportNotionParams = __Infer<typeof ImportNotionReducer>;
 export type ImportPearSnapshotV1Params = __Infer<typeof ImportPearSnapshotV1Reducer>;
+export type ImportV2AbortParams = __Infer<typeof ImportV2AbortReducer>;
+export type ImportV2BeginParams = __Infer<typeof ImportV2BeginReducer>;
+export type ImportV2ChunkParams = __Infer<typeof ImportV2ChunkReducer>;
+export type ImportV2CommitParams = __Infer<typeof ImportV2CommitReducer>;
 export type InsertComponentParams = __Infer<typeof InsertComponentReducer>;
 export type InstallExtensionParams = __Infer<typeof InstallExtensionReducer>;
 export type InvalidateAiEvaluationsForRowParams = __Infer<typeof InvalidateAiEvaluationsForRowReducer>;

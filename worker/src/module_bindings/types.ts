@@ -872,6 +872,22 @@ export const IdCounter = __t.object("IdCounter", {
 });
 export type IdCounter = __Infer<typeof IdCounter>;
 
+export const ImportSession = __t.object("ImportSession", {
+  id: __t.u64(),
+  createdBy: __t.identity(),
+  startedAt: __t.timestamp(),
+  lastSeq: __t.u32(),
+});
+export type ImportSession = __Infer<typeof ImportSession>;
+
+export const ImportSessionCount = __t.object("ImportSessionCount", {
+  id: __t.u64(),
+  tableName: __t.string(),
+  applied: __t.u64(),
+  skipped: __t.u64(),
+});
+export type ImportSessionCount = __Infer<typeof ImportSessionCount>;
+
 // The tagged union or sum type for the algebraic type `InferenceProvider`.
 export const InferenceProvider = __t.enum("InferenceProvider", {
   Anthropic: __t.unit(),

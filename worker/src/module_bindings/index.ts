@@ -100,6 +100,10 @@ import GrantExtensionPermissionReducer from "./grant_extension_permission_reduce
 import HeartbeatAgentReducer from "./heartbeat_agent_reducer";
 import ImportNotionReducer from "./import_notion_reducer";
 import ImportPearSnapshotV1Reducer from "./import_pear_snapshot_v_1_reducer";
+import ImportV2AbortReducer from "./import_v_2_abort_reducer";
+import ImportV2BeginReducer from "./import_v_2_begin_reducer";
+import ImportV2ChunkReducer from "./import_v_2_chunk_reducer";
+import ImportV2CommitReducer from "./import_v_2_commit_reducer";
 import InsertComponentReducer from "./insert_component_reducer";
 import InstallExtensionReducer from "./install_extension_reducer";
 import InvalidateAiEvaluationsForRowReducer from "./invalidate_ai_evaluations_for_row_reducer";
@@ -1221,6 +1225,10 @@ const reducersSchema = __reducers(
   __reducerSchema("heartbeat_agent", HeartbeatAgentReducer),
   __reducerSchema("import_notion", ImportNotionReducer),
   __reducerSchema("import_pear_snapshot_v_1", ImportPearSnapshotV1Reducer),
+  __reducerSchema("import_v_2_abort", ImportV2AbortReducer),
+  __reducerSchema("import_v_2_begin", ImportV2BeginReducer),
+  __reducerSchema("import_v_2_chunk", ImportV2ChunkReducer),
+  __reducerSchema("import_v_2_commit", ImportV2CommitReducer),
   __reducerSchema("insert_component", InsertComponentReducer),
   __reducerSchema("install_extension", InstallExtensionReducer),
   __reducerSchema("invalidate_ai_evaluations_for_row", InvalidateAiEvaluationsForRowReducer),

@@ -7,6 +7,7 @@
     "start": "next start",
     "generate": "cd ../server && spacetime generate",
     "smoke": "tsx scripts/component-tree-smoke.ts",
+    "e2e:snapshot": "tsx scripts/snapshot-v2-e2e.ts",
     "bench:repeater": "tsx scripts/repeater-churn-bench.ts",
     "migrate-blocknote": "tsx scripts/migrate-blocknote-pages.ts",
     "test": "vitest run"
@@ -21,6 +22,7 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@eclosion-tech/pulp": "workspace:*",
+    "@eclosion-tech/snapshot-core": "workspace:*",
     "@mantine/core": "^8.3.16",
     "@mantine/hooks": "^8.3.16",
     "@modelcontextprotocol/sdk": "^1.29.0",
