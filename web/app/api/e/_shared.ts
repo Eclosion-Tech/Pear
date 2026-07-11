@@ -23,10 +23,14 @@ const SHARED_CACHE = new EndpointConfigCache({ maxEntries: 256, ttlMs: 60_000 })
 
 let cachedTransport: StdbTransport | null = null;
 
+function getConfiguredDbName(): string {
+  return process.env.PEAR_STDB_DB_NAME?.trim() || "pear";
+}
+
 function getTransport(): StdbTransport {
   if (cachedTransport) return cachedTransport;
   const baseUrl = process.env.PEAR_STDB_URL?.trim() || "http://localhost:3000";
-  const dbName = process.env.PEAR_STDB_DB_NAME?.trim() || "pear";
+  const dbName = getConfiguredDbName();
   const token = process.env.PEAR_STDB_TOKEN?.trim();
   if (!token) {
     throw new ApiEndpointError(
@@ -191,6 +195,10 @@ export async function serveEndpointRequest(opts: ServeOptions): Promise<Response
     transport,
     auth,
     cache: SHARED_CACHE,
+    // This handler owns one process-wide transport configured by PEAR_STDB_*.
+    // Supplying an explicit namespace opts it into the dispatcher's cache;
+    // multi-tenant hosts must use a distinct stable identity per database.
+    cacheNamespace: `self-hosted-db:${getConfiguredDbName()}`,
     callerIp: callerIp ?? undefined,
     baseUrl: `${url.origin}/api/e/${encodeURIComponent(slug)}`,
   });

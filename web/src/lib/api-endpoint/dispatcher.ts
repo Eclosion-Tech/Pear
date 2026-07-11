@@ -67,6 +67,13 @@ export interface DispatchArgs {
   transport: StdbTransport;
   auth: AuthResult;
   cache?: EndpointConfigCache;
+  /**
+   * Stable, non-secret identity for the workspace/database bound to
+   * `transport`. Endpoint slugs are only unique within a workspace, so the
+   * dispatcher uses this value to tenant-scope cache entries. When omitted
+   * or blank, endpoint config caching is deliberately bypassed.
+   */
+  cacheNamespace?: string;
   /** Best-effort caller IP (X-Forwarded-For first hop). */
   callerIp?: string;
   /** Public base URL for OpenAPI generation, e.g. `https://x/e/fruit`. */
@@ -88,6 +95,7 @@ export async function dispatchApiEndpointRequest(
       args.transport,
       args.endpointSlug,
       args.cache,
+      args.cacheNamespace,
     );
     endpointId = config.endpoint.id;
     keyId = args.auth.kind === "api-key" ? args.auth.keyId : undefined;
@@ -410,9 +418,11 @@ async function loadEndpointConfig(
   transport: StdbTransport,
   slug: string,
   cache?: EndpointConfigCache,
+  cacheNamespace?: string,
 ): Promise<EndpointConfig> {
-  if (cache) {
-    const cached = cache.get(slug);
+  const cacheKey = endpointConfigCacheKey(cacheNamespace, slug);
+  if (cache && cacheKey) {
+    const cached = cache.get(cacheKey);
     if (cached) return cached;
   }
 
@@ -511,8 +521,21 @@ async function loadEndpointConfig(
     })),
   };
 
-  if (cache) cache.set(slug, config);
+  if (cache && cacheKey) cache.set(cacheKey, config);
   return config;
+}
+
+/**
+ * Length/escaping-safe composite key. JSON encoding avoids ambiguous string
+ * concatenation (for example namespaces/slugs containing a delimiter).
+ */
+function endpointConfigCacheKey(
+  namespace: string | undefined,
+  slug: string,
+): string | undefined {
+  const scopedNamespace = namespace?.trim();
+  if (!scopedNamespace) return undefined;
+  return JSON.stringify([scopedNamespace, slug]);
 }
 
 /**

@@ -63,9 +63,13 @@ export interface OAuthStore {
   // Grants
   getGrant(grantId: string): Promise<OAuthGrantRecord | null>;
 
-  // Refresh tokens (hashes only)
+  // Refresh tokens (hashes only). familyId groups one rotation lineage: the
+  // authorization-code exchange mints it, every rotation inherits it. Replay
+  // revocation is scoped to a family, never the grant — a grant can contain
+  // several independent authorization roots.
   insertRefreshToken(args: {
     grantId: string;
+    familyId: string;
     tokenHash: Uint8Array;
     rotatedFromId: string | null;
     expiresAtMs: number;
@@ -73,18 +77,21 @@ export interface OAuthStore {
   /** Atomically claim an unused refresh token (single UPDATE, never a
    * cached read — see the Hyperdrive-cache replay incident, 2026-07-07).
    * Returns null when the token is unknown OR already used; callers
-   * disambiguate via findRefreshToken and revoke the family on reuse. */
+   * disambiguate via findRefreshToken for diagnostics. */
   claimRefreshToken(
     tokenHash: Uint8Array,
     nowMs: number,
-  ): Promise<{ id: string; grantId: string; expiresAtMs: number } | null>;
+  ): Promise<{ id: string; grantId: string; familyId: string; expiresAtMs: number } | null>;
   /** Diagnostic lookup by hash (may be served from a stale cache; never
    * use it to authorize a refresh — that's claimRefreshToken's job). */
   findRefreshToken(tokenHash: Uint8Array): Promise<{
     id: string;
     grantId: string;
+    familyId: string;
     usedAtMs: number | null;
     expiresAtMs: number;
   } | null>;
-  revokeRefreshFamily(grantId: string): Promise<void>;
+  /** RFC 9700 reuse response, scoped: mark every UNUSED token in one
+   * rotation family as used. Sibling families on the same grant survive. */
+  revokeRefreshFamily(familyId: string): Promise<void>;
 }
