@@ -81,7 +81,17 @@ struct Offsets {
     container: u64,
 }
 
+/// Defensive ceiling on the payload — imported content is untrusted input and
+/// a single reducer call materialises the whole document in module memory.
+const MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
+
 fn apply_notion_snapshot(ctx: &ReducerContext, snapshot_json: &str) -> Result<u64, String> {
+    if snapshot_json.len() > MAX_SNAPSHOT_BYTES {
+        return Err(format!(
+            "Import payload is {} bytes; the maximum is {MAX_SNAPSHOT_BYTES}.              Share a smaller selection and retry.",
+            snapshot_json.len()
+        ));
+    }
     let root: Value =
         serde_json::from_str(snapshot_json).map_err(|e| format!("JSON parse: {e}"))?;
 

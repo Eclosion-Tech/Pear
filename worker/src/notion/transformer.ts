@@ -354,6 +354,18 @@ function bnTextBlock(type: string, inline: unknown[], props: Record<string, unkn
   return { id: bnId(), type, props: bnProps(props), content: inline, children };
 }
 
+
+/** Untrusted-content guard: only http(s) URLs survive into hrefs/images. */
+function safeHttpUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    return u.protocol === "http:" || u.protocol === "https:" ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 /** PM inline text (with marks) → BlockNote styled-text / link inline content. */
 function pmInlineToBn(nodes: PMNode[] | undefined): unknown[] {
   const out: unknown[] = [];
@@ -368,7 +380,7 @@ function pmInlineToBn(nodes: PMNode[] | undefined): unknown[] {
       else if (t === "strike") styles.strikethrough = true;
       else if (t === "underline") styles.underline = true;
       else if (t === "code") styles.code = true;
-      else if (t === "link") href = ((m.attrs as { href?: string } | undefined)?.href) ?? null;
+      else if (t === "link") href = safeHttpUrl((m.attrs as { href?: string } | undefined)?.href);
     }
     const text = { type: "text", text: (n.text as string) ?? "", styles };
     out.push(href ? { type: "link", href, content: [text] } : text);
@@ -424,7 +436,9 @@ function pmNodeToBnBlocks(node: PMNode): BNBlock[] {
       return [bnTextBlock("paragraph", [])];
     case "image": {
       const attrs = (node.attrs as { src?: string; alt?: string } | undefined) ?? {};
-      if (!attrs.src) return [];
+      // Relative /api/workspaces/... blob paths are ours; absolute URLs must be http(s).
+      const src = attrs.src?.startsWith("/") ? attrs.src : safeHttpUrl(attrs.src);
+      if (!src) return [];
       return [{
         id: bnId(),
         type: "image",
@@ -432,7 +446,7 @@ function pmNodeToBnBlocks(node: PMNode): BNBlock[] {
           backgroundColor: "default",
           textAlignment: "left",
           name: attrs.alt ?? "",
-          url: attrs.src,
+          url: src,
           caption: attrs.alt ?? "",
           showPreview: true,
           previewWidth: 512,

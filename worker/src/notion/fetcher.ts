@@ -197,6 +197,15 @@ export async function fetchNotionWorkspace(
   }
 
   log(`Total after data source rows: ${pages.size} pages`);
+  // Untrusted-input guard: a hostile (or just enormous) shared selection must
+  // not be able to OOM the worker or produce an unboundedly large payload.
+  const MAX_IMPORT_PAGES = 5000;
+  if (pages.size > MAX_IMPORT_PAGES) {
+    throw new Error(
+      `Import selection has ${pages.size} pages — the maximum is ${MAX_IMPORT_PAGES}. ` +
+        `Share a smaller selection with the integration and retry.`,
+    );
+  }
 
   // ── Step 4: Fetch blocks for every page (recursive) ───────────────────────
 

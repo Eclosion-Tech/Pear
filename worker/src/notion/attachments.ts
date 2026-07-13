@@ -11,6 +11,7 @@
 import { randomUUID } from "node:crypto";
 
 import { putObjectBytes } from "../s3.js";
+import { ssrfSafeFetch } from "../ssrf.js";
 import type { AttachmentRef } from "./fetcher.js";
 
 /** Mirrors web/lib/notion-attachment-upload.ts — the transformer consumes this shape. */
@@ -118,7 +119,9 @@ export async function uploadNotionAttachments(
     if (quotaHit) break;
     if (i % 10 === 0) log(`Uploading attachments ${i + 1}/${unique.length}…`);
     try {
-      const res = await fetch(ref.notionUrl);
+      // Attachment URLs originate in imported (untrusted) Notion data and the
+      // worker runs on the host network — never fetch them unguarded.
+      const res = await ssrfSafeFetch(ref.notionUrl);
       if (!res.ok) {
         log(`WARN: attachment fetch ${res.status} — skipping ${ref.notionUrl.slice(0, 80)}`);
         continue;
