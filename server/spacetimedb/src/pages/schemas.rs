@@ -625,6 +625,19 @@ pub fn set_property_value(
     value: PropertyValue,
 ) -> Result<(), String> {
     require_page_write(ctx, page_id)?;
+    set_property_value_inner(ctx, page_id, property_definition_id, value, ActorType::Human)
+}
+
+/// Body of `set_property_value`, minus the sender ACL gate — the live
+/// automation executor calls this after checking the rule's `run_as`
+/// authority instead, stamping the automation as the changing actor.
+pub(crate) fn set_property_value_inner(
+    ctx: &ReducerContext,
+    page_id: u64,
+    property_definition_id: u64,
+    value: PropertyValue,
+    changed_by: ActorType,
+) -> Result<(), String> {
     // Collect existing current-history entries before mutating
     let stale_history: Vec<PagePropertyValueHistory> = ctx
         .db
@@ -654,7 +667,7 @@ pub fn set_property_value(
             value: value.clone(),
             is_current: true,
             changed_at: ctx.timestamp,
-            changed_by: ActorType::Human,
+            changed_by,
         });
 
     // Collect existing current value before mutating
