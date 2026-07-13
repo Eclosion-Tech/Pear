@@ -132,6 +132,12 @@ export function useUpdatePageContent() {
   return useReducer(reducers.updatePageContent);
 }
 
+/** Soft-delete a page AND its descendants — page-level delete affordances
+ * use this so a tree behaves like a tree (single-row deletes stay single). */
+export function useDeletePageSubtree() {
+  return useReducer(reducers.deletePageSubtree);
+}
+
 export function useDeletePage() {
   return useReducer(reducers.deletePage);
 }

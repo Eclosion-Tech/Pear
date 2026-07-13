@@ -545,6 +545,41 @@ pub fn delete_page(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
     Ok(())
 }
 
+/// Soft-delete a page AND all of its descendants in one atomic call.
+/// `delete_page` alone strands children invisibly (still active rows whose
+/// parent no longer renders); page-level deletes in the UI and agent tools
+/// use this so a tree behaves like a tree. Fires the PageDeleted automation
+/// trigger for the root only — one user action, one event.
+#[reducer]
+pub fn delete_page_subtree(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
+    require_page_write(ctx, page_id)?;
+    ctx.db.page().id().find(page_id).ok_or("Page not found")?;
+
+    let mut queue = vec![page_id];
+    while let Some(id) = queue.pop() {
+        let children: Vec<u64> = ctx
+            .db
+            .page()
+            .parent_pk()
+            .filter(&id)
+            .filter(|p| p.deleted_at.is_none())
+            .map(|p| p.id)
+            .collect();
+        queue.extend(children);
+        if let Some(page) = ctx.db.page().id().find(id) {
+            if page.deleted_at.is_none() {
+                ctx.db.page().id().update(Page {
+                    deleted_at: Some(ctx.timestamp),
+                    updated_at: ctx.timestamp,
+                    ..page
+                });
+            }
+        }
+    }
+    enqueue_page_deleted(ctx, page_id);
+    Ok(())
+}
+
 #[reducer]
 pub fn restore_page(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
     require_page_write(ctx, page_id)?;

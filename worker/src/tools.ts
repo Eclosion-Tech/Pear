@@ -3247,7 +3247,9 @@ export async function executeTool(
         type PageRow = { id: bigint; title: string; deletedAt: unknown };
         const before = [...(conn.db.page.iter() as Iterable<PageRow>)].find((p) => p.id === pageId);
         if (!before) return JSON.stringify({ ok: false, error: "Page not found" });
-        await conn.reducers.deletePage({ pageId });
+        // Subtree delete: trashing a page takes its children with it (the
+        // tool description has always promised this).
+        await conn.reducers.deletePageSubtree({ pageId });
         const gone = await waitFor(() => {
           const row = [...(conn.db.page.iter() as Iterable<PageRow>)].find((p) => p.id === pageId);
           return row?.deletedAt ? true : undefined;

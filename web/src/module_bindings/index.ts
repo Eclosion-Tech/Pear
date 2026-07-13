@@ -87,6 +87,7 @@ import DeleteComponentReducer from "./delete_component_reducer";
 import DeleteDatabaseRowReducer from "./delete_database_row_reducer";
 import DeleteHarnessTemplateReducer from "./delete_harness_template_reducer";
 import DeletePageReducer from "./delete_page_reducer";
+import DeletePageSubtreeReducer from "./delete_page_subtree_reducer";
 import DeletePropertyReducer from "./delete_property_reducer";
 import DeleteReviewAgentBindingReducer from "./delete_review_agent_binding_reducer";
 import DeleteViewReducer from "./delete_view_reducer";
@@ -1230,6 +1231,7 @@ const reducersSchema = __reducers(
   __reducerSchema("delete_database_row", DeleteDatabaseRowReducer),
   __reducerSchema("delete_harness_template", DeleteHarnessTemplateReducer),
   __reducerSchema("delete_page", DeletePageReducer),
+  __reducerSchema("delete_page_subtree", DeletePageSubtreeReducer),
   __reducerSchema("delete_property", DeletePropertyReducer),
   __reducerSchema("delete_review_agent_binding", DeleteReviewAgentBindingReducer),
   __reducerSchema("delete_view", DeleteViewReducer),

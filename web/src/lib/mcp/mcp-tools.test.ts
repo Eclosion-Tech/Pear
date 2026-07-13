@@ -378,6 +378,25 @@ class FakeStdb implements StdbTransport {
         page!.deletedAtMicros = NOW_MICROS;
         return;
       }
+      case "delete_page_subtree": {
+        // Mirrors the module reducer: soft-deletes the page and every
+        // active descendant.
+        const rootId = Number(args[0]);
+        const root = this.pages.find((p) => p.id === rootId);
+        if (!root) fail("Page not found");
+        const queue = [rootId];
+        while (queue.length > 0) {
+          const id = queue.pop()!;
+          for (const child of this.pages.filter(
+            (p) => p.parentId === id && p.deletedAtMicros == null,
+          )) {
+            queue.push(child.id);
+          }
+          const page = this.pages.find((p) => p.id === id);
+          if (page && page.deletedAtMicros == null) page.deletedAtMicros = NOW_MICROS;
+        }
+        return;
+      }
       case "restore_page": {
         const page = this.pages.find((p) => p.id === Number(args[0]));
         if (!page) fail("Page not found");

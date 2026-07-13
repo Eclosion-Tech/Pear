@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { useUpdatePageTitle, useUpdatePageIcon, useDeletePage } from "@/src/hooks/usePages";
+import { useUpdatePageTitle, useUpdatePageIcon, useDeletePageSubtree } from "@/src/hooks/usePages";
 import type { PageRow } from "@/src/hooks/usePages";
 import { GridView } from "./GridView";
 import { PageMoreMenu } from "./PageMoreMenu";
@@ -24,7 +24,7 @@ export function DatabasePage({ page }: DatabasePageProps) {
   const router = useRouter();
   const updateTitle = useUpdatePageTitle();
   const updatePageIcon = useUpdatePageIcon();
-  const deletePage = useDeletePage();
+  const deletePage = useDeletePageSubtree();
   const ancestors = usePageAncestors(page.id);
   const iconButtonRef = useRef<HTMLButtonElement>(null);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
