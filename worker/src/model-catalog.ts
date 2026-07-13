@@ -18,6 +18,28 @@
 import type { ProviderTag } from "./providers.js";
 
 /**
+ * Catalog family: the key the model catalog is organized by. Usually the
+ * provider enum tag, but well-known OpenAI-compatible aggregators get their
+ * own family — an OpenRouter key unlocks vendor-prefixed slugs across vendors,
+ * which is a different model menu than a bare custom endpoint.
+ */
+export type CatalogFamily = ProviderTag | "OpenRouter" | "Meta";
+
+/** Resolve the catalog family for a config's provider tag + endpoint. */
+export function catalogFamilyFor(
+  tag: ProviderTag,
+  endpoint?: string,
+): CatalogFamily {
+  if (tag === "OpenAiCompatible" && endpoint?.includes("openrouter.ai")) {
+    return "OpenRouter";
+  }
+  if (tag === "OpenAiCompatible" && endpoint?.includes("api.meta.ai")) {
+    return "Meta";
+  }
+  return tag;
+}
+
+/**
  * Capability ladder, cheapest → most capable. **Append-only** — add a rung at
  * the end as the frontier moves; never renumber, and never `switch` exhaustively
  * on these values (so a new rung can't break consumers). `frontier` sits above
@@ -72,7 +94,7 @@ const OPENAI_REASONING_EFFORT: EffortSupport = {
 };
 const NO_EFFORT: EffortSupport = { kind: "none" };
 
-export const MODEL_CATALOG: Record<ProviderTag, CatalogModel[]> = {
+export const MODEL_CATALOG: Record<CatalogFamily, CatalogModel[]> = {
   Anthropic: [
     {
       id: "claude-fable-5",
@@ -111,33 +133,132 @@ export const MODEL_CATALOG: Record<ProviderTag, CatalogModel[]> = {
     // they are Responses-API-oriented and OpenAIProvider uses Chat Completions,
     // so they need Responses-API support before they can be listed.
     {
-      id: "gpt-5.5",
+      id: "gpt-5.6",
       tier: "frontier",
-      label: "GPT-5.5",
+      label: "GPT-5.6",
       useFor:
         "OpenAI's newest frontier model — the hardest coding, reasoning, and agentic work.",
       effort: OPENAI_REASONING_EFFORT,
     },
     {
-      id: "gpt-5.4",
+      id: "gpt-5.5",
       tier: "flagship",
-      label: "GPT-5.4",
+      label: "GPT-5.5",
       useFor: "Complex professional work — strong coding, reasoning, and tool use.",
       effort: OPENAI_REASONING_EFFORT,
     },
     {
-      id: "gpt-5.4-mini",
+      id: "gpt-5.6-mini",
       tier: "balanced",
-      label: "GPT-5.4 mini",
+      label: "GPT-5.6 mini",
       useFor: "Most everyday tasks and subagents — responsive at lower cost.",
       effort: OPENAI_REASONING_EFFORT,
     },
     {
-      id: "gpt-5.4-nano",
+      id: "gpt-5.6-nano",
       tier: "fast",
-      label: "GPT-5.4 nano",
+      label: "GPT-5.6 nano",
       useFor: "Simple, latency-sensitive tasks. Cheapest.",
       effort: OPENAI_REASONING_EFFORT,
+    },
+  ],
+  // OpenRouter proxies many vendors behind OpenAI-compatible chat completions
+  // with vendor-prefixed slugs — the menu spans vendors on one key. Effort
+  // knobs are conservatively `none`: the proxy's passthrough of vendor effort
+  // params isn't guaranteed, and a no-op beats a request error. Slugs drift as
+  // vendors release; treat these as curated suggestions, not an exhaustive
+  // registry. Keep in sync with web/src/lib/aiUserApi.ts.
+  OpenRouter: [
+    {
+      id: "anthropic/claude-fable-5",
+      tier: "frontier",
+      label: "Claude Fable 5",
+      useFor:
+        "The hardest, long-horizon reasoning and agentic work. Slowest and most expensive.",
+      effort: NO_EFFORT,
+    },
+    {
+      id: "openai/gpt-5.6",
+      tier: "frontier",
+      label: "GPT-5.6",
+      useFor: "OpenAI's frontier model — hardest coding, reasoning, and agentic work.",
+      effort: NO_EFFORT,
+    },
+    {
+      id: "google/gemini-3-pro",
+      tier: "frontier",
+      label: "Gemini 3 Pro",
+      useFor: "Frontier multimodal reasoning with a very large context window.",
+      effort: NO_EFFORT,
+    },
+    {
+      id: "x-ai/grok-4.5",
+      tier: "frontier",
+      label: "Grok 4.5",
+      useFor: "xAI's newest — frontier coding, knowledge work, and STEM.",
+      effort: NO_EFFORT,
+    },
+    {
+      id: "anthropic/claude-opus-4.8",
+      tier: "flagship",
+      label: "Claude Opus 4.8",
+      useFor: "Complex reasoning, hard coding, and multi-step work.",
+      effort: NO_EFFORT,
+    },
+    {
+      id: "openai/gpt-5.5",
+      tier: "flagship",
+      label: "GPT-5.5",
+      useFor: "Complex professional work — strong coding, reasoning, and tool use.",
+      effort: NO_EFFORT,
+    },
+    {
+      id: "z-ai/glm-5.2",
+      tier: "flagship",
+      label: "GLM 5.2",
+      useFor: "Top open-weight model — long-horizon coding and planning at low cost.",
+      effort: NO_EFFORT,
+    },
+    {
+      id: "anthropic/claude-sonnet-4.6",
+      tier: "balanced",
+      label: "Claude Sonnet 4.6",
+      useFor: "Most everyday tasks — strong quality at lower cost and latency.",
+      effort: NO_EFFORT,
+    },
+    {
+      id: "deepseek/deepseek-chat-v3.1",
+      tier: "balanced",
+      label: "DeepSeek V3.1",
+      useFor: "Capable open-weights generalist at very low cost.",
+      effort: NO_EFFORT,
+    },
+    {
+      id: "anthropic/claude-haiku-4.5",
+      tier: "fast",
+      label: "Claude Haiku 4.5",
+      useFor: "Simple, well-scoped, latency-sensitive tasks. Cheapest.",
+      effort: NO_EFFORT,
+    },
+    {
+      id: "google/gemini-3-flash",
+      tier: "fast",
+      label: "Gemini 3 Flash",
+      useFor: "Fast, cheap multimodal tasks with a large context window.",
+      effort: NO_EFFORT,
+    },
+  ],
+  // Meta Model API (api.meta.ai) — Muse Spark family. NOTE: Meta's dashboard
+  // documents the Responses API (/v1/responses); if chat completions isn't
+  // also exposed, OpenAIProvider (Chat Completions) can't reach it yet — same
+  // constraint as the absent Codex models above.
+  Meta: [
+    {
+      id: "muse-spark-1.1",
+      tier: "flagship",
+      label: "Muse Spark 1.1",
+      useFor: "Meta's newest model — general reasoning and coding.",
+      effort: NO_EFFORT,
     },
   ],
   // Custom / local providers run arbitrary models with no known family, so we
@@ -154,7 +275,7 @@ export const MODEL_CATALOG: Record<ProviderTag, CatalogModel[]> = {
  * call never targets a model the key can't reach.
  */
 export function utilityModelFor(
-  provider: ProviderTag,
+  provider: CatalogFamily,
   primaryModel: string,
 ): string {
   const fast = MODEL_CATALOG[provider]?.find((m) => m.tier === "fast");
@@ -182,7 +303,7 @@ export function effortSupportFor(modelId: string): EffortSupport {
  * (Ollama / OpenAI-compatible) — the caller keeps the configured model there.
  */
 export function modelForTier(
-  provider: ProviderTag,
+  provider: CatalogFamily,
   tier: ModelTier,
 ): string | undefined {
   const models = MODEL_CATALOG[provider];
@@ -220,7 +341,7 @@ export interface ResolvedRouting {
  * can't take it (a no-op rather than an error), per the OSS/Ollama constraint.
  */
 export function resolveRouting(
-  base: { providerTag: ProviderTag; model: string },
+  base: { providerTag: CatalogFamily; model: string },
   choice: RoutingChoice,
 ): ResolvedRouting {
   let model = base.model;

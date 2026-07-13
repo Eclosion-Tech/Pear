@@ -1,11 +1,27 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  catalogFamilyFor,
   MODEL_CATALOG,
   modelForTier,
   resolveRouting,
   utilityModelFor,
 } from "./model-catalog.js";
+
+test("catalogFamilyFor derives aggregator families from the endpoint", () => {
+  assert.equal(catalogFamilyFor("Anthropic"), "Anthropic");
+  assert.equal(catalogFamilyFor("OpenAiCompatible"), "OpenAiCompatible");
+  assert.equal(
+    catalogFamilyFor("OpenAiCompatible", "https://openrouter.ai/api/v1"),
+    "OpenRouter",
+  );
+  assert.equal(
+    catalogFamilyFor("OpenAiCompatible", "https://api.meta.ai/v1"),
+    "Meta",
+  );
+  // Only OpenAI-compatible configs are endpoint-disambiguated.
+  assert.equal(catalogFamilyFor("Ollama", "https://openrouter.ai/api/v1"), "Ollama");
+});
 
 test("each known-provider family has exactly one fast tier", () => {
   for (const provider of ["Anthropic", "OpenAi"] as const) {
@@ -19,7 +35,7 @@ test("utilityModelFor returns the provider's fast model regardless of primary", 
     utilityModelFor("Anthropic", "claude-opus-4-8"),
     "claude-haiku-4-5-20251001",
   );
-  assert.equal(utilityModelFor("OpenAi", "gpt-5.4"), "gpt-5.4-nano");
+  assert.equal(utilityModelFor("OpenAi", "gpt-5.5"), "gpt-5.6-nano");
 });
 
 test("utilityModelFor falls back to the primary model for unknown families", () => {
@@ -42,7 +58,11 @@ test("modelForTier maps each tier to the right model", () => {
   assert.equal(modelForTier("Anthropic", "flagship"), "claude-opus-4-8");
   assert.equal(modelForTier("Anthropic", "balanced"), "claude-sonnet-4-6");
   assert.equal(modelForTier("Anthropic", "fast"), "claude-haiku-4-5-20251001");
-  assert.equal(modelForTier("OpenAi", "frontier"), "gpt-5.5");
+  assert.equal(modelForTier("OpenAi", "frontier"), "gpt-5.6");
+  // Endpoint-derived families route tiers to vendor-prefixed slugs.
+  assert.equal(modelForTier("OpenRouter", "frontier"), "anthropic/claude-fable-5");
+  assert.equal(modelForTier("OpenRouter", "fast"), "anthropic/claude-haiku-4.5");
+  assert.equal(modelForTier("Meta", "flagship"), "muse-spark-1.1");
   // Unknown family → undefined (caller keeps the configured model).
   assert.equal(modelForTier("Ollama", "flagship"), undefined);
 });

@@ -68,7 +68,13 @@ export type ProviderTag = "Anthropic" | "OpenAi" | "Ollama" | "OpenAiCompatible"
  * tag plus defaults; OpenRouter is a preset over `OpenAiCompatible` with a
  * pinned endpoint (the worker's OpenAI-compatible client handles it as-is).
  */
-export type ProviderPresetKey = "Anthropic" | "OpenAi" | "OpenRouter" | "Ollama" | "OpenAiCompatible";
+export type ProviderPresetKey =
+  | "Anthropic"
+  | "OpenAi"
+  | "OpenRouter"
+  | "Meta"
+  | "Ollama"
+  | "OpenAiCompatible";
 
 export interface ProviderPreset {
   key: ProviderPresetKey;
@@ -91,6 +97,14 @@ export const PROVIDER_OPTIONS: ProviderPreset[] = [
     label: "OpenRouter",
     defaultModel: "anthropic/claude-haiku-4.5",
     defaultEndpoint: "https://openrouter.ai/api/v1",
+    endpointLocked: true,
+  },
+  {
+    key: "Meta",
+    tag: "OpenAiCompatible",
+    label: "Meta",
+    defaultModel: "muse-spark-1.1",
+    defaultEndpoint: "https://api.meta.ai/v1",
     endpointLocked: true,
   },
   { key: "Ollama", tag: "Ollama", label: "Ollama", defaultModel: "llama3.1", defaultEndpoint: "http://localhost:11434/v1" },
@@ -142,20 +156,31 @@ export const MODEL_CATALOG: Record<ProviderPresetKey, CatalogModel[]> = {
     { id: "claude-haiku-4-5-20251001", tier: "fast", label: "Haiku 4.5" },
   ],
   OpenAi: [
-    { id: "gpt-5.5", tier: "frontier", label: "GPT-5.5" },
-    { id: "gpt-5.4", tier: "flagship", label: "GPT-5.4" },
-    { id: "gpt-5.4-mini", tier: "balanced", label: "GPT-5.4 mini" },
-    { id: "gpt-5.4-nano", tier: "fast", label: "GPT-5.4 nano" },
+    { id: "gpt-5.6", tier: "frontier", label: "GPT-5.6" },
+    { id: "gpt-5.5", tier: "flagship", label: "GPT-5.5" },
+    { id: "gpt-5.6-mini", tier: "balanced", label: "GPT-5.6 mini" },
+    { id: "gpt-5.6-nano", tier: "fast", label: "GPT-5.6 nano" },
   ],
-  // OpenRouter slugs are vendor-prefixed; one quick-pick per tier across the
-  // two families people actually route to, plus the cheap utility sibling.
+  // OpenRouter slugs are vendor-prefixed; one key unlocks models across
+  // vendors, so the quick-picks span families. Curated suggestions — the
+  // model field accepts any slug. Keep in sync with worker/src/model-catalog.ts.
   OpenRouter: [
     { id: "anthropic/claude-fable-5", tier: "frontier", label: "Fable 5" },
+    { id: "openai/gpt-5.6", tier: "frontier", label: "GPT-5.6" },
+    { id: "google/gemini-3-pro", tier: "frontier", label: "Gemini 3 Pro" },
+    { id: "x-ai/grok-4.5", tier: "frontier", label: "Grok 4.5" },
     { id: "anthropic/claude-opus-4.8", tier: "flagship", label: "Opus 4.8" },
-    { id: "openai/gpt-5.4", tier: "flagship", label: "GPT-5.4" },
+    { id: "openai/gpt-5.5", tier: "flagship", label: "GPT-5.5" },
+    { id: "z-ai/glm-5.2", tier: "flagship", label: "GLM 5.2" },
     { id: "anthropic/claude-sonnet-4.6", tier: "balanced", label: "Sonnet 4.6" },
+    { id: "deepseek/deepseek-chat-v3.1", tier: "balanced", label: "DeepSeek V3.1" },
     { id: "anthropic/claude-haiku-4.5", tier: "fast", label: "Haiku 4.5" },
+    { id: "google/gemini-3-flash", tier: "fast", label: "Gemini 3 Flash" },
   ],
+  // Meta Model API (api.meta.ai) — Muse Spark family. NOTE: the dashboard
+  // documents the Responses API (/v1/responses); if chat completions isn't
+  // also exposed, the worker's OpenAI-compatible client can't reach it yet.
+  Meta: [{ id: "muse-spark-1.1", tier: "flagship", label: "Muse Spark 1.1" }],
   Ollama: [],
   OpenAiCompatible: [],
 };
@@ -173,6 +198,7 @@ export const PRESET_BY_PROVIDER_NAME: Record<string, ProviderPresetKey> = {
   Anthropic: "Anthropic",
   OpenAI: "OpenAi",
   OpenRouter: "OpenRouter",
+  Meta: "Meta",
   Ollama: "Ollama",
   "OpenAI Compatible": "OpenAiCompatible",
 };

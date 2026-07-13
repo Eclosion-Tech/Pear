@@ -21,7 +21,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
-import { effortSupportFor } from "./model-catalog.js";
+import { catalogFamilyFor, effortSupportFor, type CatalogFamily } from "./model-catalog.js";
 
 // ── Normalized types ────────────────────────────────────────────────────────────
 
@@ -593,8 +593,10 @@ export interface ResolvedProvider {
   provider: InferenceProvider;
   model: string;
   maxTokens: number;
-  /** Provider family tag — drives utility-model selection (model-catalog.ts). */
-  providerTag: ProviderTag;
+  /** Catalog family — drives tier/model routing (model-catalog.ts). Endpoint-
+   * aware: an OpenAI-compatible config pointed at openrouter.ai resolves to
+   * the "OpenRouter" family so tier routing maps to vendor-prefixed slugs. */
+  providerTag: CatalogFamily;
 }
 
 /** Cached provider instances keyed by AI user ID. */
@@ -652,7 +654,7 @@ export function getProviderForAiUser(
     provider: createProviderFromConfig(config),
     model: config.model,
     maxTokens: config.maxTokens || 8192,
-    providerTag: config.provider.tag,
+    providerTag: catalogFamilyFor(config.provider.tag, config.endpoint),
   };
   providerCache.set(aiUserId, entry);
   return entry;

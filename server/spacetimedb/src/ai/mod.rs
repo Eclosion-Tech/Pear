@@ -189,10 +189,13 @@ pub(crate) fn provider_profile_name(
     provider: &InferenceProvider,
     endpoint: Option<&str>,
 ) -> String {
-    if matches!(provider, InferenceProvider::OpenAICompatible)
-        && endpoint.is_some_and(|e| e.contains("openrouter.ai"))
-    {
-        return "OpenRouter".to_string();
+    if matches!(provider, InferenceProvider::OpenAICompatible) {
+        if endpoint.is_some_and(|e| e.contains("openrouter.ai")) {
+            return "OpenRouter".to_string();
+        }
+        if endpoint.is_some_and(|e| e.contains("api.meta.ai")) {
+            return "Meta".to_string();
+        }
     }
     provider_display_name(provider).to_string()
 }
