@@ -202,18 +202,23 @@ export function NotionImportPanel() {
             </div>
           )}
 
-          {/* Actions */}
+          {/* Actions — re-imports are additive (each run lands under its own
+              container page), so the button stays available after success. */}
           <div className="flex flex-wrap gap-2">
-            {!isDone && (
-              <button
-                type="button"
-                onClick={handleImport}
-                disabled={isRunning}
-                className="px-3 py-1.5 rounded text-sm font-medium bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:opacity-90 disabled:opacity-40"
-              >
-                {isRunning ? "Importing…" : isError ? "Retry import" : "Import from Notion"}
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={handleImport}
+              disabled={isRunning}
+              className="px-3 py-1.5 rounded text-sm font-medium bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:opacity-90 disabled:opacity-40"
+            >
+              {isRunning
+                ? "Importing…"
+                : isError
+                  ? "Retry import"
+                  : isDone
+                    ? "Import again"
+                    : "Import from Notion"}
+            </button>
           </div>
 
           {msg && (
