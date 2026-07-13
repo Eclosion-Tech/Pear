@@ -93,11 +93,22 @@ fn apply_notion_snapshot(ctx: &ReducerContext, snapshot_json: &str) -> Result<()
         .and_then(|v| v.as_str())
         .map(|s| s.chars().take(10).collect::<String>())
         .unwrap_or_else(|| "import".to_string());
+    // Title the container after the source Notion workspace so imports from
+    // multiple workspaces stay distinguishable side by side.
+    let container_title = match root
+        .get("notionWorkspaceName")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(name) => format!("{name} (Notion) — {imported_date}"),
+        None => format!("Notion Import — {imported_date}"),
+    };
     let container = create_component_tree_page_inner(
         ctx,
         None,
         PageType::Doc,
-        format!("Notion Import — {imported_date}"),
+        container_title,
         ActorType::Human,
     )?;
 
