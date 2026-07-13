@@ -4,10 +4,14 @@
 //! runs the instruction through the full conversation harness, and reports back
 //! into the thread (reusing the job-completion loop and everything else).
 //!
-//! Governance posture mirrors access-rule authorship: only the AI user's human
-//! creator (or a workspace admin) may create, enable/disable, or delete a
-//! routine — the AI user cannot schedule its own work. A capped AI user's runs
-//! are skipped with a visible status rather than silently spending its budget.
+//! Governance posture: the AI user's human creator (or a workspace admin) may
+//! create, enable/disable, or delete any routine. The AI user itself may also
+//! author and manage routines FOR ITSELF (self-authorship), capped at
+//! [`MAX_AI_SELF_ROUTINES`] standing routines and attributed to the AI's
+//! identity so the settings surface can show and revoke them. Self-authored
+//! routine threads stay anchored to the AI's human creator. A capped AI user's
+//! runs are skipped with a visible status rather than silently spending its
+//! budget.
 
 use std::time::Duration;
 
@@ -27,6 +31,11 @@ use crate::orcha::ai_user_at_hard_cap;
 /// Floor on the routine interval — routines are ambient background work, not a
 /// tight loop; this bounds how often even a mistaken config can fire.
 const MIN_ROUTINE_INTERVAL_SECS: u64 = 300;
+
+/// Cap on the number of routines an AI user may author for itself, so a
+/// self-scheduling loop can't accumulate unbounded standing work. Human
+/// creators and admins are not subject to this cap.
+const MAX_AI_SELF_ROUTINES: usize = 10;
 
 /// Canned prompt for the first routine consumer: structural-sensor triage. The
 /// AI reviews open findings, fixes the trivial ones with receipts, and drafts a
@@ -82,8 +91,22 @@ pub struct AiUserRoutine {
     pub created_at: Timestamp,
 }
 
-/// Create a routine for an AI user. Creator-or-admin only (the AI user cannot
-/// schedule its own work). `interval_secs` is floored at `MIN_ROUTINE_INTERVAL_SECS`.
+/// Authority gate for routine management: the AI user itself (self-authorship),
+/// its human creator, or a workspace admin.
+fn require_routine_authority(
+    ctx: &ReducerContext,
+    ai_user: &AiUserConfig,
+    action: &str,
+) -> Result<(), String> {
+    if ctx.sender() == ai_user.identity {
+        return Ok(());
+    }
+    require_creator_or_admin(ctx, ai_user.created_by, action)
+}
+
+/// Create a routine for an AI user: creator, admin, or the AI user itself.
+/// Self-authored routines are capped at `MAX_AI_SELF_ROUTINES` per AI user.
+/// `interval_secs` is floored at `MIN_ROUTINE_INTERVAL_SECS`.
 #[reducer]
 pub fn create_ai_user_routine(
     ctx: &ReducerContext,
@@ -98,7 +121,21 @@ pub fn create_ai_user_routine(
         .id()
         .find(ai_user_id)
         .ok_or("AI user not found")?;
-    require_creator_or_admin(ctx, ai_user.created_by, "create routine")?;
+    require_routine_authority(ctx, &ai_user, "create routine")?;
+    if ctx.sender() == ai_user.identity {
+        let self_authored = ctx
+            .db
+            .ai_user_routine()
+            .iter()
+            .filter(|r| r.ai_user_id == ai_user_id && r.created_by == ai_user.identity)
+            .count();
+        if self_authored >= MAX_AI_SELF_ROUTINES {
+            return Err(format!(
+                "AI user already has {MAX_AI_SELF_ROUTINES} self-authored routines; delete one \
+                 first or ask your creator to add more"
+            ));
+        }
+    }
 
     let prompt = prompt.trim().to_string();
     if prompt.is_empty() {
@@ -162,7 +199,7 @@ pub fn create_memory_consolidation_routine(
     )
 }
 
-/// Enable or disable a routine (creator/admin only).
+/// Enable or disable a routine (creator, admin, or the AI user itself).
 #[reducer]
 pub fn set_ai_user_routine_enabled(
     ctx: &ReducerContext,
@@ -181,7 +218,7 @@ pub fn set_ai_user_routine_enabled(
         .id()
         .find(routine.ai_user_id)
         .ok_or("AI user not found")?;
-    require_creator_or_admin(ctx, ai_user.created_by, "modify routine")?;
+    require_routine_authority(ctx, &ai_user, "modify routine")?;
     ctx.db.ai_user_routine().scheduled_id().update(AiUserRoutine {
         enabled,
         ..routine
@@ -189,7 +226,8 @@ pub fn set_ai_user_routine_enabled(
     Ok(())
 }
 
-/// Delete a routine (creator/admin only). Removing the row cancels its schedule.
+/// Delete a routine (creator, admin, or the AI user itself). Removing the row
+/// cancels its schedule.
 #[reducer]
 pub fn delete_ai_user_routine(ctx: &ReducerContext, scheduled_id: u64) -> Result<(), String> {
     let routine = ctx
@@ -204,7 +242,7 @@ pub fn delete_ai_user_routine(ctx: &ReducerContext, scheduled_id: u64) -> Result
         .id()
         .find(routine.ai_user_id)
         .ok_or("AI user not found")?;
-    require_creator_or_admin(ctx, ai_user.created_by, "delete routine")?;
+    require_routine_authority(ctx, &ai_user, "delete routine")?;
     ctx.db.ai_user_routine().scheduled_id().delete(scheduled_id);
     Ok(())
 }
@@ -295,8 +333,10 @@ fn record_routine_run(ctx: &ReducerContext, scheduled_id: u64, status: &str) {
 }
 
 /// Resolve the conversation to post into: reuse the routine's active
-/// conversation if set, else create a page-less thread (creator as initiator,
-/// AI user as member) and persist its id back onto the routine.
+/// conversation if set, else create a page-less thread (a human as initiator,
+/// AI user as member) and persist its id back onto the routine. For a
+/// self-authored routine (`created_by` is the AI itself) the thread anchors to
+/// the AI's human creator, so its output always lands in front of a person.
 fn ensure_routine_conversation(
     ctx: &ReducerContext,
     routine: &AiUserRoutine,
@@ -310,10 +350,15 @@ fn ensure_routine_conversation(
         }
     }
 
+    let human = if routine.created_by == ai_user.identity {
+        ai_user.created_by
+    } else {
+        routine.created_by
+    };
     let conv = ctx.db.conversation().insert(Conversation {
         id: next_conversation_id(ctx),
         page_id: None,
-        initiated_by: routine.created_by,
+        initiated_by: human,
         status: ConversationStatus::Active,
         created_at: ctx.timestamp,
         updated_at: ctx.timestamp,
@@ -327,7 +372,7 @@ fn ensure_routine_conversation(
     ctx.db.conversation_participant().insert(ConversationParticipant {
         id: next_conversation_participant_id(ctx),
         conversation_id: conv.id,
-        identity: routine.created_by,
+        identity: human,
         role: ParticipantRole::Initiator,
         joined_at: ctx.timestamp,
         last_viewed_message_id: None,

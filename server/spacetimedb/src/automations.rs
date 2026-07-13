@@ -1,10 +1,16 @@
-//! Automations: typed trigger/action graphs, event queue, dry-run execution,
-//! and scheduled routines.
+//! Automations: typed trigger/action graphs, event queue, and live/dry-run
+//! execution.
 //!
-//! This is the v0 substrate. Live side effects intentionally remain behind the
-//! queue boundary; dry-run execution is available immediately so humans and AI
-//! users can draft, validate, simulate, and inspect automations safely.
+//! v1: the in-module actions (`CreatePage`, `UpdateProperty`, `OrchaJob`)
+//! execute for real when a rule is in `Live` mode; `HttpRequest` / `SendEmail`
+//! stay dry-run until an off-module worker executor exists (reducers cannot do
+//! I/O). Live actions run with the rule's `run_as` authority, checked against
+//! page ACLs per action. Governance: anyone — including AI users — may author
+//! and dry-run rules, but only a human (creator or admin) may flip a rule
+//! Live, and any structural edit to a Live rule demotes it back to DryRun so
+//! changes need fresh human approval.
 
+use std::cell::Cell;
 use std::time::Duration;
 
 use chrono::{Datelike, Timelike, Utc};
@@ -13,9 +19,24 @@ use spacetimedb::{
     reducer, table, Identity, ReducerContext, ScheduleAt, SpacetimeType, Table, Timestamp,
 };
 
-use crate::access_control::helpers::require_creator_or_admin;
+use crate::access_control::helpers::{can_write_page, require_creator_or_admin};
+use crate::ai::ai_user_config;
 use crate::id_counters::alloc_id;
-use crate::pages::{page, PageType};
+use crate::orcha::{ai_user_at_hard_cap, create_job};
+use crate::pages::schemas::{
+    property_definition, set_property_value_inner, PropertyType, PropertyValue,
+};
+use crate::pages::{create_component_tree_page_inner, page, ActorType, PageType};
+
+/// Bound on inline execution recursion: a live action that itself fires
+/// triggers (e.g. CreatePage → PageCreated) processes the nested events inline
+/// only this deep; deeper events stay Pending instead of recursing unbounded
+/// within one transaction. `process_pending_automation_events` drains them.
+const MAX_INLINE_EXEC_DEPTH: u32 = 4;
+
+thread_local! {
+    static INLINE_EXEC_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
 
 #[derive(SpacetimeType, Clone, Debug, PartialEq)]
 pub enum AutomationTriggerKind {
@@ -315,36 +336,36 @@ pub(crate) fn seed_automation_primitives_inner(ctx: &ReducerContext) {
             "action.http_request",
             AutomationPrimitiveKind::Action,
             "HTTP request",
-            "Posts to an external URL. Dry-run only in v0.",
+            "Posts to an external URL. Dry-run only until the worker executor ships.",
             r#"{"type":"object","properties":{"url":{"type":"string"},"headers":{"type":"object"},"body_template":{"type":"string"}}}"#,
         ),
         (
             "action.send_email",
             AutomationPrimitiveKind::Action,
             "Send email",
-            "Sends an SMTP email. Dry-run only in v0.",
+            "Sends an SMTP email. Dry-run only until the worker executor ships.",
             r#"{"type":"object","properties":{"to":{"type":"string"},"subject_template":{"type":"string"},"body_template":{"type":"string"}}}"#,
         ),
         (
             "action.create_page",
             AutomationPrimitiveKind::Action,
             "Create page",
-            "Creates a page or database row. Dry-run only in v0.",
+            "Creates a page. title_template supports {{field}} tokens from the trigger payload. Executes for real when the rule is Live.",
             r#"{"type":"object","properties":{"parent_id":{"type":"integer"},"title_template":{"type":"string"}}}"#,
         ),
         (
             "action.update_property",
             AutomationPrimitiveKind::Action,
             "Update property",
-            "Sets a property value on a row. Dry-run only in v0.",
-            r#"{"type":"object","properties":{"property_definition_id":{"type":"integer"},"value":{"type":"object"}}}"#,
+            "Sets a property value on a row (target from config.page_id or the payload field named by page_id_field, default \"page_id\"). Executes for real when the rule is Live.",
+            r#"{"type":"object","properties":{"property_definition_id":{"type":"integer"},"value":{},"page_id":{"type":"integer"},"page_id_field":{"type":"string"}}}"#,
         ),
         (
             "action.orcha_job",
             AutomationPrimitiveKind::Action,
             "Orcha job",
-            "Creates an AI job from the trigger payload. Dry-run only in v0.",
-            r#"{"type":"object","properties":{"prompt_template":{"type":"string"},"page_id_field":{"type":"string"}}}"#,
+            "Creates an AI job from the trigger payload (prompt_template supports {{field}} tokens). Executes for real when the rule is Live.",
+            r#"{"type":"object","properties":{"prompt_template":{"type":"string"},"page_id_field":{"type":"string"},"ai_user_id":{"type":"integer"},"tier":{"type":"string"}}}"#,
         ),
         (
             "condition.payload_field_equals",
@@ -442,6 +463,9 @@ pub fn update_automation_rule(
         timezone: normalize_timezone(timezone),
         canonical_description,
         enabled: false,
+        // Edits demote a Live rule: the approved graph changed, so live
+        // execution needs fresh human approval via set_automation_mode.
+        mode: AutomationMode::DryRun,
         next_run_at: None,
         updated_at: ctx.timestamp,
         ..rule
@@ -475,9 +499,30 @@ pub fn set_automation_mode(
 ) -> Result<(), String> {
     let rule = require_rule_owner(ctx, automation_id, "set automation mode")?;
     if mode == AutomationMode::Live {
-        return Err(
-            "Live automation execution is not enabled in v0; keep the rule in DryRun".to_string(),
-        );
+        // AI users may author and dry-run rules, but going live is a human
+        // decision — an AI creator cannot approve its own side effects.
+        if sender_is_ai_user(ctx) {
+            return Err(
+                "Only a human (creator or admin) can set an automation Live; AI-authored rules \
+                 stay in DryRun until a human approves them"
+                    .to_string(),
+            );
+        }
+        let offending: Vec<&'static str> = ctx
+            .db
+            .automation_action()
+            .by_rule()
+            .filter(&automation_id)
+            .filter(|a| !action_kind_is_in_module(&a.action_kind))
+            .map(|a| action_kind_name(&a.action_kind))
+            .collect();
+        if !offending.is_empty() {
+            return Err(format!(
+                "Live execution supports CreatePage, UpdateProperty, and OrchaJob actions only; \
+                 {} requires the worker executor (not yet implemented)",
+                offending.join(", ")
+            ));
+        }
     }
     ctx.db.automation_rule().id().update(AutomationRule {
         mode,
@@ -497,6 +542,7 @@ pub fn add_automation_action(
 ) -> Result<(), String> {
     require_rule_owner(ctx, automation_id, "add automation actions")?;
     parse_json_object(&config, "action config")?;
+    demote_live_rule_on_edit(ctx, automation_id);
     ctx.db.automation_action().insert(AutomationAction {
         id: next_automation_action_id(ctx),
         automation_id,
@@ -523,6 +569,7 @@ pub fn update_automation_action(
         .find(action_id)
         .ok_or("Automation action not found")?;
     require_rule_owner(ctx, action.automation_id, "update automation actions")?;
+    demote_live_rule_on_edit(ctx, action.automation_id);
     ctx.db.automation_action().id().update(AutomationAction {
         order,
         action_kind,
@@ -541,6 +588,7 @@ pub fn delete_automation_action(ctx: &ReducerContext, action_id: u64) -> Result<
         .find(action_id)
         .ok_or("Automation action not found")?;
     require_rule_owner(ctx, action.automation_id, "delete automation actions")?;
+    demote_live_rule_on_edit(ctx, action.automation_id);
     ctx.db.automation_action().id().delete(action_id);
     Ok(())
 }
@@ -555,6 +603,7 @@ pub fn add_automation_condition(
 ) -> Result<(), String> {
     require_rule_owner(ctx, automation_id, "add automation conditions")?;
     parse_json_object(&config, "condition config")?;
+    demote_live_rule_on_edit(ctx, automation_id);
     ctx.db.automation_condition().insert(AutomationCondition {
         id: next_automation_condition_id(ctx),
         automation_id,
@@ -818,11 +867,32 @@ fn enqueue_matching_automations(
 
     for rule in rules {
         let queue_id = insert_event(ctx, &rule, trigger_kind.clone(), payload.to_string());
-        if rule.mode == AutomationMode::DryRun {
-            process_automation_event_inner(ctx, queue_id, Some("inline-dry-run".to_string()))?;
-        }
+        try_process_inline(ctx, queue_id, inline_claim_label(&rule.mode, "inline"))?;
     }
     Ok(())
+}
+
+/// Process an event inline (inside the triggering transaction) unless the
+/// recursion-depth cap is reached, in which case the event stays Pending.
+fn try_process_inline(ctx: &ReducerContext, queue_id: u64, claimed_by: String) -> Result<(), String> {
+    let depth = INLINE_EXEC_DEPTH.with(Cell::get);
+    if depth >= MAX_INLINE_EXEC_DEPTH {
+        log::warn!(
+            "automation event {queue_id}: inline execution depth {depth} reached; leaving Pending"
+        );
+        return Ok(());
+    }
+    INLINE_EXEC_DEPTH.with(|d| d.set(depth + 1));
+    let result = process_automation_event_inner(ctx, queue_id, Some(claimed_by));
+    INLINE_EXEC_DEPTH.with(|d| d.set(depth));
+    result
+}
+
+fn inline_claim_label(mode: &AutomationMode, source: &str) -> String {
+    match mode {
+        AutomationMode::DryRun => format!("{source}-dry-run"),
+        AutomationMode::Live => format!("{source}-live"),
+    }
 }
 
 fn enqueue_scheduled_event(
@@ -843,9 +913,7 @@ fn enqueue_scheduled_event(
         AutomationTriggerKind::Scheduled,
         payload.to_string(),
     );
-    if rule.mode == AutomationMode::DryRun {
-        process_automation_event_inner(ctx, queue_id, Some(format!("{source}-dry-run")))?;
-    }
+    try_process_inline(ctx, queue_id, inline_claim_label(&rule.mode, source))?;
     Ok(())
 }
 
@@ -946,43 +1014,349 @@ fn process_automation_event_inner(
         return Ok(());
     }
 
-    if rule.mode != AutomationMode::DryRun {
-        insert_run_log(
-            ctx,
-            queue_id,
-            None,
-            false,
-            false,
-            "Live automation execution is not implemented in v0".to_string(),
-            "{}".to_string(),
-        );
-        update_event_status(
-            ctx,
-            queue_id,
-            AutomationEventStatus::Failed,
-            Some("Live automation execution is not implemented in v0".to_string()),
-        );
+    if rule.mode == AutomationMode::DryRun {
+        for action in actions {
+            insert_run_log(
+                ctx,
+                queue_id,
+                Some(action.id),
+                true,
+                true,
+                format!("Would execute {}", action_kind_name(&action.action_kind)),
+                json!({
+                    "action_kind": action_kind_name(&action.action_kind),
+                    "config": parse_json_object(&action.config, "action config")?,
+                    "trigger_payload": payload,
+                })
+                .to_string(),
+            );
+        }
+        update_event_status(ctx, queue_id, AutomationEventStatus::Completed, None);
         return Ok(());
     }
 
+    // Live execution: actions run in order with the rule's run_as authority.
+    // An action failure logs and marks the event Failed but returns Ok — an
+    // Err here would roll back the triggering transaction (and the logs).
     for action in actions {
-        insert_run_log(
-            ctx,
-            queue_id,
-            Some(action.id),
-            true,
-            true,
-            format!("Would execute {}", action_kind_name(&action.action_kind)),
-            json!({
-                "action_kind": action_kind_name(&action.action_kind),
-                "config": parse_json_object(&action.config, "action config")?,
-                "trigger_payload": payload,
-            })
-            .to_string(),
-        );
+        match execute_live_action(ctx, &rule, &action, queue_id, &payload) {
+            Ok(result) => insert_run_log(
+                ctx,
+                queue_id,
+                Some(action.id),
+                true,
+                false,
+                format!("Executed {}", action_kind_name(&action.action_kind)),
+                result.to_string(),
+            ),
+            Err(err) => {
+                insert_run_log(
+                    ctx,
+                    queue_id,
+                    Some(action.id),
+                    false,
+                    false,
+                    format!("{} failed: {err}", action_kind_name(&action.action_kind)),
+                    json!({ "error": err }).to_string(),
+                );
+                update_event_status(ctx, queue_id, AutomationEventStatus::Failed, Some(err));
+                return Ok(());
+            }
+        }
     }
     update_event_status(ctx, queue_id, AutomationEventStatus::Completed, None);
     Ok(())
+}
+
+/// Execute one live action. Returns a JSON result for the run log, or an error
+/// string (which fails the event without rolling back the transaction).
+fn execute_live_action(
+    ctx: &ReducerContext,
+    rule: &AutomationRule,
+    action: &AutomationAction,
+    queue_id: u64,
+    payload: &Value,
+) -> Result<Value, String> {
+    let config = parse_json_object(&action.config, "action config")?;
+    match action.action_kind {
+        AutomationActionKind::CreatePage => execute_create_page(ctx, rule, &config, payload),
+        AutomationActionKind::UpdateProperty => {
+            execute_update_property(ctx, rule, &config, payload)
+        }
+        AutomationActionKind::OrchaJob => {
+            execute_orcha_job(ctx, rule, action.id, queue_id, &config, payload)
+        }
+        AutomationActionKind::HttpRequest | AutomationActionKind::SendEmail => Err(
+            "action requires the worker executor and cannot run in-module; keep the rule in DryRun"
+                .to_string(),
+        ),
+    }
+}
+
+fn execute_create_page(
+    ctx: &ReducerContext,
+    rule: &AutomationRule,
+    config: &Value,
+    payload: &Value,
+) -> Result<Value, String> {
+    let parent_id = json_u64(config.get("parent_id"));
+    let title_template = config
+        .get("title_template")
+        .and_then(Value::as_str)
+        .unwrap_or("Automation page");
+    let title = render_template(title_template, payload).trim().to_string();
+    if title.is_empty() {
+        return Err("rendered title is empty".to_string());
+    }
+    if let Some(pid) = parent_id {
+        let parent = ctx
+            .db
+            .page()
+            .id()
+            .find(pid)
+            .ok_or(format!("parent page {pid} not found"))?;
+        if parent.deleted_at.is_some() {
+            return Err(format!("parent page {pid} is deleted"));
+        }
+        if !can_write_page(ctx, pid, rule.run_as) {
+            return Err(format!(
+                "run_as principal lacks write access on parent page {pid}"
+            ));
+        }
+    }
+    let page_id = create_component_tree_page_inner(
+        ctx,
+        parent_id,
+        PageType::Doc,
+        title.clone(),
+        ActorType::Agent(format!("automation:{}", rule.id)),
+    )?;
+    Ok(json!({ "page_id": page_id, "title": title }))
+}
+
+fn execute_update_property(
+    ctx: &ReducerContext,
+    rule: &AutomationRule,
+    config: &Value,
+    payload: &Value,
+) -> Result<Value, String> {
+    let property_definition_id = json_u64(config.get("property_definition_id"))
+        .ok_or("action config.property_definition_id is required")?;
+    // Target page: explicit config.page_id, else the payload field named by
+    // config.page_id_field (default "page_id" — the common event-trigger case).
+    let page_id = match json_u64(config.get("page_id")) {
+        Some(id) => id,
+        None => {
+            let field = config
+                .get("page_id_field")
+                .and_then(Value::as_str)
+                .unwrap_or("page_id");
+            json_u64(payload.get(field)).ok_or(format!(
+                "trigger payload has no usable '{field}' field to select a target page"
+            ))?
+        }
+    };
+    ctx.db
+        .page()
+        .id()
+        .find(page_id)
+        .ok_or(format!("page {page_id} not found"))?;
+    if !can_write_page(ctx, page_id, rule.run_as) {
+        return Err(format!(
+            "run_as principal lacks write access on page {page_id}"
+        ));
+    }
+    let def = ctx
+        .db
+        .property_definition()
+        .id()
+        .find(property_definition_id)
+        .ok_or(format!(
+            "property definition {property_definition_id} not found"
+        ))?;
+    let raw = config
+        .get("value")
+        .ok_or("action config.value is required")?;
+    let value = coerce_property_value(&def.property_type, raw)?;
+    set_property_value_inner(
+        ctx,
+        page_id,
+        property_definition_id,
+        value,
+        ActorType::Agent(format!("automation:{}", rule.id)),
+    )?;
+    Ok(json!({
+        "page_id": page_id,
+        "property_definition_id": property_definition_id,
+    }))
+}
+
+fn execute_orcha_job(
+    ctx: &ReducerContext,
+    rule: &AutomationRule,
+    action_id: u64,
+    queue_id: u64,
+    config: &Value,
+    payload: &Value,
+) -> Result<Value, String> {
+    let prompt_template = config
+        .get("prompt_template")
+        .and_then(Value::as_str)
+        .ok_or("action config.prompt_template is required")?;
+    let prompt = render_template(prompt_template, payload).trim().to_string();
+    if prompt.is_empty() {
+        return Err("rendered prompt is empty".to_string());
+    }
+    let page_id = config
+        .get("page_id_field")
+        .and_then(Value::as_str)
+        .and_then(|f| json_u64(payload.get(f)))
+        .or_else(|| json_u64(payload.get("page_id")));
+    let ai_user_id = json_u64(config.get("ai_user_id"));
+    if let Some(id) = ai_user_id {
+        ctx.db
+            .ai_user_config()
+            .id()
+            .find(id)
+            .ok_or(format!("AI user {id} not found"))?;
+        if ai_user_at_hard_cap(ctx, id) {
+            return Err(format!("AI user {id} is at its monthly token cap"));
+        }
+    }
+    let tier = config
+        .get("tier")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    // Same single-task graph the worker's `delegate` tool creates; the nonce
+    // lets observers read back exactly this job.
+    let nonce = format!("automation-q{queue_id}-a{action_id}");
+    let task_graph = json!([{
+        "description": prompt,
+        "task_type": "orchestrate",
+        "depends_on": [],
+        "required_capabilities": ["orchestrate"],
+    }]);
+    create_job(
+        ctx,
+        rule.run_as.to_hex().to_string(),
+        prompt,
+        page_id,
+        ai_user_id,
+        tier,
+        nonce.clone(),
+        None,
+        task_graph.to_string(),
+    )?;
+    Ok(json!({ "nonce": nonce, "page_id": page_id }))
+}
+
+/// Coerce a JSON action-config value into the typed `PropertyValue` matching
+/// the target column. Computed columns (Ai) cannot be set by automations.
+fn coerce_property_value(
+    property_type: &PropertyType,
+    raw: &Value,
+) -> Result<PropertyValue, String> {
+    fn as_string(raw: &Value) -> Option<String> {
+        raw.as_str().map(str::to_string)
+    }
+    fn as_string_vec(raw: &Value) -> Option<Vec<String>> {
+        raw.as_array()?
+            .iter()
+            .map(|v| v.as_str().map(str::to_string))
+            .collect()
+    }
+    fn as_u64_vec(raw: &Value) -> Option<Vec<u64>> {
+        raw.as_array()?.iter().map(|v| json_u64(Some(v))).collect()
+    }
+    match property_type {
+        PropertyType::Text => as_string(raw)
+            .map(PropertyValue::Text)
+            .ok_or("value must be a string for a Text property".to_string()),
+        PropertyType::Url => as_string(raw)
+            .map(PropertyValue::Url)
+            .ok_or("value must be a string for a Url property".to_string()),
+        PropertyType::Select => as_string(raw)
+            .map(PropertyValue::Select)
+            .ok_or("value must be a string for a Select property".to_string()),
+        PropertyType::Number => raw
+            .as_f64()
+            .map(PropertyValue::Number)
+            .ok_or("value must be a number for a Number property".to_string()),
+        PropertyType::Date => json_u64(Some(raw))
+            .map(PropertyValue::Date)
+            .ok_or("value must be a unix-ms number for a Date property".to_string()),
+        PropertyType::Checkbox => raw
+            .as_bool()
+            .map(PropertyValue::Checkbox)
+            .ok_or("value must be a boolean for a Checkbox property".to_string()),
+        PropertyType::MultiSelect => as_string_vec(raw)
+            .map(PropertyValue::MultiSelect)
+            .ok_or("value must be an array of strings for a MultiSelect property".to_string()),
+        PropertyType::Person => as_string_vec(raw)
+            .map(PropertyValue::Person)
+            .ok_or("value must be an array of identity strings for a Person property".to_string()),
+        PropertyType::Relation => as_u64_vec(raw)
+            .map(PropertyValue::Relation)
+            .ok_or("value must be an array of page ids for a Relation property".to_string()),
+        _ => Err("computed property types cannot be set by automations".to_string()),
+    }
+}
+
+/// Replace `{{field}}` tokens with the matching top-level trigger-payload
+/// scalar; unknown fields render as empty. Unterminated tokens pass through.
+fn render_template(template: &str, payload: &Value) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(start) = rest.find("{{") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        match after.find("}}") {
+            Some(end) => {
+                let key = after[..end].trim();
+                if let Some(v) = payload.get(key) {
+                    out.push_str(&json_scalar_as_string(v));
+                }
+                rest = &after[end + 2..];
+            }
+            None => {
+                out.push_str(&rest[start..]);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn action_kind_is_in_module(kind: &AutomationActionKind) -> bool {
+    matches!(
+        kind,
+        AutomationActionKind::CreatePage
+            | AutomationActionKind::UpdateProperty
+            | AutomationActionKind::OrchaJob
+    )
+}
+
+fn sender_is_ai_user(ctx: &ReducerContext) -> bool {
+    ctx.db
+        .ai_user_config()
+        .identity()
+        .find(ctx.sender())
+        .is_some()
+}
+
+/// Any structural edit to a Live rule demotes it to DryRun — a changed graph
+/// needs fresh human approval via `set_automation_mode`.
+fn demote_live_rule_on_edit(ctx: &ReducerContext, automation_id: u64) {
+    if let Some(rule) = ctx.db.automation_rule().id().find(automation_id) {
+        if rule.mode == AutomationMode::Live {
+            ctx.db.automation_rule().id().update(AutomationRule {
+                mode: AutomationMode::DryRun,
+                updated_at: ctx.timestamp,
+                ..rule
+            });
+        }
+    }
 }
 
 fn insert_run_log(
@@ -1496,5 +1870,69 @@ fn action_kind_name(kind: &AutomationActionKind) -> &'static str {
         AutomationActionKind::CreatePage => "CreatePage",
         AutomationActionKind::UpdateProperty => "UpdateProperty",
         AutomationActionKind::OrchaJob => "OrchaJob",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_template_substitutes_payload_fields() {
+        let payload = json!({"page_id": 42, "title": "Dishes", "flag": true});
+        assert_eq!(
+            render_template("Log: {{title}} ({{page_id}})", &payload),
+            "Log: Dishes (42)"
+        );
+        assert_eq!(render_template("{{ flag }}", &payload), "true");
+        // Unknown fields render empty; unterminated tokens pass through.
+        assert_eq!(render_template("x{{missing}}y", &payload), "xy");
+        assert_eq!(render_template("x{{oops", &payload), "x{{oops");
+        assert_eq!(render_template("plain", &payload), "plain");
+    }
+
+    #[test]
+    fn coerce_property_value_maps_json_to_typed_values() {
+        assert_eq!(
+            coerce_property_value(&PropertyType::Text, &json!("hi")).unwrap(),
+            PropertyValue::Text("hi".to_string())
+        );
+        assert_eq!(
+            coerce_property_value(&PropertyType::Number, &json!(2.5)).unwrap(),
+            PropertyValue::Number(2.5)
+        );
+        assert_eq!(
+            coerce_property_value(&PropertyType::Date, &json!(1770000000000u64)).unwrap(),
+            PropertyValue::Date(1770000000000)
+        );
+        assert_eq!(
+            coerce_property_value(&PropertyType::Checkbox, &json!(true)).unwrap(),
+            PropertyValue::Checkbox(true)
+        );
+        assert_eq!(
+            coerce_property_value(&PropertyType::MultiSelect, &json!(["a", "b"])).unwrap(),
+            PropertyValue::MultiSelect(vec!["a".to_string(), "b".to_string()])
+        );
+        assert_eq!(
+            coerce_property_value(&PropertyType::Relation, &json!([1, "2"])).unwrap(),
+            PropertyValue::Relation(vec![1, 2])
+        );
+        assert!(coerce_property_value(&PropertyType::Number, &json!("nope")).is_err());
+        assert!(coerce_property_value(&PropertyType::Ai, &json!("x")).is_err());
+    }
+
+    #[test]
+    fn cron_matches_basic_expressions() {
+        // 2026-07-13 is a Monday; 13:30 UTC.
+        let ts = Timestamp::from_micros_since_unix_epoch(1_784_122_200_000_000);
+        let dt = chrono::DateTime::<Utc>::from_timestamp_micros(ts.to_micros_since_unix_epoch())
+            .unwrap();
+        // Pin the fixture: minute/hour derived from the timestamp itself.
+        let expr_exact = format!("{} {} * * *", dt.minute(), dt.hour());
+        assert!(cron_matches(&expr_exact, ts).unwrap());
+        assert!(!cron_matches("0 0 * * *", ts).unwrap() || (dt.minute() == 0 && dt.hour() == 0));
+        assert!(cron_matches("* * * * *", ts).unwrap());
+        assert!(parse_cron_fields("bad expr").is_err());
+        assert!(parse_cron_fields("0 9 * * 1").is_ok());
     }
 }

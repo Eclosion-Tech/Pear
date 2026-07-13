@@ -147,7 +147,7 @@ pub(crate) fn next_attachment_id(ctx: &ReducerContext) -> u64 {
 }
 
 /// When creating a child of a restricted page, copy access rules so the subtree stays private.
-fn copy_page_access_rules_from_parent(ctx: &ReducerContext, parent_id: u64, new_page_id: u64) {
+pub(crate) fn copy_page_access_rules_from_parent(ctx: &ReducerContext, parent_id: u64, new_page_id: u64) {
     if !page_has_any_rule(ctx, parent_id) {
         return;
     }
@@ -200,7 +200,8 @@ pub fn create_page(
         require_page_write(ctx, pid)?;
     }
     if page_type == PageType::Doc {
-        return create_component_tree_page_inner(ctx, parent_id, page_type, title);
+        return create_component_tree_page_inner(ctx, parent_id, page_type, title, ActorType::Human)
+            .map(|_| ());
     }
 
     let sort_order = next_sort_order(ctx, parent_id);
@@ -232,13 +233,15 @@ pub fn create_page(
     Ok(())
 }
 
-/// Shared body for `create_component_tree_page` and `create_page(Doc)`.
-fn create_component_tree_page_inner(
+/// Shared body for `create_component_tree_page`, `create_page(Doc)`, and the
+/// live automation CreatePage action. Returns the new page's id.
+pub(crate) fn create_component_tree_page_inner(
     ctx: &ReducerContext,
     parent_id: Option<u64>,
     page_type: PageType,
     title: String,
-) -> Result<(), String> {
+    created_by: ActorType,
+) -> Result<u64, String> {
     let sort_order = next_sort_order(ctx, parent_id);
     let page = ctx.db.page().insert(Page {
         id: next_page_id(ctx),
@@ -248,7 +251,7 @@ fn create_component_tree_page_inner(
         title,
         icon: None,
         embedding: None,
-        created_by: ActorType::Human,
+        created_by,
         created_at: ctx.timestamp,
         updated_at: ctx.timestamp,
         deleted_at: None,
@@ -263,7 +266,7 @@ fn create_component_tree_page_inner(
         copy_page_access_rules_from_parent(ctx, pid, page.id);
     }
     enqueue_page_created(ctx, page.id);
-    Ok(())
+    Ok(page.id)
 }
 
 /// Root `Container` + one empty `RichText` — fresh doc is immediately editable.
@@ -313,7 +316,7 @@ pub fn create_component_tree_page(
     if let Some(pid) = parent_id {
         require_page_write(ctx, pid)?;
     }
-    create_component_tree_page_inner(ctx, parent_id, page_type, title)
+    create_component_tree_page_inner(ctx, parent_id, page_type, title, ActorType::Human).map(|_| ())
 }
 
 /// Moves a page to a new parent and/or position.
