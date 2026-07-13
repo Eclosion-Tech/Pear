@@ -75,6 +75,15 @@ importers:
         specifier: ^3.2.4
         version: 3.2.4(@types/debug@4.1.12)(@types/node@22.19.15)(happy-dom@20.9.0)(jiti@1.21.7)(tsx@4.21.0)(yaml@2.9.0)
 
+  packages/snapshot-core:
+    devDependencies:
+      '@types/node':
+        specifier: ^20
+        version: 20.19.37
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
   web:
     dependencies:
       '@aws-sdk/client-s3':
@@ -104,6 +113,9 @@ importers:
       '@eclosion-tech/pulp':
         specifier: workspace:*
         version: link:../packages/pulp
+      '@eclosion-tech/snapshot-core':
+        specifier: workspace:*
+        version: link:../packages/snapshot-core
       '@mantine/core':
         specifier: ^8.3.16
         version: 8.3.16(@mantine/hooks@8.3.16(react@19.2.3))(@types/react@19.2.14)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)

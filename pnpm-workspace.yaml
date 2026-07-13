@@ -3,3 +3,4 @@ packages:
   - desktop
   - worker
   - packages/pulp
+  - packages/snapshot-core

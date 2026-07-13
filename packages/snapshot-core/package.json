@@ -1,0 +1,14 @@
+{
+  "name": "@eclosion-tech/snapshot-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pear portable snapshot formats (pear-snapshot-v1/v2): value encoding, canonical table policy, snapshot building, and chunking.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "typescript": "^5"
+  }
+}

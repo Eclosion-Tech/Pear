@@ -10,12 +10,78 @@ import {
   validateResolvedSpacetimeUri,
 } from "@/src/lib/workspaceConnections";
 import {
-  buildPearSnapshotV1,
+  PEAR_SNAPSHOT_FORMAT_V2,
+  buildPearSnapshotV2,
+  chunkSnapshotV2,
   downloadPearSnapshotJson,
-  parsePearSnapshotV1Json,
+  parsePearSnapshotJson,
+  type PearSnapshotV2,
 } from "@/src/lib/pearExport";
 import { clearIdbCache } from "@/src/lib/spacetime";
-import { reducers } from "@/src/module_bindings";
+import { reducers, tables } from "@/src/module_bindings";
+
+/**
+ * Call signatures of the v2 import reducers (single named-args object, like the
+ * generated `conn.reducers.*` accessors).
+ */
+type PearImportV2Reducers = {
+  importV2Begin: (args: { headerJson: string }) => Promise<void>;
+  importV2Chunk: (args: { seq: number; tableName: string; rowsJson: string }) => Promise<void>;
+  importV2Commit: (args: { manifestJson: string }) => Promise<void>;
+  importV2Abort: () => Promise<void>;
+};
+
+function getImportV2Reducers(conn: unknown): PearImportV2Reducers {
+  // TODO(bindings-regen): the import_v2_* reducers are being added to the Rust
+  // module concurrently and the generated bindings don't include them yet, so
+  // we go through the connection's untyped reducers view. Once `spacetime
+  // generate` runs against the new module, replace this cast with the typed
+  // `reducers.importV2Begin` etc. accessors (and `useReducer`, mirroring v1).
+  const r = (conn as { reducers?: Record<string, unknown> }).reducers as
+    | Partial<PearImportV2Reducers>
+    | undefined;
+  if (
+    !r ||
+    typeof r.importV2Begin !== "function" ||
+    typeof r.importV2Chunk !== "function" ||
+    typeof r.importV2Commit !== "function" ||
+    typeof r.importV2Abort !== "function"
+  ) {
+    throw new Error(
+      "This workspace's module does not support pear-snapshot-v2 import (import_v2_* reducers missing). Update the module and try again."
+    );
+  }
+  return r as PearImportV2Reducers;
+}
+
+/** Best-effort: newest module version recorded in the public migration_state table. */
+function readModuleVersion(db: unknown): string | undefined {
+  try {
+    const table = (db as Record<string, { iter?: () => Iterable<unknown> } | undefined>)[
+      "migration_state"
+    ];
+    if (!table || typeof table.iter !== "function") return undefined;
+    let best: string | undefined;
+    let bestAt = -1n;
+    for (const row of table.iter()) {
+      const r = row as {
+        moduleVersion?: unknown;
+        completedAt?: { microsSinceUnixEpoch?: unknown };
+      };
+      const at =
+        typeof r?.completedAt?.microsSinceUnixEpoch === "bigint"
+          ? r.completedAt.microsSinceUnixEpoch
+          : 0n;
+      if (typeof r?.moduleVersion === "string" && at >= bestAt) {
+        best = r.moduleVersion;
+        bestAt = at;
+      }
+    }
+    return best;
+  } catch {
+    return undefined;
+  }
+}
 
 export function WorkspaceConnectionsPanel() {
   const {
@@ -35,6 +101,9 @@ export function WorkspaceConnectionsPanel() {
   const [dbName, setDbName] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(
+    null
+  );
   const [addUriError, setAddUriError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -70,17 +139,48 @@ export function WorkspaceConnectionsPanel() {
     setBusy(true);
     setMsg(null);
     try {
-      const snap = buildPearSnapshotV1(conn, {
+      const snap = buildPearSnapshotV2(conn.db, {
         wsUri: resolveWorkspaceWsUri(activeWorkspace.wsUri),
         dbName: resolveWorkspaceDbName(activeWorkspace.dbName),
+        moduleVersion: readModuleVersion(conn.db),
+        tablesRegistry: tables,
       });
-      const safe = activeWorkspace.name.replace(/[^\w\-]+/g, "_").slice(0, 40) || "workspace";
-      downloadPearSnapshotJson(snap, `pear-${safe}-${snap.exportedAt.slice(0, 10)}.json`);
+      downloadPearSnapshotJson(snap, `pear-snapshot-${snap.exportedAt.slice(0, 10)}.json`);
       setMsg("Export downloaded.");
     } catch (e) {
       setMsg(e instanceof Error ? e.message : `${e}`);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleImportV2(snapshot: PearSnapshotV2) {
+    const conn = getConnection();
+    if (!conn) throw new Error("Not connected.");
+    const importV2 = getImportV2Reducers(conn);
+    const { header, chunks, manifest } = chunkSnapshotV2(snapshot);
+
+    setImportProgress({ done: 0, total: chunks.length });
+    try {
+      await importV2.importV2Begin({ headerJson: JSON.stringify(header) });
+      for (const chunk of chunks) {
+        await importV2.importV2Chunk({
+          seq: chunk.seq,
+          tableName: chunk.tableName,
+          rowsJson: chunk.rowsJson,
+        });
+        setImportProgress({ done: chunk.seq, total: chunks.length });
+      }
+      await importV2.importV2Commit({ manifestJson: JSON.stringify(manifest) });
+    } catch (e) {
+      try {
+        await importV2.importV2Abort();
+      } catch {
+        // best-effort abort; surface the original error
+      }
+      throw e;
+    } finally {
+      setImportProgress(null);
     }
   }
 
@@ -90,8 +190,12 @@ export function WorkspaceConnectionsPanel() {
     setMsg(null);
     try {
       const text = await f.text();
-      parsePearSnapshotV1Json(text);
-      await importSnapshot({ snapshotJson: text });
+      const parsed = parsePearSnapshotJson(text);
+      if (parsed.format === PEAR_SNAPSHOT_FORMAT_V2) {
+        await handleImportV2(parsed.snapshot);
+      } else {
+        await importSnapshot({ snapshotJson: text });
+      }
       setMsg("Import successful. Data will appear momentarily.");
     } catch (e) {
       setMsg(e instanceof Error ? e.message : `${e}`);
@@ -278,8 +382,9 @@ export function WorkspaceConnectionsPanel() {
       <div className="space-y-3">
         <p className="text-xs font-medium text-neutral-600 dark:text-neutral-400">Backup & restore</p>
         <p className="text-neutral-600 dark:text-neutral-400 text-sm">
-          Export and import use the <code className="text-xs bg-neutral-100 dark:bg-neutral-800 px-1 rounded">pear-snapshot-v1</code> JSON format (public tables). Import only works on an
-          empty database (no pages). AI users get stub server configs (re-enter API keys after import).
+          Export uses the <code className="text-xs bg-neutral-100 dark:bg-neutral-800 px-1 rounded">pear-snapshot-v2</code> JSON format and now includes all workspace tables. Import accepts
+          v1 and v2 files and only works on an empty database (no pages). AI users get stub server
+          configs (re-enter API keys after import).
         </p>
         <div className="flex flex-wrap gap-2 items-center">
           <button
@@ -300,6 +405,11 @@ export function WorkspaceConnectionsPanel() {
             Import snapshot…
           </button>
         </div>
+        {importProgress && (
+          <p className="text-sm text-neutral-600 dark:text-neutral-400">
+            Importing… chunk {importProgress.done} of {importProgress.total}
+          </p>
+        )}
         {msg && <p className="text-sm text-neutral-600 dark:text-neutral-400">{msg}</p>}
       </div>
 
