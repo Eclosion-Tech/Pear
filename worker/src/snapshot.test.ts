@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   RLS_SQL_TABLES,
   SUBSCRIPTION_TABLES,
+  assertSchemaCoverage,
   assertSnapshotCountsMatch,
   parseSqlJson,
   reencodeSqlTableRows,
@@ -338,4 +339,27 @@ test("assertSnapshotCountsMatch throws loudly on any mismatch", () => {
   const missing = allCounts(3);
   delete missing.user;
   assert.throws(() => assertSnapshotCountsMatch(missing, allCounts(3)), /user: snapshot=missing/);
+});
+
+// ── assertSchemaCoverage (runtime drift backstop) ────────────────────────────
+
+test("schema coverage: policy-covered public tables + any private tables pass", () => {
+  const schemaTables = [
+    ...SNAPSHOT_TABLES_V2.map((name) => ({ name, table_access: { Public: [] } })),
+    { name: "id_counter", table_access: { Public: [] } }, // excluded-with-reason
+    { name: "bridge_device", table_access: { Private: [] } },
+    { name: "some_brand_new_private_table", table_access: { Private: [] } },
+  ];
+  assert.doesNotThrow(() => assertSchemaCoverage(schemaTables));
+});
+
+test("schema coverage: unknown PUBLIC table fails naming the offender", () => {
+  const schemaTables = [
+    ...SNAPSHOT_TABLES_V2.map((name) => ({ name, table_access: { Public: [] } })),
+    { name: "shiny_new_feature_table", table_access: { Public: [] } },
+  ];
+  assert.throws(
+    () => assertSchemaCoverage(schemaTables),
+    /shiny_new_feature_table.*snapshot_tables_v2\.json/s,
+  );
 });

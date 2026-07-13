@@ -24,6 +24,7 @@ import {
   buildPearSnapshotV2,
   chunkSnapshotV2,
   SNAPSHOT_TABLES_V2,
+  SNAPSHOT_TABLE_POLICY_V2,
   type ChunkedPearSnapshotV2,
   type PearSnapshotV2,
 } from "../../packages/snapshot-core/src/index.js";
@@ -503,6 +504,55 @@ export type ServerSnapshotV2 = ChunkedPearSnapshotV2 & {
  * Build a complete, count-verified pear-snapshot-v2 of one workspace database
  * using the admin token. See module docs for the subscription-vs-/sql split.
  */
+/**
+ * Runtime drift backstop: every PUBLIC table in the live database schema must
+ * be known to the snapshot policy (include or exclude). Catches a module that
+ * shipped a new table without the policy/tests being updated — e.g. a hotfix
+ * published without regenerating bindings or running CI — on the next backup
+ * run instead of silently producing incomplete snapshots forever.
+ *
+ * The schema endpoint lists tables only (SpacetimeDB `#[view]`s such as
+ * api_endpoint_key_lookup do not appear), so no view allowance is needed.
+ */
+export function assertSchemaCoverage(
+  schemaTables: Array<{ name: string; table_access: Record<string, unknown> }>,
+): void {
+  const known = new Set<string>([
+    ...SNAPSHOT_TABLE_POLICY_V2.include,
+    ...Object.keys(SNAPSHOT_TABLE_POLICY_V2.exclude),
+  ]);
+  const unknown = schemaTables
+    .filter((t) => "Public" in t.table_access && !known.has(t.name))
+    .map((t) => t.name)
+    .sort();
+  if (unknown.length > 0) {
+    throw new Error(
+      `snapshot policy does not cover public table(s) in the live schema: ` +
+        `${unknown.join(", ")} — add them to snapshot_tables_v2.json ` +
+        `(include + importer, or exclude with a reason) before backups can proceed`,
+    );
+  }
+}
+
+async function fetchSchemaTables(
+  opts: SqlHttpOptions,
+): Promise<Array<{ name: string; table_access: Record<string, unknown> }>> {
+  const res = await fetch(
+    `${opts.httpBaseUrl}/v1/database/${opts.dbName}/schema?version=9`,
+    { headers: { Authorization: `Bearer ${opts.adminToken}` } },
+  );
+  if (!res.ok) {
+    throw new Error(`schema fetch failed: ${res.status} ${res.statusText}`);
+  }
+  const schema = (await res.json()) as {
+    tables?: Array<{ name: string; table_access: Record<string, unknown> }>;
+  };
+  if (!Array.isArray(schema.tables)) {
+    throw new Error("schema fetch returned no tables array");
+  }
+  return schema.tables;
+}
+
 export async function buildServerSnapshotV2(
   opts: BuildServerSnapshotV2Options,
 ): Promise<ServerSnapshotV2> {
@@ -511,6 +561,10 @@ export async function buildServerSnapshotV2(
     dbName: opts.dbName,
     adminToken: opts.adminToken,
   };
+
+  // Fail before any subscription work if the live schema has public tables
+  // the policy doesn't know about.
+  assertSchemaCoverage(await fetchSchemaTables(sqlOpts));
 
   const conn = await connectOnce(opts.uri, opts.dbName, opts.adminToken);
   let snapshot: PearSnapshotV2;
