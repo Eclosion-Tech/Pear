@@ -8,6 +8,8 @@ import {
   useAiUserProfiles,
   useAiUserRoutines,
   useCreateAiUser,
+  useCreateAiUserRoutine,
+  useCreateAiUserRoutineCron,
   useCreateMemoryConsolidationRoutine,
   useCreateSensorTriageRoutine,
   useDeleteAiUser,
@@ -859,10 +861,28 @@ function formatInterval(secs: number): string {
   return `${secs}s`;
 }
 
+/** Schedule summary: "cron 30 8 * * * · America/New_York" or "every 1d". */
+function routineSchedule(r: {
+  scheduleKind?: { tag: string };
+  cronExpression?: unknown;
+  timezone?: unknown;
+  intervalSecs: bigint;
+}): string {
+  if (r.scheduleKind?.tag === "Cron") {
+    const expr =
+      optionStringFromRow(r.cronExpression as Parameters<typeof optionStringFromRow>[0]) || "?";
+    const tz = optionStringFromRow(r.timezone as Parameters<typeof optionStringFromRow>[0]);
+    return `cron ${expr} · ${tz || "UTC"}`;
+  }
+  return `every ${formatInterval(Number(r.intervalSecs))}`;
+}
+
 /**
  * Scheduled routines for one AI user: list existing routines (pause/resume,
- * delete) and add the two built-in ones (sensor triage, weekly consolidation).
- * Creator/admin-gated server-side; the AI user cannot author its own routines.
+ * delete), add the two built-in ones (sensor triage, weekly consolidation),
+ * or author a custom routine — interval or cron (exact local times).
+ * Authority is enforced server-side (creator/admin, or the AI user itself
+ * within its self-authorship cap).
  */
 function RoutinesSection({
   aiUserId,
@@ -874,10 +894,52 @@ function RoutinesSection({
   const allRoutines = useAiUserRoutines();
   const createTriage = useCreateSensorTriageRoutine();
   const createConsolidation = useCreateMemoryConsolidationRoutine();
+  const createRoutine = useCreateAiUserRoutine();
+  const createRoutineCron = useCreateAiUserRoutineCron();
   const setEnabled = useSetAiUserRoutineEnabled();
   const deleteRoutine = useDeleteAiUserRoutine();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [customOpen, setCustomOpen] = useState(false);
+  const [customPrompt, setCustomPrompt] = useState("");
+  const [customMode, setCustomMode] = useState<"cron" | "interval">("cron");
+  const [customCron, setCustomCron] = useState("30 8 * * *");
+  const [customTz, setCustomTz] = useState(() => {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    } catch {
+      return "UTC";
+    }
+  });
+  const [customIntervalSecs, setCustomIntervalSecs] = useState("86400");
+
+  const submitCustom = async () => {
+    const prompt = customPrompt.trim();
+    if (!prompt) {
+      setErr("Routine prompt is required");
+      return;
+    }
+    await run(async () => {
+      if (customMode === "cron") {
+        await createRoutineCron({
+          aiUserId,
+          prompt,
+          cronExpression: customCron.trim(),
+          timezone: customTz.trim(),
+          conversationId: undefined,
+        });
+      } else {
+        await createRoutine({
+          aiUserId,
+          prompt,
+          intervalSecs: BigInt(Math.max(300, Number(customIntervalSecs) || 0)),
+          conversationId: undefined,
+        });
+      }
+      setCustomPrompt("");
+      setCustomOpen(false);
+    });
+  };
 
   const routines = allRoutines
     .filter((r) => r.aiUserId === aiUserId)
@@ -921,7 +983,7 @@ function RoutinesSection({
                     {routineLabel(r.prompt)}
                   </div>
                   <div className="text-neutral-400 dark:text-neutral-500">
-                    every {formatInterval(Number(r.intervalSecs))}
+                    {routineSchedule(r)}
                     {last ? ` · last: ${last}` : ""}
                     {!r.enabled ? " · paused" : ""}
                   </div>
@@ -986,7 +1048,100 @@ function RoutinesSection({
             + Weekly memory consolidation
           </button>
         )}
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => setCustomOpen((o) => !o)}
+          className="rounded-md border border-neutral-200 dark:border-neutral-700 px-2 py-1 text-xs text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors disabled:opacity-50"
+        >
+          {customOpen ? "− Custom routine" : "+ Custom routine"}
+        </button>
       </div>
+
+      {customOpen && (
+        <div className="mt-2 rounded-md border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900/40 p-3 space-y-2">
+          <textarea
+            value={customPrompt}
+            onChange={(e) => setCustomPrompt(e.target.value)}
+            disabled={busy}
+            rows={4}
+            placeholder="Standing instruction for this routine (e.g. paste a Daily OS prompt)"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 px-2.5 py-1.5 text-xs text-neutral-900 dark:text-white disabled:opacity-50 font-mono"
+          />
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="flex rounded-md border border-neutral-200 dark:border-neutral-700 overflow-hidden">
+              {(["cron", "interval"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setCustomMode(m)}
+                  className={`px-2 py-1 text-xs transition-colors disabled:opacity-50 ${
+                    customMode === m
+                      ? "bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900"
+                      : "text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                  }`}
+                >
+                  {m === "cron" ? "At times (cron)" : "Every interval"}
+                </button>
+              ))}
+            </div>
+            {customMode === "cron" ? (
+              <>
+                <label className="block">
+                  <span className="block text-[10px] text-neutral-500 dark:text-neutral-400">
+                    min hour day month weekday
+                  </span>
+                  <input
+                    type="text"
+                    value={customCron}
+                    onChange={(e) => setCustomCron(e.target.value)}
+                    disabled={busy}
+                    placeholder="30 8 * * *"
+                    className="w-32 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 px-2 py-1 text-xs font-mono text-neutral-900 dark:text-white disabled:opacity-50"
+                  />
+                </label>
+                <label className="block">
+                  <span className="block text-[10px] text-neutral-500 dark:text-neutral-400">
+                    IANA timezone
+                  </span>
+                  <input
+                    type="text"
+                    value={customTz}
+                    onChange={(e) => setCustomTz(e.target.value)}
+                    disabled={busy}
+                    placeholder="America/New_York"
+                    className="w-44 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 px-2 py-1 text-xs font-mono text-neutral-900 dark:text-white disabled:opacity-50"
+                  />
+                </label>
+              </>
+            ) : (
+              <label className="block">
+                <span className="block text-[10px] text-neutral-500 dark:text-neutral-400">
+                  interval (seconds, min 300)
+                </span>
+                <input
+                  type="text"
+                  value={customIntervalSecs}
+                  onChange={(e) => setCustomIntervalSecs(e.target.value)}
+                  disabled={busy}
+                  placeholder="86400"
+                  className="w-28 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 px-2 py-1 text-xs font-mono text-neutral-900 dark:text-white disabled:opacity-50"
+                />
+              </label>
+            )}
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void submitCustom()}
+              className="rounded-md bg-neutral-900 dark:bg-neutral-100 px-2.5 py-1 text-xs font-medium text-white dark:text-neutral-900 hover:opacity-90 disabled:opacity-50"
+            >
+              Add routine
+            </button>
+          </div>
+        </div>
+      )}
+
       {err ? (
         <p className="mt-1 text-xs text-red-600 dark:text-red-400" role="alert">
           {err}

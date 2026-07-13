@@ -15,11 +15,14 @@
 
 use std::time::Duration;
 
-use spacetimedb::{reducer, table, Identity, ReducerContext, ScheduleAt, Table, Timestamp};
+use spacetimedb::{
+    reducer, table, Identity, ReducerContext, ScheduleAt, SpacetimeType, Table, Timestamp,
+};
 
 use crate::access_control::helpers::require_creator_or_admin;
 use crate::ai::memory::ai_user_memory;
 use crate::ai::{ai_user_config, AiUserConfig};
+use crate::cron::{cron_matches, minute_bucket, parse_cron_fields, parse_timezone};
 use crate::conversations::{
     conversation, conversation_message, conversation_participant, next_conversation_id,
     next_conversation_message_id, next_conversation_participant_id, Conversation, ConversationKind,
@@ -36,6 +39,20 @@ const MIN_ROUTINE_INTERVAL_SECS: u64 = 300;
 /// self-scheduling loop can't accumulate unbounded standing work. Human
 /// creators and admins are not subject to this cap.
 const MAX_AI_SELF_ROUTINES: usize = 10;
+
+/// Poll cadence for cron routines: the schedule row ticks every minute and
+/// `run_ai_user_routine` fires only when the expression matches (at most once
+/// per matching minute). Mirrors the Automations cron tick.
+const CRON_POLL_SECS: u64 = 60;
+
+/// How a routine decides when to fire: a fixed interval anchored at creation,
+/// or a five-field cron expression evaluated in an IANA timezone (exact
+/// wall-clock times, DST-correct).
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum RoutineScheduleKind {
+    Interval,
+    Cron,
+}
 
 /// Canned prompt for the first routine consumer: structural-sensor triage. The
 /// AI reviews open findings, fixes the trivial ones with receipts, and drafts a
@@ -89,6 +106,18 @@ pub struct AiUserRoutine {
     /// "skipped: token cap" | …) so the UI can show what happened.
     pub last_status: Option<String>,
     pub created_at: Timestamp,
+    // New columns are appended with #[default(...)] — SpacetimeDB AutoMigrate
+    // requires a default on added columns to backfill existing rows.
+    /// Interval (anchored at creation) or Cron (exact wall-clock schedule).
+    #[default(RoutineScheduleKind::Interval)]
+    pub schedule_kind: RoutineScheduleKind,
+    /// Five-field cron expression; `None` for interval routines.
+    #[default(None::<String>)]
+    pub cron_expression: Option<String>,
+    /// IANA timezone for cron evaluation ("America/New_York"). `None`/blank
+    /// means UTC. Must remain last (STDB allows additive changes at the end).
+    #[default(None::<String>)]
+    pub timezone: Option<String>,
 }
 
 /// Authority gate for routine management: the AI user itself (self-authorship),
@@ -122,20 +151,7 @@ pub fn create_ai_user_routine(
         .find(ai_user_id)
         .ok_or("AI user not found")?;
     require_routine_authority(ctx, &ai_user, "create routine")?;
-    if ctx.sender() == ai_user.identity {
-        let self_authored = ctx
-            .db
-            .ai_user_routine()
-            .iter()
-            .filter(|r| r.ai_user_id == ai_user_id && r.created_by == ai_user.identity)
-            .count();
-        if self_authored >= MAX_AI_SELF_ROUTINES {
-            return Err(format!(
-                "AI user already has {MAX_AI_SELF_ROUTINES} self-authored routines; delete one \
-                 first or ask your creator to add more"
-            ));
-        }
-    }
+    enforce_self_authorship_cap(ctx, &ai_user, ai_user_id)?;
 
     let prompt = prompt.trim().to_string();
     if prompt.is_empty() {
@@ -155,7 +171,86 @@ pub fn create_ai_user_routine(
         last_run_at: None,
         last_status: None,
         created_at: ctx.timestamp,
+        schedule_kind: RoutineScheduleKind::Interval,
+        cron_expression: None,
+        timezone: None,
     });
+    Ok(())
+}
+
+/// Create a cron-scheduled routine: fires when `cron_expression` (five-field:
+/// minute hour day month weekday) matches the wall clock in `timezone` (IANA
+/// name, e.g. "America/New_York"; blank = UTC) — at most once per matching
+/// minute. Same authority and self-authorship cap as interval routines. The
+/// underlying schedule row polls every `CRON_POLL_SECS`.
+#[reducer]
+pub fn create_ai_user_routine_cron(
+    ctx: &ReducerContext,
+    ai_user_id: u64,
+    prompt: String,
+    cron_expression: String,
+    timezone: String,
+    conversation_id: Option<u64>,
+) -> Result<(), String> {
+    let ai_user = ctx
+        .db
+        .ai_user_config()
+        .id()
+        .find(ai_user_id)
+        .ok_or("AI user not found")?;
+    require_routine_authority(ctx, &ai_user, "create routine")?;
+    enforce_self_authorship_cap(ctx, &ai_user, ai_user_id)?;
+
+    let prompt = prompt.trim().to_string();
+    if prompt.is_empty() {
+        return Err("Routine prompt must not be empty".to_string());
+    }
+    let expression = cron_expression.trim().to_string();
+    parse_cron_fields(&expression)?;
+    let tz = timezone.trim().to_string();
+    parse_timezone(&tz)?;
+
+    ctx.db.ai_user_routine().insert(AiUserRoutine {
+        scheduled_id: 0,
+        scheduled_at: Duration::from_secs(CRON_POLL_SECS).into(),
+        ai_user_id,
+        prompt,
+        enabled: true,
+        created_by: ctx.sender(),
+        conversation_id,
+        interval_secs: CRON_POLL_SECS,
+        last_run_at: None,
+        last_status: None,
+        created_at: ctx.timestamp,
+        schedule_kind: RoutineScheduleKind::Cron,
+        cron_expression: Some(expression),
+        timezone: if tz.is_empty() { None } else { Some(tz) },
+    });
+    Ok(())
+}
+
+/// Self-authorship cap: an AI user creating routines for itself may hold at
+/// most `MAX_AI_SELF_ROUTINES`. Humans and admins are unaffected.
+fn enforce_self_authorship_cap(
+    ctx: &ReducerContext,
+    ai_user: &AiUserConfig,
+    ai_user_id: u64,
+) -> Result<(), String> {
+    if ctx.sender() != ai_user.identity {
+        return Ok(());
+    }
+    let self_authored = ctx
+        .db
+        .ai_user_routine()
+        .iter()
+        .filter(|r| r.ai_user_id == ai_user_id && r.created_by == ai_user.identity)
+        .count();
+    if self_authored >= MAX_AI_SELF_ROUTINES {
+        return Err(format!(
+            "AI user already has {MAX_AI_SELF_ROUTINES} self-authored routines; delete one \
+             first or ask your creator to add more"
+        ));
+    }
     Ok(())
 }
 
@@ -268,6 +363,27 @@ pub fn run_ai_user_routine(ctx: &ReducerContext, routine: AiUserRoutine) -> Resu
     if !stored.enabled {
         record_routine_run(ctx, stored.scheduled_id, "skipped: disabled");
         return Ok(());
+    }
+
+    // Cron routines poll every `CRON_POLL_SECS`: fire only when the expression
+    // matches the current minute in the routine's timezone, at most once per
+    // matching minute (dedup on last_run_at's minute bucket). Non-matching
+    // polls return quietly so last_run_at/last_status keep reflecting real runs.
+    if stored.schedule_kind == RoutineScheduleKind::Cron {
+        let Some(expr) = stored.cron_expression.as_deref() else {
+            record_routine_run(ctx, stored.scheduled_id, "skipped: cron expression missing");
+            return Ok(());
+        };
+        let tz = stored.timezone.as_deref().unwrap_or("");
+        if !cron_matches(expr, ctx.timestamp, tz).unwrap_or(false) {
+            return Ok(());
+        }
+        if stored
+            .last_run_at
+            .is_some_and(|last| minute_bucket(last) == minute_bucket(ctx.timestamp))
+        {
+            return Ok(());
+        }
     }
 
     let Some(ai_user) = ctx.db.ai_user_config().id().find(stored.ai_user_id) else {

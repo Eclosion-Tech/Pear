@@ -56,6 +56,7 @@ import ConfirmBridgeCommandReducer from "./confirm_bridge_command_reducer";
 import ConfirmExtensionInstallReducer from "./confirm_extension_install_reducer";
 import CreateAiUserReducer from "./create_ai_user_reducer";
 import CreateAiUserRoutineReducer from "./create_ai_user_routine_reducer";
+import CreateAiUserRoutineCronReducer from "./create_ai_user_routine_cron_reducer";
 import CreateApiEndpointReducer from "./create_api_endpoint_reducer";
 import CreateApiEndpointKeyReducer from "./create_api_endpoint_key_reducer";
 import CreateApiFieldMappingReducer from "./create_api_field_mapping_reducer";
@@ -1181,6 +1182,7 @@ const reducersSchema = __reducers(
   __reducerSchema("confirm_extension_install", ConfirmExtensionInstallReducer),
   __reducerSchema("create_ai_user", CreateAiUserReducer),
   __reducerSchema("create_ai_user_routine", CreateAiUserRoutineReducer),
+  __reducerSchema("create_ai_user_routine_cron", CreateAiUserRoutineCronReducer),
   __reducerSchema("create_api_endpoint", CreateApiEndpointReducer),
   __reducerSchema("create_api_endpoint_key", CreateApiEndpointKeyReducer),
   __reducerSchema("create_api_field_mapping", CreateApiFieldMappingReducer),
