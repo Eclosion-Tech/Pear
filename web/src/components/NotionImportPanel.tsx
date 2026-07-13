@@ -10,7 +10,8 @@
  *      then passes the payload to the SpacetimeDB `import_notion` reducer.
  *   4. Import status is shown (running / done / error).
  *
- * Note: The import reducer requires an empty workspace (v1 limitation).
+ * Imports land under a "Notion Import" container page; existing content is
+ * untouched (the reducer offsets all imported ids). Re-import is additive.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -31,15 +32,7 @@ export function NotionImportPanel() {
   const slug = usePearWorkspaceSlug();
   const { identity } = useSpacetimeDB();
 
-  // The import_notion reducer is available after module bindings are regenerated.
-  // Wrap in a try so the panel degrades gracefully if bindings are stale.
-  let importNotion: ((args: { snapshotJson: string }) => Promise<void>) | null = null;
-  try {
-    // eslint-disable-next-line react-hooks/rules-of-hooks, @typescript-eslint/no-explicit-any
-    importNotion = useReducer((reducers as any).importNotion);
-  } catch {
-    // Bindings not yet regenerated — show a notice below
-  }
+  const importNotion = useReducer(reducers.importNotion);
 
   const [status, setStatus] = useState<NotionStatus | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(false);
@@ -114,14 +107,6 @@ export function NotionImportPanel() {
       setMsg("Not connected to workspace.");
       return;
     }
-    if (!importNotion) {
-      setMsg(
-        "The import_notion reducer is not yet available in module bindings. " +
-          "Publish the updated SpacetimeDB module and run `spacetime generate` first."
-      );
-      return;
-    }
-
     setBusy(true);
     setMsg(null);
 
@@ -174,7 +159,7 @@ export function NotionImportPanel() {
 
       <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-4">
         Connect your Notion account to import pages, databases, attachments, and comments into this
-        workspace. Import is one-time and requires an empty workspace (no existing pages).
+        workspace. Everything lands under a &quot;Notion Import&quot; page — existing content is untouched.
       </p>
 
       {loadingStatus && !status ? (
