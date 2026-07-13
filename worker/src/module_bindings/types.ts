@@ -975,6 +975,35 @@ export const ModuleInstallMeta = __t.object("ModuleInstallMeta", {
 });
 export type ModuleInstallMeta = __Infer<typeof ModuleInstallMeta>;
 
+export const NotionImportJob = __t.object("NotionImportJob", {
+  id: __t.u64(),
+  requestedBy: __t.identity(),
+  encryptedTokenB64: __t.string(),
+  sourceName: __t.string(),
+  workspaceSlug: __t.string(),
+  get status() {
+    return NotionImportJobStatus;
+  },
+  stage: __t.string(),
+  pagesDone: __t.u32(),
+  pagesTotal: __t.u32(),
+  error: __t.option(__t.string()),
+  containerPageId: __t.option(__t.u64()),
+  claimedBy: __t.option(__t.string()),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+});
+export type NotionImportJob = __Infer<typeof NotionImportJob>;
+
+// The tagged union or sum type for the algebraic type `NotionImportJobStatus`.
+export const NotionImportJobStatus = __t.enum("NotionImportJobStatus", {
+  Pending: __t.unit(),
+  Running: __t.unit(),
+  Done: __t.unit(),
+  Failed: __t.unit(),
+});
+export type NotionImportJobStatus = __Infer<typeof NotionImportJobStatus>;
+
 export const OrchaAgent = __t.object("OrchaAgent", {
   id: __t.string(),
   capabilities: __t.array(__t.string()),

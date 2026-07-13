@@ -43,6 +43,7 @@ import AddTasksToJobReducer from "./add_tasks_to_job_reducer";
 import AppendPageDocReducer from "./append_page_doc_reducer";
 import AwaitBridgeCommandConfirmationReducer from "./await_bridge_command_confirmation_reducer";
 import CancelExtensionInstallReducer from "./cancel_extension_install_reducer";
+import ClaimNotionImportJobReducer from "./claim_notion_import_job_reducer";
 import ClaimTaskReducer from "./claim_task_reducer";
 import ClearBlockAccessRuleReducer from "./clear_block_access_rule_reducer";
 import ClearMessageFeedbackReducer from "./clear_message_feedback_reducer";
@@ -52,6 +53,7 @@ import CloseBridgeDeviceSessionsReducer from "./close_bridge_device_sessions_red
 import CloseBridgeSessionReducer from "./close_bridge_session_reducer";
 import CloseConversationReducer from "./close_conversation_reducer";
 import CompleteBridgeCommandReducer from "./complete_bridge_command_reducer";
+import CompleteNotionImportJobReducer from "./complete_notion_import_job_reducer";
 import ConfirmBridgeCommandReducer from "./confirm_bridge_command_reducer";
 import ConfirmExtensionInstallReducer from "./confirm_extension_install_reducer";
 import CreateAiUserReducer from "./create_ai_user_reducer";
@@ -69,6 +71,7 @@ import CreateDatabaseSchemaReducer from "./create_database_schema_reducer";
 import CreateJobReducer from "./create_job_reducer";
 import CreateLocalUserReducer from "./create_local_user_reducer";
 import CreateMemoryConsolidationRoutineReducer from "./create_memory_consolidation_routine_reducer";
+import CreateNotionImportJobReducer from "./create_notion_import_job_reducer";
 import CreatePageReducer from "./create_page_reducer";
 import CreateReviewAgentBindingReducer from "./create_review_agent_binding_reducer";
 import CreateSensorTriageRoutineReducer from "./create_sensor_triage_routine_reducer";
@@ -92,6 +95,7 @@ import DisableAiUserMemoryReducer from "./disable_ai_user_memory_reducer";
 import DisableAutomationReducer from "./disable_automation_reducer";
 import EnableAutomationReducer from "./enable_automation_reducer";
 import EnqueueBridgeCommandReducer from "./enqueue_bridge_command_reducer";
+import FailNotionImportJobReducer from "./fail_notion_import_job_reducer";
 import FailTaskReducer from "./fail_task_reducer";
 import FindOrCreateAiDmReducer from "./find_or_create_ai_dm_reducer";
 import FindOrCreateDmReducer from "./find_or_create_dm_reducer";
@@ -211,6 +215,7 @@ import UpdateDatabaseRowReducer from "./update_database_row_reducer";
 import UpdateDatabaseSchemaConfigReducer from "./update_database_schema_config_reducer";
 import UpdateExtensionReducer from "./update_extension_reducer";
 import UpdateMessageReducer from "./update_message_reducer";
+import UpdateNotionImportJobReducer from "./update_notion_import_job_reducer";
 import UpdatePageContentReducer from "./update_page_content_reducer";
 import UpdatePageIconReducer from "./update_page_icon_reducer";
 import UpdatePageTitleReducer from "./update_page_title_reducer";
@@ -265,6 +270,7 @@ import InstalledExtensionRow from "./installed_extension_table";
 import MessageFeedbackRow from "./message_feedback_table";
 import MigrationStateRow from "./migration_state_table";
 import ModuleInstallMetaRow from "./module_install_meta_table";
+import NotionImportJobRow from "./notion_import_job_table";
 import OrchaAgentRow from "./orcha_agent_table";
 import OrchaJobRow from "./orcha_job_table";
 import OrchaSharedContextRow from "./orcha_shared_context_table";
@@ -863,6 +869,17 @@ const tablesSchema = __schema({
       { name: 'module_install_meta_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, ModuleInstallMetaRow),
+  notion_import_job: __table({
+    name: 'notion_import_job',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'notion_import_job_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, NotionImportJobRow),
   orcha_agent: __table({
     name: 'orcha_agent',
     indexes: [
@@ -1169,6 +1186,7 @@ const reducersSchema = __reducers(
   __reducerSchema("append_page_doc", AppendPageDocReducer),
   __reducerSchema("await_bridge_command_confirmation", AwaitBridgeCommandConfirmationReducer),
   __reducerSchema("cancel_extension_install", CancelExtensionInstallReducer),
+  __reducerSchema("claim_notion_import_job", ClaimNotionImportJobReducer),
   __reducerSchema("claim_task", ClaimTaskReducer),
   __reducerSchema("clear_block_access_rule", ClearBlockAccessRuleReducer),
   __reducerSchema("clear_message_feedback", ClearMessageFeedbackReducer),
@@ -1178,6 +1196,7 @@ const reducersSchema = __reducers(
   __reducerSchema("close_bridge_session", CloseBridgeSessionReducer),
   __reducerSchema("close_conversation", CloseConversationReducer),
   __reducerSchema("complete_bridge_command", CompleteBridgeCommandReducer),
+  __reducerSchema("complete_notion_import_job", CompleteNotionImportJobReducer),
   __reducerSchema("confirm_bridge_command", ConfirmBridgeCommandReducer),
   __reducerSchema("confirm_extension_install", ConfirmExtensionInstallReducer),
   __reducerSchema("create_ai_user", CreateAiUserReducer),
@@ -1195,6 +1214,7 @@ const reducersSchema = __reducers(
   __reducerSchema("create_job", CreateJobReducer),
   __reducerSchema("create_local_user", CreateLocalUserReducer),
   __reducerSchema("create_memory_consolidation_routine", CreateMemoryConsolidationRoutineReducer),
+  __reducerSchema("create_notion_import_job", CreateNotionImportJobReducer),
   __reducerSchema("create_page", CreatePageReducer),
   __reducerSchema("create_review_agent_binding", CreateReviewAgentBindingReducer),
   __reducerSchema("create_sensor_triage_routine", CreateSensorTriageRoutineReducer),
@@ -1218,6 +1238,7 @@ const reducersSchema = __reducers(
   __reducerSchema("disable_automation", DisableAutomationReducer),
   __reducerSchema("enable_automation", EnableAutomationReducer),
   __reducerSchema("enqueue_bridge_command", EnqueueBridgeCommandReducer),
+  __reducerSchema("fail_notion_import_job", FailNotionImportJobReducer),
   __reducerSchema("fail_task", FailTaskReducer),
   __reducerSchema("find_or_create_ai_dm", FindOrCreateAiDmReducer),
   __reducerSchema("find_or_create_dm", FindOrCreateDmReducer),
@@ -1337,6 +1358,7 @@ const reducersSchema = __reducers(
   __reducerSchema("update_database_schema_config", UpdateDatabaseSchemaConfigReducer),
   __reducerSchema("update_extension", UpdateExtensionReducer),
   __reducerSchema("update_message", UpdateMessageReducer),
+  __reducerSchema("update_notion_import_job", UpdateNotionImportJobReducer),
   __reducerSchema("update_page_content", UpdatePageContentReducer),
   __reducerSchema("update_page_icon", UpdatePageIconReducer),
   __reducerSchema("update_page_title", UpdatePageTitleReducer),

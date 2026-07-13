@@ -5,7 +5,7 @@
  * worker never exposes S3 URLs to providers).
  */
 
-import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 
 const S3_ENDPOINT = process.env.S3_ENDPOINT;
 const S3_BUCKET = process.env.S3_BUCKET ?? "pear-attachments";
@@ -49,4 +49,20 @@ export async function fetchObjectBase64(objectKey: string): Promise<string> {
   }
   const bytes = await res.Body.transformToByteArray();
   return Buffer.from(bytes).toString("base64");
+}
+
+/** Upload raw bytes to an object key. Used by the Notion import job runner. */
+export async function putObjectBytes(
+  objectKey: string,
+  body: Buffer,
+  contentType: string,
+): Promise<void> {
+  await getS3Client().send(
+    new PutObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: objectKey,
+      Body: body,
+      ContentType: contentType,
+    }),
+  );
 }

@@ -23,6 +23,7 @@ import { AiUserWorker } from "./ai-user-worker.js";
 import { handleAiPrimitiveTask } from "./ai-primitive-task.js";
 import { StructuralSensorsScheduler } from "./structural-sensors.js";
 import { subscribeToAvailableTables } from "./subscriptions.js";
+import { NotionImportJobRunner } from "./notion/import-job-runner.js";
 import type { ConnLike, ToolCallContext } from "./tools.js";
 
 const CAPABILITIES = [
@@ -177,6 +178,8 @@ export class DatabaseWorker {
   private token: string | undefined;
   /** See {@link DatabaseWorkerOptions.externalAiUserDiscovery}. */
   private readonly externalAiUserDiscovery: boolean;
+
+  private notionImportRunner: NotionImportJobRunner | null = null;
 
   constructor(opts: DatabaseWorkerOptions) {
     this.uri = opts.uri;
@@ -451,6 +454,12 @@ export class DatabaseWorker {
       this.checkAndClaim(conn, task);
     });
 
+    // Background Notion imports run on this (admin) connection only — the
+    // job reducers are publisher-gated. No-op if the module predates the
+    // notion_import_job table.
+    this.notionImportRunner = new NotionImportJobRunner(this.dbName, this.agentId);
+    this.notionImportRunner.attach(conn);
+
     // AI-user discovery: (re)spawn per-AI-user workers when a `worker_token`
     // appears, is rotated, or is cleared. Uses `as any` for the table accessor
     // because the AI-user tables are not part of the strongly-typed Orcha set
@@ -506,6 +515,8 @@ export class DatabaseWorker {
       for (const task of conn.db.orcha_task.iter() as Iterable<TaskRow>) {
         this.checkAndClaim(conn, task);
       }
+
+      this.notionImportRunner?.scan(conn);
 
       // Spawn AI-user workers for any rows that already carry a worker_token.
       // Only when self-discovery is the authority; otherwise the external

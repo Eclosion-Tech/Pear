@@ -8,6 +8,7 @@
 //! envelope (Notion's UUID strings) barely overlaps.
 
 mod decode;
+pub(crate) mod notion_jobs;
 pub(crate) mod notion_v1;
 pub(crate) mod pear_v1;
 pub(crate) mod pear_v2;

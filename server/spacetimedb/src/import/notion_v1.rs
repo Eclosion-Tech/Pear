@@ -40,7 +40,29 @@ const FORMAT: &str = "notion-import-v1";
 /// All writes are atomic within this reducer call.
 #[reducer]
 pub fn import_notion(ctx: &ReducerContext, snapshot_json: String) -> Result<(), String> {
-    apply_notion_snapshot(ctx, &snapshot_json)
+    // Guard: authenticated caller (the background-job path is gated on the
+    // module publisher in notion_jobs.rs instead).
+    let me = ctx.sender();
+    let ok = ctx
+        .db
+        .user()
+        .identity()
+        .find(me)
+        .map(|u| u.is_authenticated)
+        .unwrap_or(false);
+    if !ok {
+        return Err("You must be logged in to import from Notion.".to_string());
+    }
+    apply_notion_snapshot(ctx, &snapshot_json).map(|_| ())
+}
+
+/// Job-path entry: same importer, publisher authority already checked by the
+/// caller. Returns the container page id for the job row.
+pub(crate) fn apply_notion_snapshot_for_job(
+    ctx: &ReducerContext,
+    snapshot_json: &str,
+) -> Result<u64, String> {
+    apply_notion_snapshot(ctx, snapshot_json)
 }
 
 /// Per-table id offsets applied to every id in the payload (the transformer
@@ -59,20 +81,7 @@ struct Offsets {
     container: u64,
 }
 
-fn apply_notion_snapshot(ctx: &ReducerContext, snapshot_json: &str) -> Result<(), String> {
-    // Guard: authenticated caller
-    let me = ctx.sender();
-    let ok = ctx
-        .db
-        .user()
-        .identity()
-        .find(me)
-        .map(|u| u.is_authenticated)
-        .unwrap_or(false);
-    if !ok {
-        return Err("You must be logged in to import from Notion.".to_string());
-    }
-
+fn apply_notion_snapshot(ctx: &ReducerContext, snapshot_json: &str) -> Result<u64, String> {
     let root: Value =
         serde_json::from_str(snapshot_json).map_err(|e| format!("JSON parse: {e}"))?;
 
@@ -156,7 +165,7 @@ fn apply_notion_snapshot(ctx: &ReducerContext, snapshot_json: &str) -> Result<()
         ctx.db.id_counter().name().delete(name);
     }
 
-    Ok(())
+    Ok(container)
 }
 
 // ── Table importers ───────────────────────────────────────────────────────────
