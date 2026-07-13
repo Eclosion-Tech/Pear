@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useTable } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
-import { useUpdatePageTitle, useUpdatePageIcon, useDeletePage, useChildPages } from "@/src/hooks/usePages";
+import { useUpdatePageTitle, useUpdatePageIcon, useDeletePageSubtree, useChildPages } from "@/src/hooks/usePages";
 import type { PageRow } from "@/src/hooks/usePages";
 import { EmojiPicker } from "./EmojiPicker";
 import { PageEditorSurface } from "./PageEditorSurface";
@@ -28,7 +28,7 @@ export function DocPage({ page }: DocPageProps) {
   const router = useRouter();
   const updateTitle = useUpdatePageTitle();
   const updatePageIcon = useUpdatePageIcon();
-  const deletePage = useDeletePage();
+  const deletePage = useDeletePageSubtree();
   const iconButtonRef = useRef<HTMLButtonElement>(null);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [contents] = useTable(tables.page_content);

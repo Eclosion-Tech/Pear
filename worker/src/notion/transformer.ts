@@ -242,9 +242,22 @@ function blockToPmNodes(
       return [{ type: "paragraph", content: [{ type: "text", text: block.equation.expression }] }];
     }
     case "child_page":
-    case "child_database":
-      // These are their own Page rows — just leave a placeholder paragraph
-      return [{ type: "paragraph", content: [{ type: "text", text: block.type === "child_page" ? block.child_page.title : block.child_database.title }] }];
+    case "child_database": {
+      // These are their own Page rows; the block id IS the child's Notion id,
+      // so link to the imported page instead of leaving dead placeholder text.
+      const childTitle =
+        (block.type === "child_page" ? block.child_page.title : block.child_database.title) ||
+        "Untitled";
+      const pearId = notionToId(block.id);
+      return [{
+        type: "paragraph",
+        content: [{
+          type: "text",
+          marks: [{ type: "link", attrs: { href: `/workspace/${slug}/${pearId}` } }],
+          text: `→ ${childTitle}`,
+        }],
+      }];
+    }
     case "video": {
       const v = block.video;
       let url = "";
@@ -380,7 +393,12 @@ function pmInlineToBn(nodes: PMNode[] | undefined): unknown[] {
       else if (t === "strike") styles.strikethrough = true;
       else if (t === "underline") styles.underline = true;
       else if (t === "code") styles.code = true;
-      else if (t === "link") href = safeHttpUrl((m.attrs as { href?: string } | undefined)?.href);
+      else if (t === "link") {
+        const raw = (m.attrs as { href?: string } | undefined)?.href;
+        // Workspace-relative paths (blob/page links we generated) are ours;
+        // absolute URLs must be http(s).
+        href = raw?.startsWith("/") ? raw : safeHttpUrl(raw);
+      }
     }
     const text = { type: "text", text: (n.text as string) ?? "", styles };
     out.push(href ? { type: "link", href, content: [text] } : text);
@@ -722,6 +740,13 @@ export function transformNotionToPayload(
   const notionToId = makeIdAssigner();
   const now = new Date().toISOString();
 
+  // Which page each fetched block belongs to — resolves `block_id` page
+  // parents (a page created inside a toggle/column) to its containing page.
+  const blockToPage = new Map<string, string>();
+  for (const [pageId, pageBlocks] of fetchResult.blocks) {
+    for (const b of pageBlocks) blockToPage.set(b.id, pageId);
+  }
+
   const pageRows: unknown[] = [];
   const pageContentRows: unknown[] = [];
   const dbSchemaRows: unknown[] = [];
@@ -775,15 +800,23 @@ export function transformNotionToPayload(
     const icon = getPageIcon(page);
     const isDatabase = page.object === "data_source";
 
-    // Determine parent
+    // Determine parent. Database rows carry `data_source_id` parents in the
+    // current API (the pages map is keyed by data-source id); `database_id`
+    // is the legacy shape; pages nested inside blocks (toggles, columns)
+    // carry `block_id`, resolved to the containing page via blockToPage.
     let parentId: unknown = null;
     let parentPk = pearBigint(0n);
     if ("parent" in page && page.parent) {
       const parent = page.parent as Record<string, unknown>;
-      const pid =
+      let pid =
+        (parent["data_source_id"] as string | undefined) ??
         (parent["page_id"] as string | undefined) ??
         (parent["database_id"] as string | undefined) ??
         null;
+      const blockPid = parent["block_id"] as string | undefined;
+      if ((!pid || !fetchResult.pages.has(pid)) && blockPid) {
+        pid = blockToPage.get(blockPid) ?? null;
+      }
       if (pid && fetchResult.pages.has(pid)) {
         const pidU64 = notionToId(pid);
         parentId = pearBigint(pidU64);
@@ -858,6 +891,9 @@ export function transformNotionToPayload(
 
       let propOrder = 0;
       for (const [propName, prop] of Object.entries(db.properties)) {
+        // The title property maps to the Pear page title (built-in column);
+        // emitting a definition for it duplicated it as a "Name" text column.
+        if (prop.type === "title") continue;
         propDefIdCounter += 1n;
         const defId = propDefIdCounter;
         const pType = notionPropertyTypeToTag(prop.type);

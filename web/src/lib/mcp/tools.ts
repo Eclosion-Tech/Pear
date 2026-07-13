@@ -266,7 +266,8 @@ const deletePageTool: McpToolEntry = {
     const page = await getPageRow(ctx.transport, pageId);
     if (!page) return JSON.stringify({ ok: false, error: "Page not found" });
     try {
-      await ctx.transport.call("delete_page", [encodeU64(pageId)]);
+      // Subtree delete: matches the description — children go to the trash too.
+      await ctx.transport.call("delete_page_subtree", [encodeU64(pageId)]);
     } catch (err) {
       return JSON.stringify({ ok: false, page_id: pageId, error: reducerErrorMessage(err) });
     }
