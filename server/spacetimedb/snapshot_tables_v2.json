@@ -1,5 +1,5 @@
 {
-  "$comment": "Canonical table policy for the pear-snapshot-v2 export/import format. Every PUBLIC module table must appear in exactly one of `include` or `exclude` — enforced from the TypeScript side (pear/web/src/lib/pearExport.test.ts, against generated bindings) and the Rust side (pear/server/spacetimedb/src/import/pear_v2.rs tests, against the importer dispatch table). Adding a module table without updating this file fails CI on both sides. Private tables are not in client bindings and are intentionally outside this policy (documented in docs/RUNBOOKS/restore-workspace.md).",
+  "$comment": "Canonical table policy for the pear-snapshot-v2 export/import format. Every PUBLIC module table must appear in exactly one of `include` or `exclude` \u2014 enforced from the TypeScript side (pear/web/src/lib/pearExport.test.ts, against generated bindings) and the Rust side (pear/server/spacetimedb/src/import/pear_v2.rs tests, against the importer dispatch table). Adding a module table without updating this file fails CI on both sides. Private tables are not in client bindings and are intentionally outside this policy (documented in docs/RUNBOOKS/restore-workspace.md).",
   "format": "pear-snapshot-v2",
   "include": [
     "user",
@@ -59,12 +59,13 @@
     "structural_sensor_finding"
   ],
   "exclude": {
+    "ai_user_config": "Contains plaintext provider API keys and worker tokens. Never exported. Import restores stub configs from ai_user_profile rows (same behavior as v1); operators reconfigure keys post-restore.",
+    "automation_primitive": "Seeded catalog of available primitives keyed by name (seed_automation_primitives_inner); module-defined, not user data.",
     "id_counter": "Module-managed id allocator. import_v2_commit deletes all counter rows so the next allocation re-seeds from post-import max(id) (see id_counters.rs).",
     "migration_state": "Module-managed migration bookkeeping; owned by the module version that publishes, never restored.",
     "module_install_meta": "Module-managed publisher-identity record; re-created by init on the restore target.",
-    "sensor_registry": "Fully seeded at init (seed_sensor_registry_inner); findings reference sensors by string (sensor_kind, code), never by id, so re-seeded rows are equivalent.",
-    "automation_primitive": "Seeded catalog of available primitives keyed by name (seed_automation_primitives_inner); module-defined, not user data.",
-    "ai_user_config": "Contains plaintext provider API keys and worker tokens. Never exported. Import restores stub configs from ai_user_profile rows (same behavior as v1); operators reconfigure keys post-restore."
+    "notion_import_job": "Transient background-import queue (carries Notion token ciphertexts, blanked on completion); jobs are meaningless on a restore target and must never ride along in backups.",
+    "sensor_registry": "Fully seeded at init (seed_sensor_registry_inner); findings reference sensors by string (sensor_kind, code), never by id, so re-seeded rows are equivalent."
   },
   "import_row_guards": {
     "harness_template": "Skip rows with source == Builtin (re-seeded by init; unique external_id would collide).",

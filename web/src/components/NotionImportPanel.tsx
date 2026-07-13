@@ -6,18 +6,19 @@
  * Flow:
  *   1. User clicks "Connect Notion" → OAuth popup opens at /auth/notion
  *   2. After popup closes, panel polls /api/workspaces/[slug]/notion/status
- *   3. User clicks "Import from Notion" → calls the import API (fetch + S3 + transform)
- *      then passes the payload to the SpacetimeDB `import_notion` reducer.
- *   4. Import status is shown (running / done / error).
+ *   3. User clicks "Import from Notion" → fetches the encrypted-token ticket
+ *      and enqueues a `notion_import_job` row; the workspace worker runs the
+ *      fetch + attachments + transform + import pipeline in the background.
+ *   4. Progress streams live from the job row over the STDB subscription.
  *
  * Imports land under a "Notion Import" container page; existing content is
  * untouched (the reducer offsets all imported ids). Re-import is additive.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useSpacetimeDB, useReducer } from "spacetimedb/react";
+import { useSpacetimeDB, useReducer, useTable } from "spacetimedb/react";
 import { usePearWorkspaceSlug } from "@/src/lib/blobUpload";
-import { reducers } from "@/src/module_bindings";
+import { reducers, tables } from "@/src/module_bindings";
 
 type NotionStatus = {
   connected: boolean;
@@ -32,7 +33,12 @@ export function NotionImportPanel() {
   const slug = usePearWorkspaceSlug();
   const { identity } = useSpacetimeDB();
 
-  const importNotion = useReducer(reducers.importNotion);
+  const createImportJob = useReducer(reducers.createNotionImportJob);
+  const [importJobs] = useTable(tables.notion_import_job);
+  const job = importJobs.length
+    ? importJobs.reduce((a, b) => (a.id > b.id ? a : b))
+    : undefined;
+  const jobStatus = job?.status?.tag as "Pending" | "Running" | "Done" | "Failed" | undefined;
 
   const [status, setStatus] = useState<NotionStatus | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(false);
@@ -111,34 +117,27 @@ export function NotionImportPanel() {
     setMsg(null);
 
     try {
-      // Step 1: Orchestration — fetch Notion, upload attachments, transform
+      // Fetch the encrypted-token ticket, then enqueue the background job.
+      // The workspace worker does everything else; progress streams onto the
+      // job row we're subscribed to.
       const res = await fetch(
-        `/api/workspaces/${encodeURIComponent(slug)}/notion/import`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ callerIdentityHex: identity.toHexString() }),
-        }
+        `/api/workspaces/${encodeURIComponent(slug)}/notion/import/ticket`,
+        { method: "POST" }
       );
-
       const data = await res.json().catch(() => ({ error: "Failed to parse response" }));
-
       if (!res.ok || data.error) {
         setMsg(`Import failed: ${data.error ?? "Unknown error"}`);
-        await fetchStatus();
         return;
       }
-
-      // Step 2: Write to SpacetimeDB via reducer (uses the authenticated STDB connection)
-      setMsg("Uploading to workspace…");
-      await importNotion({ snapshotJson: data.payload });
-
-      setMsg("Import complete! Your Notion pages are now in Pear.");
-      await fetchStatus();
+      await createImportJob({
+        encryptedTokenB64: data.encryptedTokenB64,
+        sourceName: data.notionWorkspaceName ?? "Notion",
+        workspaceSlug: slug,
+      });
+      setMsg(null);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setMsg(`Import failed: ${message}`);
-      await fetchStatus();
     } finally {
       setBusy(false);
     }
@@ -147,9 +146,15 @@ export function NotionImportPanel() {
   // ── Render ───────────────────────────────────────────────────────────────────
 
   const importStatus = status?.importStatus;
-  const isRunning = busy || importStatus === "running";
-  const isDone = importStatus === "done";
-  const isError = importStatus === "error";
+  const isRunning =
+    busy || jobStatus === "Pending" || jobStatus === "Running" ||
+    (!job && importStatus === "running");
+  const isDone = jobStatus ? jobStatus === "Done" : importStatus === "done";
+  const isError = jobStatus ? jobStatus === "Failed" : importStatus === "error";
+  const progressLine = job && (jobStatus === "Pending" || jobStatus === "Running")
+    ? `${job.stage}${job.pagesTotal > 0 ? ` (${job.pagesDone}/${job.pagesTotal})` : ""}`
+    : null;
+  const jobError = job?.error ?? undefined;
 
   return (
     <section className="mb-10">
@@ -193,7 +198,7 @@ export function NotionImportPanel() {
           )}
           {isError && (
             <div className="px-3 py-2 rounded border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/30 text-sm text-red-700 dark:text-red-400">
-              Import failed: {status.importError ?? "Unknown error"}
+              Import failed: {jobError ?? status.importError ?? "Unknown error"}
             </div>
           )}
 
@@ -203,7 +208,7 @@ export function NotionImportPanel() {
               <button
                 type="button"
                 onClick={handleImport}
-                disabled={isRunning || !importNotion}
+                disabled={isRunning}
                 className="px-3 py-1.5 rounded text-sm font-medium bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:opacity-90 disabled:opacity-40"
               >
                 {isRunning ? "Importing…" : isError ? "Retry import" : "Import from Notion"}
@@ -217,7 +222,7 @@ export function NotionImportPanel() {
 
           {isRunning && !msg && (
             <p className="text-sm text-neutral-500 dark:text-neutral-400 animate-pulse">
-              Fetching your Notion content… This may take a minute for large workspaces.
+              {progressLine ?? "Starting background import…"}
             </p>
           )}
         </div>
