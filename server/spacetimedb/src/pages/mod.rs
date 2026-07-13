@@ -3,7 +3,7 @@
 //! mutable content (`PageContent`), the merged Yjs state blob
 //! (`PageYjsState`), and per-page attachment metadata (`Attachment`).
 
-use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table, Timestamp};
+use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, SpacetimeType, Table, Timestamp};
 
 use crate::access_control::helpers::{can_write_page, page_has_any_rule, require_page_write};
 use crate::access_control::{next_page_access_rule_id, page_access_rule, PageAccessRule};
@@ -541,6 +541,7 @@ pub fn delete_page(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
         updated_at: ctx.timestamp,
         ..page
     });
+    ensure_trash_purge_tick(ctx);
     enqueue_page_deleted(ctx, page_id);
     Ok(())
 }
@@ -576,6 +577,7 @@ pub fn delete_page_subtree(ctx: &ReducerContext, page_id: u64) -> Result<(), Str
             }
         }
     }
+    ensure_trash_purge_tick(ctx);
     enqueue_page_deleted(ctx, page_id);
     Ok(())
 }
@@ -641,6 +643,13 @@ pub fn delete_attachment(ctx: &ReducerContext, attachment_id: u64) -> Result<(),
 #[reducer]
 pub fn purge_page(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
     require_page_write(ctx, page_id)?;
+    purge_trashed_page(ctx, page_id)
+}
+
+/// Shared body of `purge_page`, `empty_trash`, and the retention tick:
+/// reparent children (never purge non-trashed content), then hard-delete the
+/// page and its dependent rows. Caller is responsible for authorization.
+fn purge_trashed_page(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
     let page = ctx.db.page().id().find(page_id).ok_or("Page not found")?;
     if page.deleted_at.is_none() {
         return Err("Page is not in trash. Move to trash first.".to_string());
@@ -666,6 +675,81 @@ pub fn purge_page(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
     }
 
     purge_page_inner(ctx, page_id)
+}
+
+/// Permanently delete every trashed page the caller may write. Pages the
+/// caller lacks write access on are skipped, not errors.
+#[reducer]
+pub fn empty_trash(ctx: &ReducerContext) -> Result<(), String> {
+    ensure_trash_purge_tick(ctx);
+    let trashed: Vec<u64> = ctx
+        .db
+        .page()
+        .iter()
+        .filter(|p| p.deleted_at.is_some())
+        .map(|p| p.id)
+        .collect();
+    let mut purged = 0u32;
+    for id in trashed {
+        if can_write_page(ctx, id, ctx.sender()) && purge_trashed_page(ctx, id).is_ok() {
+            purged += 1;
+        }
+    }
+    log::info!("empty_trash: purged {purged} page(s)");
+    Ok(())
+}
+
+/// Trash retention: pages deleted longer than this are purged automatically.
+/// (The Page docs promised "hard purge after 30 days" long before any
+/// mechanism existed — this tick is that mechanism.)
+const TRASH_RETENTION_DAYS: i64 = 30;
+const TRASH_PURGE_TICK_SECS: u64 = 24 * 60 * 60;
+
+#[table(accessor = trash_purge_tick, scheduled(run_trash_purge_tick))]
+pub struct TrashPurgeTick {
+    #[primary_key]
+    #[auto_inc]
+    pub scheduled_id: u64,
+    pub scheduled_at: ScheduleAt,
+}
+
+/// Arm the daily retention tick (idempotent). Called lazily from the trash
+/// mutation paths so existing deployments pick it up without a migration.
+pub(crate) fn ensure_trash_purge_tick(ctx: &ReducerContext) {
+    if ctx.db.trash_purge_tick().iter().next().is_some() {
+        return;
+    }
+    ctx.db.trash_purge_tick().insert(TrashPurgeTick {
+        scheduled_id: 0,
+        scheduled_at: std::time::Duration::from_secs(TRASH_PURGE_TICK_SECS).into(),
+    });
+}
+
+/// Daily tick: purge pages trashed longer than the retention window.
+#[reducer]
+pub fn run_trash_purge_tick(ctx: &ReducerContext, _job: TrashPurgeTick) -> Result<(), String> {
+    let cutoff_micros = ctx
+        .timestamp
+        .to_micros_since_unix_epoch()
+        .saturating_sub(TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1_000_000);
+    let expired: Vec<u64> = ctx
+        .db
+        .page()
+        .iter()
+        .filter(|p| {
+            p.deleted_at
+                .is_some_and(|d| d.to_micros_since_unix_epoch() < cutoff_micros)
+        })
+        .map(|p| p.id)
+        .collect();
+    let count = expired.len();
+    for id in expired {
+        let _ = purge_trashed_page(ctx, id);
+    }
+    if count > 0 {
+        log::info!("trash retention: purged {count} page(s) older than {TRASH_RETENTION_DAYS}d");
+    }
+    Ok(())
 }
 
 fn purge_page_inner(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {

@@ -167,6 +167,11 @@ export function usePageSnapshots(pageId: bigint) {
   return forPage;
 }
 
+/** Permanently delete every trashed page the caller can write. */
+export function useEmptyTrash() {
+  return useReducer(reducers.emptyTrash);
+}
+
 export function usePurgePage() {
   return useReducer(reducers.purgePage);
 }

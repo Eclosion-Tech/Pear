@@ -2,13 +2,14 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { useDeletedPages, useRestorePage, usePurgePage } from "@/src/hooks/usePages";
+import { useDeletedPages, useRestorePage, usePurgePage, useEmptyTrash } from "@/src/hooks/usePages";
 
 export default function TrashPage() {
   const router = useRouter();
   const { pages } = useDeletedPages();
   const restorePage = useRestorePage();
   const purgePage = usePurgePage();
+  const emptyTrash = useEmptyTrash();
   const [optimisticallyRemoved, setOptimisticallyRemoved] = useState<Set<string>>(new Set());
 
   const displayPages = pages.filter((p) => !optimisticallyRemoved.has(String(p.id)));
@@ -41,13 +42,40 @@ export default function TrashPage() {
     }
   }
 
+  async function handleEmptyTrash() {
+    if (
+      !confirm(
+        `Permanently delete all ${displayPages.length} page(s) in the trash? This cannot be undone.`,
+      )
+    )
+      return;
+    setOptimisticallyRemoved(new Set(displayPages.map((p) => String(p.id))));
+    try {
+      await emptyTrash();
+    } catch {
+      setOptimisticallyRemoved(new Set());
+    }
+  }
+
   return (
-    <div className="h-full flex flex-col p-6 max-w-2xl mx-auto">
-      <h1 className="text-lg font-semibold text-neutral-900 dark:text-white mb-1">
-        Trash
-      </h1>
+    <div className="h-full flex flex-col p-6 max-w-2xl mx-auto w-full">
+      <div className="flex items-center justify-between gap-3 mb-1">
+        <h1 className="text-lg font-semibold text-neutral-900 dark:text-white">
+          Trash
+        </h1>
+        {displayPages.length > 0 && (
+          <button
+            type="button"
+            onClick={() => void handleEmptyTrash()}
+            className="px-2.5 py-1 text-xs rounded border border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+          >
+            Empty trash ({displayPages.length})
+          </button>
+        )}
+      </div>
       <p className="text-sm text-neutral-500 dark:text-neutral-400 mb-6">
-        Deleted pages are kept for 30 days. Restore or permanently delete them.
+        Deleted pages are kept for 30 days, then purged automatically. Restore or permanently
+        delete them.
       </p>
 
       {displayPages.length === 0 ? (
@@ -55,7 +83,7 @@ export default function TrashPage() {
           Trash is empty
         </p>
       ) : (
-        <ul className="space-y-2">
+        <ul className="space-y-2 flex-1 min-h-0 overflow-y-auto pb-6">
           {displayPages.map((page) => (
             <li
               key={String(page.id)}

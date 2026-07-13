@@ -1400,6 +1400,12 @@ export const ToolCallAuditLog = __t.object("ToolCallAuditLog", {
 });
 export type ToolCallAuditLog = __Infer<typeof ToolCallAuditLog>;
 
+export const TrashPurgeTick = __t.object("TrashPurgeTick", {
+  scheduledId: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+});
+export type TrashPurgeTick = __Infer<typeof TrashPurgeTick>;
+
 // The tagged union or sum type for the algebraic type `UnlistedCommandPolicy`.
 export const UnlistedCommandPolicy = __t.enum("UnlistedCommandPolicy", {
   Prompt: __t.unit(),

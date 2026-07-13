@@ -94,6 +94,7 @@ import DeleteViewReducer from "./delete_view_reducer";
 import DenyBridgeCommandReducer from "./deny_bridge_command_reducer";
 import DisableAiUserMemoryReducer from "./disable_ai_user_memory_reducer";
 import DisableAutomationReducer from "./disable_automation_reducer";
+import EmptyTrashReducer from "./empty_trash_reducer";
 import EnableAutomationReducer from "./enable_automation_reducer";
 import EnqueueBridgeCommandReducer from "./enqueue_bridge_command_reducer";
 import FailNotionImportJobReducer from "./fail_notion_import_job_reducer";
@@ -1238,6 +1239,7 @@ const reducersSchema = __reducers(
   __reducerSchema("deny_bridge_command", DenyBridgeCommandReducer),
   __reducerSchema("disable_ai_user_memory", DisableAiUserMemoryReducer),
   __reducerSchema("disable_automation", DisableAutomationReducer),
+  __reducerSchema("empty_trash", EmptyTrashReducer),
   __reducerSchema("enable_automation", EnableAutomationReducer),
   __reducerSchema("enqueue_bridge_command", EnqueueBridgeCommandReducer),
   __reducerSchema("fail_notion_import_job", FailNotionImportJobReducer),
