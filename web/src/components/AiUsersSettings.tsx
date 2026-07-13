@@ -15,10 +15,12 @@ import {
   useDisableAiUserMemory,
   usePatchAiUserProfileSettings,
   useProvisionAiUserMemory,
+  useSetAiUserApiKey,
   useSetAiUserModel,
   useSetAiUserRoutineEnabled,
   useSetAiUserSerperApiKey,
   useSetAiUserWorkerToken,
+  useUpdateAiUserConfig,
   useUpdateAiUserSystemPrompt,
   type AiUserProfileRow,
 } from "@/src/hooks/useAiUsers";
@@ -26,24 +28,29 @@ import { useWorkerLiveness } from "@/src/hooks/useOrcha";
 import {
   hostCreateAiUser,
   hostDeleteAiUser,
+  hostPatchConfig,
+  hostUpsertApiKey,
   identityFromHex,
   isAiUserHostDelegated,
+  isExternalMcpProfile,
   mintIdentity,
   PROVIDER_OPTIONS,
   providerDefaults,
   providerNeedsEndpoint,
   providerModels,
-  PROVIDER_TAG_BY_NAME,
+  PRESET_BY_PROVIDER_NAME,
   utilityModelFor,
-  type ProviderTag,
+  type ProviderPresetKey,
 } from "@/src/lib/aiUserApi";
 import { resolveWorkspaceWsUri } from "@/src/lib/workspaceConnections";
 import { useWorkspace } from "@/src/providers/WorkspaceProvider";
 import { optionStringFromRow } from "@/src/lib/spacetime";
 import type {
   CreateAiUserParams,
+  SetAiUserApiKeyParams,
   SetAiUserSerperApiKeyParams,
   SetAiUserWorkerTokenParams,
+  UpdateAiUserConfigParams,
 } from "@/src/module_bindings/types/reducers";
 
 function optionalString(value: string): string | undefined {
@@ -67,7 +74,7 @@ function CreateAiUserForm({ onDone }: { onDone: () => void }) {
   const hostDelegated = isAiUserHostDelegated();
 
   const [displayName, setDisplayName] = useState("");
-  const [provider, setProvider] = useState<ProviderTag>("Anthropic");
+  const [provider, setProvider] = useState<ProviderPresetKey>("Anthropic");
   const [model, setModel] = useState(providerDefaults("Anthropic").defaultModel);
   const [endpoint, setEndpoint] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -75,7 +82,7 @@ function CreateAiUserForm({ onDone }: { onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function handleProviderChange(next: ProviderTag) {
+  function handleProviderChange(next: ProviderPresetKey) {
     const prev = providerDefaults(provider);
     const nextDefault = providerDefaults(next);
     setProvider(next);
@@ -85,9 +92,12 @@ function CreateAiUserForm({ onDone }: { onDone: () => void }) {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    const preset = providerDefaults(provider);
     const name = displayName.trim();
     const modelName = model.trim();
-    const endpointValue = optionalString(endpoint);
+    const endpointValue = preset.endpointLocked
+      ? preset.defaultEndpoint
+      : optionalString(endpoint);
     const apiKeyValue = optionalString(apiKey);
     const systemPromptValue = optionalString(systemPrompt);
 
@@ -103,7 +113,7 @@ function CreateAiUserForm({ onDone }: { onDone: () => void }) {
       if (hostDelegated) {
         await hostCreateAiUser({
           displayName: name,
-          provider,
+          provider: preset.tag,
           model: modelName,
           endpoint: endpointValue,
           apiKey: apiKeyValue,
@@ -122,7 +132,7 @@ function CreateAiUserForm({ onDone }: { onDone: () => void }) {
           aiUserIdentity,
           createdByIdentity: identity,
           displayName: name,
-          provider: { tag: provider },
+          provider: { tag: preset.tag },
           model: modelName,
           endpoint: endpointValue,
           apiKey: apiKeyValue,
@@ -173,12 +183,12 @@ function CreateAiUserForm({ onDone }: { onDone: () => void }) {
         <div className="flex flex-wrap gap-1.5">
           {PROVIDER_OPTIONS.map((p) => (
             <button
-              key={p.tag}
+              key={p.key}
               type="button"
-              onClick={() => handleProviderChange(p.tag)}
+              onClick={() => handleProviderChange(p.key)}
               disabled={busy}
               className={`px-3 py-1.5 rounded-lg text-sm transition-colors disabled:opacity-50 ${
-                provider === p.tag
+                provider === p.key
                   ? "bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900"
                   : "bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-700"
               }`}
@@ -239,6 +249,14 @@ function CreateAiUserForm({ onDone }: { onDone: () => void }) {
               className={inputCls}
             />
           </label>
+        )}
+        {providerDefaults(provider).endpointLocked && (
+          <div className="block">
+            <span className="text-xs font-medium text-neutral-600 dark:text-neutral-400">Endpoint</span>
+            <p className="mt-2 text-xs font-mono text-neutral-500 dark:text-neutral-400">
+              {providerDefaults(provider).defaultEndpoint}
+            </p>
+          </div>
         )}
       </div>
 
@@ -320,10 +338,19 @@ function AiUserRowEditor({
   const updateSystemPrompt = useUpdateAiUserSystemPrompt();
   const setSerperApiKey = useSetAiUserSerperApiKey();
   const setAiUserModel = useSetAiUserModel();
-  const providerTag = PROVIDER_TAG_BY_NAME[profile.providerName] ?? "Ollama";
+  const updateConfig = useUpdateAiUserConfig();
+  const setApiKeyReducer = useSetAiUserApiKey();
+  // External MCP clients bring their own model; no inference config applies.
+  const isMcp = isExternalMcpProfile(profile);
+  const savedPreset: ProviderPresetKey =
+    PRESET_BY_PROVIDER_NAME[profile.providerName] ?? "OpenAiCompatible";
+  const [open, setOpen] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [displayName, setDisplayName] = useState(profile.displayName);
+  const [preset, setPreset] = useState<ProviderPresetKey>(savedPreset);
   const [model, setModel] = useState(profile.modelName);
+  const [endpointDraft, setEndpointDraft] = useState("");
+  const [apiKeyDraft, setApiKeyDraft] = useState("");
   const [systemPrompt, setSystemPrompt] = useState(() =>
     optionStringFromRow(profile.systemPrompt)
   );
@@ -336,9 +363,24 @@ function AiUserRowEditor({
 
   useEffect(() => {
     setDisplayName(profile.displayName);
+    setPreset(savedPreset);
     setModel(profile.modelName);
+    setEndpointDraft("");
     setSystemPrompt(optionStringFromRow(profile.systemPrompt));
-  }, [profile.displayName, profile.modelName, profile.systemPrompt, profile.aiUserId]);
+  }, [profile.displayName, profile.modelName, profile.systemPrompt, profile.aiUserId, savedPreset]);
+
+  /** Switching preset seeds the model/endpoint drafts with that preset's defaults. */
+  function handlePresetChange(next: ProviderPresetKey) {
+    const prevDef = providerDefaults(preset);
+    const nextDef = providerDefaults(next);
+    setPreset(next);
+    if (model.trim() === "" || model === profile.modelName || model === prevDef.defaultModel) {
+      setModel(next === savedPreset ? profile.modelName : nextDef.defaultModel);
+    }
+    if (endpointDraft.trim() === "" || endpointDraft === prevDef.defaultEndpoint) {
+      setEndpointDraft(next === savedPreset ? "" : nextDef.defaultEndpoint);
+    }
+  }
 
   const onSaveSerper = async () => {
     if (hostDelegated) return;
@@ -373,7 +415,7 @@ function AiUserRowEditor({
       setLocalErr("Display name is required");
       return;
     }
-    if (!modelName) {
+    if (!isMcp && !modelName) {
       setLocalErr("Model is required");
       return;
     }
@@ -383,6 +425,8 @@ function AiUserRowEditor({
       const nameChanged = name !== profile.displayName;
       const promptChanged = prompt !== optionStringFromRow(profile.systemPrompt);
       const modelChanged = modelName !== profile.modelName;
+      const providerChanged = !isMcp && preset !== savedPreset;
+      const endpointDirty = !isMcp && endpointDraft.trim() !== "";
       if (nameChanged) {
         await patchProfile({
           aiUserId: profile.aiUserId,
@@ -396,9 +440,57 @@ function AiUserRowEditor({
           systemPrompt: prompt === "" ? null : prompt,
         });
       }
-      if (modelChanged) {
+      if (providerChanged || endpointDirty) {
+        // Provider (or endpoint) change: rewrite the inference config. The
+        // stored API key is preserved — paste a new key below if it differs.
+        const presetDef = providerDefaults(preset);
+        const endpointValue = presetDef.endpointLocked
+          ? presetDef.defaultEndpoint
+          : providerNeedsEndpoint(preset)
+            ? endpointDraft.trim() || undefined
+            : undefined;
+        if (providerNeedsEndpoint(preset) && !endpointValue) {
+          throw new Error("Endpoint is required for Ollama and OpenAI-compatible providers");
+        }
+        if (hostDelegated) {
+          await hostPatchConfig(profile.aiUserId, {
+            provider: presetDef.tag,
+            model: modelName,
+            endpoint: endpointValue ?? null,
+          });
+        } else {
+          // The reducer replaces system_prompt and max_tokens too; send the
+          // current prompt so a combined edit stays consistent (undefined
+          // max_tokens keeps the existing value).
+          await updateConfig({
+            aiUserId: profile.aiUserId,
+            provider: { tag: presetDef.tag },
+            model: modelName,
+            endpoint: endpointValue,
+            systemPrompt: prompt === "" ? undefined : prompt,
+            maxTokens: undefined,
+          } as unknown as UpdateAiUserConfigParams);
+        }
+        setEndpointDraft("");
+      } else if (!isMcp && modelChanged) {
         // Only the model changes; provider, key, and endpoint are preserved.
-        await setAiUserModel({ aiUserId: profile.aiUserId, model: modelName });
+        if (hostDelegated) {
+          await hostPatchConfig(profile.aiUserId, { model: modelName });
+        } else {
+          await setAiUserModel({ aiUserId: profile.aiUserId, model: modelName });
+        }
+      }
+      const newKey = apiKeyDraft.trim();
+      if (!isMcp && newKey) {
+        if (hostDelegated) {
+          await hostUpsertApiKey(profile.aiUserId, newKey);
+        } else {
+          await setApiKeyReducer({
+            aiUserId: profile.aiUserId,
+            apiKey: newKey,
+          } as unknown as SetAiUserApiKeyParams);
+        }
+        setApiKeyDraft("");
       }
     } catch (e) {
       setLocalErr(e instanceof Error ? e.message : String(e));
@@ -409,9 +501,36 @@ function AiUserRowEditor({
 
   const rowBusy = busy || memoryBusy || serperBusy || deleteBusy;
 
+  const summary = isMcp
+    ? "External MCP client"
+    : `${profile.providerName} · ${profile.modelName}`;
+
   return (
-    <li className="py-3 border-b border-neutral-200 dark:border-neutral-800 last:border-0">
-      <div className="space-y-4">
+    <li className="border-b border-neutral-200 dark:border-neutral-800 last:border-0">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="w-full flex items-center gap-2.5 py-3 text-left hover:bg-neutral-50 dark:hover:bg-neutral-900/40 transition-colors rounded-md px-1 -mx-1"
+      >
+        <svg
+          viewBox="0 0 16 16"
+          className={`h-3.5 w-3.5 shrink-0 text-neutral-400 transition-transform ${open ? "rotate-90" : ""}`}
+          fill="currentColor"
+          aria-hidden
+        >
+          <path d="M6 3l5 5-5 5V3z" />
+        </svg>
+        <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100 truncate">
+          {profile.displayName}
+        </span>
+        <span className="rounded-full bg-neutral-100 dark:bg-neutral-800 px-2 py-0.5 text-[11px] font-mono text-neutral-500 dark:text-neutral-400 truncate">
+          {summary}
+        </span>
+      </button>
+
+      {open && (
+      <div className="space-y-4 pb-4 pl-6">
         <div>
           <label
             htmlFor={`ai-user-name-${profile.aiUserId.toString()}`}
@@ -450,6 +569,7 @@ function AiUserRowEditor({
           />
         </div>
 
+        {!isMcp && (
         <div>
           <label
             htmlFor={`ai-user-serper-${profile.aiUserId.toString()}`}
@@ -507,18 +627,46 @@ function AiUserRowEditor({
             </>
           )}
         </div>
+        )}
 
+        {isMcp ? (
+          <div className="rounded-md border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900/40 px-3 py-2.5">
+            <div className="text-sm font-medium text-neutral-800 dark:text-neutral-200">
+              External MCP client
+            </div>
+            <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1 max-w-lg">
+              This AI user is operated by an external agent (e.g. Claude Code, Codex) connecting
+              over MCP. The client brings its own model, so no provider, model, or API key is
+              configured in Pear — this identity exists for attribution, permissions, memory, and
+              budgets.
+            </p>
+          </div>
+        ) : (
         <div>
-          <label
-            htmlFor={`ai-user-model-${profile.aiUserId.toString()}`}
-            className="block text-sm font-medium text-neutral-800 dark:text-neutral-200"
-          >
-            Default model
-          </label>
+          <span className="block text-sm font-medium text-neutral-800 dark:text-neutral-200">
+            Model &amp; provider
+          </span>
           <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5 mb-1.5 max-w-lg">
-            The model this AI user replies with by default. Pick one the existing API key can reach
-            (the {profile.providerName} family) — the provider and key are unchanged.
+            The provider and default model this AI user replies with. Changing the provider keeps
+            the stored API key unless you paste a new one below.
           </p>
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {PROVIDER_OPTIONS.map((p) => (
+              <button
+                key={p.key}
+                type="button"
+                onClick={() => handlePresetChange(p.key)}
+                disabled={rowBusy}
+                className={`px-3 py-1.5 rounded-lg text-sm transition-colors disabled:opacity-50 ${
+                  preset === p.key
+                    ? "bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900"
+                    : "bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-700"
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
           <input
             id={`ai-user-model-${profile.aiUserId.toString()}`}
             type="text"
@@ -528,9 +676,9 @@ function AiUserRowEditor({
             placeholder="e.g. claude-haiku-4-5-20251001"
             className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-neutral-900 dark:text-white disabled:opacity-50 font-mono"
           />
-          {providerModels(providerTag).length > 0 && (
+          {providerModels(preset).length > 0 && (
             <span className="mt-1.5 flex flex-wrap items-center gap-1">
-              {providerModels(providerTag).map((m) => (
+              {providerModels(preset).map((m) => (
                 <button
                   key={m.id}
                   type="button"
@@ -551,9 +699,49 @@ function AiUserRowEditor({
           )}
           <span className="mt-1 block text-[11px] text-neutral-400 dark:text-neutral-500">
             Utility tasks (intent checks, planning) use{" "}
-            <span className="font-mono">{utilityModelFor(providerTag, model)}</span> to save cost.
+            <span className="font-mono">{utilityModelFor(preset, model)}</span> to save cost.
           </span>
+
+          {providerNeedsEndpoint(preset) && (
+            <label className="block mt-3">
+              <span className="text-xs font-medium text-neutral-600 dark:text-neutral-400">
+                Endpoint URL
+              </span>
+              <input
+                type="url"
+                value={endpointDraft}
+                onChange={(e) => setEndpointDraft(e.target.value)}
+                disabled={rowBusy}
+                placeholder={preset === "Ollama" ? "http://localhost:11434/v1" : "https://…"}
+                className="mt-1 w-full rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-neutral-900 dark:text-white disabled:opacity-50 font-mono"
+              />
+            </label>
+          )}
+          {providerDefaults(preset).endpointLocked && (
+            <p className="mt-2 text-[11px] text-neutral-400 dark:text-neutral-500">
+              Endpoint: <span className="font-mono">{providerDefaults(preset).defaultEndpoint}</span>
+            </p>
+          )}
+
+          <label className="block mt-3">
+            <span className="text-xs font-medium text-neutral-600 dark:text-neutral-400">
+              API key{" "}
+              <span className="text-neutral-400 font-normal">
+                (leave blank to keep the current key{profile.hasApiKey ? "" : " — none set"})
+              </span>
+            </span>
+            <input
+              type="password"
+              autoComplete="off"
+              value={apiKeyDraft}
+              onChange={(e) => setApiKeyDraft(e.target.value)}
+              disabled={rowBusy}
+              placeholder="sk-…"
+              className="mt-1 w-full rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-neutral-900 dark:text-white disabled:opacity-50 font-mono"
+            />
+          </label>
         </div>
+        )}
 
         <div className="flex flex-wrap items-center gap-3">
           <button
@@ -565,7 +753,7 @@ function AiUserRowEditor({
             Save
           </button>
           <span className="text-sm text-neutral-500 dark:text-neutral-400">
-            {profile.providerName}
+            {isMcp ? "External MCP client" : profile.providerName}
           </span>
 
           <span className="ml-auto" />
@@ -652,6 +840,7 @@ function AiUserRowEditor({
 
         <RoutinesSection aiUserId={profile.aiUserId} hasMemory={hasMemory} />
       </div>
+      )}
     </li>
   );
 }
@@ -936,7 +1125,7 @@ export function AiUsersSettings() {
               </p>
             )
           ) : (
-            <ul className="space-y-6">
+            <ul>
               {profiles.map((p) => (
                 <AiUserRowEditor
                   key={p.aiUserId.toString()}

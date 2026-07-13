@@ -63,26 +63,59 @@ function hostUrl(path = ""): string {
 
 export type ProviderTag = "Anthropic" | "OpenAi" | "Ollama" | "OpenAiCompatible";
 
-/** Provider picker metadata shared by the AI-user create form(s). */
-export const PROVIDER_OPTIONS: Array<{
+/**
+ * UI-level provider presets. A preset maps to a SpacetimeDB `InferenceProvider`
+ * tag plus defaults; OpenRouter is a preset over `OpenAiCompatible` with a
+ * pinned endpoint (the worker's OpenAI-compatible client handles it as-is).
+ */
+export type ProviderPresetKey = "Anthropic" | "OpenAi" | "OpenRouter" | "Ollama" | "OpenAiCompatible";
+
+export interface ProviderPreset {
+  key: ProviderPresetKey;
+  /** Reducer enum tag this preset stores. */
   tag: ProviderTag;
   label: string;
   defaultModel: string;
   defaultEndpoint: string;
-}> = [
-  { tag: "Anthropic", label: "Anthropic", defaultModel: "claude-haiku-4-5-20251001", defaultEndpoint: "" },
-  { tag: "OpenAi", label: "OpenAI", defaultModel: "gpt-4.1-mini", defaultEndpoint: "" },
-  { tag: "Ollama", label: "Ollama", defaultModel: "llama3.1", defaultEndpoint: "http://localhost:11434/v1" },
-  { tag: "OpenAiCompatible", label: "OpenAI-compatible", defaultModel: "gpt-4.1-mini", defaultEndpoint: "" },
-];
-
-export function providerDefaults(provider: ProviderTag) {
-  return PROVIDER_OPTIONS.find((p) => p.tag === provider) ?? PROVIDER_OPTIONS[0];
+  /** The preset defines the endpoint; hide the endpoint input. */
+  endpointLocked?: boolean;
 }
 
-/** Providers that require an explicit endpoint URL. */
-export function providerNeedsEndpoint(provider: ProviderTag): boolean {
-  return provider === "Ollama" || provider === "OpenAiCompatible";
+/** Provider picker metadata shared by the AI-user create/edit forms. */
+export const PROVIDER_OPTIONS: ProviderPreset[] = [
+  { key: "Anthropic", tag: "Anthropic", label: "Anthropic", defaultModel: "claude-haiku-4-5-20251001", defaultEndpoint: "" },
+  { key: "OpenAi", tag: "OpenAi", label: "OpenAI", defaultModel: "gpt-4.1-mini", defaultEndpoint: "" },
+  {
+    key: "OpenRouter",
+    tag: "OpenAiCompatible",
+    label: "OpenRouter",
+    defaultModel: "anthropic/claude-haiku-4.5",
+    defaultEndpoint: "https://openrouter.ai/api/v1",
+    endpointLocked: true,
+  },
+  { key: "Ollama", tag: "Ollama", label: "Ollama", defaultModel: "llama3.1", defaultEndpoint: "http://localhost:11434/v1" },
+  { key: "OpenAiCompatible", tag: "OpenAiCompatible", label: "OpenAI-compatible", defaultModel: "gpt-4.1-mini", defaultEndpoint: "" },
+];
+
+export function providerDefaults(preset: ProviderPresetKey): ProviderPreset {
+  return PROVIDER_OPTIONS.find((p) => p.key === preset) ?? PROVIDER_OPTIONS[0];
+}
+
+/** Presets that require an explicit endpoint URL from the operator. */
+export function providerNeedsEndpoint(preset: ProviderPresetKey): boolean {
+  const p = providerDefaults(preset);
+  return (p.tag === "Ollama" || p.tag === "OpenAiCompatible") && !p.endpointLocked;
+}
+
+/**
+ * Marker model set by MCP OAuth onboarding (and `mcp:provision`): this AI user
+ * is operated by an external MCP client that brings its own model — no worker
+ * inference config applies. See lifecycle `mcp_oauth.rs`.
+ */
+export const EXTERNAL_MCP_MODEL = "external-mcp-client";
+
+export function isExternalMcpProfile(p: { modelName: string }): boolean {
+  return p.modelName === EXTERNAL_MCP_MODEL;
 }
 
 // ── Model catalog (UI mirror of worker/src/model-catalog.ts) ────────────────
@@ -101,7 +134,7 @@ export interface CatalogModel {
   label: string;
 }
 
-export const MODEL_CATALOG: Record<ProviderTag, CatalogModel[]> = {
+export const MODEL_CATALOG: Record<ProviderPresetKey, CatalogModel[]> = {
   Anthropic: [
     { id: "claude-fable-5", tier: "frontier", label: "Fable 5" },
     { id: "claude-opus-4-8", tier: "flagship", label: "Opus 4.8" },
@@ -114,25 +147,39 @@ export const MODEL_CATALOG: Record<ProviderTag, CatalogModel[]> = {
     { id: "gpt-5.4-mini", tier: "balanced", label: "GPT-5.4 mini" },
     { id: "gpt-5.4-nano", tier: "fast", label: "GPT-5.4 nano" },
   ],
+  // OpenRouter slugs are vendor-prefixed; one quick-pick per tier across the
+  // two families people actually route to, plus the cheap utility sibling.
+  OpenRouter: [
+    { id: "anthropic/claude-fable-5", tier: "frontier", label: "Fable 5" },
+    { id: "anthropic/claude-opus-4.8", tier: "flagship", label: "Opus 4.8" },
+    { id: "openai/gpt-5.4", tier: "flagship", label: "GPT-5.4" },
+    { id: "anthropic/claude-sonnet-4.6", tier: "balanced", label: "Sonnet 4.6" },
+    { id: "anthropic/claude-haiku-4.5", tier: "fast", label: "Haiku 4.5" },
+  ],
   Ollama: [],
   OpenAiCompatible: [],
 };
 
-export function providerModels(provider: ProviderTag): CatalogModel[] {
-  return MODEL_CATALOG[provider] ?? [];
+export function providerModels(preset: ProviderPresetKey): CatalogModel[] {
+  return MODEL_CATALOG[preset] ?? [];
 }
 
-/** Map an AI user's display provider name (from its public profile) to a ProviderTag. */
-export const PROVIDER_TAG_BY_NAME: Record<string, ProviderTag> = {
+/**
+ * Map an AI user's display provider name (from its public profile) to a UI
+ * preset. "OpenRouter" is written by the server when an OpenAI-compatible
+ * config points at openrouter.ai.
+ */
+export const PRESET_BY_PROVIDER_NAME: Record<string, ProviderPresetKey> = {
   Anthropic: "Anthropic",
   OpenAI: "OpenAi",
+  OpenRouter: "OpenRouter",
   Ollama: "Ollama",
   "OpenAI Compatible": "OpenAiCompatible",
 };
 
 /** Fast sibling the worker uses for utility tasks; primary model if unknown family. */
-export function utilityModelFor(provider: ProviderTag, primaryModel: string): string {
-  const fast = MODEL_CATALOG[provider]?.find((m) => m.tier === "fast");
+export function utilityModelFor(preset: ProviderPresetKey, primaryModel: string): string {
+  const fast = MODEL_CATALOG[preset]?.find((m) => m.tier === "fast");
   return fast?.id ?? primaryModel;
 }
 

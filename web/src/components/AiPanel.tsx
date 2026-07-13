@@ -31,7 +31,7 @@ import {
 } from "@/src/hooks/useConversations";
 import {
   providerModels,
-  PROVIDER_TAG_BY_NAME,
+  PRESET_BY_PROVIDER_NAME,
 } from "@/src/lib/aiUserApi";
 import {
   PAGE_DRAG_MIME,
@@ -834,7 +834,7 @@ function ConversationModelSwitcher({
   const defaultModel = aiUser.modelName;
   const override = conversation.modelOverride ?? undefined;
   const effective = override ?? defaultModel;
-  const catalog = providerModels(PROVIDER_TAG_BY_NAME[aiUser.providerName] ?? "Ollama");
+  const catalog = providerModels(PRESET_BY_PROVIDER_NAME[aiUser.providerName] ?? "Ollama");
 
   const apply = async (model: string | undefined) => {
     setOpen(false);
