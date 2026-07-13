@@ -182,6 +182,24 @@ pub(crate) fn provider_display_name(provider: &InferenceProvider) -> &'static st
     }
 }
 
+/// Provider name written to the public profile. Well-known OpenAI-compatible
+/// aggregators get their own display name so the settings UI can show (and
+/// map back to) the right preset — the enum stays unchanged.
+pub(crate) fn provider_profile_name(
+    provider: &InferenceProvider,
+    endpoint: Option<&str>,
+) -> String {
+    if matches!(provider, InferenceProvider::OpenAICompatible) {
+        if endpoint.is_some_and(|e| e.contains("openrouter.ai")) {
+            return "OpenRouter".to_string();
+        }
+        if endpoint.is_some_and(|e| e.contains("api.meta.ai")) {
+            return "Meta".to_string();
+        }
+    }
+    provider_display_name(provider).to_string()
+}
+
 /// Create an AI user with its inference configuration and public profile.
 ///
 /// Callers supply `ai_user_identity` and `created_by_identity` explicitly.
@@ -223,7 +241,7 @@ pub fn create_ai_user(
         return Err("created_by_identity must be a non-zero Identity".to_string());
     }
 
-    let prov_name = provider_display_name(&provider).to_string();
+    let prov_name = provider_profile_name(&provider, endpoint.as_deref());
     let model_name = model.trim().to_string();
     let has_api_key = api_key.is_some();
     let system_prompt_for_profile = system_prompt.clone();
@@ -363,7 +381,7 @@ pub fn update_ai_user_config(
         .find(ai_user_id)
         .ok_or("AI user config not found")?;
 
-    let prov_name = provider_display_name(&provider).to_string();
+    let prov_name = provider_profile_name(&provider, endpoint.as_deref());
     let model_name = model.trim().to_string();
     let system_prompt_for_profile = system_prompt.clone();
 
