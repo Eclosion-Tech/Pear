@@ -128,7 +128,10 @@ export async function uploadNotionAttachments(
       }
       const bytes = Buffer.from(await res.arrayBuffer());
       if (bytes.length === 0 || bytes.length > MAX_FILE_BYTES) {
-        log(`WARN: attachment ${bytes.length} bytes out of range — skipped`);
+        log(
+          `WARN: attachment "${ref.filename || ref.notionUrl.slice(0, 80)}" ` +
+            `${bytes.length} bytes out of range — skipped`,
+        );
         continue;
       }
       if (bytes.length > budget) {

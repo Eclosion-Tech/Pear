@@ -22,6 +22,7 @@
 
 import {
   Client,
+  LogLevel,
   isFullPage,
   isFullDataSource,
   isFullBlock,
@@ -118,7 +119,9 @@ export async function fetchNotionWorkspace(
   accessToken: string,
   onProgress?: (msg: string) => void
 ): Promise<NotionFetchResult> {
-  const notion = new Client({ auth: accessToken });
+    // Errors only: tolerated per-object 404s (restricted comments etc.) are
+  // logged by the SDK at warn and would otherwise dominate the log.
+  const notion = new Client({ auth: accessToken, logLevel: LogLevel.ERROR });
   const rateLimit = makeRateLimiter();
 
   const pages = new Map<string, NotionPage>();
@@ -254,6 +257,7 @@ export async function fetchNotionWorkspace(
 
   // ── Step 6: Fetch comments for every page ─────────────────────────────────
 
+  let commentMisses = 0;
   for (let i = 0; i < pageIds.length; i++) {
     const pageId = pageIds[i];
     if (i % 30 === 0) log(`Fetching comments ${i + 1}/${pageIds.length}…`);
@@ -264,9 +268,15 @@ export async function fetchNotionWorkspace(
         comments.set(pageId, res.results as CommentObjectResponse[]);
       }
     } catch {
-      // Comments API may be unavailable if scope wasn't granted — skip silently
+      // The comments API 404s for pages whose discussions the integration
+      // can't read; those pages import without comments.
+      commentMisses += 1;
     }
   }
+  log(
+    `Comments: ${comments.size} page(s) with comments, ${commentMisses} inaccessible, ` +
+      `${pageIds.length - comments.size - commentMisses} without comments`,
+  );
 
   log(`Fetch complete. Pages: ${pages.size}, Attachment refs: ${attachmentRefs.length}`);
 
