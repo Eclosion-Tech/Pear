@@ -28,6 +28,7 @@ import ConfirmBridgeCommandReducer from "../confirm_bridge_command_reducer";
 import ConfirmExtensionInstallReducer from "../confirm_extension_install_reducer";
 import CreateAiUserReducer from "../create_ai_user_reducer";
 import CreateAiUserRoutineReducer from "../create_ai_user_routine_reducer";
+import CreateAiUserRoutineCronReducer from "../create_ai_user_routine_cron_reducer";
 import CreateApiEndpointReducer from "../create_api_endpoint_reducer";
 import CreateApiEndpointKeyReducer from "../create_api_endpoint_key_reducer";
 import CreateApiFieldMappingReducer from "../create_api_field_mapping_reducer";
@@ -213,6 +214,7 @@ export type ConfirmBridgeCommandParams = __Infer<typeof ConfirmBridgeCommandRedu
 export type ConfirmExtensionInstallParams = __Infer<typeof ConfirmExtensionInstallReducer>;
 export type CreateAiUserParams = __Infer<typeof CreateAiUserReducer>;
 export type CreateAiUserRoutineParams = __Infer<typeof CreateAiUserRoutineReducer>;
+export type CreateAiUserRoutineCronParams = __Infer<typeof CreateAiUserRoutineCronReducer>;
 export type CreateApiEndpointParams = __Infer<typeof CreateApiEndpointReducer>;
 export type CreateApiEndpointKeyParams = __Infer<typeof CreateApiEndpointKeyReducer>;
 export type CreateApiFieldMappingParams = __Infer<typeof CreateApiFieldMappingReducer>;

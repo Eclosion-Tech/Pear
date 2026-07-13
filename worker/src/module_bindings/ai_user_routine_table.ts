@@ -9,6 +9,10 @@ import {
   type AlgebraicTypeType as __AlgebraicTypeType,
   type Infer as __Infer,
 } from "spacetimedb";
+import {
+  RoutineScheduleKind,
+} from "./types";
+
 
 export default __t.row({
   scheduledId: __t.u64().primaryKey().name("scheduled_id"),
@@ -22,4 +26,9 @@ export default __t.row({
   lastRunAt: __t.option(__t.timestamp()).name("last_run_at"),
   lastStatus: __t.option(__t.string()).name("last_status"),
   createdAt: __t.timestamp().name("created_at"),
+  get scheduleKind() {
+    return RoutineScheduleKind.name("schedule_kind");
+  },
+  cronExpression: __t.option(__t.string()).name("cron_expression"),
+  timezone: __t.option(__t.string()),
 });

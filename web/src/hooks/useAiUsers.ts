@@ -111,6 +111,16 @@ export function useAiUserRoutines() {
   return routines;
 }
 
+/** Create a custom interval routine (prompt + interval_secs). */
+export function useCreateAiUserRoutine() {
+  return useReducer(reducers.createAiUserRoutine);
+}
+
+/** Create a cron routine: five-field expression evaluated in an IANA timezone. */
+export function useCreateAiUserRoutineCron() {
+  return useReducer(reducers.createAiUserRoutineCron);
+}
+
 export function useCreateSensorTriageRoutine() {
   return useReducer(reducers.createSensorTriageRoutine);
 }

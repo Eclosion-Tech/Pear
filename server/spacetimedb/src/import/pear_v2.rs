@@ -37,6 +37,7 @@ use crate::{
 use crate::{
     AccessRequestStatus, AiEvaluation, AiPrimitive, AiUserConfig, AiUserProfile, AiUserRole,
     AiUserRoutine, ApiCallLog, AttachmentKind, AutomationAction, AutomationActionKind,
+    RoutineScheduleKind,
     AutomationCapability, AutomationCapabilityKind, AutomationCondition, AutomationConditionKind,
     AutomationEventQueue, AutomationEventStatus, AutomationMode, AutomationRule, AutomationRunLog,
     AutomationScheduleKind, AutomationTriggerKind, BridgeCommand, BridgeCommandResult,
@@ -964,6 +965,20 @@ fn decode_ai_user_routine(v: &Value) -> Result<AiUserRoutine, String> {
         last_run_at: opt_timestamp_at(m, "lastRunAt")?,
         last_status: opt_string_at(m, "lastStatus")?,
         created_at: decode_timestamp(m.get("createdAt").ok_or("createdAt")?)?,
+        // Added in beta.6; absent from older snapshots -> interval defaults.
+        schedule_kind: match m.get("scheduleKind") {
+            Some(v) => decode_enum_tag2(
+                v,
+                &[
+                    ("Interval", RoutineScheduleKind::Interval),
+                    ("Cron", RoutineScheduleKind::Cron),
+                ],
+                "RoutineScheduleKind",
+            )?,
+            None => RoutineScheduleKind::Interval,
+        },
+        cron_expression: opt_string_at(m, "cronExpression")?,
+        timezone: opt_string_at(m, "timezone")?,
     })
 }
 

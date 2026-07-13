@@ -13,7 +13,6 @@
 use std::cell::Cell;
 use std::time::Duration;
 
-use chrono::{Datelike, Timelike, Utc};
 use serde_json::{json, Value};
 use spacetimedb::{
     reducer, table, Identity, ReducerContext, ScheduleAt, SpacetimeType, Table, Timestamp,
@@ -21,6 +20,7 @@ use spacetimedb::{
 
 use crate::access_control::helpers::{can_write_page, require_creator_or_admin};
 use crate::ai::ai_user_config;
+use crate::cron::{cron_matches, minute_bucket, parse_cron_fields, parse_timezone};
 use crate::id_counters::alloc_id;
 use crate::orcha::{ai_user_at_hard_cap, create_job};
 use crate::pages::schemas::{
@@ -1470,6 +1470,7 @@ fn validate_schedule(rule: &AutomationRule) -> Result<(), String> {
         AutomationScheduleKind::Cron => {
             let expr = cron_expression(&rule.schedule_config)?;
             parse_cron_fields(&expr)?;
+            parse_timezone(&rule.timezone)?;
         }
         AutomationScheduleKind::None => {
             return Err("Scheduled trigger must use Interval, OneShot, or Cron".to_string());
@@ -1742,109 +1743,9 @@ fn cron_rule_due(rule: &AutomationRule, now: Timestamp) -> bool {
     let Ok(expr) = cron_expression(&rule.schedule_config) else {
         return false;
     };
-    cron_matches(&expr, now).unwrap_or(false)
-}
-
-fn minute_bucket(ts: Timestamp) -> i64 {
-    ts.to_micros_since_unix_epoch() / 60_000_000
-}
-
-fn cron_matches(expr: &str, ts: Timestamp) -> Result<bool, String> {
-    let fields = parse_cron_fields(expr)?;
-    let micros = ts.to_micros_since_unix_epoch();
-    let dt = chrono::DateTime::<Utc>::from_timestamp_micros(micros)
-        .ok_or("Timestamp out of cron evaluation range")?;
-    let minute = dt.minute();
-    let hour = dt.hour();
-    let day = dt.day();
-    let month = dt.month();
-    let dow = dt.weekday().num_days_from_sunday();
-    Ok(cron_field_matches(&fields[0], minute, 0, 59, false)?
-        && cron_field_matches(&fields[1], hour, 0, 23, false)?
-        && cron_field_matches(&fields[2], day, 1, 31, false)?
-        && cron_field_matches(&fields[3], month, 1, 12, false)?
-        && cron_field_matches(&fields[4], dow, 0, 7, true)?)
-}
-
-fn parse_cron_fields(expr: &str) -> Result<Vec<String>, String> {
-    let fields: Vec<String> = expr.split_whitespace().map(str::to_string).collect();
-    if fields.len() != 5 {
-        return Err(
-            "Cron expression must have five fields: minute hour day month weekday".to_string(),
-        );
-    }
-    for (idx, field) in fields.iter().enumerate() {
-        let (min, max, sunday_alias) = match idx {
-            0 => (0, 59, false),
-            1 => (0, 23, false),
-            2 => (1, 31, false),
-            3 => (1, 12, false),
-            4 => (0, 7, true),
-            _ => unreachable!(),
-        };
-        cron_field_matches(field, min, min, max, sunday_alias)?;
-    }
-    Ok(fields)
-}
-
-fn cron_field_matches(
-    field: &str,
-    value: u32,
-    min: u32,
-    max: u32,
-    sunday_alias: bool,
-) -> Result<bool, String> {
-    for part in field.split(',') {
-        let part = part.trim();
-        if part.is_empty() {
-            return Err("Cron field contains an empty segment".to_string());
-        }
-        if part == "*" {
-            return Ok(true);
-        }
-        if let Some(step) = part.strip_prefix("*/") {
-            let step = step
-                .parse::<u32>()
-                .map_err(|_| "Cron step must be an integer".to_string())?;
-            if step == 0 {
-                return Err("Cron step must be greater than zero".to_string());
-            }
-            if (value - min) % step == 0 {
-                return Ok(true);
-            }
-            continue;
-        }
-        if let Some((start, end)) = part.split_once('-') {
-            let start = parse_cron_number(start, sunday_alias)?;
-            let end = parse_cron_number(end, sunday_alias)?;
-            if start < min || end > max || start > end {
-                return Err("Cron range is out of bounds".to_string());
-            }
-            if value >= start && value <= end {
-                return Ok(true);
-            }
-            continue;
-        }
-        let exact = parse_cron_number(part, sunday_alias)?;
-        if exact < min || exact > max {
-            return Err("Cron value is out of bounds".to_string());
-        }
-        if exact == value || (sunday_alias && exact == 7 && value == 0) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn parse_cron_number(raw: &str, sunday_alias: bool) -> Result<u32, String> {
-    let n = raw
-        .parse::<u32>()
-        .map_err(|_| "Cron value must be an integer".to_string())?;
-    if sunday_alias && n == 7 {
-        Ok(7)
-    } else {
-        Ok(n)
-    }
+    // Evaluated in the rule's stored timezone (validated at enable time);
+    // an unparseable zone falls back to UTC inside cron_matches.
+    cron_matches(&expr, now, &rule.timezone).unwrap_or(false)
 }
 
 fn normalize_timezone(timezone: String) -> String {
@@ -1921,18 +1822,4 @@ mod tests {
         assert!(coerce_property_value(&PropertyType::Ai, &json!("x")).is_err());
     }
 
-    #[test]
-    fn cron_matches_basic_expressions() {
-        // 2026-07-13 is a Monday; 13:30 UTC.
-        let ts = Timestamp::from_micros_since_unix_epoch(1_784_122_200_000_000);
-        let dt = chrono::DateTime::<Utc>::from_timestamp_micros(ts.to_micros_since_unix_epoch())
-            .unwrap();
-        // Pin the fixture: minute/hour derived from the timestamp itself.
-        let expr_exact = format!("{} {} * * *", dt.minute(), dt.hour());
-        assert!(cron_matches(&expr_exact, ts).unwrap());
-        assert!(!cron_matches("0 0 * * *", ts).unwrap() || (dt.minute() == 0 && dt.hour() == 0));
-        assert!(cron_matches("* * * * *", ts).unwrap());
-        assert!(parse_cron_fields("bad expr").is_err());
-        assert!(parse_cron_fields("0 9 * * 1").is_ok());
-    }
 }

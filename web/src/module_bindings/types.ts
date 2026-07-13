@@ -133,6 +133,11 @@ export const AiUserRoutine = __t.object("AiUserRoutine", {
   lastRunAt: __t.option(__t.timestamp()),
   lastStatus: __t.option(__t.string()),
   createdAt: __t.timestamp(),
+  get scheduleKind() {
+    return RoutineScheduleKind;
+  },
+  cronExpression: __t.option(__t.string()),
+  timezone: __t.option(__t.string()),
 });
 export type AiUserRoutine = __Infer<typeof AiUserRoutine>;
 
@@ -1308,6 +1313,13 @@ export const ReviewSubject = __t.enum("ReviewSubject", {
   Workspace: __t.unit(),
 });
 export type ReviewSubject = __Infer<typeof ReviewSubject>;
+
+// The tagged union or sum type for the algebraic type `RoutineScheduleKind`.
+export const RoutineScheduleKind = __t.enum("RoutineScheduleKind", {
+  Interval: __t.unit(),
+  Cron: __t.unit(),
+});
+export type RoutineScheduleKind = __Infer<typeof RoutineScheduleKind>;
 
 export const SensorRegistry = __t.object("SensorRegistry", {
   id: __t.u64(),
