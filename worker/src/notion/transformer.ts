@@ -564,27 +564,35 @@ function notionPropertyTypeToTag(notionType: string): string {
   return map[notionType] ?? "Text";
 }
 
+
+/** Pear's option-chip palette. Notion's gray/brown collapse to default. */
+const PEAR_OPTION_COLORS = new Set(["default", "blue", "green", "yellow", "orange", "red", "purple", "pink"]);
+
+function pearSelectConfig(raw: { options?: { name: string; color: string }[] } | undefined): string {
+  const options: string[] = [];
+  const colors: Record<string, string> = {};
+  for (const o of raw?.options ?? []) {
+    if (typeof o?.name !== "string") continue;
+    options.push(o.name);
+    if (PEAR_OPTION_COLORS.has(o.color) && o.color !== "default") colors[o.name] = o.color;
+  }
+  return JSON.stringify(Object.keys(colors).length > 0 ? { options, colors } : { options });
+}
+
 function notionPropertyConfig(
   prop: { type: string } & Record<string, unknown>,
   notionToId: (id: string) => bigint
 ): string {
+  // Pear stores select options as a string array + colors map — emitting
+  // {label, color} objects crashed option renderers.
   if (prop.type === "select") {
-    const options = ((prop.select as { options?: { name: string; color: string }[] })?.options ?? []).map(
-      (o) => ({ label: o.name, color: o.color })
-    );
-    return JSON.stringify({ options });
+    return pearSelectConfig(prop.select as { options?: { name: string; color: string }[] });
   }
   if (prop.type === "status") {
-    const options = ((prop.status as { options?: { name: string; color: string }[] })?.options ?? []).map(
-      (o) => ({ label: o.name, color: o.color })
-    );
-    return JSON.stringify({ options });
+    return pearSelectConfig(prop.status as { options?: { name: string; color: string }[] });
   }
   if (prop.type === "multi_select") {
-    const options = ((prop.multi_select as { options?: { name: string; color: string }[] })?.options ?? []).map(
-      (o) => ({ label: o.name, color: o.color })
-    );
-    return JSON.stringify({ options });
+    return pearSelectConfig(prop.multi_select as { options?: { name: string; color: string }[] });
   }
   if (prop.type === "relation") {
     const rel = prop.relation as { database_id?: string };

@@ -117,17 +117,36 @@ export function parseSelectConfig(config: string): SelectConfig {
       conditions?: unknown;
       colors?: unknown;
     };
+    // Options are stored as strings, but tolerate {label, color} objects
+    // (produced by importers/older tooling) — config is data and must never
+    // crash a renderer. Object colors merge into the colors map.
+    const objectColors: Record<string, OptionColorKey> = {};
     const options = Array.isArray(parsed.options)
-      ? (parsed.options as string[])
+      ? (parsed.options as unknown[])
+          .map((o) => {
+            if (typeof o === "string") return o;
+            if (o && typeof o === "object" && typeof (o as { label?: unknown }).label === "string") {
+              const label = (o as { label: string }).label;
+              const color = (o as { color?: unknown }).color;
+              if (typeof color === "string") objectColors[label] = color as OptionColorKey;
+              return label;
+            }
+            return null;
+          })
+          .filter((o): o is string => o !== null)
       : [];
     const conditions =
       parsed.conditions && typeof parsed.conditions === "object"
         ? (parsed.conditions as Record<string, SelectOptionCondition>)
         : undefined;
-    const colors =
+    const parsedColors =
       parsed.colors && typeof parsed.colors === "object"
         ? (parsed.colors as Record<string, OptionColorKey>)
         : undefined;
+    const colors =
+      Object.keys(objectColors).length > 0
+        ? { ...objectColors, ...parsedColors }
+        : parsedColors;
     return { options, conditions, colors };
   } catch {
     return { options: [] };

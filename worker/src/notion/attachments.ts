@@ -24,6 +24,17 @@ export type AttachmentUploadResult = {
 
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
 
+/** Full URL path for logs (the Notion S3 path ends in the real filename);
+ * the presigned signature query is noise and mildly sensitive — drop it. */
+function describeUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return url;
+  }
+}
+
 type BlobContext = { workspace_id: string; quota_bytes: number; used_bytes: number };
 
 function lifecycleBase(): string {
@@ -129,7 +140,7 @@ export async function uploadNotionAttachments(
       const bytes = Buffer.from(await res.arrayBuffer());
       if (bytes.length === 0 || bytes.length > MAX_FILE_BYTES) {
         log(
-          `WARN: attachment "${ref.filename || ref.notionUrl.slice(0, 80)}" ` +
+          `WARN: attachment "${ref.filename || describeUrl(ref.notionUrl)}" ` +
             `${bytes.length} bytes out of range — skipped`,
         );
         continue;
