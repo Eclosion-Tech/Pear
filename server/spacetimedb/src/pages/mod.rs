@@ -646,35 +646,41 @@ pub fn purge_page(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
     purge_trashed_page(ctx, page_id)
 }
 
-/// Shared body of `purge_page`, `empty_trash`, and the retention tick:
-/// reparent children (never purge non-trashed content), then hard-delete the
-/// page and its dependent rows. Caller is responsible for authorization.
+/// Shared body of `purge_page`, `empty_trash`, and the retention tick.
+/// Purges the page AND its trashed descendants (they were trashed together
+/// by the subtree delete); ACTIVE descendants are never purged — they bubble
+/// up to the purged root's parent so live content stays reachable.
+/// Caller is responsible for authorization.
 fn purge_trashed_page(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
-    let page = ctx.db.page().id().find(page_id).ok_or("Page not found")?;
-    if page.deleted_at.is_none() {
+    let root = ctx.db.page().id().find(page_id).ok_or("Page not found")?;
+    if root.deleted_at.is_none() {
         return Err("Page is not in trash. Move to trash first.".to_string());
     }
 
-    // Reparent children to our parent — never purge them (they may not be in trash)
-    let child_ids: Vec<u64> = ctx
-        .db
-        .page()
-        .iter()
-        .filter(|p| p.parent_id == Some(page_id))
-        .map(|p| p.id)
-        .collect();
-    for cid in child_ids {
-        if let Some(child) = ctx.db.page().id().find(cid) {
-            ctx.db.page().id().update(Page {
-                parent_id: page.parent_id,
-                parent_pk: page.parent_id.unwrap_or(0),
-                updated_at: ctx.timestamp,
-                ..child
-            });
+    let mut to_purge: Vec<u64> = Vec::new();
+    let mut queue = vec![page_id];
+    while let Some(id) = queue.pop() {
+        to_purge.push(id);
+        let children: Vec<Page> = ctx.db.page().parent_pk().filter(&id).collect();
+        for child in children {
+            if child.deleted_at.is_some() {
+                queue.push(child.id);
+            } else {
+                // Live content under a purged subtree surfaces at the root's
+                // parent rather than being destroyed or stranded.
+                ctx.db.page().id().update(Page {
+                    parent_id: root.parent_id,
+                    parent_pk: root.parent_id.unwrap_or(0),
+                    updated_at: ctx.timestamp,
+                    ..child
+                });
+            }
         }
     }
-
-    purge_page_inner(ctx, page_id)
+    for id in to_purge {
+        purge_page_inner(ctx, id)?;
+    }
+    Ok(())
 }
 
 /// Permanently delete every trashed page the caller may write. Pages the
@@ -755,6 +761,19 @@ pub fn run_trash_purge_tick(ctx: &ReducerContext, _job: TrashPurgeTick) -> Resul
 fn purge_page_inner(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
     // Delete linked data (PageContent is 1:1 with Page)
     ctx.db.page_content().page_id().delete(page_id);
+
+    // Attachment rows go with the page. (The S3 bytes + blob-registry rows
+    // are off-module; reclaiming them is the orphaned-blob sweeper's job.)
+    let attachment_ids: Vec<u64> = ctx
+        .db
+        .attachment()
+        .page_id()
+        .filter(&page_id)
+        .map(|a| a.id)
+        .collect();
+    for aid in attachment_ids {
+        ctx.db.attachment().id().delete(aid);
+    }
 
     // Delete the Yjs state blob (single row, primary key = page_id).
     ctx.db.page_yjs_state().page_id().delete(page_id);
