@@ -436,6 +436,7 @@ const addPropertyTool: McpToolEntry = {
           "Checkbox",
           "Url",
           "Person",
+          "File",
         ],
       },
       config: {

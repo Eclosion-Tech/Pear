@@ -559,7 +559,7 @@ function notionPropertyTypeToTag(notionType: string): string {
     relation: "Relation",
     formula: "Formula",
     rollup: "Rollup",
-    files: "Text",
+    files: "File",
   };
   return map[notionType] ?? "Text";
 }
@@ -627,7 +627,9 @@ function notionPropertyConfig(
 // Returns null for computed property types (Formula, Rollup) that should not be stored.
 function notionPropValueToWire(
   prop: Record<string, unknown> & { type: string },
-  notionToId: (id: string) => bigint
+  notionToId: (id: string) => bigint,
+  uploadedAttachments: Map<string, AttachmentUploadResult>,
+  workspaceSlug: string
 ): unknown | null {
   switch (prop.type) {
     case "title": {
@@ -700,8 +702,28 @@ function notionPropValueToWire(
       // Rollup values are computed client-side from related rows; skip storing a static value
       return null;
     case "files": {
-      const files = (prop.files as { name?: string }[] | undefined) ?? [];
-      return { tag: "Text", value: files.map((f) => f.name ?? "").join(", ") };
+      // First-class File property: each entry references the re-homed
+      // workspace blob (object id — portable across slugs) or an external
+      // URL. Skipped uploads (oversize/quota) keep the name only.
+      type NotionPropFile = {
+        name?: string;
+        type?: string;
+        file?: { url?: string };
+        external?: { url?: string };
+      };
+      const files = (prop.files as NotionPropFile[] | undefined) ?? [];
+      const refs = files.map((f) => {
+        const name = f.name || "file";
+        const notionUrl = f.file?.url ?? null;
+        const externalUrl = f.external?.url ?? null;
+        const uploaded = notionUrl ? uploadedAttachments.get(notionUrl) : undefined;
+        return {
+          name,
+          objectId: uploaded?.objectId ?? "",
+          externalUrl: externalUrl ?? "",
+        };
+      });
+      return { tag: "File", value: refs };
     }
     default:
       return { tag: "Text", value: "" };
@@ -962,7 +984,9 @@ export function transformNotionToPayload(
 
       const value = notionPropValueToWire(
         prop as Record<string, unknown> & { type: string },
-        notionToId
+        notionToId,
+        uploadedAttachments,
+        workspaceSlug
       );
 
       // Skip computed property types (Formula, Rollup) — values are client-side only

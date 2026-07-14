@@ -95,6 +95,7 @@ pub use crate::pages::components::{
     ComponentNode, ComponentTypeDefinition, ComponentYjsState, PageContentFormat,
 };
 pub use crate::pages::schemas::{
+    FileRef,
     database_schema, page_property_value, page_property_value_history, property_definition,
     AiPrimitive, AiPropertyValue, DatabaseSchema, InvalidationPolicy, PagePropertyValue,
     PagePropertyValueHistory, PropertyDefinition, PropertyType, PropertyValue,

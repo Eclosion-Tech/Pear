@@ -190,6 +190,19 @@ export function decodeCellValue(raw: unknown): unknown {
     case "MultiSelect":
     case "Person":
       return Array.isArray(payload) ? payload.map(String) : [String(payload)];
+    case "File": {
+      // Sum payload: array of FileRef products {name, object_id, external_url}
+      // (positional or named). Render as names so agents see the attachments.
+      const arr = Array.isArray(payload) ? payload : [];
+      return arr.map((f) => {
+        if (Array.isArray(f)) return String(f[0] ?? "file");
+        if (f !== null && typeof f === "object") {
+          const o = f as Record<string, unknown>;
+          return String(o.name ?? "file");
+        }
+        return "file";
+      });
+    }
     case "Relation":
       return Array.isArray(payload) ? payload.map(Number) : [Number(payload)];
     case "Ai": {
@@ -368,6 +381,26 @@ function coerceAndEncode(
       const arr = Array.isArray(raw) ? raw : [raw];
       if (!arr.every((x) => typeof x === "string")) return fail("an identity-hex string array");
       return { ok: true, wire: { person: arr } };
+    }
+    case "File": {
+      // Agents can attach external URLs; blob uploads aren't possible over
+      // MCP yet, so object_id entries are only produced by the UI/importers.
+      const arr = Array.isArray(raw) ? raw : [raw];
+      const refs: { name: string; object_id: string; external_url: string }[] = [];
+      for (const x of arr) {
+        if (x === null || typeof x !== "object") {
+          return fail('an array of {name, url} objects (external file links)');
+        }
+        const o = x as Record<string, unknown>;
+        const url = typeof o.url === "string" ? o.url : typeof o.external_url === "string" ? o.external_url : "";
+        if (!url) return fail('an array of {name, url} objects (external file links)');
+        refs.push({
+          name: typeof o.name === "string" && o.name ? o.name : url,
+          object_id: "",
+          external_url: url,
+        });
+      }
+      return { ok: true, wire: { file: refs } };
     }
     default:
       return {

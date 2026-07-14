@@ -620,6 +620,7 @@ fn decode_property_type(v: &Value) -> Result<PropertyType, String> {
         // the transformer emits the definitions but no stored values.
         "Formula" => Ok(PropertyType::Formula),
         "Rollup" => Ok(PropertyType::Rollup),
+        "File" => Ok(PropertyType::File),
         _ => Err(format!("PropertyType::{tag}")),
     }
 }
@@ -701,6 +702,36 @@ fn decode_property_value(v: &Value) -> Result<PropertyValue, String> {
                 .ok_or("Checkbox.value")?,
         )),
         "Url" => Ok(PropertyValue::Url(string_at(o, "value")?)),
+        "File" => {
+            let arr = o
+                .get("value")
+                .and_then(|v| v.as_array())
+                .ok_or("File.value")?;
+            let refs = arr
+                .iter()
+                .map(|f| {
+                    let m = f.as_object().ok_or("File entry")?;
+                    Ok(crate::FileRef {
+                        name: m
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("file")
+                            .to_string(),
+                        object_id: m
+                            .get("objectId")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        external_url: m
+                            .get("externalUrl")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(PropertyValue::File(refs))
+        }
         "Person" => {
             let arr = o
                 .get("value")

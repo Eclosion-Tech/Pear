@@ -367,6 +367,7 @@ pub fn run_schema_consistency_sensor(ctx: &ReducerContext) -> Result<(), String>
             PropertyValue::Url(_) => PropertyType::Url,
             PropertyValue::Person(_) => PropertyType::Person,
             PropertyValue::Ai(_) => PropertyType::Ai,
+            PropertyValue::File(_) => PropertyType::File,
         };
 
         if &actual_tag != expected {

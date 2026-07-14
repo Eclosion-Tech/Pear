@@ -834,6 +834,13 @@ export const ExtensionType = __t.enum("ExtensionType", {
 });
 export type ExtensionType = __Infer<typeof ExtensionType>;
 
+export const FileRef = __t.object("FileRef", {
+  name: __t.string(),
+  objectId: __t.string(),
+  externalUrl: __t.string(),
+});
+export type FileRef = __Infer<typeof FileRef>;
+
 export const HarnessTemplate = __t.object("HarnessTemplate", {
   id: __t.u64(),
   externalId: __t.string(),
@@ -1266,6 +1273,7 @@ export const PropertyType = __t.enum("PropertyType", {
   Ai: __t.unit(),
   Formula: __t.unit(),
   Rollup: __t.unit(),
+  File: __t.unit(),
 });
 export type PropertyType = __Infer<typeof PropertyType>;
 
@@ -1282,6 +1290,9 @@ export const PropertyValue = __t.enum("PropertyValue", {
   Person: __t.array(__t.string()),
   get Ai() {
     return AiPropertyValue;
+  },
+  get File() {
+    return __t.array(FileRef);
   },
 });
 export type PropertyValue = __Infer<typeof PropertyValue>;

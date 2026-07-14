@@ -12,6 +12,7 @@ import type { PropertyDefinitionRow, PagePropertyValueRow } from "@/src/hooks/us
 import { useUsers, type UserRow } from "@/src/hooks/useUser";
 import { FloatingPopup } from "./FloatingPopup";
 import { formatDateOnly } from "../lib/date-only";
+import { uploadWorkspaceBlob, usePearWorkspaceSlug } from "@/src/lib/blobUpload";
 import {
   parseSelectConfig,
   serializeSelectConfig,
@@ -136,6 +137,14 @@ export function PropertyCell({
           placeholder="https://…"
           forceEdit={forceEdit}
           onRequestNavigate={onRequestNavigate}
+        />
+      );
+
+    case "File":
+      return (
+        <FileCell
+          value={value?.tag === "File" ? (value.value as FileRefValue[]) : []}
+          onSave={(v) => save({ tag: "File", value: v } as PropertyValue)}
         />
       );
 
@@ -1232,6 +1241,122 @@ function AiCell({
   );
 }
 
+
+// ── File cell ─────────────────────────────────────────────────────────────────
+
+type FileRefValue = { name: string; objectId: string; externalUrl: string };
+
+function fileHref(slug: string | null, f: FileRefValue): string | null {
+  if (f.objectId) {
+    return slug ? `/api/workspaces/${encodeURIComponent(slug)}/blobs/${f.objectId}/raw` : null;
+  }
+  return f.externalUrl || null;
+}
+
+function FileCell({
+  value,
+  onSave,
+}: {
+  value: FileRefValue[];
+  onSave: (v: FileRefValue[]) => void;
+}) {
+  const slug = usePearWorkspaceSlug();
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const anchorRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  async function handleUpload(file: globalThis.File) {
+    setBusy(true);
+    try {
+      const uploaded = await uploadWorkspaceBlob({
+        slug: slug ?? "",
+        body: file,
+        contentType: file.type || "application/octet-stream",
+      });
+      if (uploaded) {
+        onSave([...value, { name: file.name, objectId: uploaded.objectId, externalUrl: "" }]);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div ref={anchorRef} className="w-full min-h-[1.5rem]">
+      <button
+        type="button"
+        onClick={() => setEditing(true)}
+        className="w-full text-left flex flex-wrap gap-1 items-center"
+      >
+        {value.length === 0 ? (
+          <span className="text-neutral-300 dark:text-neutral-600 text-sm">—</span>
+        ) : (
+          value.map((f, i) => (
+            <span
+              key={`${f.objectId || f.externalUrl}-${i}`}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-neutral-100 dark:bg-neutral-800 text-xs text-neutral-700 dark:text-neutral-300 max-w-[12rem] truncate"
+            >
+              📎 {f.name}
+            </span>
+          ))
+        )}
+      </button>
+      {editing && (
+        <FloatingPopup anchorRef={anchorRef} onClose={() => setEditing(false)}>
+          <div className="p-2 w-72 space-y-1">
+            {value.map((f, i) => {
+              const href = fileHref(slug, f);
+              return (
+                <div key={`${f.objectId || f.externalUrl}-${i}`} className="flex items-center gap-2 text-sm">
+                  {href ? (
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex-1 truncate text-blue-600 dark:text-blue-400 hover:underline"
+                    >
+                      📎 {f.name}
+                    </a>
+                  ) : (
+                    <span className="flex-1 truncate text-neutral-500">📎 {f.name}</span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => onSave(value.filter((_, j) => j !== i))}
+                    className="text-neutral-400 hover:text-red-500 text-xs"
+                    aria-label={`Remove ${f.name}`}
+                  >
+                    ✕
+                  </button>
+                </div>
+              );
+            })}
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void handleUpload(file);
+                e.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              disabled={busy || !slug}
+              onClick={() => fileInputRef.current?.click()}
+              className="w-full mt-1 px-2 py-1 rounded border border-dashed border-neutral-300 dark:border-neutral-600 text-xs text-neutral-500 hover:border-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-300 disabled:opacity-50"
+            >
+              {busy ? "Uploading…" : "+ Attach file"}
+            </button>
+          </div>
+        </FloatingPopup>
+      )}
+    </div>
+  );
+}
+
 function renderValueFallback(value: PropertyValue): string {
   switch (value.tag) {
     case "Text":
@@ -1250,6 +1375,10 @@ function renderValueFallback(value: PropertyValue): string {
       return `${(value.value as string[]).length} assigned`;
     case "Date":
       return formatDateOnly(Number(value.value as bigint));
+    case "File": {
+      const files = value.value as { name: string }[];
+      return files.map((f) => f.name).join(", ");
+    }
     default:
       return "";
   }

@@ -599,6 +599,26 @@ function buildTaggedPropertyValue(
         ok: true,
         value: { tag: "Person", value: Array.isArray(rawValue) ? rawValue.map(String) : [String(rawValue)] },
       };
+    case "File": {
+      // External file links only — agents cannot upload workspace blobs here.
+      const arr = Array.isArray(rawValue) ? rawValue : [rawValue];
+      const refs: { name: string; objectId: string; externalUrl: string }[] = [];
+      for (const x of arr) {
+        if (x === null || typeof x !== "object") {
+          return { ok: false, error: "File values must be an array of {name, url} objects" };
+        }
+        const o = x as Record<string, unknown>;
+        const url =
+          typeof o.url === "string" ? o.url : typeof o.external_url === "string" ? o.external_url : "";
+        if (!url) return { ok: false, error: "File entries need a url (external link)" };
+        refs.push({
+          name: typeof o.name === "string" && o.name ? o.name : url,
+          objectId: "",
+          externalUrl: url,
+        });
+      }
+      return { ok: true, value: { tag: "File", value: refs } };
+    }
     default:
       return { ok: false, error: `Unknown value_type: ${valueType}` };
   }
@@ -830,7 +850,7 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
         name: { type: "string" },
         property_type: {
           type: "string",
-          enum: ["Text", "Number", "Date", "Select", "MultiSelect", "Relation", "Checkbox", "Url", "Person"],
+          enum: ["Text", "Number", "Date", "Select", "MultiSelect", "Relation", "Checkbox", "Url", "Person", "File"],
         },
         config: {
           type: "string",
@@ -912,10 +932,10 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
         property_definition_id: { type: "number" },
         value_type: {
           type: "string",
-          enum: ["Text", "Number", "Date", "Select", "MultiSelect", "Relation", "Checkbox", "Url", "Person"],
+          enum: ["Text", "Number", "Date", "Select", "MultiSelect", "Relation", "Checkbox", "Url", "Person", "File"],
         },
         value: {
-          description: "The value — string for Text/Select/Url, number for Number/Date, boolean for Checkbox, string[] for MultiSelect, number[] of page_ids for Relation, string[] of identity hex strings for Person.",
+          description: "The value — string for Text/Select/Url, number for Number/Date, boolean for Checkbox, string[] for MultiSelect, number[] of page_ids for Relation, string[] of identity hex strings for Person, array of {name, url} objects for File (external links).",
         },
       },
       required: ["page_id", "property_definition_id", "value_type", "value"],
@@ -939,7 +959,7 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
               property_definition_id: { type: "number" },
               value_type: {
                 type: "string",
-                enum: ["Text", "Number", "Date", "Select", "MultiSelect", "Relation", "Checkbox", "Url", "Person"],
+                enum: ["Text", "Number", "Date", "Select", "MultiSelect", "Relation", "Checkbox", "Url", "Person", "File"],
               },
               value: { description: "Cell value, same as set_property_value for that type." },
             },
@@ -1915,6 +1935,10 @@ function renderCellValue(v: { tag: string; value: unknown } | undefined): unknow
     case "MultiSelect":
     case "Person":
       return Array.isArray(v.value) ? (v.value as unknown[]).map(String) : [String(v.value)];
+    case "File":
+      return Array.isArray(v.value)
+        ? (v.value as { name?: unknown }[]).map((f) => String(f?.name ?? "file"))
+        : [];
     default:
       // Relation / unknown — best-effort BigInt-safe rendering.
       if (Array.isArray(v.value)) {

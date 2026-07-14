@@ -15,6 +15,7 @@ const PROPERTY_TYPES = [
   "Checkbox",
   "Url",
   "Person",
+  "File",
 ] as const;
 
 type PropertyType = (typeof PROPERTY_TYPES)[number];

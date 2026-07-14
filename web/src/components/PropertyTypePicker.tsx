@@ -10,6 +10,7 @@ export type PropertyTypeTag =
   | "Checkbox"
   | "Url"
   | "Person"
+  | "File"
   | "Ai"
   | "Formula"
   | "Rollup";
@@ -25,6 +26,7 @@ const PROPERTY_TYPES: { tag: PropertyTypeTag; icon: string; label: string }[] =
     { tag: "Checkbox", icon: "✓", label: "Checkbox" },
     { tag: "Url", icon: "🔗", label: "URL" },
     { tag: "Person", icon: "👤", label: "Person" },
+    { tag: "File", icon: "📎", label: "Files & media" },
     { tag: "Ai", icon: "✨", label: "AI" },
     { tag: "Formula", icon: "⨍", label: "Formula" },
     { tag: "Rollup",  icon: "∑", label: "Rollup" },

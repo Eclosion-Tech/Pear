@@ -103,6 +103,10 @@ pub enum PropertyType {
     /// Aggregation over related rows. Config: { "relationPropertyId": u64, "rollupPropertyId": u64, "function": "sum"|"count"|... }
     /// Evaluated client-side from subscribed related row data.
     Rollup,
+    /// File/image attachments on a row (Notion "Files & media" equivalent).
+    /// Values are `PropertyValue::File` lists of workspace blobs or external
+    /// URLs.
+    File,
 }
 
 #[derive(SpacetimeType, Clone, Debug, PartialEq)]
@@ -121,6 +125,19 @@ pub enum PropertyValue {
     /// it was produced by so the UI can show provenance and cost without a
     /// separate query.
     Ai(AiPropertyValue),
+    /// Files attached to a File-type property cell.
+    File(Vec<FileRef>),
+}
+
+/// One file in a File-type property cell. Exactly one of `object_id`
+/// (workspace blob, rendered via the blob route with the current workspace
+/// slug — id rather than URL so snapshots restore across slugs) or
+/// `external_url` is non-empty.
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub struct FileRef {
+    pub name: String,
+    pub object_id: String,
+    pub external_url: String,
 }
 
 /// Materialised value of an AI column. The output is intentionally a

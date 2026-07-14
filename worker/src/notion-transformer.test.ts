@@ -48,6 +48,7 @@ function dataSource(id: string, title: string) {
     properties: {
       Name: { type: "title", title: {} },
       Cost: { type: "number", number: { format: "dollar" } },
+      Receipt: { type: "files", files: {} },
     },
   };
 }
@@ -60,6 +61,13 @@ function makeFixture(): NotionFetchResult {
   pages.set("ds-1", dataSource("ds-1", "Recurring Expenses"));
   pages.set("row-1", page("row-1", "Netflix", { type: "data_source_id", data_source_id: "ds-1" }, {
     Cost: { type: "number", number: 15.99 },
+    Receipt: {
+      type: "files",
+      files: [
+        { name: "receipt.pdf", type: "file", file: { url: "https://files.notion.example/receipt" } },
+        { name: "docs", type: "external", external: { url: "https://example.com/docs" } },
+      ],
+    },
   }));
 
   // A top-level page with a normal sub-page.
@@ -126,6 +134,29 @@ test("row property values are emitted for data_source_id-parented rows", () => {
     (v) => (v.value as { tag?: string })?.tag === "Number",
   );
   assert.equal(numberValues.length, 1, `expected 1 number value, got ${values.length} total values`);
+});
+
+test("files properties become first-class File values with blob/external refs", () => {
+  const uploaded = new Map([
+    ["https://files.notion.example/receipt", {
+      notionUrl: "https://files.notion.example/receipt",
+      objectId: "11111111-2222-3333-4444-555555555555",
+      byteSize: 10,
+      contentType: "application/pdf",
+    }],
+  ]);
+  const payload = transformNotionToPayload(makeFixture(), uploaded, "aa".repeat(32), "testws");
+  const defs = payload.tables.property_definition as Array<Record<string, unknown>>;
+  const receipt = defs.find((d) => d.name === "Receipt")!;
+  assert.equal((receipt.propertyType as { tag: string }).tag, "File");
+  const values = payload.tables.page_property_value as Array<Record<string, unknown>>;
+  const fileVal = values.find((v) => (v.value as { tag?: string })?.tag === "File")!;
+  const refs = (fileVal.value as { value: { name: string; objectId: string; externalUrl: string }[] }).value;
+  assert.equal(refs.length, 2);
+  assert.equal(refs[0].objectId, "11111111-2222-3333-4444-555555555555");
+  assert.equal(refs[0].externalUrl, "");
+  assert.equal(refs[1].objectId, "");
+  assert.equal(refs[1].externalUrl, "https://example.com/docs");
 });
 
 test("the Notion title property is not emitted as a duplicate column", () => {

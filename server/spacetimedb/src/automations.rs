@@ -1298,6 +1298,9 @@ fn coerce_property_value(
         PropertyType::Relation => as_u64_vec(raw)
             .map(PropertyValue::Relation)
             .ok_or("value must be an array of page ids for a Relation property".to_string()),
+        PropertyType::File => {
+            Err("File properties cannot be set by automations yet".to_string())
+        }
         _ => Err("computed property types cannot be set by automations".to_string()),
     }
 }
