@@ -162,10 +162,46 @@ export function NotionImportPanel() {
         Import from Notion
       </h2>
 
-      <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-4">
+      <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-2">
         Connect your Notion account to import pages, databases, attachments, and comments into this
         workspace. Everything lands under a &quot;Notion Import&quot; page — existing content is untouched.
       </p>
+
+      <details className="mb-4 text-xs text-neutral-500 dark:text-neutral-400">
+        <summary className="cursor-pointer select-none hover:text-neutral-700 dark:hover:text-neutral-300">
+          What doesn&apos;t come over*
+        </summary>
+        <ul className="mt-1.5 ml-4 space-y-0.5 list-disc">
+          <li>
+            <strong>Teamspaces</strong> — Notion&apos;s API doesn&apos;t expose them; teamspace pages import
+            side by side at the top level.
+          </li>
+          <li>
+            <strong>Database views</strong> — each database gets a default grid; board, calendar,
+            timeline, and gallery views don&apos;t transfer.
+          </li>
+          <li>
+            <strong>Rollups</strong> — column definitions import, but cross-row aggregation isn&apos;t
+            computed yet.
+          </li>
+          <li>
+            <strong>Formulas</strong> — expressions import and are re-evaluated here; results can
+            differ for functions Pear doesn&apos;t support.
+          </li>
+          <li>
+            <strong>Files over 50&nbsp;MB</strong> (or beyond your storage quota) are skipped; their
+            links keep temporary Notion URLs that expire.
+          </li>
+          <li>
+            <strong>People properties</strong> import as names — they aren&apos;t linked to workspace
+            members.
+          </li>
+          <li>
+            <strong>Permissions</strong> — Notion page sharing doesn&apos;t transfer; imported pages
+            follow this workspace&apos;s access rules.
+          </li>
+        </ul>
+      </details>
 
       {loadingStatus && !status ? (
         <p className="text-sm text-neutral-500">Checking connection…</p>
