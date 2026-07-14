@@ -105,7 +105,8 @@ function makeFixture(): NotionFetchResult {
       toggle: { rich_text: [{ type: "text", plain_text: "More", text: { content: "More", link: null }, annotations: ann() }] },
     },
     {
-      object: "block", id: "blk-child-page", type: "child_page", has_children: false,
+      // In the live API a child_page block shares its id with the page itself.
+      object: "block", id: "sub-1", type: "child_page", has_children: false,
       parent: { type: "page_id", page_id: "top-1" },
       child_page: { title: "Sub Page" },
     },
@@ -217,6 +218,16 @@ test("relation columns target the related data source's page; unshared targets a
   assert.equal((contractVal.value as { value: unknown[] }).value.length, 0);
 });
 
+test("declared idCounts cover every assigned page id, including link targets", () => {
+  const payload = transformNotionToPayload(makeFixture(), new Map(), "aa".repeat(32), "testws");
+  const maxRowId = Math.max(
+    ...(payload.tables.page as Array<{ id: { v: string } }>).map((r) => Number(r.id.v)),
+  );
+  assert.ok(payload.idCounts.page >= maxRowId, "page idCount covers all page rows");
+  assert.equal(payload.idCounts.property_definition, payload.tables.property_definition.length);
+  assert.equal(payload.idCounts.page_property_value, payload.tables.page_property_value.length);
+});
+
 test("the Notion title property is not emitted as a duplicate column", () => {
   const payload = transformNotionToPayload(makeFixture(), new Map(), "aa".repeat(32), "testws");
   const defs = payload.tables.property_definition as Array<Record<string, unknown>>;
@@ -225,13 +236,21 @@ test("the Notion title property is not emitted as a duplicate column", () => {
   assert.ok(names.includes("Cost"));
 });
 
-test("child_page placeholders become links to the imported page", () => {
+test("child_page placeholders become native pageLink blocks targeting the imported page", () => {
   const payload = transformNotionToPayload(makeFixture(), new Map(), "aa".repeat(32), "testws");
+  const pages = rowsByTitle(payload);
+  const subPage = pages.get("Sub Page")!;
   const contentRows = payload.tables.page_content as Array<{ content: string }>;
   const hubContent = contentRows.map((c) => c.content).find((c) => c.includes("Sub Page"));
   assert.ok(hubContent, "hub page content exists");
-  const blocks = JSON.parse(hubContent!);
-  const flat = JSON.stringify(blocks);
-  assert.match(flat, /\/workspace\/testws\/\d+/);
-  assert.match(flat, /→ Sub Page/);
+  const blocks = JSON.parse(hubContent!) as Array<{
+    type: string;
+    props: { pageId?: string; pageTitle?: string };
+  }>;
+  const link = blocks.find((b) => b.type === "pageLink");
+  assert.ok(link, "pageLink block emitted");
+  // The pageId is the payload-local id of the child's page row; the import
+  // reducer offsets it into the workspace id space alongside the row itself.
+  assert.equal(link!.props.pageId, (subPage.id as { v: string }).v);
+  assert.equal(link!.props.pageTitle, "Sub Page");
 });

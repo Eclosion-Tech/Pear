@@ -6,16 +6,19 @@
 //! Only content tables are imported — no AI users, Orcha jobs, API endpoints,
 //! or extensions. This is a content migration, not a full workspace restore.
 //!
-//! Imports into a **non-empty workspace** are supported: every id in the
-//! payload (the transformer numbers from 1) is shifted by a per-table offset
-//! computed from the workspace's current maxima, cross-references (parents,
-//! relations, schema/property links, conversations) are remapped with the
-//! same offsets, and everything lands under a fresh "Notion Import" container
-//! page at the workspace root. After the inserts, the `id_counter` rows are
-//! reset so subsequent allocations re-seed above the imported ids (same
-//! pattern as `import_v2_commit`).
+//! Imports into a **non-empty workspace** are supported: a contiguous id
+//! block per table is atomically reserved through the `id_counter` allocator
+//! (advancing the counter past the block, so every other allocation path
+//! skips it), every payload id (the transformer numbers from 1) is shifted
+//! into its table's reserved block, cross-references (parents, relations,
+//! schema/property links, conversations, content page links) are remapped
+//! with the same bases, and everything lands under a fresh "Notion Import"
+//! container page at the workspace root. Reservation — rather than
+//! offsetting from observed maxima — keeps the bases valid regardless of
+//! concurrent allocations, including across transactions if the apply is
+//! ever chunked.
 
-use crate::id_counters::id_counter;
+use crate::id_counters::reserve_id_block;
 use crate::pages::create_component_tree_page_inner;
 use crate::{
     attachment, conversation, conversation_message, conversation_participant, database_schema,
@@ -65,8 +68,10 @@ pub(crate) fn apply_notion_snapshot_for_job(
     apply_notion_snapshot(ctx, snapshot_json)
 }
 
-/// Per-table id offsets applied to every id in the payload (the transformer
-/// numbers each table from 1, so `current max + payload id` cannot collide).
+/// Per-table id-block bases applied to every id in the payload. The
+/// transformer numbers each table from 1 and declares its id-space size
+/// (`idCounts`); each base comes from an atomic `reserve_id_block`, so
+/// `base + payload id` lies inside space no other allocation can touch.
 struct Offsets {
     page: u64,
     schema: u64,
@@ -131,28 +136,77 @@ fn apply_notion_snapshot(ctx: &ReducerContext, snapshot_json: &str) -> Result<u6
         ActorType::Human,
     )?;
 
+    // Reserve a contiguous id block per table through the allocator instead
+    // of offsetting from observed maxima: the reservation advances the
+    // counter past the block in this transaction, so every other allocation
+    // path skips it — and the bases stay valid across transactions, which a
+    // max-at-apply-time snapshot would not if the apply is ever chunked.
     let off = Offsets {
-        page: ctx.db.page().iter().map(|r| r.id).max().unwrap_or(0),
-        schema: ctx.db.database_schema().iter().map(|r| r.id).max().unwrap_or(0),
-        prop_def: ctx.db.property_definition().iter().map(|r| r.id).max().unwrap_or(0),
-        view: ctx.db.database_view().iter().map(|r| r.id).max().unwrap_or(0),
-        prop_value: ctx.db.page_property_value().iter().map(|r| r.id).max().unwrap_or(0),
-        attachment: ctx.db.attachment().iter().map(|r| r.id).max().unwrap_or(0),
-        conversation: ctx.db.conversation().iter().map(|r| r.id).max().unwrap_or(0),
-        conv_participant: ctx
-            .db
-            .conversation_participant()
-            .iter()
-            .map(|r| r.id)
-            .max()
-            .unwrap_or(0),
-        conv_message: ctx
-            .db
-            .conversation_message()
-            .iter()
-            .map(|r| r.id)
-            .max()
-            .unwrap_or(0),
+        page: reserve_id_block(ctx, "page", id_span(&root, tables, "page")?, || {
+            ctx.db.page().iter().map(|r| r.id).max().unwrap_or(0)
+        }),
+        schema: reserve_id_block(
+            ctx,
+            "database_schema",
+            id_span(&root, tables, "database_schema")?,
+            || ctx.db.database_schema().iter().map(|r| r.id).max().unwrap_or(0),
+        ),
+        prop_def: reserve_id_block(
+            ctx,
+            "property_definition",
+            id_span(&root, tables, "property_definition")?,
+            || ctx.db.property_definition().iter().map(|r| r.id).max().unwrap_or(0),
+        ),
+        view: reserve_id_block(
+            ctx,
+            "database_view",
+            id_span(&root, tables, "database_view")?,
+            || ctx.db.database_view().iter().map(|r| r.id).max().unwrap_or(0),
+        ),
+        prop_value: reserve_id_block(
+            ctx,
+            "page_property_value",
+            id_span(&root, tables, "page_property_value")?,
+            || ctx.db.page_property_value().iter().map(|r| r.id).max().unwrap_or(0),
+        ),
+        attachment: reserve_id_block(
+            ctx,
+            "attachment",
+            id_span(&root, tables, "attachment")?,
+            || ctx.db.attachment().iter().map(|r| r.id).max().unwrap_or(0),
+        ),
+        conversation: reserve_id_block(
+            ctx,
+            "conversation",
+            id_span(&root, tables, "conversation")?,
+            || ctx.db.conversation().iter().map(|r| r.id).max().unwrap_or(0),
+        ),
+        conv_participant: reserve_id_block(
+            ctx,
+            "conversation_participant",
+            id_span(&root, tables, "conversation_participant")?,
+            || {
+                ctx.db
+                    .conversation_participant()
+                    .iter()
+                    .map(|r| r.id)
+                    .max()
+                    .unwrap_or(0)
+            },
+        ),
+        conv_message: reserve_id_block(
+            ctx,
+            "conversation_message",
+            id_span(&root, tables, "conversation_message")?,
+            || {
+                ctx.db
+                    .conversation_message()
+                    .iter()
+                    .map(|r| r.id)
+                    .max()
+                    .unwrap_or(0)
+            },
+        ),
         container,
     };
 
@@ -167,15 +221,44 @@ fn apply_notion_snapshot(ctx: &ReducerContext, snapshot_json: &str) -> Result<u6
     import_conversation_participant(ctx, tables, &off)?;
     import_conversation_message(ctx, tables, &off)?;
 
-    // Reset the id allocator: imported rows were inserted with explicit ids
-    // above the pre-import maxima, so counters must re-seed from the new
-    // maxima or the next create_page would collide (see id_counters.rs).
-    let counter_names: Vec<String> = ctx.db.id_counter().iter().map(|r| r.name).collect();
-    for name in counter_names {
-        ctx.db.id_counter().name().delete(name);
-    }
-
     Ok(container)
+}
+
+/// Defensive ceiling on a single table's reserved id span — the declared
+/// counts come from the (untrusted) payload, and an absurd value would burn
+/// through the id space or overflow the counter.
+const MAX_ID_SPAN: u64 = 50_000_000;
+
+/// Ids the payload occupies in a table's namespace: the transformer-declared
+/// count when present, or the maximum row id actually found — whichever is
+/// larger. Declared counts also cover ids that were assigned but never
+/// materialised as rows (e.g. a link_to_page target outside the export), so
+/// dangling references still land inside reserved space.
+fn id_span(root: &Value, tables: &Value, table: &str) -> Result<u64, String> {
+    let declared = root
+        .get("idCounts")
+        .and_then(|c| c.get(table))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let row_max = tables
+        .get(table)
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|row| row.as_object())
+                .filter_map(|o| o.get("id"))
+                .filter_map(|v| decode_u64(v).ok())
+                .max()
+                .unwrap_or(0)
+        })
+        .unwrap_or(0);
+    let span = declared.max(row_max);
+    if span > MAX_ID_SPAN {
+        return Err(format!(
+            "Import declares {span} ids for table {table}; the maximum is {MAX_ID_SPAN}."
+        ));
+    }
+    Ok(span)
 }
 
 // ── Table importers ───────────────────────────────────────────────────────────
@@ -225,9 +308,66 @@ fn import_page_content(ctx: &ReducerContext, tables: &Value, off: &Offsets) -> R
     for row in arr {
         let mut r = decode_page_content(row)?;
         r.page_id += off.page;
+        r.content = remap_content_page_ids(&r.content, off);
         ctx.db.page_content().insert(r);
     }
     Ok(())
+}
+
+/// Remap payload-local page ids embedded in BlockNote content JSON: the
+/// `pageId` prop of pageLink blocks and `/workspace/<slug>/<id>` hrefs the
+/// transformer generated. Table-row ids are offset on insert, but content is
+/// an opaque string to the rest of the import — without this, links point at
+/// whichever pre-existing page owns the un-offset id.
+fn remap_content_page_ids(content: &str, off: &Offsets) -> String {
+    let Ok(mut v) = serde_json::from_str::<Value>(content) else {
+        return content.to_string();
+    };
+    fn walk(v: &mut Value, off: &Offsets) {
+        match v {
+            Value::Array(items) => items.iter_mut().for_each(|x| walk(x, off)),
+            Value::Object(o) => {
+                let ty = o.get("type").and_then(|t| t.as_str());
+                if ty == Some("pageLink") {
+                    if let Some(Value::Object(props)) = o.get_mut("props") {
+                        let parsed = props
+                            .get("pageId")
+                            .and_then(|p| p.as_str())
+                            .and_then(|s| s.parse::<u64>().ok());
+                        if let Some(id) = parsed {
+                            props.insert(
+                                "pageId".to_string(),
+                                Value::String((id + off.page).to_string()),
+                            );
+                        }
+                    }
+                } else if ty == Some("link") {
+                    if let Some(href) = o.get("href").and_then(|h| h.as_str()) {
+                        if let Some(remapped) = remap_workspace_href(href, off) {
+                            o.insert("href".to_string(), Value::String(remapped));
+                        }
+                    }
+                }
+                o.values_mut().for_each(|x| walk(x, off));
+            }
+            _ => {}
+        }
+    }
+    walk(&mut v, off);
+    v.to_string()
+}
+
+/// `/workspace/<slug>/<digits>` → same path with the page offset applied.
+/// Anything else (external URLs, blob paths, deeper paths) is left alone.
+fn remap_workspace_href(href: &str, off: &Offsets) -> Option<String> {
+    let parts: Vec<&str> = href.split('/').collect();
+    match parts.as_slice() {
+        ["", "workspace", slug, id] => {
+            let id = id.parse::<u64>().ok()?;
+            Some(format!("/workspace/{}/{}", slug, id + off.page))
+        }
+        _ => None,
+    }
 }
 
 fn import_database_schema(ctx: &ReducerContext, tables: &Value, off: &Offsets) -> Result<(), String> {
@@ -888,6 +1028,56 @@ mod notion_v1_tests {
         assert!(v.get("targetPageId").is_none());
         // Non-object config passes through verbatim.
         assert_eq!(remap_relation_config("not json", &off), "not json");
+    }
+
+    #[test]
+    fn id_span_takes_max_of_declared_and_row_ids_and_caps() {
+        let tables = serde_json::json!({
+            "page": [
+                {"id": {"__pear": "bigint", "v": "3"}},
+                {"id": {"__pear": "bigint", "v": "9"}},
+            ],
+        });
+        // Declared count wins when larger (covers dangling link targets).
+        let root = serde_json::json!({"idCounts": {"page": 12}});
+        assert_eq!(id_span(&root, &tables, "page").unwrap(), 12);
+        // Row max wins when the declaration is missing or lower.
+        let root = serde_json::json!({"idCounts": {"page": 4}});
+        assert_eq!(id_span(&root, &tables, "page").unwrap(), 9);
+        assert_eq!(id_span(&serde_json::json!({}), &tables, "page").unwrap(), 9);
+        // Absent table → zero-width reservation.
+        assert_eq!(id_span(&serde_json::json!({}), &tables, "attachment").unwrap(), 0);
+        // Untrusted declared counts are capped.
+        let root = serde_json::json!({"idCounts": {"page": u64::MAX}});
+        assert!(id_span(&root, &tables, "page").is_err());
+    }
+
+    #[test]
+    fn remap_content_page_ids_covers_page_links_and_hrefs() {
+        let off = offsets(500);
+        // pageLink block props remap; nested children are walked too.
+        let content = r#"[{"id":"a","type":"pageLink","props":{"pageId":"40","pageTitle":"Recipes"},"content":[],"children":[{"id":"b","type":"pageLink","props":{"pageId":"7","pageTitle":"Sub"},"content":[],"children":[]}]}]"#;
+        let out = remap_content_page_ids(content, &off);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v[0]["props"]["pageId"], "540");
+        assert_eq!(v[0]["children"][0]["props"]["pageId"], "507");
+
+        // Inline workspace links remap; external and blob URLs are untouched.
+        let content = r#"[{"id":"c","type":"paragraph","props":{},"content":[{"type":"link","href":"/workspace/eclosion/40","content":[{"type":"text","text":"→ Hub","styles":{}}]},{"type":"link","href":"https://example.com/workspace/eclosion/40","content":[]},{"type":"link","href":"/api/workspaces/eclosion/blobs/abc/raw","content":[]}],"children":[]}]"#;
+        let out = remap_content_page_ids(content, &off);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v[0]["content"][0]["href"], "/workspace/eclosion/540");
+        assert_eq!(
+            v[0]["content"][1]["href"],
+            "https://example.com/workspace/eclosion/40"
+        );
+        assert_eq!(
+            v[0]["content"][2]["href"],
+            "/api/workspaces/eclosion/blobs/abc/raw"
+        );
+
+        // Non-JSON content passes through verbatim.
+        assert_eq!(remap_content_page_ids("not json", &off), "not json");
     }
 
     #[test]

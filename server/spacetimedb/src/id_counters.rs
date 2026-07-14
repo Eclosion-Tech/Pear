@@ -75,3 +75,41 @@ pub(crate) fn alloc_id<F: FnOnce() -> u64>(
     }
     next
 }
+
+/// Atomically reserve a contiguous block of `count` ids for the named
+/// counter, returning the block's base: the reserved ids are
+/// `base + 1 ..= base + count`. The counter is advanced past the block in
+/// the same transaction, so every other allocation path skips it — the
+/// caller can assign ids inside the block without racing anyone, including
+/// across later transactions (the base stays valid no matter what is
+/// allocated in between).
+///
+/// Unlike `alloc_id`, `current_table_max` is consulted on every call (not
+/// just on first seed) and the base never sits below it — a counter row
+/// that has drifted behind explicitly-written ids cannot hand out an
+/// overlapping block. Reservation is a cold path (bulk imports), so the
+/// extra table scan is acceptable.
+pub(crate) fn reserve_id_block<F: FnOnce() -> u64>(
+    ctx: &ReducerContext,
+    name: &str,
+    count: u64,
+    current_table_max: F,
+) -> u64 {
+    let key = name.to_string();
+    let existing = ctx.db.id_counter().name().find(key.clone());
+    let base = existing
+        .as_ref()
+        .map(|row| row.value)
+        .unwrap_or(0)
+        .max(current_table_max());
+    let updated = IdCounter {
+        name: key,
+        value: base + count,
+    };
+    if existing.is_some() {
+        ctx.db.id_counter().name().update(updated);
+    } else {
+        ctx.db.id_counter().insert(updated);
+    }
+    base
+}

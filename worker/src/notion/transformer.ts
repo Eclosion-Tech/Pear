@@ -30,10 +30,15 @@ import type { AttachmentUploadResult } from "./attachments.js";
 function makeIdAssigner() {
   const map = new Map<string, bigint>();
   let next = 1n;
-  return (notionId: string): bigint => {
+  const assign = (notionId: string): bigint => {
     if (!map.has(notionId)) map.set(notionId, next++);
     return map.get(notionId)!;
   };
+  // Total ids handed out — the payload declares this so the reducer can
+  // reserve id space covering every assignment, including references that
+  // never became rows (e.g. a link target outside the export).
+  assign.count = (): bigint => next - 1n;
+  return assign;
 }
 
 // ── Wire format helpers ───────────────────────────────────────────────────────
@@ -244,19 +249,13 @@ function blockToPmNodes(
     case "child_page":
     case "child_database": {
       // These are their own Page rows; the block id IS the child's Notion id,
-      // so link to the imported page instead of leaving dead placeholder text.
+      // so emit a native pageLink block pointing at the imported page. The
+      // payload-local pageId is offset-remapped by the import reducer.
       const childTitle =
         (block.type === "child_page" ? block.child_page.title : block.child_database.title) ||
         "Untitled";
       const pearId = notionToId(block.id);
-      return [{
-        type: "paragraph",
-        content: [{
-          type: "text",
-          marks: [{ type: "link", attrs: { href: `/workspace/${slug}/${pearId}` } }],
-          text: `→ ${childTitle}`,
-        }],
-      }];
+      return [{ type: "pageLink", attrs: { pageId: String(pearId), pageTitle: childTitle } }];
     }
     case "video": {
       const v = block.video;
@@ -305,15 +304,10 @@ function blockToPmNodes(
         ltp.type === "database_id" ? ltp.database_id :
         null;
       if (!targetNotionId) return [];
+      // The cached title is a placeholder; the pageLink renderer swaps in the
+      // live page title from the subscription.
       const pearId = notionToId(targetNotionId);
-      return [{
-        type: "paragraph",
-        content: [{
-          type: "text",
-          marks: [{ type: "link", attrs: { href: `/workspace/${slug}/${pearId}` } }],
-          text: "→ Linked page",
-        }],
-      }];
+      return [{ type: "pageLink", attrs: { pageId: String(pearId), pageTitle: "Untitled" } }];
     }
     case "column_list": {
       // childBlocks are the column blocks; recurse into each column's children
@@ -467,6 +461,17 @@ function pmNodeToBnBlocks(node: PMNode): BNBlock[] {
       return ((node.content as PMNode[]) ?? []).flatMap(pmNodeToBnBlocks);
     case "horizontalRule":
       return [bnTextBlock("paragraph", [])];
+    case "pageLink": {
+      const attrs = (node.attrs as { pageId?: string; pageTitle?: string } | undefined) ?? {};
+      if (!attrs.pageId) return [];
+      return [{
+        id: bnId(),
+        type: "pageLink",
+        props: { pageId: attrs.pageId, pageTitle: attrs.pageTitle || "Untitled" },
+        content: [],
+        children: [],
+      }];
+    }
     case "image": {
       const attrs = (node.attrs as { src?: string; alt?: string } | undefined) ?? {};
       // Relative /api/workspaces/... blob paths are ours; absolute URLs must be http(s).
@@ -767,6 +772,12 @@ export type NotionImportPayload = {
   callerIdentityHex: string;
   /** Source Notion workspace name; the reducer titles the container page with it. */
   notionWorkspaceName?: string | null;
+  /**
+   * Per-table id-space size (ids are assigned densely from 1). The reducer
+   * reserves this many ids per table through its allocator, so payload ids —
+   * including dangling references — remap into space nothing else can claim.
+   */
+  idCounts: Record<string, number>;
   tables: {
     page: unknown[];
     page_content: unknown[];
@@ -1113,6 +1124,17 @@ export function transformNotionToPayload(
     importedAt: now,
     notionWorkspaceName: notionWorkspaceName ?? null,
     callerIdentityHex,
+    idCounts: {
+      page: Number(notionToId.count()),
+      database_schema: Number(schemaIdCounter),
+      property_definition: Number(propDefIdCounter),
+      database_view: Number(dbViewIdCounter),
+      page_property_value: Number(propValueIdCounter),
+      attachment: Number(attachmentIdCounter),
+      conversation: Number(conversationIdCounter),
+      conversation_participant: Number(participantIdCounter),
+      conversation_message: Number(messageIdCounter),
+    },
     tables: {
       page: pageRows,
       page_content: pageContentRows,
