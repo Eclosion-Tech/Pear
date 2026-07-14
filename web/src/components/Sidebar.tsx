@@ -6,7 +6,7 @@ import { useTheme } from "next-themes";
 import {
   usePages,
   useCreatePage,
-  useDeletePage,
+  useDeletePageSubtree,
   useMovePage,
   useDeletedPages,
   useConnection,
@@ -226,6 +226,8 @@ interface SidebarItemProps {
   onDragEnd: () => void;
   onDrop: (target: DropTarget) => void;
   onContextMenu: (e: React.MouseEvent, page: PageRow) => void;
+  selectedIds: Set<string>;
+  onItemClick: (e: React.MouseEvent, page: PageRow) => void;
   router: ReturnType<typeof useRouter>;
   emojiPickerPageId: bigint | null;
   onOpenEmojiPicker: (pageId: bigint) => void;
@@ -246,6 +248,8 @@ function SidebarItem({
   onDragEnd,
   onDrop,
   onContextMenu,
+  selectedIds,
+  onItemClick,
   router,
   emojiPickerPageId,
   onOpenEmojiPicker,
@@ -255,6 +259,7 @@ function SidebarItem({
   const iconButtonRef = useRef<HTMLButtonElement>(null);
   const id = String(page.id);
   const isActive = id === activeId;
+  const isSelected = selectedIds.has(id);
   const isExpanded = expandedIds.has(id);
   const isDragging = draggingId === page.id;
   const defaultIcon = page.pageType.tag === "Database" ? "📊" : "📄";
@@ -334,6 +339,8 @@ function SidebarItem({
         } ${
           dragOver === "into"
             ? "bg-blue-100 dark:bg-blue-900/30 outline outline-1 outline-blue-400"
+            : isSelected
+            ? "bg-blue-100 dark:bg-blue-900/40 text-neutral-900 dark:text-white"
             : isActive
             ? "bg-neutral-200 dark:bg-neutral-800 text-neutral-900 dark:text-white"
             : "text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-900 hover:text-neutral-900 dark:hover:text-white"
@@ -370,7 +377,7 @@ function SidebarItem({
         {/* Icon + title */}
         <div
           className="flex-1 flex items-center gap-1.5 min-w-0"
-          onClick={() => router.push(`/workspace/${page.id}`)}
+          onClick={(e) => onItemClick(e, page)}
         >
           <button
             ref={iconButtonRef}
@@ -416,6 +423,8 @@ function SidebarItem({
               onDragEnd={onDragEnd}
               onDrop={onDrop}
               onContextMenu={onContextMenu}
+              selectedIds={selectedIds}
+              onItemClick={onItemClick}
               router={router}
               emojiPickerPageId={emojiPickerPageId}
               onOpenEmojiPicker={onOpenEmojiPicker}
@@ -440,7 +449,7 @@ export function Sidebar() {
   const navPages = filterNavVisiblePages(pages);
   const { pages: deletedPages } = useDeletedPages();
   const createPage = useCreatePage();
-  const deletePage = useDeletePage();
+  const deletePageSubtree = useDeletePageSubtree();
   const movePage = useMovePage();
   const { isActive } = useConnection();
   const { user, displayName, initials } = useCurrentUser();
@@ -455,6 +464,11 @@ export function Sidebar() {
   const [pendingNav, setPendingNav] = useState<Set<bigint> | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [emojiPickerPageId, setEmojiPickerPageId] = useState<bigint | null>(null);
+  // Multi-select: cmd/ctrl-click toggles, shift-click range-selects across the
+  // visible tree order. Anchor is the last non-shift click.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectionAnchor, setSelectionAnchor] = useState<string | null>(null);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -534,6 +548,107 @@ export function Sidebar() {
     });
   }
 
+  // ── Multi-select ────────────────────────────────────────────────────────────
+
+  /** Page ids in the order they appear in the sidebar (expanded nodes only). */
+  function visibleOrderedIds(): string[] {
+    const out: string[] = [];
+    const walk = (page: PageRow) => {
+      const id = String(page.id);
+      out.push(id);
+      if (!expandedIds.has(id)) return;
+      navPages
+        .filter((p) => p.parentId === page.id)
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .forEach(walk);
+    };
+    roots.forEach(walk);
+    return out;
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set());
+    setSelectionAnchor(null);
+  }
+
+  function handleItemClick(e: React.MouseEvent, page: PageRow) {
+    const id = String(page.id);
+    if (e.shiftKey && (selectionAnchor !== null || selectedIds.size > 0)) {
+      e.preventDefault();
+      const order = visibleOrderedIds();
+      const anchor = selectionAnchor ?? order.find((x) => selectedIds.has(x)) ?? id;
+      const from = order.indexOf(anchor);
+      const to = order.indexOf(id);
+      if (from === -1 || to === -1) return;
+      const [lo, hi] = from <= to ? [from, to] : [to, from];
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (let i = lo; i <= hi; i++) next.add(order[i]);
+        return next;
+      });
+      return;
+    }
+    if (e.metaKey || e.ctrlKey) {
+      e.preventDefault();
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.has(id) ? next.delete(id) : next.add(id);
+        return next;
+      });
+      setSelectionAnchor(id);
+      return;
+    }
+    if (selectedIds.size > 0) {
+      // A plain click while selecting acts like cmd-click so runs of single
+      // clicks build the selection instead of navigating away from it.
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.has(id) ? next.delete(id) : next.add(id);
+        return next;
+      });
+      setSelectionAnchor(id);
+      return;
+    }
+    setSelectionAnchor(id);
+    router.push(`/workspace/${page.id}`);
+  }
+
+  async function handleBulkDelete() {
+    if (isBulkDeleting || selectedIds.size === 0) return;
+    // Skip pages whose ancestor is also selected — the subtree delete cascades.
+    const selectedPages = navPages.filter((p) => selectedIds.has(String(p.id)));
+    const topLevel = selectedPages.filter((p) => {
+      let cur = p;
+      while (cur.parentId != null) {
+        if (selectedIds.has(String(cur.parentId))) return false;
+        const parent = navPages.find((x) => x.id === cur.parentId);
+        if (!parent) break;
+        cur = parent;
+      }
+      return true;
+    });
+    setIsBulkDeleting(true);
+    try {
+      for (const p of topLevel) {
+        await deletePageSubtree({ pageId: p.id });
+      }
+      clearSelection();
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  }
+
+  // Escape clears the selection.
+  useEffect(() => {
+    if (selectedIds.size === 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") clearSelection();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedIds.size]);
+
   async function handleNewPage(parentId?: bigint, type: "Doc" | "Database" = "Doc") {
     const snapshot = new Set(pages.map((p) => p.id));
     setPendingNav(snapshot);
@@ -555,6 +670,7 @@ export function Sidebar() {
   function handleContextMenu(e: React.MouseEvent, page: PageRow) {
     e.preventDefault();
     e.stopPropagation();
+    const inSelection = selectedIds.has(String(page.id)) && selectedIds.size > 1;
     setContextMenu({
       x: e.clientX,
       y: e.clientY,
@@ -567,11 +683,17 @@ export function Sidebar() {
           label: "New sub-database",
           onClick: () => handleNewPage(page.id, "Database"),
         },
-        {
-          label: "Move to trash",
-          onClick: () => deletePage({ pageId: page.id }),
-          destructive: true,
-        },
+        inSelection
+          ? {
+              label: `Move ${selectedIds.size} pages to trash`,
+              onClick: () => void handleBulkDelete(),
+              destructive: true,
+            }
+          : {
+              label: "Move to trash",
+              onClick: () => deletePageSubtree({ pageId: page.id }),
+              destructive: true,
+            },
       ],
     });
   }
@@ -729,6 +851,8 @@ export function Sidebar() {
                 onDragEnd={handleDragEnd}
                 onDrop={setDropTarget}
                 onContextMenu={handleContextMenu}
+                selectedIds={selectedIds}
+                onItemClick={handleItemClick}
                 router={router}
                 emojiPickerPageId={emojiPickerPageId}
                 onOpenEmojiPicker={setEmojiPickerPageId}
@@ -768,6 +892,29 @@ export function Sidebar() {
           Settings
         </button>
       </nav>
+
+      {/* Multi-select action bar */}
+      {selectedIds.size > 0 && (
+        <div className="px-2 py-2 border-t border-blue-200 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/40 flex items-center gap-2 text-xs">
+          <span className="flex-1 text-neutral-700 dark:text-neutral-300 font-medium">
+            {selectedIds.size} selected
+          </span>
+          <button
+            onClick={() => void handleBulkDelete()}
+            disabled={isBulkDeleting || !isActive}
+            className="px-2 py-1 rounded bg-red-600 hover:bg-red-700 text-white font-medium transition-colors disabled:opacity-50"
+          >
+            {isBulkDeleting ? "Deleting…" : "Delete"}
+          </button>
+          <button
+            onClick={clearSelection}
+            disabled={isBulkDeleting}
+            className="px-2 py-1 rounded text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-800 transition-colors disabled:opacity-50"
+          >
+            Clear
+          </button>
+        </div>
+      )}
 
       {/* New page buttons */}
       <div className="px-2 py-2 border-t border-neutral-200 dark:border-neutral-800 space-y-1">
