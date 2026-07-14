@@ -333,9 +333,24 @@ function blockToPmNodes(
     case "table_of_contents":
     case "breadcrumb":
       return [];
-    default:
-      // Unknown block — render plain text fallback
-      return [];
+    default: {
+      // Unknown / API-unsupported block (e.g. Notion's AI meeting notes).
+      // Salvage any fetched children; otherwise leave a visible placeholder —
+      // a silent drop reads as an empty page with no explanation, and the
+      // placeholder names the block type so gaps are diagnosable.
+      const salvaged = childBlocks.flatMap((c) =>
+        blockToPmNodes(c, allBlocks, slug, attachmentMap, notionToId),
+      );
+      if (salvaged.length > 0) return salvaged;
+      return [{
+        type: "paragraph",
+        content: [{
+          type: "text",
+          text: `[Block not available via Notion's API: ${block.type}]`,
+          marks: [{ type: "italic" }],
+        }],
+      }];
+    }
   }
 }
 

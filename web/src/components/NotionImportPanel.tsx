@@ -197,6 +197,10 @@ export function NotionImportPanel() {
             members.
           </li>
           <li>
+            <strong>Blocks Notion&apos;s API doesn&apos;t expose</strong> (e.g. AI meeting notes /
+            transcriptions) import as a named placeholder.
+          </li>
+          <li>
             <strong>Permissions</strong> — Notion page sharing doesn&apos;t transfer; imported pages
             follow this workspace&apos;s access rules.
           </li>
