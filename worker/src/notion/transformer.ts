@@ -596,7 +596,8 @@ function pearSelectConfig(raw: { options?: { name: string; color: string }[] } |
 
 function notionPropertyConfig(
   prop: { type: string } & Record<string, unknown>,
-  notionToId: (id: string) => bigint
+  notionToId: (id: string) => bigint,
+  fetchedIds: Set<string>
 ): string {
   // Pear stores select options as a string array + colors map — emitting
   // {label, color} objects crashed option renderers.
@@ -610,12 +611,17 @@ function notionPropertyConfig(
     return pearSelectConfig(prop.multi_select as { options?: { name: string; color: string }[] });
   }
   if (prop.type === "relation") {
-    const rel = prop.relation as { database_id?: string };
-    // Key the Pear UI reads (PropertyCell parses config.targetPageId). The
-    // Notion database UUID maps to a payload-local Pear id here; the reducer
-    // offset-remaps it into the workspace's id space at import time.
-    const target = rel?.database_id ? String(notionToId(rel.database_id)) : null;
-    return JSON.stringify(target ? { targetPageId: target } : {});
+    const rel = prop.relation as { database_id?: string; data_source_id?: string };
+    // The config carries both the database UUID and the data-source UUID, but
+    // imported pages are keyed by data-source id — only that one resolves to a
+    // page row. Restricting to fetched ids keeps a relation into an unshared
+    // database from minting a dangling target the picker can never load.
+    const targetNotion = [rel?.data_source_id, rel?.database_id].find(
+      (id): id is string => id != null && fetchedIds.has(id)
+    );
+    return JSON.stringify(
+      targetNotion ? { targetPageId: String(notionToId(targetNotion)) } : {}
+    );
   }
   if (prop.type === "formula") {
     const f = prop.formula as { expression?: string } | undefined;
@@ -644,7 +650,8 @@ function notionPropValueToWire(
   prop: Record<string, unknown> & { type: string },
   notionToId: (id: string) => bigint,
   uploadedAttachments: Map<string, AttachmentUploadResult>,
-  workspaceSlug: string
+  workspaceSlug: string,
+  fetchedIds: Set<string>
 ): unknown | null {
   switch (prop.type) {
     case "title": {
@@ -708,7 +715,14 @@ function notionPropValueToWire(
     }
     case "relation": {
       const rels = (prop.relation as { id: string }[] | undefined) ?? [];
-      return { tag: "Relation", value: rels.map((r) => pearBigint(notionToId(r.id))) };
+      // Refs to pages outside the export (e.g. a related database that isn't
+      // shared with the integration) would remap to rows that don't exist.
+      return {
+        tag: "Relation",
+        value: rels
+          .filter((r) => fetchedIds.has(r.id))
+          .map((r) => pearBigint(notionToId(r.id))),
+      };
     }
     case "formula":
       // Formula values are computed client-side; skip storing a static value
@@ -783,6 +797,7 @@ export function transformNotionToPayload(
   notionWorkspaceName?: string | null
 ): NotionImportPayload {
   const notionToId = makeIdAssigner();
+  const fetchedIds = new Set(fetchResult.pages.keys());
   const now = new Date().toISOString();
 
   // Which page each fetched block belongs to — resolves `block_id` page
@@ -944,7 +959,8 @@ export function transformNotionToPayload(
         const pType = notionPropertyTypeToTag(prop.type);
         const config = notionPropertyConfig(
           prop as { type: string } & Record<string, unknown>,
-          notionToId
+          notionToId,
+          fetchedIds
         );
 
         propDefRows.push({
@@ -1001,7 +1017,8 @@ export function transformNotionToPayload(
         prop as Record<string, unknown> & { type: string },
         notionToId,
         uploadedAttachments,
-        workspaceSlug
+        workspaceSlug,
+        fetchedIds
       );
 
       // Skip computed property types (Formula, Rollup) — values are client-side only

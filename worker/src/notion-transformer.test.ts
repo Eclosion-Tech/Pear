@@ -74,6 +74,28 @@ function makeFixture(): NotionFetchResult {
   pages.set("top-1", page("top-1", "Hub", { type: "workspace", workspace: true }));
   pages.set("sub-1", page("sub-1", "Sub Page", { type: "page_id", page_id: "top-1" }));
 
+  // A second database whose relation column targets ds-1 via data_source_id
+  // (the v5 config also carries the database UUID, which no fetched object is
+  // keyed by), plus a relation into a database that was never shared.
+  pages.set("ds-2", {
+    ...dataSource("ds-2", "Vendors"),
+    properties: {
+      Name: { type: "title", title: {} },
+      Expenses: {
+        type: "relation",
+        relation: { database_id: "db-uuid-unfetched", data_source_id: "ds-1", type: "single_property", single_property: {} },
+      },
+      Contracts: {
+        type: "relation",
+        relation: { database_id: "db-uuid-other", data_source_id: "ds-unshared", type: "single_property", single_property: {} },
+      },
+    },
+  });
+  pages.set("vendor-1", page("vendor-1", "Netflix Inc", { type: "data_source_id", data_source_id: "ds-2" }, {
+    Expenses: { type: "relation", relation: [{ id: "row-1" }, { id: "row-unfetched" }] },
+    Contracts: { type: "relation", relation: [{ id: "contract-unfetched" }] },
+  }));
+
   // A page nested inside a block (toggle/column) of the hub page.
   pages.set("blocknested-1", page("blocknested-1", "Inside Toggle", { type: "block_id", block_id: "blk-9" }));
   blocks.set("top-1", [
@@ -157,6 +179,42 @@ test("files properties become first-class File values with blob/external refs", 
   assert.equal(refs[0].externalUrl, "");
   assert.equal(refs[1].objectId, "");
   assert.equal(refs[1].externalUrl, "https://example.com/docs");
+});
+
+test("relation columns target the related data source's page; unshared targets and refs are dropped", () => {
+  const payload = transformNotionToPayload(makeFixture(), new Map(), "aa".repeat(32), "testws");
+  const pages = rowsByTitle(payload);
+  const expensesDb = pages.get("Recurring Expenses")!;
+  const netflixRow = pages.get("Netflix")!;
+  const defs = payload.tables.property_definition as Array<Record<string, unknown>>;
+
+  // Column config: resolved via data_source_id, not the database UUID.
+  const relDef = defs.find((d) => d.name === "Expenses")!;
+  const cfg = JSON.parse(relDef.config as string) as { targetPageId?: string };
+  assert.equal(
+    cfg.targetPageId,
+    (expensesDb.id as { v: string }).v,
+    "relation targetPageId must be the payload id of the related data source's page",
+  );
+
+  // A relation into a database that wasn't shared gets no dangling target.
+  const unsharedDef = defs.find((d) => d.name === "Contracts")!;
+  assert.deepEqual(JSON.parse(unsharedDef.config as string), {});
+
+  // Row values: fetched refs remap, unfetched refs are dropped.
+  const values = payload.tables.page_property_value as Array<Record<string, unknown>>;
+  const relValues = values.filter((v) => (v.value as { tag?: string })?.tag === "Relation");
+  const expenseVal = relValues.find(
+    (v) => pearIdNum(v.pageId) === pearIdNum(pages.get("Netflix Inc")!.id)
+      && pearIdNum(v.propertyDefinitionId) === pearIdNum(relDef.id),
+  )!;
+  const ids = (expenseVal.value as { value: { v: string }[] }).value.map((x) => x.v);
+  assert.deepEqual(ids, [(netflixRow.id as { v: string }).v]);
+  const contractsDef = defs.find((d) => d.name === "Contracts")!;
+  const contractVal = relValues.find(
+    (v) => pearIdNum(v.propertyDefinitionId) === pearIdNum(contractsDef.id),
+  )!;
+  assert.equal((contractVal.value as { value: unknown[] }).value.length, 0);
 });
 
 test("the Notion title property is not emitted as a duplicate column", () => {
