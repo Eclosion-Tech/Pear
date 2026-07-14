@@ -117,6 +117,17 @@ test("sub-pages nest under their parent page; block-nested pages resolve to the 
   assert.equal(pearIdNum(pages.get("Inside Toggle")!.parentId), pearIdNum(hub.id));
 });
 
+test("row property values are emitted for data_source_id-parented rows", () => {
+  const payload = transformNotionToPayload(makeFixture(), new Map(), "aa".repeat(32), "testws");
+  const values = payload.tables.page_property_value as Array<Record<string, unknown>>;
+  // The Netflix row's Cost number must survive — the values loop resolves the
+  // row's database via its parent, which is data_source_id in the current API.
+  const numberValues = values.filter(
+    (v) => (v.value as { tag?: string })?.tag === "Number",
+  );
+  assert.equal(numberValues.length, 1, `expected 1 number value, got ${values.length} total values`);
+});
+
 test("the Notion title property is not emitted as a duplicate column", () => {
   const payload = transformNotionToPayload(makeFixture(), new Map(), "aa".repeat(32), "testws");
   const defs = payload.tables.property_definition as Array<Record<string, unknown>>;

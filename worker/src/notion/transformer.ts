@@ -945,7 +945,11 @@ export function transformNotionToPayload(
     if (page.object !== "page") continue;
     const p = page as PageObjectResponse;
     const parent = p.parent as Record<string, unknown>;
-    const dbId = parent["database_id"] as string | undefined;
+    // Rows carry data_source_id parents in the current API (schemaMetaByDbId
+    // is keyed by data-source id); database_id is the legacy shape.
+    const dbId =
+      (parent["data_source_id"] as string | undefined) ??
+      (parent["database_id"] as string | undefined);
     if (!dbId) continue;
 
     const meta = schemaMetaByDbId.get(dbId);
