@@ -92,11 +92,32 @@ function getPageIcon(page: NotionPage): string | null {
   return null;
 }
 
+// ── Shared transform context ──────────────────────────────────────────────────
+
+/** Everything block/rich-text conversion needs, threaded as one object. */
+type TransformRefs = {
+  slug: string;
+  attachmentMap: Map<string, AttachmentUploadResult>;
+  notionToId: (id: string) => bigint;
+  /** Database UUID → data-source UUID (fetched objects are keyed by the latter). */
+  dbToDs: Map<string, string>;
+  /** Every Notion id present in the fetch — guards against dangling links. */
+  fetchedIds: Set<string>;
+  /** Notion user id → display name. */
+  userNames: Map<string, string>;
+};
+
+// Notion and BlockNote share the same nine-color palette; "x_background"
+// maps to a background style, bare "x" to a text-color style.
+const NOTION_COLORS = new Set([
+  "gray", "brown", "red", "orange", "yellow", "green", "blue", "purple", "pink",
+]);
+
 // ── Rich text → ProseMirror inline content ────────────────────────────────────
 
 type PMNode = Record<string, unknown>;
 
-function richTextToPmInline(richText: RichTextItemResponse[]): PMNode[] {
+function richTextToPmInline(richText: RichTextItemResponse[], refs: TransformRefs): PMNode[] {
   return richText.map((rt) => {
     const marks: PMNode[] = [];
     if (rt.annotations.bold) marks.push({ type: "bold" });
@@ -104,10 +125,38 @@ function richTextToPmInline(richText: RichTextItemResponse[]): PMNode[] {
     if (rt.annotations.strikethrough) marks.push({ type: "strike" });
     if (rt.annotations.code) marks.push({ type: "code" });
     if (rt.annotations.underline) marks.push({ type: "underline" });
+    const color = rt.annotations.color ?? "default";
+    if (color.endsWith("_background")) {
+      const c = color.slice(0, -"_background".length);
+      if (NOTION_COLORS.has(c)) marks.push({ type: "bgColor", attrs: { color: c } });
+    } else if (NOTION_COLORS.has(color)) {
+      marks.push({ type: "textColor", attrs: { color } });
+    }
     if (rt.type === "text" && rt.text.link) {
       marks.push({ type: "link", attrs: { href: rt.text.link.url } });
     }
-    const node: PMNode = { type: "text", text: rt.plain_text };
+    let text = rt.plain_text;
+    if (rt.type === "mention") {
+      // Page/database @-mentions carry their target id — link them like any
+      // other internal reference (the import reducer remaps the href).
+      const m = rt.mention as Record<string, { id?: string } | undefined> & { type: string };
+      const targetId =
+        m.type === "page" ? m.page?.id :
+        m.type === "database" ? (m.database?.id ? refs.dbToDs.get(m.database.id) : undefined) :
+        m.type === "data_source" ? (m as { data_source?: { id?: string } }).data_source?.id :
+        undefined;
+      if (targetId && refs.fetchedIds.has(targetId)) {
+        marks.push({
+          type: "link",
+          attrs: { href: `/workspace/${refs.slug}/${refs.notionToId(targetId)}` },
+        });
+      } else if (m.type === "user") {
+        const uid = (m as { user?: { id?: string } }).user?.id;
+        const name = uid ? refs.userNames.get(uid) : undefined;
+        if (name && (!text || text === "@Anonymous")) text = `@${name}`;
+      }
+    }
+    const node: PMNode = { type: "text", text };
     if (marks.length > 0) node.marks = marks;
     return node;
   });
@@ -118,50 +167,49 @@ function richTextToPmInline(richText: RichTextItemResponse[]): PMNode[] {
 function blockToPmNodes(
   block: BlockObjectResponse,
   allBlocks: BlockObjectResponse[],
-  slug: string,
-  attachmentMap: Map<string, AttachmentUploadResult>,
-  notionToId: (id: string) => bigint,
-  // Database UUID → data-source UUID. child_database blocks and database
-  // link targets carry the database id, but fetched objects are keyed by
-  // data-source id — linking without translating dangles.
-  dbToDs: Map<string, string>
+  refs: TransformRefs
 ): PMNode[] {
+  const { slug, attachmentMap, notionToId, dbToDs } = refs;
   const childBlocks = allBlocks.filter(
     (b) => "parent" in b && (b.parent as { block_id?: string }).block_id === block.id
   );
 
   switch (block.type) {
     case "paragraph": {
-      const content = richTextToPmInline(block.paragraph.rich_text);
+      const content = richTextToPmInline(block.paragraph.rich_text, refs);
       return [{ type: "paragraph", content: content.length ? content : [{ type: "text", text: "" }] }];
     }
     case "heading_1":
-      return [{ type: "heading", attrs: { level: 1 }, content: richTextToPmInline(block.heading_1.rich_text) }];
+      return [{ type: "heading", attrs: { level: 1 }, content: richTextToPmInline(block.heading_1.rich_text, refs) }];
     case "heading_2":
-      return [{ type: "heading", attrs: { level: 2 }, content: richTextToPmInline(block.heading_2.rich_text) }];
+      return [{ type: "heading", attrs: { level: 2 }, content: richTextToPmInline(block.heading_2.rich_text, refs) }];
     case "heading_3":
-      return [{ type: "heading", attrs: { level: 3 }, content: richTextToPmInline(block.heading_3.rich_text) }];
+      return [{ type: "heading", attrs: { level: 3 }, content: richTextToPmInline(block.heading_3.rich_text, refs) }];
+    case "heading_4" as never: {
+      const h4 = (block as unknown as { heading_4: { rich_text: RichTextItemResponse[] } }).heading_4;
+      return [{ type: "heading", attrs: { level: 4 }, content: richTextToPmInline(h4.rich_text, refs) }];
+    }
     case "bulleted_list_item": {
-      const children = childBlocks.flatMap((c) => blockToPmNodes(c, allBlocks, slug, attachmentMap, notionToId, dbToDs));
+      const children = childBlocks.flatMap((c) => blockToPmNodes(c, allBlocks, refs));
       return [{
         type: "bulletList",
         content: [{
           type: "listItem",
           content: [
-            { type: "paragraph", content: richTextToPmInline(block.bulleted_list_item.rich_text) },
+            { type: "paragraph", content: richTextToPmInline(block.bulleted_list_item.rich_text, refs) },
             ...children,
           ],
         }],
       }];
     }
     case "numbered_list_item": {
-      const children = childBlocks.flatMap((c) => blockToPmNodes(c, allBlocks, slug, attachmentMap, notionToId, dbToDs));
+      const children = childBlocks.flatMap((c) => blockToPmNodes(c, allBlocks, refs));
       return [{
         type: "orderedList",
         content: [{
           type: "listItem",
           content: [
-            { type: "paragraph", content: richTextToPmInline(block.numbered_list_item.rich_text) },
+            { type: "paragraph", content: richTextToPmInline(block.numbered_list_item.rich_text, refs) },
             ...children,
           ],
         }],
@@ -173,16 +221,17 @@ function blockToPmNodes(
         content: [{
           type: "taskItem",
           attrs: { checked: block.to_do.checked },
-          content: [{ type: "paragraph", content: richTextToPmInline(block.to_do.rich_text) }],
+          content: [{ type: "paragraph", content: richTextToPmInline(block.to_do.rich_text, refs) }],
         }],
       }];
     }
     case "toggle": {
-      const children = childBlocks.flatMap((c) => blockToPmNodes(c, allBlocks, slug, attachmentMap, notionToId, dbToDs));
-      return [
-        { type: "paragraph", content: richTextToPmInline(block.toggle.rich_text) },
-        ...children,
-      ];
+      const children = childBlocks.flatMap((c) => blockToPmNodes(c, allBlocks, refs));
+      return [{
+        type: "toggle",
+        content: richTextToPmInline(block.toggle.rich_text, refs),
+        children,
+      }];
     }
     case "code": {
       return [{
@@ -194,34 +243,40 @@ function blockToPmNodes(
     case "quote": {
       return [{
         type: "blockquote",
-        content: [{ type: "paragraph", content: richTextToPmInline(block.quote.rich_text) }],
+        content: [{ type: "paragraph", content: richTextToPmInline(block.quote.rich_text, refs) }],
       }];
     }
     case "callout": {
+      const icon =
+        block.callout.icon?.type === "emoji" ? block.callout.icon.emoji : "";
+      const rawColor = block.callout.color ?? "default";
+      const color = rawColor.replace(/_background$/, "");
       return [{
-        type: "blockquote",
-        content: [{ type: "paragraph", content: richTextToPmInline(block.callout.rich_text) }],
+        type: "callout",
+        attrs: { icon, color: NOTION_COLORS.has(color) ? color : "default" },
+        content: richTextToPmInline(block.callout.rich_text, refs),
+        children: childBlocks.flatMap((c) => blockToPmNodes(c, allBlocks, refs)),
       }];
     }
     case "divider":
       return [{ type: "horizontalRule" }];
     case "image": {
       const img = block.image;
+      // Pear's image block resolves a blob objectId (storageKey); external
+      // hotlinked images ride a separate externalUrl prop.
+      let storageKey = "";
       let src = "";
       if (img.type === "external") {
         src = img.external.url;
       } else if (img.type === "file") {
         const uploaded = attachmentMap.get(img.file.url);
-        if (uploaded) {
-          src = `/api/workspaces/${slug}/blobs/${uploaded.objectId}/raw`;
-        } else {
-          src = img.file.url; // fallback to original (may expire)
-        }
+        if (uploaded) storageKey = uploaded.objectId;
+        else src = img.file.url; // fallback to original (may expire)
       }
       const caption = img.type === "external"
         ? extractPlainText(img.caption)
         : extractPlainText((img as { caption: RichTextItemResponse[] }).caption ?? []);
-      return [{ type: "image", attrs: { src, alt: caption || null, title: null } }];
+      return [{ type: "image", attrs: { storageKey, src, alt: caption || null, title: null } }];
     }
     case "file":
     case "pdf": {
@@ -233,7 +288,12 @@ function blockToPmNodes(
         const uploaded = attachmentMap.get(f.file.url);
         url = uploaded ? `/api/workspaces/${slug}/blobs/${uploaded.objectId}/raw` : f.file.url;
       }
-      return [{ type: "paragraph", content: [{ type: "text", marks: [{ type: "link", attrs: { href: url } }], text: url }] }];
+      const name =
+        (block.type === "file" ? (block.file as { name?: string }).name : "") ||
+        extractPlainText((f as { caption?: RichTextItemResponse[] }).caption ?? []) ||
+        url;
+      const caption = extractPlainText((f as { caption?: RichTextItemResponse[] }).caption ?? []);
+      return [{ type: "fileBlock", attrs: { url, name, caption } }];
     }
     case "table": {
       const tableChildren = childBlocks;
@@ -241,11 +301,15 @@ function blockToPmNodes(
         if (rowBlock.type !== "table_row") return { type: "tableRow", content: [] };
         const cells: PMNode[] = rowBlock.table_row.cells.map((cell) => ({
           type: "tableCell",
-          content: [{ type: "paragraph", content: richTextToPmInline(cell) }],
+          content: [{ type: "paragraph", content: richTextToPmInline(cell, refs) }],
         }));
         return { type: "tableRow", content: cells };
       });
-      return [{ type: "table", content: rows }];
+      return [{
+        type: "table",
+        attrs: { headerRow: Boolean(block.table.has_column_header) },
+        content: rows,
+      }];
     }
     case "equation": {
       return [{ type: "paragraph", content: [{ type: "text", text: block.equation.expression }] }];
@@ -285,19 +349,30 @@ function blockToPmNodes(
         url = uploaded ? `/api/workspaces/${slug}/blobs/${uploaded.objectId}/raw` : v.file.url;
       }
       if (!url) return [];
-      return [{ type: "paragraph", content: [{ type: "text", marks: [{ type: "link", attrs: { href: url } }], text: url }] }];
+      const vCaption = extractPlainText((v as { caption?: RichTextItemResponse[] }).caption ?? []);
+      return [{ type: "videoBlock", attrs: { url, name: vCaption || url, caption: vCaption } }];
     }
     case "audio": {
       const a = block.audio;
-      let url = "";
-      if (a.type === "external") {
-        url = a.external.url;
-      } else if (a.type === "file") {
+      const aCaption = extractPlainText((a as { caption?: RichTextItemResponse[] }).caption ?? []);
+      if (a.type === "file") {
         const uploaded = attachmentMap.get(a.file.url);
-        url = uploaded ? `/api/workspaces/${slug}/blobs/${uploaded.objectId}/raw` : a.file.url;
+        if (uploaded) {
+          // Pear's audio block resolves a blob storageKey.
+          return [{ type: "audioBlock", attrs: { storageKey: uploaded.objectId } }];
+        }
       }
+      // External (or un-uploaded) audio has no Pear block shape — keep a link.
+      const url = a.type === "external" ? a.external.url : a.file.url;
       if (!url) return [];
-      return [{ type: "paragraph", content: [{ type: "text", marks: [{ type: "link", attrs: { href: url } }], text: url }] }];
+      return [{
+        type: "paragraph",
+        content: [{
+          type: "text",
+          marks: [{ type: "link", attrs: { href: url } }],
+          text: aCaption || url,
+        }],
+      }];
     }
     case "embed": {
       const url = block.embed.url;
@@ -333,25 +408,63 @@ function blockToPmNodes(
         const colChildren = allBlocks.filter(
           (b) => "parent" in b && (b.parent as { block_id?: string }).block_id === col.id
         );
-        return colChildren.flatMap((c) => blockToPmNodes(c, allBlocks, slug, attachmentMap, notionToId, dbToDs));
+        return colChildren.flatMap((c) => blockToPmNodes(c, allBlocks, refs));
       });
     }
     case "column": {
-      return childBlocks.flatMap((c) => blockToPmNodes(c, allBlocks, slug, attachmentMap, notionToId, dbToDs));
+      return childBlocks.flatMap((c) => blockToPmNodes(c, allBlocks, refs));
     }
     case "synced_block": {
-      return childBlocks.flatMap((c) => blockToPmNodes(c, allBlocks, slug, attachmentMap, notionToId, dbToDs));
+      const synced = childBlocks.flatMap((c) => blockToPmNodes(c, allBlocks, refs));
+      if (synced.length > 0) return synced;
+      if (block.synced_block.synced_from) {
+        // The fetcher grafts the original's children in when it can; landing
+        // here means the original wasn't shared with the integration.
+        return [{
+          type: "paragraph",
+          content: [{
+            type: "text",
+            marks: [{ type: "italic" }],
+            text: "[Synced block — original not shared with the integration]",
+          }],
+        }];
+      }
+      return [];
     }
     case "table_of_contents":
     case "breadcrumb":
       return [];
+    case "template":
+      // Template wrappers are Notion-UI machinery; keep their content.
+      return childBlocks.flatMap((c) => blockToPmNodes(c, allBlocks, refs));
+    case "meeting_notes":
+    case "transcription": {
+      // AI meeting-notes: title + whatever summary/notes children came back.
+      const mn = (block.type === "meeting_notes" ? block.meeting_notes : block.transcription) as {
+        title?: RichTextItemResponse[];
+      };
+      const title = mn.title ? richTextToPmInline(mn.title, refs) : [];
+      const body = childBlocks.flatMap((c) => blockToPmNodes(c, allBlocks, refs));
+      const nodes: PMNode[] = [];
+      if (title.length > 0) nodes.push({ type: "heading", attrs: { level: 3 }, content: title });
+      nodes.push(...body);
+      if (nodes.length > 0) return nodes;
+      return [{
+        type: "paragraph",
+        content: [{
+          type: "text",
+          marks: [{ type: "italic" }],
+          text: "[Meeting notes — transcript body not available via Notion's API]",
+        }],
+      }];
+    }
     default: {
       // Unknown / API-unsupported block (e.g. Notion's AI meeting notes).
       // Salvage any fetched children; otherwise leave a visible placeholder —
       // a silent drop reads as an empty page with no explanation, and the
       // placeholder names the block type so gaps are diagnosable.
       const salvaged = childBlocks.flatMap((c) =>
-        blockToPmNodes(c, allBlocks, slug, attachmentMap, notionToId, dbToDs),
+        blockToPmNodes(c, allBlocks, refs),
       );
       if (salvaged.length > 0) return salvaged;
       return [{
@@ -377,6 +490,13 @@ let bnIdCounter = 1;
 function bnId(): string {
   return `notion-${(bnIdCounter++).toString(36)}`;
 }
+
+// Languages registered on the editor's codeBlock spec (PearEditor.tsx) —
+// anything else renders as plain so an unknown value can't break the block.
+const BN_CODE_LANGUAGES = new Set([
+  "plain", "typescript", "javascript", "json", "html", "css",
+  "markdown", "python", "bash", "sql",
+]);
 
 function bnProps(extra: Record<string, unknown> = {}): Record<string, unknown> {
   return { textColor: "default", backgroundColor: "default", textAlignment: "left", ...extra };
@@ -411,7 +531,7 @@ function pmInlineToBn(nodes: PMNode[] | undefined): unknown[] {
   const out: unknown[] = [];
   for (const n of nodes ?? []) {
     if ((n as { type?: string }).type !== "text") continue;
-    const styles: Record<string, boolean> = {};
+    const styles: Record<string, boolean | string> = {};
     let href: string | null = null;
     for (const m of ((n.marks as PMNode[] | undefined) ?? [])) {
       const t = m.type as string;
@@ -420,7 +540,13 @@ function pmInlineToBn(nodes: PMNode[] | undefined): unknown[] {
       else if (t === "strike") styles.strikethrough = true;
       else if (t === "underline") styles.underline = true;
       else if (t === "code") styles.code = true;
-      else if (t === "link") {
+      else if (t === "textColor") {
+        const c = (m.attrs as { color?: string } | undefined)?.color;
+        if (c) styles.textColor = c;
+      } else if (t === "bgColor") {
+        const c = (m.attrs as { color?: string } | undefined)?.color;
+        if (c) styles.backgroundColor = c;
+      } else if (t === "link") {
         const raw = (m.attrs as { href?: string } | undefined)?.href;
         // Workspace-relative paths (blob/page links we generated) are ours;
         // absolute URLs must be http(s).
@@ -448,8 +574,53 @@ function pmNodeToBnBlocks(node: PMNode): BNBlock[] {
       return [bnTextBlock("paragraph", pmInlineToBn(node.content as PMNode[]))];
     case "heading": {
       const raw = Number((node.attrs as { level?: number } | undefined)?.level ?? 1);
-      const level = Math.min(3, Math.max(1, Number.isFinite(raw) ? raw : 1));
+      const level = Math.min(6, Math.max(1, Number.isFinite(raw) ? raw : 1));
       return [bnTextBlock("heading", pmInlineToBn(node.content as PMNode[]), { level })];
+    }
+    case "toggle": {
+      const children = ((node.children as PMNode[] | undefined) ?? []).flatMap(pmNodeToBnBlocks);
+      return [bnTextBlock("toggleListItem", pmInlineToBn(node.content as PMNode[]), {}, children)];
+    }
+    case "callout": {
+      const attrs = (node.attrs as { icon?: string; color?: string } | undefined) ?? {};
+      const children = ((node.children as PMNode[] | undefined) ?? []).flatMap(pmNodeToBnBlocks);
+      return [{
+        id: bnId(),
+        type: "callout",
+        props: { icon: attrs.icon ?? "", color: attrs.color ?? "default" },
+        content: pmInlineToBn(node.content as PMNode[]),
+        children,
+      }];
+    }
+    case "fileBlock":
+    case "videoBlock": {
+      const attrs = (node.attrs as { url?: string; name?: string; caption?: string } | undefined) ?? {};
+      const url = attrs.url?.startsWith("/") ? attrs.url : safeHttpUrl(attrs.url);
+      if (!url) return [];
+      return [{
+        id: bnId(),
+        type: node.type === "fileBlock" ? "file" : "video",
+        props: {
+          backgroundColor: "default",
+          name: attrs.name ?? "",
+          url,
+          caption: attrs.caption ?? "",
+        },
+        content: [],
+        children: [],
+      }];
+    }
+    case "audioBlock": {
+      const attrs = (node.attrs as { storageKey?: string } | undefined) ?? {};
+      if (!attrs.storageKey) return [];
+      // Pear's custom audio block (storageKey-addressed blob).
+      return [{
+        id: bnId(),
+        type: "audio",
+        props: { storageKey: attrs.storageKey, transcript: "", durationSec: 0, boot: "" },
+        content: [],
+        children: [],
+      }];
     }
     case "bulletList":
       return ((node.content as PMNode[]) ?? []).map((item) => {
@@ -468,17 +639,28 @@ function pmNodeToBnBlocks(node: PMNode): BNBlock[] {
         return bnTextBlock("checkListItem", inline, { checked }, children);
       });
     case "codeBlock": {
-      // Conservative: a paragraph in code style (BlockNote codeBlock support
-      // varies by version; a styled paragraph renders everywhere).
       const text = ((node.content as PMNode[]) ?? [])
         .map((t) => (t.text as string) ?? "")
         .join("");
-      return [bnTextBlock("paragraph", text ? [{ type: "text", text, styles: { code: true } }] : [])];
+      const rawLang = ((node.attrs as { language?: string | null } | undefined)?.language ?? "plain") || "plain";
+      return [{
+        id: bnId(),
+        type: "codeBlock",
+        props: { language: BN_CODE_LANGUAGES.has(rawLang) ? rawLang : "plain" },
+        content: text ? [{ type: "text", text, styles: {} }] : [],
+        children: [],
+      }];
     }
-    case "blockquote":
-      return ((node.content as PMNode[]) ?? []).flatMap(pmNodeToBnBlocks);
+    case "blockquote": {
+      // BlockNote's quote block takes inline content — merge the quote's
+      // paragraphs into one, preserving styles.
+      const inline = ((node.content as PMNode[]) ?? []).flatMap((p) =>
+        p.type === "paragraph" ? pmInlineToBn(p.content as PMNode[]) : [],
+      );
+      return [bnTextBlock("quote", inline)];
+    }
     case "horizontalRule":
-      return [bnTextBlock("paragraph", [])];
+      return [{ id: bnId(), type: "divider", props: {}, content: [], children: [] }];
     case "pageLink": {
       const attrs = (node.attrs as { pageId?: string; pageTitle?: string } | undefined) ?? {};
       if (!attrs.pageId) return [];
@@ -491,21 +673,18 @@ function pmNodeToBnBlocks(node: PMNode): BNBlock[] {
       }];
     }
     case "image": {
-      const attrs = (node.attrs as { src?: string; alt?: string } | undefined) ?? {};
-      // Relative /api/workspaces/... blob paths are ours; absolute URLs must be http(s).
-      const src = attrs.src?.startsWith("/") ? attrs.src : safeHttpUrl(attrs.src);
-      if (!src) return [];
+      const attrs = (node.attrs as { storageKey?: string; src?: string; alt?: string } | undefined) ?? {};
+      // Pear's image block: storageKey resolves through the workspace blob
+      // route; externalUrl covers hotlinked images (http(s) only — untrusted).
+      const externalUrl = attrs.storageKey ? "" : safeHttpUrl(attrs.src) ?? "";
+      if (!attrs.storageKey && !externalUrl) return [];
       return [{
         id: bnId(),
         type: "image",
         props: {
-          backgroundColor: "default",
-          textAlignment: "left",
-          name: attrs.alt ?? "",
-          url: src,
+          storageKey: attrs.storageKey ?? "",
+          externalUrl,
           caption: attrs.alt ?? "",
-          showPreview: true,
-          previewWidth: 512,
         },
         content: [],
         children: [],
@@ -518,11 +697,12 @@ function pmNodeToBnBlocks(node: PMNode): BNBlock[] {
           return cellParas.flatMap((p) => pmInlineToBn(p.content as PMNode[]));
         }),
       }));
+      const headerRow = Boolean((node.attrs as { headerRow?: boolean } | undefined)?.headerRow);
       return [{
         id: bnId(),
         type: "table",
         props: { textColor: "default", backgroundColor: "default" },
-        content: { type: "tableContent", rows },
+        content: { type: "tableContent", ...(headerRow ? { headerRows: 1 } : {}), rows },
         children: [],
       }];
     }
@@ -546,11 +726,8 @@ export function pmNodesToBlockNoteJson(nodes: PMNode[]): string {
 
 function buildBlockNoteContent(
   pageBlocks: BlockObjectResponse[],
-  slug: string,
-  attachmentMap: Map<string, AttachmentUploadResult>,
-  notionToId: (id: string) => bigint,
-  dbToDs: Map<string, string>,
-  coverImageUrl?: string,
+  refs: TransformRefs,
+  cover?: { storageKey?: string; src?: string },
   description?: RichTextItemResponse[]
 ): string {
   // Top-level blocks only (children are inlined by blockToPmNodes when needed)
@@ -559,15 +736,18 @@ function buildBlockNoteContent(
     return !parent?.block_id; // block_id means it's a child of another block
   });
 
-  const nodes = topLevel.flatMap((b) => blockToPmNodes(b, pageBlocks, slug, attachmentMap, notionToId, dbToDs));
+  const nodes = topLevel.flatMap((b) => blockToPmNodes(b, pageBlocks, refs));
 
   // Prepend cover image if present
   const prefixNodes: PMNode[] = [];
-  if (coverImageUrl) {
-    prefixNodes.push({ type: "image", attrs: { src: coverImageUrl, alt: "Cover", title: null } });
+  if (cover?.storageKey || cover?.src) {
+    prefixNodes.push({
+      type: "image",
+      attrs: { storageKey: cover.storageKey ?? "", src: cover.src ?? "", alt: "Cover", title: null },
+    });
   }
   if (description && description.length > 0) {
-    const inline = richTextToPmInline(description);
+    const inline = richTextToPmInline(description, refs);
     if (inline.length > 0) prefixNodes.push({ type: "paragraph", content: inline });
   }
   return pmNodesToBlockNoteJson([...prefixNodes, ...nodes]);
@@ -580,7 +760,8 @@ function notionPropertyTypeToTag(notionType: string): string {
     title: "Text",
     rich_text: "Text",
     number: "Number",
-    unique_id: "Number",
+    unique_id: "Text",
+    place: "Text",
     date: "Date",
     created_time: "Date",
     last_edited_time: "Date",
@@ -674,11 +855,9 @@ function notionPropertyConfig(
 // Returns null for computed property types (Formula, Rollup) that should not be stored.
 function notionPropValueToWire(
   prop: Record<string, unknown> & { type: string },
-  notionToId: (id: string) => bigint,
-  uploadedAttachments: Map<string, AttachmentUploadResult>,
-  workspaceSlug: string,
-  fetchedIds: Set<string>
+  refs: TransformRefs
 ): unknown | null {
+  const { notionToId, attachmentMap: uploadedAttachments, slug: workspaceSlug, fetchedIds, userNames } = refs;
   switch (prop.type) {
     case "title": {
       const rt = (prop.title as RichTextItemResponse[] | undefined) ?? [];
@@ -689,10 +868,26 @@ function notionPropValueToWire(
       return { tag: "Text", value: extractPlainText(rt) };
     }
     case "number":
-      return { tag: "Number", value: typeof prop.number === "number" ? prop.number : 0 };
+      // A null number is an empty cell — storing 0 makes "empty" and "zero"
+      // indistinguishable.
+      return typeof prop.number === "number" ? { tag: "Number", value: prop.number } : null;
     case "unique_id": {
-      const uid = prop.unique_id as { number?: number | null };
-      return { tag: "Number", value: uid?.number ?? 0 };
+      const uid = prop.unique_id as { prefix?: string | null; number?: number | null };
+      if (uid?.number == null) return null;
+      // Keep the full display identity ("TASK-42"), not just the number.
+      return { tag: "Text", value: uid.prefix ? `${uid.prefix}-${uid.number}` : String(uid.number) };
+    }
+    case "place": {
+      const pl = prop.place as {
+        name?: string | null; address?: string | null;
+        latitude?: number | null; longitude?: number | null;
+      } | null;
+      if (!pl) return null;
+      const parts = [pl.name, pl.address].filter(Boolean);
+      const coords =
+        pl.latitude != null && pl.longitude != null ? `(${pl.latitude}, ${pl.longitude})` : "";
+      const text = [parts.join(", "), coords].filter(Boolean).join(" ");
+      return text ? { tag: "Text", value: text } : null;
     }
     case "date": {
       const d = prop.date as { start?: string | null } | null;
@@ -729,15 +924,17 @@ function notionPropValueToWire(
       return { tag: "Text", value: typeof prop.phone_number === "string" ? prop.phone_number : "" };
     case "people": {
       const people = (prop.people as { id: string; name?: string }[] | undefined) ?? [];
-      return { tag: "Person", value: people.map((p) => p.name ?? p.id) };
+      // Page objects carry partial users (no name) — resolve through the
+      // workspace user directory before falling back to the UUID.
+      return { tag: "Person", value: people.map((p) => p.name ?? userNames.get(p.id) ?? p.id) };
     }
     case "created_by": {
       const cb = prop.created_by as { name?: string; id?: string } | undefined;
-      return { tag: "Person", value: [cb?.name ?? cb?.id ?? ""] };
+      return { tag: "Person", value: [cb?.name ?? (cb?.id ? userNames.get(cb.id) ?? cb.id : "")] };
     }
     case "last_edited_by": {
       const lb = prop.last_edited_by as { name?: string; id?: string } | undefined;
-      return { tag: "Person", value: [lb?.name ?? lb?.id ?? ""] };
+      return { tag: "Person", value: [lb?.name ?? (lb?.id ? userNames.get(lb.id) ?? lb.id : "")] };
     }
     case "relation": {
       const rels = (prop.relation as { id: string }[] | undefined) ?? [];
@@ -843,6 +1040,14 @@ export function transformNotionToPayload(
       dbToDs.set(parent.database_id, p.id);
     }
   }
+  const refs: TransformRefs = {
+    slug: workspaceSlug,
+    attachmentMap: uploadedAttachments,
+    notionToId,
+    dbToDs,
+    fetchedIds,
+    userNames: fetchResult.userNames ?? new Map(),
+  };
   const now = new Date().toISOString();
 
   // Which page each fetched block belongs to — resolves `block_id` page
@@ -958,16 +1163,14 @@ export function transformNotionToPayload(
     // PageContent — blocks → ProseMirror JSON
     const pageBlocks = fetchResult.blocks.get(page.id) ?? [];
 
-    // Compute cover image URL
-    let coverImageUrl: string | undefined;
+    // Compute cover image ref (blob storageKey when re-uploaded, else URL)
+    let cover: { storageKey?: string; src?: string } | undefined;
     if (page.cover) {
       if (page.cover.type === "external") {
-        coverImageUrl = page.cover.external.url;
+        cover = { src: page.cover.external.url };
       } else if (page.cover.type === "file") {
         const uploaded = uploadedAttachments.get(page.cover.file.url);
-        coverImageUrl = uploaded
-          ? `/api/workspaces/${workspaceSlug}/blobs/${uploaded.objectId}/raw`
-          : page.cover.file.url;
+        cover = uploaded ? { storageKey: uploaded.objectId } : { src: page.cover.file.url };
       }
     }
 
@@ -980,7 +1183,7 @@ export function transformNotionToPayload(
       }
     }
 
-    const content = buildBlockNoteContent(pageBlocks, workspaceSlug, uploadedAttachments, notionToId, dbToDs, coverImageUrl, description);
+    const content = buildBlockNoteContent(pageBlocks, refs, cover, description);
     pageContentRows.push({
       pageId: pearBigint(pearId),
       content,
@@ -1069,13 +1272,11 @@ export function transformNotionToPayload(
 
       const value = notionPropValueToWire(
         prop as Record<string, unknown> & { type: string },
-        notionToId,
-        uploadedAttachments,
-        workspaceSlug,
-        fetchedIds
+        refs
       );
 
-      // Skip computed property types (Formula, Rollup) — values are client-side only
+      // Null means nothing to store: computed types (Formula, Rollup) and
+      // genuinely empty cells (null numbers, empty places).
       if (value === null) continue;
 
       propValueIdCounter += 1n;
@@ -1141,14 +1342,36 @@ export function transformNotionToPayload(
 
     for (const comment of pageComments) {
       const text = comment.rich_text?.map((r: RichTextItemResponse) => r.plain_text).join("") ?? "";
-      if (!text) continue;
+      // Original authorship can't map to a Pear identity, so carry it in the
+      // message body instead of silently attributing everything to the importer.
+      const c = comment as CommentObjectResponse & {
+        display_name?: { resolved_name?: string | null };
+        created_by?: { id?: string };
+        attachments?: { file?: { url?: string } }[];
+      };
+      const author =
+        c.display_name?.resolved_name ??
+        (c.created_by?.id ? refs.userNames.get(c.created_by.id) : undefined);
+      const attachmentLinks = (c.attachments ?? [])
+        .map((a) => {
+          const uploaded = a.file?.url ? uploadedAttachments.get(a.file.url) : undefined;
+          return uploaded
+            ? `/api/workspaces/${workspaceSlug}/blobs/${uploaded.objectId}/raw`
+            : null;
+        })
+        .filter((x): x is string => x !== null);
+      const body = [
+        author ? `${author}: ${text}` : text,
+        ...attachmentLinks.map((l) => `📎 ${l}`),
+      ].filter(Boolean).join("\n");
+      if (!body) continue;
 
       messageIdCounter += 1n;
       messageRows.push({
         id: pearBigint(messageIdCounter),
         conversationId: pearBigint(convId),
         sender: { tag: "User", value: callerIdentity },
-        content: text,
+        content: body,
         jobId: null,
         createdAt: pearTimestamp(comment.created_time ?? now),
         status: STATUS_COMPLETE,

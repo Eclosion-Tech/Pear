@@ -37,6 +37,7 @@ import {
 } from "@/src/hooks/useUserPreferences";
 import { SpacetimeYjsProvider } from "@/src/lib/SpacetimeYjsProvider";
 import { PageLinkBlockSpec } from "@/src/components/PageLinkBlock";
+import { CalloutBlockSpec } from "@/src/components/CalloutBlock";
 import { ConversationBlockSpec } from "@/src/components/ConversationBlock";
 import { ImageBlockSpec } from "@/src/components/ImageBlock";
 import { AudioBlockSpec } from "@/src/components/AudioBlock";
@@ -217,6 +218,7 @@ export function PearEditor({
             },
           }),
           pageLink: PageLinkBlockSpec(),
+          callout: CalloutBlockSpec(),
           conversation: ConversationBlockSpec(),
           image: ImageBlockSpec(),
           audio: AudioBlockSpec(),

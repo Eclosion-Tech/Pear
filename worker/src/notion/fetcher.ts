@@ -62,6 +62,12 @@ export type NotionFetchResult = {
   comments: Map<string, CommentObjectResponse[]>;
   /** All file/image attachment references found in blocks and properties. */
   attachmentRefs: AttachmentRef[];
+  /**
+   * Notion user id → display name, from the workspace user directory. Used
+   * to render people/created_by values and comment authors as names instead
+   * of raw UUIDs. Empty when the integration lacks user-read capability.
+   */
+  userNames: Map<string, string>;
 };
 
 // ── Rate limiter ──────────────────────────────────────────────────────────────
@@ -117,11 +123,14 @@ function extractFileRef(
  */
 export async function fetchNotionWorkspace(
   accessToken: string,
-  onProgress?: (msg: string) => void
+  onProgress?: (msg: string) => void,
+  // Test seam: a stub standing in for the Notion client. Production always
+  // constructs the real one from the token.
+  clientOverride?: Client
 ): Promise<NotionFetchResult> {
     // Errors only: tolerated per-object 404s (restricted comments etc.) are
   // logged by the SDK at warn and would otherwise dominate the log.
-  const notion = new Client({ auth: accessToken, logLevel: LogLevel.ERROR });
+  const notion = clientOverride ?? new Client({ auth: accessToken, logLevel: LogLevel.ERROR });
   const rateLimit = makeRateLimiter();
 
   const pages = new Map<string, NotionPage>();
@@ -200,6 +209,78 @@ export async function fetchNotionWorkspace(
   }
 
   log(`Total after data source rows: ${pages.size} pages`);
+
+  // ── Step 3b: Complete truncated list-shaped property values ────────────────
+  // Page objects inline at most 25 items for relation/people/rich_text/title
+  // properties. Relations flag the remainder with has_more at runtime; the
+  // others truncate without a reliable flag (the typedefs omit has_more
+  // entirely), so a full-length array of 25 is treated as possibly truncated
+  // and completed through the property-item endpoint.
+  const LIST_PROPERTY_TYPES = new Set(["relation", "people", "rich_text", "title"]);
+  let completedProps = 0;
+  for (const p of pages.values()) {
+    if (p.object !== "page") continue;
+    for (const prop of Object.values((p as { properties: Record<string, unknown> }).properties)) {
+      const lp = prop as { type?: string; id?: string; has_more?: boolean } & Record<string, unknown>;
+      if (!lp.type || !lp.id || !LIST_PROPERTY_TYPES.has(lp.type)) continue;
+      const current = (lp[lp.type] as unknown[] | undefined) ?? [];
+      if (lp.has_more !== true && current.length < 25) continue;
+      try {
+        const full: unknown[] = [];
+        let propCursor: string | undefined;
+        do {
+          await rateLimit();
+          const res = await notion.pages.properties.retrieve({
+            page_id: p.id,
+            property_id: lp.id,
+            page_size: 100,
+            ...(propCursor ? { start_cursor: propCursor } : {}),
+          });
+          if (!("results" in res)) break;
+          for (const item of res.results) {
+            const it = item as { type: string } & Record<string, unknown>;
+            if (it.type === lp.type) full.push(it[it.type]);
+          }
+          propCursor = res.has_more ? (res.next_cursor ?? undefined) : undefined;
+        } while (propCursor);
+        if (full.length > current.length) {
+          lp[lp.type] = full;
+          lp.has_more = false;
+          completedProps++;
+        }
+      } catch {
+        // Keep the truncated 25 rather than failing the import over one
+        // property; the summary line below makes the gap visible.
+      }
+    }
+  }
+  if (completedProps > 0) {
+    log(`Completed ${completedProps} property values that exceeded Notion's 25-item cap`);
+  }
+
+  // ── Step 3c: Workspace user directory ──────────────────────────────────────
+  // Resolves people/created_by values and comment authors to display names.
+  // Integrations without user-read capability 403 here — names degrade to
+  // whatever the property values carry inline.
+  const userNames = new Map<string, string>();
+  try {
+    let userCursor: string | undefined;
+    do {
+      await rateLimit();
+      const res = await notion.users.list({
+        page_size: 100,
+        ...(userCursor ? { start_cursor: userCursor } : {}),
+      });
+      for (const u of res.results) {
+        if (u.name) userNames.set(u.id, u.name);
+      }
+      userCursor = res.has_more ? (res.next_cursor ?? undefined) : undefined;
+    } while (userCursor);
+    log(`User directory: ${userNames.size} users`);
+  } catch {
+    log("User directory unavailable (integration lacks user-read capability)");
+  }
+
   // Untrusted-input guard: a hostile (or just enormous) shared selection must
   // not be able to OOM the worker or produce an unboundedly large payload.
   const MAX_IMPORT_PAGES = 5000;
@@ -262,10 +343,34 @@ export async function fetchNotionWorkspace(
     const pageId = pageIds[i];
     if (i % 30 === 0) log(`Fetching comments ${i + 1}/${pageIds.length}…`);
     try {
-      await rateLimit();
-      const res = await notion.comments.list({ block_id: pageId, page_size: 100 });
-      if (res.results.length > 0) {
-        comments.set(pageId, res.results as CommentObjectResponse[]);
+      const pageComments: CommentObjectResponse[] = [];
+      let commentCursor: string | undefined;
+      do {
+        await rateLimit();
+        const res = await notion.comments.list({
+          block_id: pageId,
+          page_size: 100,
+          ...(commentCursor ? { start_cursor: commentCursor } : {}),
+        });
+        pageComments.push(...(res.results as CommentObjectResponse[]));
+        commentCursor = res.has_more ? (res.next_cursor ?? undefined) : undefined;
+      } while (commentCursor);
+      if (pageComments.length > 0) {
+        comments.set(pageId, pageComments);
+        // Comment attachments ride the same re-upload pipeline as block files.
+        for (const c of pageComments) {
+          for (const att of c.attachments ?? []) {
+            if (att.file?.url) {
+              attachmentRefs.push({
+                notionUrl: att.file.url,
+                pageId,
+                filename: `comment-attachment.${att.category}`,
+                mimeType: "",
+                isExternal: false,
+              });
+            }
+          }
+        }
       }
     } catch {
       // The comments API 404s for pages whose discussions the integration
@@ -280,7 +385,7 @@ export async function fetchNotionWorkspace(
 
   log(`Fetch complete. Pages: ${pages.size}, Attachment refs: ${attachmentRefs.length}`);
 
-  return { pages, blocks, comments, attachmentRefs };
+  return { pages, blocks, comments, attachmentRefs, userNames };
 }
 
 // ── Recursive block fetcher ───────────────────────────────────────────────────
@@ -313,6 +418,26 @@ async function fetchBlocksRecursive(
       ) {
         const children = await fetchBlocksRecursive(notion, block.id, rateLimit);
         result.push(...children);
+      } else if (
+        block.type === "synced_block" &&
+        !block.has_children &&
+        block.synced_block.synced_from?.block_id
+      ) {
+        // A duplicate synced block whose original lives elsewhere returns no
+        // children of its own — pull the original's children and graft them
+        // under the duplicate so the content survives the import.
+        const originalId = block.synced_block.synced_from.block_id;
+        try {
+          const originals = await fetchBlocksRecursive(notion, originalId, rateLimit);
+          for (const o of originals) {
+            const parent = "parent" in o ? (o.parent as { block_id?: string }) : null;
+            if (parent?.block_id === originalId) parent.block_id = block.id;
+          }
+          result.push(...originals);
+        } catch {
+          // Original not shared with the integration — the transformer emits
+          // a placeholder for the empty synced block.
+        }
       }
     }
     cursor = res.has_more ? (res.next_cursor ?? undefined) : undefined;

@@ -3,10 +3,21 @@
 import { createReactBlockSpec } from "@blocknote/react";
 import { usePearWorkspaceSlug, workspaceBlobSrc } from "@/src/lib/blobUpload";
 
-function ImageBlockView({ storageKey, caption }: { storageKey: string; caption: string }) {
+function ImageBlockView({
+  storageKey,
+  externalUrl,
+  caption,
+}: {
+  storageKey: string;
+  externalUrl: string;
+  caption: string;
+}) {
   const slug = usePearWorkspaceSlug();
 
-  if (!storageKey) {
+  // http(s)-only guard — externalUrl may come from imported (untrusted) content.
+  const safeExternal = /^https?:\/\//i.test(externalUrl) ? externalUrl : "";
+
+  if (!storageKey && !safeExternal) {
     return (
       <figure
         contentEditable={false}
@@ -17,7 +28,7 @@ function ImageBlockView({ storageKey, caption }: { storageKey: string; caption: 
     );
   }
 
-  const src = workspaceBlobSrc(slug, storageKey);
+  const src = storageKey ? workspaceBlobSrc(slug, storageKey) : safeExternal;
 
   return (
     <figure contentEditable={false} className="my-3">
@@ -47,6 +58,8 @@ export const ImageBlockSpec = createReactBlockSpec(
     type: "image" as const,
     propSchema: {
       storageKey: { default: "" },
+      // Hotlinked images (e.g. from imports) that have no workspace blob.
+      externalUrl: { default: "" },
       caption: { default: "" },
     },
     content: "none",
@@ -55,6 +68,7 @@ export const ImageBlockSpec = createReactBlockSpec(
     render: ({ block }) => (
       <ImageBlockView
         storageKey={block.props.storageKey as string}
+        externalUrl={(block.props.externalUrl as string) || ""}
         caption={(block.props.caption as string) || ""}
       />
     ),

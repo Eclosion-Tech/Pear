@@ -197,8 +197,20 @@ export function NotionImportPanel() {
             members.
           </li>
           <li>
-            <strong>Blocks Notion&apos;s API doesn&apos;t expose</strong> (e.g. AI meeting notes /
-            transcriptions) import as a named placeholder.
+            <strong>AI meeting-note transcripts</strong> — titles and any summary the API exposes
+            import; transcript bodies Notion withholds become a named placeholder.
+          </li>
+          <li>
+            <strong>Inline comments</strong> — page-level comment threads import; comments anchored
+            to individual blocks don&apos;t (fetching them per block would exceed API rate limits).
+            Original authors are noted by name inside each message.
+          </li>
+          <li>
+            <strong>Image &amp; custom-emoji page icons</strong> — Pear page icons are emoji;
+            image icons are skipped.
+          </li>
+          <li>
+            <strong>Date ranges</strong> — the start date imports; end dates aren&apos;t kept yet.
           </li>
           <li>
             <strong>Permissions</strong> — Notion page sharing doesn&apos;t transfer; imported pages
