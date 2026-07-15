@@ -38,7 +38,10 @@ function dataSource(id: string, title: string) {
   return {
     object: "data_source",
     id,
-    parent: { type: "workspace", workspace: true },
+    // v5: a data source's parent is its database container; the database's
+    // own location (page/block/workspace) is in database_parent.
+    parent: { type: "database_id", database_id: `db-${id}` },
+    database_parent: { type: "workspace", workspace: true },
     created_time: T,
     last_edited_time: T,
     icon: null,
@@ -96,9 +99,21 @@ function makeFixture(): NotionFetchResult {
     Contracts: { type: "relation", relation: [{ id: "contract-unfetched" }] },
   }));
 
+  // An inline database living inside the hub page (Notion shows it embedded;
+  // the block carries the database UUID, not the data-source id).
+  pages.set("ds-inline", {
+    ...dataSource("ds-inline", "Body Metrics"),
+    database_parent: { type: "page_id", page_id: "top-1" },
+  });
+
   // A page nested inside a block (toggle/column) of the hub page.
   pages.set("blocknested-1", page("blocknested-1", "Inside Toggle", { type: "block_id", block_id: "blk-9" }));
   blocks.set("top-1", [
+    {
+      object: "block", id: "db-ds-inline", type: "child_database", has_children: false,
+      parent: { type: "page_id", page_id: "top-1" },
+      child_database: { title: "Body Metrics" },
+    },
     {
       object: "block", id: "blk-9", type: "toggle", has_children: true,
       parent: { type: "page_id", page_id: "top-1" },
@@ -218,6 +233,27 @@ test("relation columns target the related data source's page; unshared targets a
   assert.equal((contractVal.value as { value: unknown[] }).value.length, 0);
 });
 
+test("inline databases nest under their containing page and link via the data-source id", () => {
+  const payload = transformNotionToPayload(makeFixture(), new Map(), "aa".repeat(32), "testws");
+  const pages = rowsByTitle(payload);
+  const hub = pages.get("Hub")!;
+  const inlineDb = pages.get("Body Metrics")!;
+  // The data source's parent is its database container; nesting must come
+  // from database_parent or the inline DB falls to the import root.
+  assert.equal(pearIdNum(inlineDb.parentId), pearIdNum(hub.id));
+  // The child_database block (database UUID) must link to the data-source's
+  // imported page, not mint a dangling id that renders as a tombstone.
+  const contentRows = payload.tables.page_content as Array<{ pageId: unknown; content: string }>;
+  const hubContent = contentRows.find((c) => pearIdNum(c.pageId) === pearIdNum(hub.id))!;
+  const blocks = JSON.parse(hubContent.content) as Array<{
+    type: string;
+    props: { pageId?: string; pageTitle?: string };
+  }>;
+  const link = blocks.find((b) => b.type === "pageLink" && b.props.pageTitle === "Body Metrics");
+  assert.ok(link, "pageLink block for the inline database emitted");
+  assert.equal(link!.props.pageId, (inlineDb.id as { v: string }).v);
+});
+
 test("declared idCounts cover every assigned page id, including link targets", () => {
   const payload = transformNotionToPayload(makeFixture(), new Map(), "aa".repeat(32), "testws");
   const maxRowId = Math.max(
@@ -247,7 +283,7 @@ test("child_page placeholders become native pageLink blocks targeting the import
     type: string;
     props: { pageId?: string; pageTitle?: string };
   }>;
-  const link = blocks.find((b) => b.type === "pageLink");
+  const link = blocks.find((b) => b.type === "pageLink" && b.props.pageTitle === "Sub Page");
   assert.ok(link, "pageLink block emitted");
   // The pageId is the payload-local id of the child's page row; the import
   // reducer offsets it into the workspace id space alongside the row itself.

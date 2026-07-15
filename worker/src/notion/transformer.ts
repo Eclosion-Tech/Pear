@@ -120,7 +120,11 @@ function blockToPmNodes(
   allBlocks: BlockObjectResponse[],
   slug: string,
   attachmentMap: Map<string, AttachmentUploadResult>,
-  notionToId: (id: string) => bigint
+  notionToId: (id: string) => bigint,
+  // Database UUID → data-source UUID. child_database blocks and database
+  // link targets carry the database id, but fetched objects are keyed by
+  // data-source id — linking without translating dangles.
+  dbToDs: Map<string, string>
 ): PMNode[] {
   const childBlocks = allBlocks.filter(
     (b) => "parent" in b && (b.parent as { block_id?: string }).block_id === block.id
@@ -138,7 +142,7 @@ function blockToPmNodes(
     case "heading_3":
       return [{ type: "heading", attrs: { level: 3 }, content: richTextToPmInline(block.heading_3.rich_text) }];
     case "bulleted_list_item": {
-      const children = childBlocks.flatMap((c) => blockToPmNodes(c, allBlocks, slug, attachmentMap, notionToId));
+      const children = childBlocks.flatMap((c) => blockToPmNodes(c, allBlocks, slug, attachmentMap, notionToId, dbToDs));
       return [{
         type: "bulletList",
         content: [{
@@ -151,7 +155,7 @@ function blockToPmNodes(
       }];
     }
     case "numbered_list_item": {
-      const children = childBlocks.flatMap((c) => blockToPmNodes(c, allBlocks, slug, attachmentMap, notionToId));
+      const children = childBlocks.flatMap((c) => blockToPmNodes(c, allBlocks, slug, attachmentMap, notionToId, dbToDs));
       return [{
         type: "orderedList",
         content: [{
@@ -174,7 +178,7 @@ function blockToPmNodes(
       }];
     }
     case "toggle": {
-      const children = childBlocks.flatMap((c) => blockToPmNodes(c, allBlocks, slug, attachmentMap, notionToId));
+      const children = childBlocks.flatMap((c) => blockToPmNodes(c, allBlocks, slug, attachmentMap, notionToId, dbToDs));
       return [
         { type: "paragraph", content: richTextToPmInline(block.toggle.rich_text) },
         ...children,
@@ -248,13 +252,27 @@ function blockToPmNodes(
     }
     case "child_page":
     case "child_database": {
-      // These are their own Page rows; the block id IS the child's Notion id,
-      // so emit a native pageLink block pointing at the imported page. The
-      // payload-local pageId is offset-remapped by the import reducer.
+      // These are their own Page rows, so emit a native pageLink block. A
+      // child_page block shares its id with the page; a child_database block
+      // carries the database UUID, which must translate to the data-source
+      // id the fetched object is keyed by. The payload-local pageId is
+      // offset-remapped by the import reducer.
       const childTitle =
         (block.type === "child_page" ? block.child_page.title : block.child_database.title) ||
         "Untitled";
-      const pearId = notionToId(block.id);
+      const targetId =
+        block.type === "child_database" ? dbToDs.get(block.id) ?? null : block.id;
+      if (!targetId) {
+        return [{
+          type: "paragraph",
+          content: [{
+            type: "text",
+            marks: [{ type: "italic" }],
+            text: `[Database not available via Notion's API: ${childTitle}]`,
+          }],
+        }];
+      }
+      const pearId = notionToId(targetId);
       return [{ type: "pageLink", attrs: { pageId: String(pearId), pageTitle: childTitle } }];
     }
     case "video": {
@@ -301,7 +319,7 @@ function blockToPmNodes(
       const ltp = block.link_to_page;
       const targetNotionId =
         ltp.type === "page_id" ? ltp.page_id :
-        ltp.type === "database_id" ? ltp.database_id :
+        ltp.type === "database_id" ? dbToDs.get(ltp.database_id) ?? null :
         null;
       if (!targetNotionId) return [];
       // The cached title is a placeholder; the pageLink renderer swaps in the
@@ -315,14 +333,14 @@ function blockToPmNodes(
         const colChildren = allBlocks.filter(
           (b) => "parent" in b && (b.parent as { block_id?: string }).block_id === col.id
         );
-        return colChildren.flatMap((c) => blockToPmNodes(c, allBlocks, slug, attachmentMap, notionToId));
+        return colChildren.flatMap((c) => blockToPmNodes(c, allBlocks, slug, attachmentMap, notionToId, dbToDs));
       });
     }
     case "column": {
-      return childBlocks.flatMap((c) => blockToPmNodes(c, allBlocks, slug, attachmentMap, notionToId));
+      return childBlocks.flatMap((c) => blockToPmNodes(c, allBlocks, slug, attachmentMap, notionToId, dbToDs));
     }
     case "synced_block": {
-      return childBlocks.flatMap((c) => blockToPmNodes(c, allBlocks, slug, attachmentMap, notionToId));
+      return childBlocks.flatMap((c) => blockToPmNodes(c, allBlocks, slug, attachmentMap, notionToId, dbToDs));
     }
     case "table_of_contents":
     case "breadcrumb":
@@ -333,7 +351,7 @@ function blockToPmNodes(
       // a silent drop reads as an empty page with no explanation, and the
       // placeholder names the block type so gaps are diagnosable.
       const salvaged = childBlocks.flatMap((c) =>
-        blockToPmNodes(c, allBlocks, slug, attachmentMap, notionToId),
+        blockToPmNodes(c, allBlocks, slug, attachmentMap, notionToId, dbToDs),
       );
       if (salvaged.length > 0) return salvaged;
       return [{
@@ -531,6 +549,7 @@ function buildBlockNoteContent(
   slug: string,
   attachmentMap: Map<string, AttachmentUploadResult>,
   notionToId: (id: string) => bigint,
+  dbToDs: Map<string, string>,
   coverImageUrl?: string,
   description?: RichTextItemResponse[]
 ): string {
@@ -540,7 +559,7 @@ function buildBlockNoteContent(
     return !parent?.block_id; // block_id means it's a child of another block
   });
 
-  const nodes = topLevel.flatMap((b) => blockToPmNodes(b, pageBlocks, slug, attachmentMap, notionToId));
+  const nodes = topLevel.flatMap((b) => blockToPmNodes(b, pageBlocks, slug, attachmentMap, notionToId, dbToDs));
 
   // Prepend cover image if present
   const prefixNodes: PMNode[] = [];
@@ -602,7 +621,8 @@ function pearSelectConfig(raw: { options?: { name: string; color: string }[] } |
 function notionPropertyConfig(
   prop: { type: string } & Record<string, unknown>,
   notionToId: (id: string) => bigint,
-  fetchedIds: Set<string>
+  fetchedIds: Set<string>,
+  dbToDs: Map<string, string>
 ): string {
   // Pear stores select options as a string array + colors map — emitting
   // {label, color} objects crashed option renderers.
@@ -621,9 +641,10 @@ function notionPropertyConfig(
     // imported pages are keyed by data-source id — only that one resolves to a
     // page row. Restricting to fetched ids keeps a relation into an unshared
     // database from minting a dangling target the picker can never load.
-    const targetNotion = [rel?.data_source_id, rel?.database_id].find(
-      (id): id is string => id != null && fetchedIds.has(id)
-    );
+    const targetNotion = [
+      rel?.data_source_id,
+      rel?.database_id ? dbToDs.get(rel.database_id) : undefined,
+    ].find((id): id is string => id != null && fetchedIds.has(id));
     return JSON.stringify(
       targetNotion ? { targetPageId: String(notionToId(targetNotion)) } : {}
     );
@@ -809,6 +830,19 @@ export function transformNotionToPayload(
 ): NotionImportPayload {
   const notionToId = makeIdAssigner();
   const fetchedIds = new Set(fetchResult.pages.keys());
+
+  // Database UUID → data-source UUID. Data sources are keyed (and imported)
+  // by data-source id, but child_database blocks, database link targets, and
+  // legacy relation configs reference the containing database's UUID, which
+  // each data source exposes as its parent.
+  const dbToDs = new Map<string, string>();
+  for (const p of fetchResult.pages.values()) {
+    if (p.object !== "data_source") continue;
+    const parent = (p as { parent?: { database_id?: string } }).parent;
+    if (parent?.database_id && !dbToDs.has(parent.database_id)) {
+      dbToDs.set(parent.database_id, p.id);
+    }
+  }
   const now = new Date().toISOString();
 
   // Which page each fetched block belongs to — resolves `block_id` page
@@ -875,10 +909,18 @@ export function transformNotionToPayload(
     // current API (the pages map is keyed by data-source id); `database_id`
     // is the legacy shape; pages nested inside blocks (toggles, columns)
     // carry `block_id`, resolved to the containing page via blockToPage.
+    // A data source's own `parent` is its database container — the actual
+    // location (page/block/workspace) is in `database_parent`, without which
+    // inline databases fall to the container root.
     let parentId: unknown = null;
     let parentPk = pearBigint(0n);
-    if ("parent" in page && page.parent) {
-      const parent = page.parent as Record<string, unknown>;
+    const rawParent = isDatabase
+      ? ((page as { database_parent?: unknown }).database_parent ?? page.parent)
+      : "parent" in page
+        ? page.parent
+        : null;
+    if (rawParent) {
+      const parent = rawParent as Record<string, unknown>;
       let pid =
         (parent["data_source_id"] as string | undefined) ??
         (parent["page_id"] as string | undefined) ??
@@ -938,7 +980,7 @@ export function transformNotionToPayload(
       }
     }
 
-    const content = buildBlockNoteContent(pageBlocks, workspaceSlug, uploadedAttachments, notionToId, coverImageUrl, description);
+    const content = buildBlockNoteContent(pageBlocks, workspaceSlug, uploadedAttachments, notionToId, dbToDs, coverImageUrl, description);
     pageContentRows.push({
       pageId: pearBigint(pearId),
       content,
@@ -971,7 +1013,8 @@ export function transformNotionToPayload(
         const config = notionPropertyConfig(
           prop as { type: string } & Record<string, unknown>,
           notionToId,
-          fetchedIds
+          fetchedIds,
+          dbToDs
         );
 
         propDefRows.push({
