@@ -22,7 +22,15 @@ export type AttachmentUploadResult = {
   contentType: string;
 };
 
-const MAX_FILE_BYTES = 50 * 1024 * 1024;
+/**
+ * Per-file cap when the backend's blob-context doesn't advertise one.
+ * Deployments can override via NOTION_IMPORT_MAX_FILE_BYTES; a backend
+ * that sends `max_file_bytes` (e.g. quota-tier aware hosting) wins.
+ */
+function defaultMaxFileBytes(): number {
+  const env = Number(process.env.NOTION_IMPORT_MAX_FILE_BYTES);
+  return Number.isFinite(env) && env > 0 ? env : 50 * 1024 * 1024;
+}
 
 /** Full URL path for logs (the Notion S3 path ends in the real filename);
  * the presigned signature query is noise and mildly sensitive — drop it. */
@@ -35,7 +43,13 @@ function describeUrl(url: string): string {
   }
 }
 
-type BlobContext = { workspace_id: string; quota_bytes: number; used_bytes: number };
+type BlobContext = {
+  workspace_id: string;
+  quota_bytes: number;
+  used_bytes: number;
+  /** Server-provided per-file ceiling; policy lives with the backend. */
+  max_file_bytes?: number;
+};
 
 function lifecycleBase(): string {
   const url = process.env.LIFECYCLE_URL?.trim();
@@ -114,6 +128,7 @@ export async function uploadNotionAttachments(
 
   const ctx = await getBlobContext(moduleName);
   let budget = Math.max(0, ctx.quota_bytes - ctx.used_bytes);
+  const maxFileBytes = ctx.max_file_bytes ?? defaultMaxFileBytes();
   let quotaHit = false;
 
   // De-dup by URL and skip external links (YouTube etc.) — the same file
@@ -138,7 +153,7 @@ export async function uploadNotionAttachments(
         continue;
       }
       const bytes = Buffer.from(await res.arrayBuffer());
-      if (bytes.length === 0 || bytes.length > MAX_FILE_BYTES) {
+      if (bytes.length === 0 || bytes.length > maxFileBytes) {
         log(
           `WARN: attachment "${ref.filename || describeUrl(ref.notionUrl)}" ` +
             `${bytes.length} bytes out of range — skipped`,

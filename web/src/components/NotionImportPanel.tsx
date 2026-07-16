@@ -189,7 +189,7 @@ export function NotionImportPanel() {
             differ for functions Pear doesn&apos;t support.
           </li>
           <li>
-            <strong>Files over 50&nbsp;MB</strong> (or beyond your storage quota) are skipped; their
+            <strong>Files beyond your storage quota or per-file limit</strong> are skipped; their
             links keep temporary Notion URLs that expire.
           </li>
           <li>
