@@ -8,6 +8,7 @@ import { ExtensionsSettings } from "@/src/components/ExtensionsSettings";
 import { MembersSettings } from "@/src/components/MembersSettings";
 import { WorkspaceConnectionsPanel } from "@/src/components/WorkspaceConnectionsPanel";
 import { NotionImportPanel } from "@/src/components/NotionImportPanel";
+import { StorageUsagePanel } from "@/src/components/StorageUsagePanel";
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -48,6 +49,8 @@ export default function SettingsPage() {
             </div>
           </div>
         </section>
+
+        <StorageUsagePanel />
 
         <WorkspaceConnectionsPanel />
 
