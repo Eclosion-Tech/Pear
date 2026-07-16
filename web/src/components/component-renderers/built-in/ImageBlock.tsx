@@ -19,6 +19,8 @@ import {
  */
 type ImageBlockProps = {
   storageKey?: string;
+  /** Hotlinked image with no workspace blob (e.g. from imports). */
+  externalUrl?: string;
   caption?: string;
 };
 
@@ -65,8 +67,10 @@ export function ImageBlockRenderer({ node }: BlockRendererProps) {
   }
 
   const storageKey = props.storageKey ?? "";
+  // http(s)-only guard — externalUrl may come from imported (untrusted) content.
+  const externalUrl = /^https?:\/\//i.test(props.externalUrl ?? "") ? props.externalUrl! : "";
 
-  if (!storageKey) {
+  if (!storageKey && !externalUrl) {
     return (
       <figure className="my-3 flex flex-col items-center gap-2 rounded-lg border border-dashed border-neutral-300 dark:border-neutral-600 bg-neutral-50 dark:bg-neutral-900/50 p-8 text-center">
         <span className="text-sm text-neutral-400 dark:text-neutral-500">
@@ -99,7 +103,7 @@ export function ImageBlockRenderer({ node }: BlockRendererProps) {
     );
   }
 
-  const src = workspaceBlobSrc(slug, storageKey);
+  const src = storageKey ? workspaceBlobSrc(slug, storageKey) : externalUrl;
   const caption = props.caption ?? "";
 
   return (
