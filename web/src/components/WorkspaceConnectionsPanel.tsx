@@ -88,7 +88,7 @@ export function WorkspaceConnectionsPanel() {
     workspaces,
     activeWorkspace,
     activeId,
-    setActiveId,
+    switchWorkspace,
     addWorkspace,
     removeWorkspace,
     idbNamespace,
@@ -126,8 +126,7 @@ export function WorkspaceConnectionsPanel() {
       return;
     }
 
-    setActiveId(id);
-    window.location.reload();
+    switchWorkspace(id);
   }
 
   async function handleExport() {

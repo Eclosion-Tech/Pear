@@ -20,7 +20,7 @@ const CONNECTION_TIMEOUT_MS = 12_000;
  */
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const { user, isReady } = useCurrentUser();
-  const { workspaces, activeWorkspace, activeId, setActiveId, removeWorkspace } =
+  const { workspaces, activeWorkspace, activeId, switchWorkspace, removeWorkspace } =
     useWorkspace();
   const wasReadyRef = useRef(false);
   const [timedOut, setTimedOut] = useState(false);
@@ -77,10 +77,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
                     {!isCurrent && (
                       <button
                         type="button"
-                        onClick={() => {
-                          setActiveId(w.id);
-                          window.location.reload();
-                        }}
+                        onClick={() => switchWorkspace(w.id)}
                         className="shrink-0 px-2.5 py-1 rounded text-xs font-medium bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:opacity-90"
                       >
                         Switch

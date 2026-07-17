@@ -25,6 +25,15 @@ type WorkspaceContextValue = {
   /** IndexedDB namespace for the active workspace (Yjs / editor cache). */
   idbNamespace: string;
   setActiveId: (id: string) => void;
+  /**
+   * Switch to another workspace as a user action. Defaults to persisting the
+   * active id and reloading (standalone: every consumer of the active
+   * workspace — connection, IDB namespace — re-initializes from localStorage).
+   * Hosts where localStorage is NOT the source of truth (Pear Cloud pins the
+   * active workspace to the URL slug on load) inject `onSwitchWorkspace` to
+   * navigate instead. Prefer this over raw `setActiveId` + reload in UI.
+   */
+  switchWorkspace: (id: string) => void;
   addWorkspace: (w: Omit<WorkspaceConnection, "id">) => WorkspaceConnection;
   updateWorkspace: (id: string, patch: Partial<Omit<WorkspaceConnection, "id">>) => void;
   removeWorkspace: (id: string) => void;
@@ -32,7 +41,14 @@ type WorkspaceContextValue = {
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 
-export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
+export function WorkspaceProvider({
+  children,
+  onSwitchWorkspace,
+}: {
+  children: React.ReactNode;
+  /** Override the user-initiated switch behavior (see `switchWorkspace`). */
+  onSwitchWorkspace?: (workspace: WorkspaceConnection) => void;
+}) {
   const [ready, setReady] = useState(false);
   const [workspaces, setWorkspaces] = useState<WorkspaceConnection[]>([]);
   const [activeId, setActiveIdState] = useState<string | null>(null);
@@ -48,6 +64,27 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     setActiveWorkspaceId(id);
     setActiveIdState(id);
   }, []);
+
+  const switchWorkspace = useCallback(
+    (id: string) => {
+      if (id === activeId) return;
+      const target = workspaces.find((w) => w.id === id);
+      if (!target) return;
+      if (onSwitchWorkspace) {
+        onSwitchWorkspace(target);
+        return;
+      }
+      setActiveWorkspaceId(id);
+      setActiveIdState(id);
+      // Drop any WorkspaceQueryBootstrap params before reloading — they pin
+      // the active workspace back to the deep-linked one on every load, which
+      // would silently undo this switch.
+      const url = new URL(window.location.href);
+      for (const p of ["ws", "db", "wsname"]) url.searchParams.delete(p);
+      window.location.assign(url.toString());
+    },
+    [activeId, workspaces, onSwitchWorkspace]
+  );
 
   const addWorkspace = useCallback(
     (w: Omit<WorkspaceConnection, "id">) => {
@@ -111,6 +148,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       activeId,
       idbNamespace,
       setActiveId,
+      switchWorkspace,
       addWorkspace,
       updateWorkspace,
       removeWorkspace,
@@ -122,6 +160,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       activeId,
       idbNamespace,
       setActiveId,
+      switchWorkspace,
       addWorkspace,
       updateWorkspace,
       removeWorkspace,

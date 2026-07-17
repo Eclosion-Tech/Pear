@@ -453,7 +453,7 @@ export function Sidebar() {
   const movePage = useMovePage();
   const { isActive } = useConnection();
   const { user, displayName, initials } = useCurrentUser();
-  const { workspaces, activeId: activeWorkspaceId, setActiveId } = useWorkspace();
+  const { workspaces, activeId: activeWorkspaceId, switchWorkspace } = useWorkspace();
 
   const roots = navPages
     .filter((p) => p.parentId == null)
@@ -703,12 +703,6 @@ export function Sidebar() {
   function handleDragStart(id: bigint) {
     setDraggingId(id);
     draggingIdRef.current = id;
-  }
-
-  function switchWorkspace(id: string) {
-    if (id === activeWorkspaceId) return;
-    setActiveId(id);
-    window.location.reload();
   }
 
   function handleDragEnd() {
