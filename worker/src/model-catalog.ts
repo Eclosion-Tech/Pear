@@ -220,6 +220,14 @@ export const MODEL_CATALOG: Record<CatalogFamily, CatalogModel[]> = {
       effort: NO_EFFORT,
     },
     {
+      id: "moonshotai/kimi-k3",
+      tier: "flagship",
+      label: "Kimi K3",
+      useFor:
+        "Open-weight agentic reasoning with a 1M context window at low cost.",
+      effort: NO_EFFORT,
+    },
+    {
       id: "anthropic/claude-sonnet-4.6",
       tier: "balanced",
       label: "Claude Sonnet 4.6",

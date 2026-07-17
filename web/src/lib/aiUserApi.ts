@@ -172,6 +172,7 @@ export const MODEL_CATALOG: Record<ProviderPresetKey, CatalogModel[]> = {
     { id: "anthropic/claude-opus-4.8", tier: "flagship", label: "Opus 4.8" },
     { id: "openai/gpt-5.5", tier: "flagship", label: "GPT-5.5" },
     { id: "z-ai/glm-5.2", tier: "flagship", label: "GLM 5.2" },
+    { id: "moonshotai/kimi-k3", tier: "flagship", label: "Kimi K3" },
     { id: "anthropic/claude-sonnet-4.6", tier: "balanced", label: "Sonnet 4.6" },
     { id: "deepseek/deepseek-chat-v3.1", tier: "balanced", label: "DeepSeek V3.1" },
     { id: "anthropic/claude-haiku-4.5", tier: "fast", label: "Haiku 4.5" },
