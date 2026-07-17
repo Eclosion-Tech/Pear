@@ -367,6 +367,13 @@ class AnthropicProvider implements InferenceProvider {
 
 // ── OpenAI / OpenAI-compatible ──────────────────────────────────────────────────
 
+/** OpenAI `finish_reason` → our Anthropic-style stop reasons. */
+const OPENAI_STOP_MAP: Record<string, string> = {
+  stop: "end_turn",
+  tool_calls: "tool_use",
+  length: "max_tokens",
+};
+
 class OpenAIProvider implements InferenceProvider {
   private client: OpenAI;
 
@@ -374,7 +381,9 @@ class OpenAIProvider implements InferenceProvider {
     this.client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
   }
 
-  async chat(request: ChatRequest): Promise<ChatResponse> {
+  private buildParams(
+    request: ChatRequest,
+  ): OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming {
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       { role: "system", content: flattenSystem(request.system) },
     ];
@@ -424,7 +433,7 @@ class OpenAIProvider implements InferenceProvider {
       }
     }
 
-    const params: OpenAI.Chat.Completions.ChatCompletionCreateParams = {
+    const params: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
       model: request.model,
       max_tokens: request.maxTokens,
       messages,
@@ -447,8 +456,13 @@ class OpenAIProvider implements InferenceProvider {
     ) {
       Object.assign(params, { reasoning_effort: request.effort });
     }
+    return params;
+  }
 
-    const response = await this.client.chat.completions.create(params);
+  async chat(request: ChatRequest): Promise<ChatResponse> {
+    const response = await this.client.chat.completions.create(
+      this.buildParams(request),
+    );
     const choice = response.choices[0];
     if (!choice) throw new Error("No completion choice returned");
 
@@ -472,16 +486,107 @@ class OpenAIProvider implements InferenceProvider {
       }
     }
 
-    const stopMap: Record<string, string> = {
-      stop: "end_turn",
-      tool_calls: "tool_use",
-      length: "max_tokens",
-    };
-
     return {
       content,
-      stopReason: stopMap[choice.finish_reason ?? "stop"] ?? "end_turn",
+      stopReason: OPENAI_STOP_MAP[choice.finish_reason ?? "stop"] ?? "end_turn",
       usage: openaiUsage(response.usage),
+    };
+  }
+
+  async *chatStream(request: ChatStreamRequest): AsyncIterable<StreamEvent> {
+    // `thinkingBudget` has no chat-completions equivalent; reasoning depth is
+    // steered via `reasoning_effort` in buildParams where the model supports it.
+    const stream = await this.client.chat.completions.create({
+      ...this.buildParams(request),
+      stream: true,
+      // Ask for a final usage chunk so streamed turns bill like non-streamed
+      // ones. Supported by OpenAI, OpenRouter, and Ollama's compat layer.
+      stream_options: { include_usage: true },
+    });
+
+    let text = "";
+    let thinking = "";
+    let stopReason: string | undefined;
+    let usage: TokenUsage | undefined;
+    const finishedTools: ToolUseBlock[] = [];
+    /** In-flight tool calls by stream index; args accumulate across deltas. */
+    const pendingTools = new Map<number, { id: string; name: string; args: string }>();
+
+    const finalizeTool = (index: number): ToolUseBlock | undefined => {
+      const pending = pendingTools.get(index);
+      if (!pending) return undefined;
+      pendingTools.delete(index);
+      let input: Record<string, unknown> = {};
+      try {
+        input = JSON.parse(pending.args || "{}");
+      } catch { /* malformed args — pass empty */ }
+      const block: ToolUseBlock = {
+        type: "tool_use",
+        id: pending.id,
+        name: pending.name,
+        input,
+      };
+      finishedTools.push(block);
+      return block;
+    };
+
+    for await (const chunk of stream) {
+      // With include_usage the last chunk has empty `choices` and real `usage`.
+      if (chunk.usage) usage = openaiUsage(chunk.usage);
+      const choice = chunk.choices[0];
+      if (!choice) continue;
+      const delta = choice.delta ?? {};
+
+      // OpenRouter surfaces reasoning-model traces as a nonstandard `reasoning`
+      // string on the delta; absent (undefined) on vanilla OpenAI.
+      const reasoning = (delta as { reasoning?: unknown }).reasoning;
+      if (typeof reasoning === "string" && reasoning) {
+        thinking += reasoning;
+        yield { type: "thinking_delta", text: reasoning };
+      }
+      if (typeof delta.content === "string" && delta.content) {
+        text += delta.content;
+        yield { type: "text_delta", text: delta.content };
+      }
+      for (const tc of delta.tool_calls ?? []) {
+        // Tool calls stream in index order, so a delta for a new index means
+        // every lower index is complete — emit those live (the args of the
+        // current index are only known-complete at stream end).
+        for (const idx of [...pendingTools.keys()].filter((i) => i < tc.index).sort((a, b) => a - b)) {
+          const block = finalizeTool(idx);
+          if (block) yield { type: "tool_use_start", block };
+        }
+        let pending = pendingTools.get(tc.index);
+        if (!pending) {
+          pending = { id: tc.id ?? `call_${tc.index}`, name: "", args: "" };
+          pendingTools.set(tc.index, pending);
+        }
+        if (tc.id) pending.id = tc.id;
+        if (tc.function?.name) pending.name += tc.function.name;
+        if (tc.function?.arguments) pending.args += tc.function.arguments;
+      }
+      if (choice.finish_reason) {
+        stopReason = OPENAI_STOP_MAP[choice.finish_reason] ?? "end_turn";
+      }
+    }
+
+    for (const idx of [...pendingTools.keys()].sort((a, b) => a - b)) {
+      const block = finalizeTool(idx);
+      if (block) yield { type: "tool_use_start", block };
+    }
+
+    const content: (TextBlock | ToolUseBlock)[] = [];
+    if (text) content.push({ type: "text", text });
+    content.push(...finishedTools);
+
+    yield {
+      type: "done",
+      response: {
+        content,
+        stopReason: stopReason ?? "end_turn",
+        thinking: thinking || undefined,
+        usage,
+      },
     };
   }
 }
