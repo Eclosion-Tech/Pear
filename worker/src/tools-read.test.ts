@@ -114,6 +114,61 @@ test("check_job errors for an unknown job", async () => {
   assert.equal(res.ok, false);
 });
 
+test("check_job exposes paginated full task results instead of losing the middle", async () => {
+  const result = `${"A".repeat(500)}${"MIDDLE".repeat(100)}${"Z".repeat(500)}`;
+  const conn = fakeConn({
+    orcha_job: [{ id: 8n, userId: "u", prompt: "draft it", status: "complete" }],
+    orcha_task: [
+      {
+        id: 10n,
+        jobId: 8n,
+        description: "write the complete draft",
+        taskType: "llm",
+        status: "done",
+        result,
+      },
+    ],
+  });
+
+  const summary = await run(conn, "check_job", { job_id: 8 });
+  const summaryTask = (summary.tasks as Record<string, unknown>[])[0];
+  assert.equal(summaryTask.result_truncated, true);
+  assert.equal(summaryTask.result_total_chars, result.length);
+  assert.match(summary.next_step as string, /task_id/);
+
+  const middle = await run(conn, "check_job", {
+    job_id: 8,
+    task_id: 10,
+    result_offset: 500,
+    result_limit: 600,
+  });
+  const middleTask = middle.task as Record<string, unknown>;
+  assert.equal(middleTask.result, "MIDDLE".repeat(100));
+  assert.equal(middleTask.result_truncated, true);
+  assert.equal(middleTask.next_result_offset, 1100);
+
+  const tail = await run(conn, "check_job", {
+    job_id: 8,
+    task_id: 10,
+    result_offset: 1100,
+    result_limit: 20_000,
+  });
+  const tailTask = tail.task as Record<string, unknown>;
+  assert.equal(tailTask.result, "Z".repeat(500));
+  assert.equal(tailTask.result_truncated, false);
+  assert.equal(tailTask.next_result_offset, undefined);
+});
+
+test("check_job rejects a task from another job", async () => {
+  const conn = fakeConn({
+    orcha_job: [{ id: 8n, userId: "u", prompt: "draft it", status: "complete" }],
+    orcha_task: [{ id: 11n, jobId: 9n, description: "other", taskType: "llm", status: "done" }],
+  });
+  const res = await run(conn, "check_job", { job_id: 8, task_id: 11 });
+  assert.equal(res.ok, false);
+  assert.match(res.error as string, /does not belong/);
+});
+
 // ── list_sensor_findings ─────────────────────────────────────────────────────────
 
 function findingsConn(): ConnLike {

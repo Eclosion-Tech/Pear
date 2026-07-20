@@ -263,6 +263,38 @@ function addUsage(total: TokenUsage, delta: TokenUsage | undefined): void {
   total.cacheReadInputTokens += delta.cacheReadInputTokens;
 }
 
+/**
+ * Convert provider/worker failures into a safe, actionable chat message.
+ * Never echo the raw provider body: SDK errors can include request metadata or
+ * credential-adjacent details that belong in server logs, not the workspace.
+ */
+export function userVisibleTurnFailure(err: unknown): string {
+  const record = err && typeof err === "object" ? (err as Record<string, unknown>) : undefined;
+  const cause = record?.cause && typeof record.cause === "object"
+    ? (record.cause as Record<string, unknown>)
+    : undefined;
+  const directStatus = Number(record?.status ?? record?.statusCode ?? cause?.status);
+  const raw = err instanceof Error ? err.message : String(err ?? "");
+  const is429 = directStatus === 429 || /\b429\b|rate.?limit|overload/i.test(raw);
+  if (is429) {
+    return (
+      "⚠️ The model provider is currently rate-limited or overloaded (429). " +
+      "This turn was interrupted before it could finish. Retry the message or switch models."
+    );
+  }
+  const isAuth = directStatus === 401 || directStatus === 403 || /\b(401|403)\b/.test(raw);
+  if (isAuth) {
+    return (
+      "⚠️ The configured model provider rejected its credentials. " +
+      "This turn could not finish; check the AI user's provider and API-key settings, then retry."
+    );
+  }
+  return (
+    "⚠️ The model provider or worker returned an error before this turn could finish. " +
+    "Please retry; if it happens again, check the provider configuration and worker logs."
+  );
+}
+
 /** u32 columns — clamp the running totals so a long turn can't overflow. */
 const U32_MAX = 0xffffffff;
 function u32(n: number): number {
@@ -492,6 +524,11 @@ async function handleConversationMessage(
   // it records the conversation as pending so this finally-block re-dispatches.
   if (!turnLock.begin(convKey)) return;
 
+  let aiMsgId: bigint | undefined;
+  const allToolCalls: StoredToolCall[] = [];
+  let thinkingText = "";
+  let responseText = "";
+
   try {
     const conv = conn.db.conversation.id.find(msg.conversationId) as
       | ConversationRow
@@ -562,7 +599,7 @@ async function handleConversationMessage(
       cacheReadInputTokens: undefined,
     });
 
-    const aiMsgId = await findAiMessageId(conn, conv.id, selfHex, preMaxId);
+    aiMsgId = await findAiMessageId(conn, conv.id, selfHex, preMaxId);
     if (!aiMsgId) {
       console.error(`${logTag} could not find placeholder AI message`);
       return;
@@ -697,11 +734,8 @@ async function handleConversationMessage(
     };
 
     const tools: ToolDef[] = getConversationTools() as ToolDef[];
-    const allToolCalls: StoredToolCall[] = [];
     /** All raw tool result strings this turn — for assessing success when the model omits a text reply. */
     const toolResultLog: string[] = [];
-    let thinkingText = "";
-    let responseText = "";
     /** Text emitted in earlier tool iterations of this turn, preserved so the
      * final message reflects the whole turn rather than just the last segment
      * (assessment #30). */
@@ -1123,6 +1157,19 @@ async function handleConversationMessage(
       `${logTag} failed to respond in conversation ${msg.conversationId}:`,
       err instanceof Error ? err.message : err,
     );
+    if (aiMsgId !== undefined) {
+      const failure = userVisibleTurnFailure(err);
+      const partial = responseText.trim();
+      const content = partial ? `${partial}\n\n---\n\n${failure}` : failure;
+      await flushMessage(
+        conn,
+        aiMsgId,
+        content,
+        "Error",
+        thinkingText,
+        allToolCalls,
+      );
+    }
   } finally {
     // end() returns true if a message arrived mid-turn and was deferred.
     // Queue-on-release: pick up the newest one now, bypassing the timestamp

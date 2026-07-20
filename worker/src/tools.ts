@@ -1210,11 +1210,25 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
       "Returns the job's overall status ('executing' | 'complete' | 'failed'), its task tree with " +
       "per-task status, and any results produced so far. Use it to poll a job you started earlier in " +
       "this turn, or to inspect a job referenced in a completion note before you report to the user. " +
+      "Task summaries cap result previews; when result_truncated is true, call again with task_id and " +
+      "page through the full result using result_offset/result_limit. " +
       "Read-only — it never modifies anything.",
     input_schema: {
       type: "object" as const,
       properties: {
         job_id: { type: "number" },
+        task_id: {
+          type: "number",
+          description: "Optional task id whose complete result should be read in a window.",
+        },
+        result_offset: {
+          type: "number",
+          description: "Character offset for a task result window (default 0).",
+        },
+        result_limit: {
+          type: "number",
+          description: "Maximum result characters to return (default 4000, maximum 20000).",
+        },
       },
       required: ["job_id"],
     },
@@ -3473,6 +3487,49 @@ export async function executeTool(
         const tasks = [...(conn.db.orcha_task.iter() as Iterable<CheckTaskRow>)]
           .filter((t) => t.jobId === target)
           .sort((a, b) => Number(a.id - b.id));
+
+        if (input.task_id !== undefined) {
+          const taskIdArg = Number(input.task_id);
+          if (!Number.isFinite(taskIdArg)) {
+            return JSON.stringify({ ok: false, error: "task_id must be a number" });
+          }
+          const taskId = BigInt(Math.trunc(taskIdArg));
+          const task = tasks.find((t) => t.id === taskId);
+          if (!task) {
+            return JSON.stringify({
+              ok: false,
+              error: `Task ${Math.trunc(taskIdArg)} does not belong to job ${jobIdArg}`,
+            });
+          }
+
+          const rawOffset = Number(input.result_offset ?? 0);
+          const rawLimit = Number(input.result_limit ?? 4000);
+          const offset = Number.isFinite(rawOffset) ? Math.max(0, Math.trunc(rawOffset)) : 0;
+          const limit = Number.isFinite(rawLimit)
+            ? Math.min(20_000, Math.max(1, Math.trunc(rawLimit)))
+            : 4000;
+          const resultChars = Array.from(task.result ?? "");
+          const window = resultChars.slice(offset, offset + limit).join("");
+          const truncated = offset + window.length < resultChars.length;
+          return JSON.stringify({
+            ok: true,
+            job_id: Number(job.id),
+            status: job.status,
+            task: {
+              task_id: Number(task.id),
+              type: task.taskType,
+              status: task.status,
+              description: task.description,
+              result: window,
+              result_total_chars: resultChars.length,
+              result_offset: offset,
+              result_truncated: truncated,
+              next_result_offset: truncated ? offset + window.length : undefined,
+            },
+          });
+        }
+
+        const hasTruncatedResult = tasks.some((t) => (t.result?.length ?? 0) > 500);
         return JSON.stringify({
           ok: true,
           job_id: Number(job.id),
@@ -3488,7 +3545,12 @@ export async function executeTool(
             status: t.status,
             description: trunc(t.description, 200),
             result: trunc(t.result, 500),
+            result_total_chars: t.result?.length ?? 0,
+            result_truncated: (t.result?.length ?? 0) > 500,
           })),
+          next_step: hasTruncatedResult
+            ? "One or more task results are truncated. Call check_job again with job_id + task_id, then page with result_offset/result_limit until result_truncated is false."
+            : undefined,
         });
       }
 
