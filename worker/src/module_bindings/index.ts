@@ -146,6 +146,7 @@ import RenamePropertyReducer from "./rename_property_reducer";
 import RenameViewReducer from "./rename_view_reducer";
 import ReorderPropertyReducer from "./reorder_property_reducer";
 import ReplacePageDocReducer from "./replace_page_doc_reducer";
+import ReportExtensionRuntimeHealthReducer from "./report_extension_runtime_health_reducer";
 import RequestPageAccessReducer from "./request_page_access_reducer";
 import ResolvePageAccessRequestReducer from "./resolve_page_access_request_reducer";
 import ResolveStructuralFindingReducer from "./resolve_structural_finding_reducer";
@@ -231,6 +232,7 @@ import ValidateAutomationReducer from "./validate_automation_reducer";
 
 // Import all table schema definitions
 import AiEvaluationRow from "./ai_evaluation_table";
+import AiExtensionRuntimeRow from "./ai_extension_runtime_table";
 import AiUserConfigRow from "./ai_user_config_table";
 import AiUserMemoryRow from "./ai_user_memory_table";
 import AiUserProfileRow from "./ai_user_profile_table";
@@ -266,6 +268,7 @@ import DatabaseRowMarkerRow from "./database_row_marker_table";
 import DatabaseSchemaRow from "./database_schema_table";
 import DatabaseViewRow from "./database_view_table";
 import ExtensionManifestRow from "./extension_manifest_table";
+import ExtensionRuntimeHealthRow from "./extension_runtime_health_table";
 import HarnessTemplateRow from "./harness_template_table";
 import IdCounterRow from "./id_counter_table";
 import InstalledExtensionRow from "./installed_extension_table";
@@ -796,6 +799,17 @@ const tablesSchema = __schema({
       { name: 'extension_manifest_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, ExtensionManifestRow),
+  extension_runtime_health: __table({
+    name: 'extension_runtime_health',
+    indexes: [
+      { name: 'installed_extension_id', algorithm: 'btree', columns: [
+        'installedExtensionId',
+      ] },
+    ],
+    constraints: [
+      { name: 'extension_runtime_health_installed_extension_id_key', constraint: 'unique', columns: ['installedExtensionId'] },
+    ],
+  }, ExtensionRuntimeHealthRow),
   harness_template: __table({
     name: 'harness_template',
     indexes: [
@@ -1168,6 +1182,13 @@ const tablesSchema = __schema({
       { name: 'user_preference_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, UserPreferenceRow),
+  ai_extension_runtime: __table({
+    name: 'ai_extension_runtime',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, AiExtensionRuntimeRow),
   api_endpoint_key_lookup: __table({
     name: 'api_endpoint_key_lookup',
     indexes: [
@@ -1291,6 +1312,7 @@ const reducersSchema = __reducers(
   __reducerSchema("rename_view", RenameViewReducer),
   __reducerSchema("reorder_property", ReorderPropertyReducer),
   __reducerSchema("replace_page_doc", ReplacePageDocReducer),
+  __reducerSchema("report_extension_runtime_health", ReportExtensionRuntimeHealthReducer),
   __reducerSchema("request_page_access", RequestPageAccessReducer),
   __reducerSchema("resolve_page_access_request", ResolvePageAccessRequestReducer),
   __reducerSchema("resolve_structural_finding", ResolveStructuralFindingReducer),

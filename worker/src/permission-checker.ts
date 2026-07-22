@@ -35,8 +35,8 @@ export interface PermissionScope {
 
 // ── SpacetimeDB row shapes ────────────────────────────────────────────────────
 
-type ExtensionPermissionRow = {
-  id: bigint;
+export type ExtensionPermissionRow = {
+  id?: bigint;
   installedExtensionId: bigint;
   scope: { tag: PermissionScopeTag; value?: bigint };
   action: { tag: PermissionActionTag };
@@ -78,9 +78,20 @@ function isPrivateHost(hostname: string): boolean {
 
 export class PermissionChecker {
   private readonly conn: ConnLike;
+  private readonly runtimePermissions: readonly ExtensionPermissionRow[] | undefined;
 
-  constructor(conn: ConnLike) {
+  constructor(conn: ConnLike, runtimePermissions?: readonly ExtensionPermissionRow[]) {
     this.conn = conn;
+    this.runtimePermissions = runtimePermissions;
+  }
+
+  private permissions(): readonly ExtensionPermissionRow[] {
+    if (this.runtimePermissions) return this.runtimePermissions;
+    return [
+      ...(this.conn.db.extension_permission?.iter() as
+        | Iterable<ExtensionPermissionRow>
+        | undefined ?? []),
+    ];
   }
 
   /**
@@ -93,11 +104,7 @@ export class PermissionChecker {
     pageId: bigint,
     action: PermissionActionTag,
   ): { allowed: boolean; reason?: string } {
-    const grants = [
-      ...(this.conn.db.extension_permission?.iter() as
-        | Iterable<ExtensionPermissionRow>
-        | undefined ?? []),
-    ].filter(
+    const grants = this.permissions().filter(
       (p) =>
         p.installedExtensionId === installedExtensionId &&
         p.action.tag === action,
@@ -130,11 +137,7 @@ export class PermissionChecker {
   resolveBridgeDevice(
     installedExtensionId: bigint,
   ): { ok: true; deviceId: bigint } | { ok: false; reason: string; candidates?: bigint[] } {
-    const grants = [
-      ...(this.conn.db.extension_permission?.iter() as
-        | Iterable<ExtensionPermissionRow>
-        | undefined ?? []),
-    ].filter(
+    const grants = this.permissions().filter(
       (p) =>
         p.installedExtensionId === installedExtensionId &&
         p.scope?.tag === "BridgeDevice" &&
@@ -183,11 +186,7 @@ export class PermissionChecker {
       };
     }
 
-    const grants = [
-      ...(this.conn.db.extension_permission?.iter() as
-        | Iterable<ExtensionPermissionRow>
-        | undefined ?? []),
-    ].filter(
+    const grants = this.permissions().filter(
       (p) =>
         p.installedExtensionId === installedExtensionId &&
         p.action.tag === "HttpOutbound",

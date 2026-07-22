@@ -5,6 +5,7 @@ import { Identity } from "spacetimedb";
 import {
   useExtensionManifests,
   useInstalledExtensions,
+  useExtensionRuntimeHealth,
   usePublishExtension,
   useInstallExtension,
   useConfirmExtensionInstall,
@@ -15,6 +16,7 @@ import {
   useSeedBuiltinExtensions,
   type ExtensionManifestRow,
   type InstalledExtensionRow,
+  type ExtensionRuntimeHealthRow,
 } from "@/src/hooks/useExtensions";
 import { mintIdentity } from "@/src/lib/aiUserApi";
 
@@ -248,6 +250,7 @@ function InstalledExtensionCard({
   installed,
   manifest,
   latestManifest,
+  runtimeHealth,
   onToggleEnabled,
   onUninstall,
   onConfirm,
@@ -257,6 +260,7 @@ function InstalledExtensionCard({
   installed: InstalledExtensionRow;
   manifest: ExtensionManifestRow | undefined;
   latestManifest: ExtensionManifestRow | undefined;
+  runtimeHealth: ExtensionRuntimeHealthRow | undefined;
   onToggleEnabled: (id: bigint, enabled: boolean) => void;
   onUninstall: (id: bigint) => void;
   onConfirm: (id: bigint) => void;
@@ -267,6 +271,35 @@ function InstalledExtensionCard({
   const isPending = installed.installStatus.tag === "PendingConfirmation";
   const hasUpgrade = latestManifest && latestManifest.id !== installed.manifestId;
   const builtin = isBuiltin(manifest);
+  const runtimeStatus = !installed.enabled
+    ? {
+        label: "Disabled",
+        classes: "bg-neutral-100 dark:bg-neutral-800 text-neutral-500",
+        title: "This extension is disabled.",
+      }
+    : runtimeHealth?.status.tag === "Connected"
+      ? {
+          label: `Connected · ${runtimeHealth.toolCount} ${runtimeHealth.toolCount === 1 ? "tool" : "tools"}`,
+          classes: "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300",
+          title: "Pear successfully initialized this MCP server and listed its tools.",
+        }
+      : runtimeHealth?.status.tag === "Connecting"
+        ? {
+            label: "Connecting",
+            classes: "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300",
+            title: "Pear is initializing this MCP server.",
+          }
+        : runtimeHealth?.status.tag === "Error"
+          ? {
+              label: "Connection failed",
+              classes: "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300",
+              title: runtimeHealth.detail ?? "Pear could not initialize this MCP server.",
+            }
+          : {
+              label: "Not checked",
+              classes: "bg-neutral-100 dark:bg-neutral-800 text-neutral-500",
+              title: "No AI worker has successfully checked this MCP server yet.",
+            };
 
   return (
     <div className="flex flex-col gap-2 py-4 border-b border-neutral-200 dark:border-neutral-800 last:border-0">
@@ -285,6 +318,14 @@ function InstalledExtensionCard({
             {isPending && (
               <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 shrink-0">
                 Awaiting confirmation
+              </span>
+            )}
+            {!builtin && !isPending && (
+              <span
+                className={`text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0 ${runtimeStatus.classes}`}
+                title={runtimeStatus.title}
+              >
+                {runtimeStatus.label}
               </span>
             )}
           </div>
@@ -880,6 +921,7 @@ function AvailableExtensionCard({
 export function ExtensionsSettings() {
   const { manifests } = useExtensionManifests();
   const { installed } = useInstalledExtensions();
+  const { health } = useExtensionRuntimeHealth();
 
   const setExtensionEnabled = useSetExtensionEnabled();
   const uninstallExtension = useUninstallExtension();
@@ -1048,6 +1090,7 @@ export function ExtensionsSettings() {
                         installed={ext}
                         manifest={currentManifest}
                         latestManifest={undefined}
+                        runtimeHealth={undefined}
                         onToggleEnabled={handleToggleEnabled}
                         onUninstall={handleUninstall}
                         onConfirm={(id) => setConfirmTarget(installed.find((i) => i.id === id) ?? null)}
@@ -1095,6 +1138,7 @@ export function ExtensionsSettings() {
                     installed={ext}
                     manifest={currentManifest}
                     latestManifest={latestManifest}
+                    runtimeHealth={health.find((row) => row.installedExtensionId === ext.id)}
                     onToggleEnabled={handleToggleEnabled}
                     onUninstall={handleUninstall}
                     onConfirm={(id) => setConfirmTarget(installed.find((i) => i.id === id) ?? null)}

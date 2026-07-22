@@ -51,6 +51,8 @@ export interface AiUserWorkerOptions {
   token: string;
   /** Optional human label used in log lines (e.g. "eclosion/Kira"). */
   label?: string;
+  /** Current module-publisher connection for credential-bearing MCP runtime data. */
+  getMcpRuntimeConn?: () => ConnLike | undefined;
 }
 
 export class AiUserWorker {
@@ -65,6 +67,7 @@ export class AiUserWorker {
   readonly label: string;
   private token: string;
   private logTag: string;
+  private readonly getMcpRuntimeConn: () => ConnLike | undefined;
 
   constructor(opts: AiUserWorkerOptions) {
     this.uri = opts.uri;
@@ -72,6 +75,7 @@ export class AiUserWorker {
     this.token = opts.token;
     this.label = opts.label ?? "ai-user";
     this.logTag = `[ai:${opts.dbName}/${this.label}]`;
+    this.getMcpRuntimeConn = opts.getMcpRuntimeConn ?? (() => undefined);
   }
 
   /** Currently-connected SpacetimeDB Identity, or null before onConnect fires. */
@@ -228,11 +232,21 @@ export class AiUserWorker {
       });
     }
 
-    registerConversationHandlers(connLike, identity, this.logTag);
+    registerConversationHandlers(
+      connLike,
+      identity,
+      this.logTag,
+      this.getMcpRuntimeConn,
+    );
 
     subscribeToAvailableTables(conn, this.logTag, () => {
       console.log(`${this.logTag} subscription ready`);
-      void processRecentConversationMessages(connLike, identity, this.logTag).catch(
+      void processRecentConversationMessages(
+        connLike,
+        identity,
+        this.logTag,
+        this.getMcpRuntimeConn,
+      ).catch(
         (err: unknown) => {
           console.error(
             `${this.logTag} recent message check failed:`,

@@ -25,6 +25,7 @@ import { StructuralSensorsScheduler } from "./structural-sensors.js";
 import { subscribeToAvailableTables } from "./subscriptions.js";
 import { NotionImportJobRunner } from "./notion/import-job-runner.js";
 import type { ConnLike, ToolCallContext } from "./tools.js";
+import { probeMcpExtensions } from "./mcp-tool-executor.js";
 
 const CAPABILITIES = [
   "orchestrate",
@@ -171,6 +172,8 @@ export class DatabaseWorker {
 
   /** Periodic liveness ping so the UI can tell this worker is alive. */
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  /** Coalesces extension changes into one initialize + tools/list health probe. */
+  private mcpProbeTimer: ReturnType<typeof setTimeout> | null = null;
 
   readonly uri: string;
   readonly dbName: string;
@@ -216,6 +219,27 @@ export class DatabaseWorker {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
     }
+  }
+
+  private clearMcpProbeTimer(): void {
+    if (this.mcpProbeTimer !== null) {
+      clearTimeout(this.mcpProbeTimer);
+      this.mcpProbeTimer = null;
+    }
+  }
+
+  private scheduleMcpProbe(conn: DbConnection): void {
+    if (this.stopped) return;
+    this.clearMcpProbeTimer();
+    this.mcpProbeTimer = setTimeout(() => {
+      this.mcpProbeTimer = null;
+      void probeMcpExtensions(conn as unknown as ConnLike).catch((err: unknown) => {
+        console.warn(
+          `[worker:${this.dbName}] MCP health probe failed:`,
+          err instanceof Error ? err.message : String(err),
+        );
+      });
+    }, 250);
   }
 
   private scheduleReconnect(): void {
@@ -279,6 +303,7 @@ export class DatabaseWorker {
       .onDisconnect(() => {
         console.log(`[worker:${this.dbName}] Disconnected`);
         this.stopHeartbeat();
+        this.clearMcpProbeTimer();
         if (this.sensors) {
           this.sensors.stop();
           this.sensors = null;
@@ -301,6 +326,7 @@ export class DatabaseWorker {
     this.stopped = true;
     this.clearReconnectTimer();
     this.stopHeartbeat();
+    this.clearMcpProbeTimer();
     if (this.aiUserReconcileTimer !== null) {
       clearTimeout(this.aiUserReconcileTimer);
       this.aiUserReconcileTimer = null;
@@ -391,6 +417,8 @@ export class DatabaseWorker {
         dbName: this.dbName,
         token: d.token,
         label: d.label ?? `ai-${aiUserId}`,
+        getMcpRuntimeConn: () =>
+          this.conn ? (this.conn as unknown as ConnLike) : undefined,
       });
       this.aiUserWorkers.set(aiUserId, w);
       this.aiUserTokens.set(aiUserId, d.token);
@@ -484,6 +512,24 @@ export class DatabaseWorker {
       }
     }
 
+    // MCP credentials are exposed only to this module-publisher connection.
+    // Probe on runtime-view changes so Settings reflects a real handshake even
+    // before an AI user starts its next chat turn.
+    const runtimeTable = (conn as unknown as {
+      db: {
+        ai_extension_runtime?: {
+          onInsert(cb: () => void): void;
+          onUpdate(cb: () => void): void;
+          onDelete(cb: () => void): void;
+        };
+      };
+    }).db.ai_extension_runtime;
+    if (runtimeTable) {
+      runtimeTable.onInsert(() => this.scheduleMcpProbe(conn));
+      runtimeTable.onUpdate(() => this.scheduleMcpProbe(conn));
+      runtimeTable.onDelete(() => this.scheduleMcpProbe(conn));
+    }
+
     conn.db.orcha_task.onUpdate(
       (_ctx: EventContext, _old: TaskRow, task: TaskRow) => {
         this.checkAndClaim(conn, task);
@@ -511,6 +557,7 @@ export class DatabaseWorker {
         );
 
       this.startHeartbeat(conn);
+      this.scheduleMcpProbe(conn);
 
       for (const task of conn.db.orcha_task.iter() as Iterable<TaskRow>) {
         this.checkAndClaim(conn, task);

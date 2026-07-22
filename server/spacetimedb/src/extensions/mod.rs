@@ -2,9 +2,12 @@
 //! registrations, per-install permission grants, and the immutable
 //! tool-call audit log.
 
-use spacetimedb::{reducer, table, Identity, ReducerContext, SpacetimeType, Table, Timestamp};
+use spacetimedb::{
+    reducer, table, view, Identity, ReducerContext, SpacetimeType, Table, Timestamp, ViewContext,
+};
 
 use crate::id_counters::alloc_id;
+use crate::module_install::module_install_meta__view;
 
 pub(crate) mod manifest;
 pub(crate) mod reducers;
@@ -125,6 +128,41 @@ pub enum PermissionAction {
     HttpOutbound,
 }
 
+/// One permission attached to an AI-visible MCP runtime descriptor. This is a
+/// projection of the private `extension_permission` row: it deliberately omits
+/// the grantor identity and timestamp while retaining everything the trusted
+/// worker needs for pre-call enforcement.
+#[derive(SpacetimeType, Clone, Debug)]
+pub struct AiExtensionRuntimePermission {
+    pub scope: PermissionScope,
+    pub action: PermissionAction,
+    pub allowed_domains: Option<String>,
+}
+
+/// Credential-bearing MCP configuration exposed only by the
+/// `ai_extension_runtime` per-caller view below. It is generated into client
+/// bindings so the trusted host worker can discover servers, but ordinary
+/// human, AI-user, external-MCP, and anonymous connections receive zero rows.
+#[derive(SpacetimeType, Clone, Debug)]
+pub struct AiExtensionRuntimeRow {
+    pub installed_extension_id: u64,
+    pub server_id: u64,
+    pub name: String,
+    pub endpoint: String,
+    pub auth_scheme: AuthScheme,
+    pub api_key: Option<String>,
+    pub capabilities: Vec<String>,
+    pub permissions: Vec<AiExtensionRuntimePermission>,
+}
+
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum ExtensionRuntimeStatus {
+    Connecting,
+    Connected,
+    Error,
+    Disabled,
+}
+
 // ============================================================
 // Extensions — Tables
 // ============================================================
@@ -196,6 +234,20 @@ pub struct ExtensionMcpServer {
     pub updated_at: Timestamp,
 }
 
+/// Credential-free worker health for an installed MCP extension. Human clients
+/// use this instead of treating "installed" as proof that an MCP handshake and
+/// `tools/list` succeeded.
+#[table(accessor = extension_runtime_health, public)]
+pub struct ExtensionRuntimeHealth {
+    #[primary_key]
+    pub installed_extension_id: u64,
+    pub status: ExtensionRuntimeStatus,
+    pub tool_count: u32,
+    pub detail: Option<String>,
+    pub checked_at: Timestamp,
+    pub reported_by: Identity,
+}
+
 /// Explicit permission grant for an installed extension.
 /// No row = no permission. Never defaulted — must be explicitly granted.
 /// Private — never exposed to agents, extensions, or external tools.
@@ -240,6 +292,69 @@ pub struct ToolCallAuditLog {
     pub outcome: String,
     pub outcome_detail: Option<String>,
     pub called_at: Timestamp,
+}
+
+/// Runtime configuration for trusted AI-user workers.
+///
+/// The source tables remain private because they contain credentials. Views may
+/// read private tables server-side; this caller-dependent projection returns
+/// rows only to the recorded module publisher. AI-user credentials are also
+/// used by externally operated MCP clients, so an AI-user identity alone is
+/// not a sufficient trust boundary for extension API keys.
+#[view(accessor = ai_extension_runtime, public)]
+fn ai_extension_runtime(ctx: &ViewContext) -> Vec<AiExtensionRuntimeRow> {
+    let is_module_publisher = ctx
+        .db
+        .module_install_meta()
+        .id()
+        .find(0)
+        .is_some_and(|meta| meta.publisher_identity == ctx.sender());
+    if !is_module_publisher {
+        return Vec::new();
+    }
+
+    // Views cannot call `.iter()`. `manifest_id` is a btree index, so an
+    // unbounded range provides the full installed-extension scan.
+    ctx.db
+        .installed_extension()
+        .manifest_id()
+        .filter(0u64..)
+        .filter(|installed| installed.enabled && installed.install_status == InstallStatus::Active)
+        .filter_map(|installed| {
+            let server_id = installed.mcp_server_id?;
+            let server = ctx.db.extension_mcp_server().id().find(server_id)?;
+            if !server.enabled {
+                return None;
+            }
+            let manifest = ctx
+                .db
+                .extension_manifest()
+                .id()
+                .find(installed.manifest_id)?;
+            let permissions = ctx
+                .db
+                .extension_permission()
+                .installed_extension_id()
+                .filter(installed.id)
+                .map(|permission| AiExtensionRuntimePermission {
+                    scope: permission.scope,
+                    action: permission.action,
+                    allowed_domains: permission.allowed_domains,
+                })
+                .collect();
+
+            Some(AiExtensionRuntimeRow {
+                installed_extension_id: installed.id,
+                server_id: server.id,
+                name: manifest.name,
+                endpoint: server.endpoint,
+                auth_scheme: server.auth_scheme,
+                api_key: server.api_key,
+                capabilities: server.capabilities,
+                permissions,
+            })
+        })
+        .collect()
 }
 
 const PEAR_WORKSPACE_TOOLS_MANIFEST: &str = r#"{

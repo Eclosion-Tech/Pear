@@ -10,12 +10,14 @@ use crate::extensions::manifest::{
     has_wildcard_domains, ManifestDoc, ManifestPermission,
 };
 use crate::extensions::{
-    extension_manifest, extension_mcp_server, extension_permission, installed_extension,
-    next_extension_manifest_id, next_extension_permission_id, next_installed_extension_id,
-    next_tool_call_audit_log_id, tool_call_audit_log, ExtensionManifest, ExtensionMcpServer,
-    ExtensionPermission, ExtensionType, InstallStatus, InstalledExtension, PermissionAction,
+    extension_manifest, extension_mcp_server, extension_permission, extension_runtime_health,
+    installed_extension, next_extension_manifest_id, next_extension_permission_id,
+    next_installed_extension_id, next_tool_call_audit_log_id, tool_call_audit_log,
+    ExtensionManifest, ExtensionMcpServer, ExtensionPermission, ExtensionRuntimeHealth,
+    ExtensionRuntimeStatus, ExtensionType, InstallStatus, InstalledExtension, PermissionAction,
     PermissionScope, ToolCallAuditLog,
 };
+use crate::module_install::sender_is_module_publisher;
 // ============================================================
 // Extensions — Reducers
 // ============================================================
@@ -343,6 +345,10 @@ pub fn cancel_extension_install(
         .installed_extension()
         .id()
         .delete(installed_extension_id);
+    ctx.db
+        .extension_runtime_health()
+        .installed_extension_id()
+        .delete(installed_extension_id);
     Ok(())
 }
 
@@ -392,6 +398,10 @@ pub fn uninstall_extension(
         .installed_extension()
         .id()
         .delete(installed_extension_id);
+    ctx.db
+        .extension_runtime_health()
+        .installed_extension_id()
+        .delete(installed_extension_id);
 
     Ok(())
 }
@@ -433,6 +443,87 @@ pub fn set_extension_enabled(
         }
     }
 
+    let status = if enabled {
+        ExtensionRuntimeStatus::Connecting
+    } else {
+        ExtensionRuntimeStatus::Disabled
+    };
+    let health = ExtensionRuntimeHealth {
+        installed_extension_id,
+        status,
+        tool_count: 0,
+        detail: None,
+        checked_at: ctx.timestamp,
+        reported_by: ctx.sender(),
+    };
+    if ctx
+        .db
+        .extension_runtime_health()
+        .installed_extension_id()
+        .find(installed_extension_id)
+        .is_some()
+    {
+        ctx.db
+            .extension_runtime_health()
+            .installed_extension_id()
+            .update(health);
+    } else {
+        ctx.db.extension_runtime_health().insert(health);
+    }
+
+    Ok(())
+}
+
+/// Record the result of an MCP initialize + `tools/list` probe. Only the module
+/// publisher connection used by the trusted host worker may report health.
+/// Human and external MCP clients can read this credential-free table but
+/// cannot forge connection state.
+#[reducer]
+pub fn report_extension_runtime_health(
+    ctx: &ReducerContext,
+    installed_extension_id: u64,
+    status: ExtensionRuntimeStatus,
+    tool_count: u32,
+    detail: Option<String>,
+) -> Result<(), String> {
+    if !sender_is_module_publisher(ctx) {
+        return Err("Only the module publisher can report extension health".to_string());
+    }
+
+    let installed = ctx
+        .db
+        .installed_extension()
+        .id()
+        .find(installed_extension_id)
+        .ok_or("InstalledExtension not found")?;
+    let effective_status = if installed.enabled {
+        status
+    } else {
+        ExtensionRuntimeStatus::Disabled
+    };
+    let detail = detail.map(|s| s.chars().take(1_000).collect());
+    let row = ExtensionRuntimeHealth {
+        installed_extension_id,
+        status: effective_status,
+        tool_count,
+        detail,
+        checked_at: ctx.timestamp,
+        reported_by: ctx.sender(),
+    };
+    if ctx
+        .db
+        .extension_runtime_health()
+        .installed_extension_id()
+        .find(installed_extension_id)
+        .is_some()
+    {
+        ctx.db
+            .extension_runtime_health()
+            .installed_extension_id()
+            .update(row);
+    } else {
+        ctx.db.extension_runtime_health().insert(row);
+    }
     Ok(())
 }
 
@@ -555,6 +646,9 @@ pub fn record_tool_call_audit(
     outcome: String,
     outcome_detail: Option<String>,
 ) -> Result<(), String> {
+    if !sender_is_module_publisher(ctx) {
+        return Err("Only the module publisher can record tool-call audits".to_string());
+    }
     if !["allowed", "denied", "error"].contains(&outcome.as_str()) {
         return Err(format!(
             "outcome must be 'allowed', 'denied', or 'error'; got '{outcome}'"

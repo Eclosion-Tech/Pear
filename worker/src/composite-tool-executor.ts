@@ -21,7 +21,10 @@
 
 import type { ConnLike, ToolCallContext } from "./tools.js";
 import { StaticToolExecutor } from "./tools.js";
-import { McpToolExecutor } from "./mcp-tool-executor.js";
+import {
+  McpToolExecutor,
+  type McpClientFactory,
+} from "./mcp-tool-executor.js";
 import { PermissionChecker, type PermissionActionTag } from "./permission-checker.js";
 import { AuditLogger, type AuditOutcome } from "./audit-logger.js";
 import type { ToolDef } from "./providers.js";
@@ -30,12 +33,20 @@ import type { ToolDef } from "./providers.js";
 
 export interface CompositeToolExecutorConfig {
   conn: ConnLike;
-  conversationId: bigint;
+  conversationId?: bigint;
   agentId: string;
   /** The page the current conversation is attached to — used for scope checks. */
-  currentPageId: bigint;
+  currentPageId?: bigint;
   jobId?: bigint;
   taskId?: bigint;
+  /** Static definitions exposed on this surface (chat and Orcha differ). */
+  staticTools: ToolDef[];
+  /** Secrets and attribution metadata required by built-in tools. */
+  toolContext?: ToolCallContext;
+  /** Module-publisher connection used only for MCP secrets, health, and audit. */
+  mcpRuntimeConn?: ConnLike;
+  /** Test seam for the protocol client; production always uses McpClient. */
+  mcpClientFactory?: McpClientFactory;
   /**
    * If set, MCP tool calls are scoped to the installed extension with this id
    * and permission-checked against ExtensionPermission rows.
@@ -121,8 +132,11 @@ export class CompositeToolExecutor {
     this.config = config;
     this.staticExecutor = staticExecutor;
     this.mcpExecutor = mcpExecutor;
-    this.permissionChecker = new PermissionChecker(config.conn);
-    this.auditLogger = new AuditLogger(config.conn);
+    this.permissionChecker = new PermissionChecker(
+      config.conn,
+      mcpExecutor.getPermissionRows(),
+    );
+    this.auditLogger = new AuditLogger(config.mcpRuntimeConn ?? config.conn);
   }
 
   /**
@@ -130,15 +144,22 @@ export class CompositeToolExecutor {
    * Connects MCP servers and checks for static/MCP tool name collisions.
    */
   static async create(config: CompositeToolExecutorConfig): Promise<CompositeToolExecutor> {
-    const staticExecutor = new StaticToolExecutor(config.conn, config.jobId ?? BigInt(0));
+    const staticToolContext: ToolCallContext = {
+      ...config.toolContext,
+      conversationId: config.conversationId ?? config.toolContext?.conversationId,
+      currentPageId: config.currentPageId ?? config.toolContext?.currentPageId,
+    };
+    const staticExecutor = new StaticToolExecutor(
+      config.conn,
+      config.jobId ?? BigInt(0),
+      config.staticTools,
+      staticToolContext,
+    );
 
-    const installedById =
-      config.installedExtensionId !== undefined
-        ? config.conn.db.installed_extension?.id?.find(config.installedExtensionId)
-            ?.installedBy?.toHexString()
-        : undefined;
-
-    const mcpExecutor = await McpToolExecutor.create(config.conn, installedById);
+    const mcpExecutor = await McpToolExecutor.create(
+      config.mcpRuntimeConn ?? config.conn,
+      config.mcpClientFactory,
+    );
 
     // Startup collision check: static wins, log errors for shadowed MCP tools
     const staticNames = staticExecutor.toolNames();
@@ -180,8 +201,11 @@ export class CompositeToolExecutor {
     // Static tools always win and need no permission check
     if (this.staticExecutor.hasTool(toolName)) {
       const staticToolContext: ToolCallContext = {
-        conversationId: this.config.conversationId,
-        currentPageId: this.config.currentPageId,
+        ...this.config.toolContext,
+        conversationId:
+          this.config.conversationId ?? this.config.toolContext?.conversationId,
+        currentPageId:
+          this.config.currentPageId ?? this.config.toolContext?.currentPageId,
       };
 
       if (toolName === "tool_bash" && this.config.installedExtensionId !== undefined) {
@@ -224,8 +248,15 @@ export class CompositeToolExecutor {
 
     // MCP tool — permission check required
     if (this.mcpExecutor.hasTool(toolName)) {
+      const installedExtensionId = this.mcpExecutor.installedExtensionIdForTool(toolName);
+      if (installedExtensionId === undefined) {
+        return JSON.stringify({
+          ok: false,
+          error: `MCP tool has no owning extension: ${toolName}`,
+        });
+      }
       return this.bracketWithSnapshots(toolName, input, () =>
-        this.executeMcpTool(toolName, input),
+        this.executeMcpTool(toolName, input, installedExtensionId),
       );
     }
 
@@ -253,6 +284,7 @@ export class CompositeToolExecutor {
     if (!isMutatingPageTool(toolName)) return run();
 
     const targetPageId = extractTargetPageId(input) ?? this.config.currentPageId;
+    if (targetPageId === undefined) return run();
 
     let preSnapshotId: bigint | undefined;
     try {
@@ -301,39 +333,41 @@ export class CompositeToolExecutor {
   private async executeMcpTool(
     toolName: string,
     input: Record<string, unknown>,
+    installedExtensionId: bigint,
   ): Promise<string> {
     const rawInput = JSON.stringify(input);
-    const { installedExtensionId, currentPageId, conversationId, agentId, jobId, taskId } =
-      this.config;
+    const { currentPageId, conversationId, agentId, jobId, taskId } = this.config;
 
     // Permission check
-    if (installedExtensionId !== undefined) {
-      const action = requiredAction(toolName);
+    const action = requiredAction(toolName);
 
-      let checkResult: { allowed: boolean; reason?: string };
-      if (action === "HttpOutbound") {
-        const url = (input.url as string | undefined) ?? "";
-        checkResult = this.permissionChecker.checkHttpOutbound(installedExtensionId, url);
-      } else {
-        checkResult = this.permissionChecker.check(installedExtensionId, currentPageId, action);
-      }
+    let checkResult: { allowed: boolean; reason?: string };
+    if (action === "HttpOutbound") {
+      const url = (input.url as string | undefined) ?? "";
+      checkResult = this.permissionChecker.checkHttpOutbound(installedExtensionId, url);
+    } else {
+      checkResult = this.permissionChecker.check(
+        installedExtensionId,
+        currentPageId ?? BigInt(0),
+        action,
+      );
+    }
 
-      if (!checkResult.allowed) {
-        const reason = checkResult.reason ?? "Permission denied";
-        void this.auditLogger.log({
-          conversationId,
-          jobId,
-          taskId,
-          agentId,
-          installedExtensionId,
-          toolName,
-          rawInput,
-          rawOutput: reason,
-          outcome: "denied",
-          outcomeDetail: reason,
-        });
-        return JSON.stringify({ ok: false, error: `Permission denied: ${reason}` });
-      }
+    if (!checkResult.allowed) {
+      const reason = checkResult.reason ?? "Permission denied";
+      void this.auditLogger.log({
+        conversationId: conversationId ?? BigInt(0),
+        jobId,
+        taskId,
+        agentId,
+        installedExtensionId,
+        toolName,
+        rawInput,
+        rawOutput: reason,
+        outcome: "denied",
+        outcomeDetail: reason,
+      });
+      return JSON.stringify({ ok: false, error: `Permission denied: ${reason}` });
     }
 
     // Execute
@@ -350,20 +384,18 @@ export class CompositeToolExecutor {
     }
 
     // Audit log — never throws
-    if (installedExtensionId !== undefined) {
-      void this.auditLogger.log({
-        conversationId,
-        jobId,
-        taskId,
-        agentId,
-        installedExtensionId,
-        toolName,
-        rawInput,
-        rawOutput,
-        outcome,
-        outcomeDetail,
-      });
-    }
+    void this.auditLogger.log({
+      conversationId: conversationId ?? BigInt(0),
+      jobId,
+      taskId,
+      agentId,
+      installedExtensionId,
+      toolName,
+      rawInput,
+      rawOutput,
+      outcome,
+      outcomeDetail,
+    });
 
     if (outcome === "error") {
       return JSON.stringify({ ok: false, error: rawOutput });

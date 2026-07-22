@@ -71,10 +71,11 @@ pub use crate::conversations::{
     ParticipantRole,
 };
 pub use crate::extensions::{
-    extension_manifest, extension_mcp_server, extension_permission, installed_extension,
-    tool_call_audit_log, AuthScheme, ExtensionManifest, ExtensionMcpServer, ExtensionPermission,
-    ExtensionType, InstallStatus, InstalledExtension, PermissionAction, PermissionScope,
-    ToolCallAuditLog,
+    extension_manifest, extension_mcp_server, extension_permission, extension_runtime_health,
+    installed_extension, tool_call_audit_log, AiExtensionRuntimePermission, AiExtensionRuntimeRow,
+    AuthScheme, ExtensionManifest, ExtensionMcpServer, ExtensionPermission, ExtensionRuntimeHealth,
+    ExtensionRuntimeStatus, ExtensionType, InstallStatus, InstalledExtension, PermissionAction,
+    PermissionScope, ToolCallAuditLog,
 };
 pub use crate::harness::{
     auto_apply_binding, harness_template, review_agent_binding, review_annotation,

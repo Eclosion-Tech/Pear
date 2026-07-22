@@ -131,12 +131,13 @@ export async function ssrfSafeFetch(
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     let url = initialUrl;
+    let requestInit: Omit<RequestInit, "redirect" | "signal"> = { ...init };
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
       const parsed = parseHttpUrl(url);
       await assertPublicHost(parsed.hostname);
 
       const res = await fetch(url, {
-        ...init,
+        ...requestInit,
         signal: controller.signal,
         redirect: "manual",
       });
@@ -144,8 +145,29 @@ export async function ssrfSafeFetch(
       if (res.status >= 300 && res.status < 400 && res.headers.has("location")) {
         const location = res.headers.get("location");
         if (!location) return res;
-        // Resolve relative redirects against the current URL.
-        url = new URL(location, url).toString();
+        // Resolve relative redirects against the current URL. Credentials are
+        // never forwarded across origins; this matters for MCP API keys passed
+        // in Authorization headers. Match Fetch semantics for 301/302/303 by
+        // switching non-GET/HEAD requests to GET and dropping the body.
+        const next = new URL(location, url);
+        if (next.origin !== parsed.origin) {
+          const headers = new Headers(requestInit.headers);
+          headers.delete("authorization");
+          headers.delete("cookie");
+          headers.delete("proxy-authorization");
+          requestInit = { ...requestInit, headers };
+        }
+        const method = requestInit.method?.toUpperCase();
+        if (
+          res.status === 303 ||
+          ((res.status === 301 || res.status === 302) && method !== undefined && method !== "GET" && method !== "HEAD")
+        ) {
+          const headers = new Headers(requestInit.headers);
+          headers.delete("content-length");
+          headers.delete("content-type");
+          requestInit = { ...requestInit, method: "GET", body: undefined, headers };
+        }
+        url = next.toString();
         continue;
       }
       return res;

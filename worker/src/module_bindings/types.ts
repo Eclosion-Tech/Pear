@@ -46,6 +46,33 @@ export const AiEvaluation = __t.object("AiEvaluation", {
 });
 export type AiEvaluation = __Infer<typeof AiEvaluation>;
 
+export const AiExtensionRuntimePermission = __t.object("AiExtensionRuntimePermission", {
+  get scope() {
+    return PermissionScope;
+  },
+  get action() {
+    return PermissionAction;
+  },
+  allowedDomains: __t.option(__t.string()),
+});
+export type AiExtensionRuntimePermission = __Infer<typeof AiExtensionRuntimePermission>;
+
+export const AiExtensionRuntimeRow = __t.object("AiExtensionRuntimeRow", {
+  installedExtensionId: __t.u64(),
+  serverId: __t.u64(),
+  name: __t.string(),
+  endpoint: __t.string(),
+  get authScheme() {
+    return AuthScheme;
+  },
+  apiKey: __t.option(__t.string()),
+  capabilities: __t.array(__t.string()),
+  get permissions() {
+    return __t.array(AiExtensionRuntimePermission);
+  },
+});
+export type AiExtensionRuntimeRow = __Infer<typeof AiExtensionRuntimeRow>;
+
 // The tagged union or sum type for the algebraic type `AiPrimitive`.
 export const AiPrimitive = __t.enum("AiPrimitive", {
   Classify: __t.unit(),
@@ -824,6 +851,27 @@ export const ExtensionPermission = __t.object("ExtensionPermission", {
   grantedAt: __t.timestamp(),
 });
 export type ExtensionPermission = __Infer<typeof ExtensionPermission>;
+
+export const ExtensionRuntimeHealth = __t.object("ExtensionRuntimeHealth", {
+  installedExtensionId: __t.u64(),
+  get status() {
+    return ExtensionRuntimeStatus;
+  },
+  toolCount: __t.u32(),
+  detail: __t.option(__t.string()),
+  checkedAt: __t.timestamp(),
+  reportedBy: __t.identity(),
+});
+export type ExtensionRuntimeHealth = __Infer<typeof ExtensionRuntimeHealth>;
+
+// The tagged union or sum type for the algebraic type `ExtensionRuntimeStatus`.
+export const ExtensionRuntimeStatus = __t.enum("ExtensionRuntimeStatus", {
+  Connecting: __t.unit(),
+  Connected: __t.unit(),
+  Error: __t.unit(),
+  Disabled: __t.unit(),
+});
+export type ExtensionRuntimeStatus = __Infer<typeof ExtensionRuntimeStatus>;
 
 // The tagged union or sum type for the algebraic type `ExtensionType`.
 export const ExtensionType = __t.enum("ExtensionType", {

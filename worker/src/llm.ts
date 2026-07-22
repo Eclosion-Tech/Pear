@@ -8,10 +8,10 @@ import {
 } from "./providers.js";
 import {
   getPearTools,
-  executeTool,
   type ConnLike,
   type ToolCallContext,
 } from "./tools.js";
+import { CompositeToolExecutor } from "./composite-tool-executor.js";
 import { SystemPromptBuilder } from "./prompt-builder.js";
 import { extractAffected } from "./tool-call-record.js";
 import {
@@ -274,9 +274,20 @@ export async function callLlm(
   ];
 
   // AI-attributed jobs get the AI user's read-only memory tools.
-  const tools: ToolDef[] = getPearTools(execConn, jobId, {
+  const staticTools: ToolDef[] = getPearTools(execConn, jobId, {
     includeMemoryTools: toolContext.aiUserId !== undefined,
   }) as ToolDef[];
+  const toolExecutor = await CompositeToolExecutor.create({
+    conn: execConn,
+    conversationId: toolContext.conversationId,
+    currentPageId: toolContext.currentPageId,
+    agentId: toolContext.aiIdentityHex ?? "orcha-worker",
+    jobId,
+    staticTools,
+    toolContext,
+    mcpRuntimeConn: conn,
+  });
+  const tools: ToolDef[] = [...staticTools, ...toolExecutor.getToolDefs()];
 
   // Page ids this job created/edited, surfaced as artifacts in the result.
   const artifactPageIds = new Set<number>();
@@ -291,54 +302,58 @@ export async function callLlm(
   let iterations = 0;
   const MAX_ITERATIONS = 25;
 
-  while (iterations++ < MAX_ITERATIONS) {
-    const response = await inf.chat({
-      model,
-      maxTokens,
-      system: SYSTEM_PROMPT,
-      messages,
-      tools,
-    });
+  try {
+    while (iterations++ < MAX_ITERATIONS) {
+      const response = await inf.chat({
+        model,
+        maxTokens,
+        system: SYSTEM_PROMPT,
+        messages,
+        tools,
+      });
 
-    if (response.usage) {
-      usage.inputTokens += response.usage.inputTokens;
-      usage.outputTokens += response.usage.outputTokens;
-      usage.cacheCreationInputTokens += response.usage.cacheCreationInputTokens;
-      usage.cacheReadInputTokens += response.usage.cacheReadInputTokens;
+      if (response.usage) {
+        usage.inputTokens += response.usage.inputTokens;
+        usage.outputTokens += response.usage.outputTokens;
+        usage.cacheCreationInputTokens += response.usage.cacheCreationInputTokens;
+        usage.cacheReadInputTokens += response.usage.cacheReadInputTokens;
+      }
+
+      const toolCalls = response.content.filter(
+        (b): b is ToolUseBlock => b.type === "tool_use"
+      );
+
+      console.log(`[worker] LLM response — stop_reason=${response.stopReason} tool_calls=${toolCalls.length} content_blocks=${response.content.map((b) => b.type).join(",")}`);
+
+      if (toolCalls.length === 0 || response.stopReason === "end_turn") {
+        const textBlock = response.content.find((b) => b.type === "text");
+        const summary = textBlock?.type === "text" ? textBlock.text : "Done.";
+        const failed = /^\s*TASK_FAILED:/i.test(summary);
+        return { text: appendArtifacts(summary, artifactPageIds), usage, failed };
+      }
+
+      messages.push({ role: "assistant", content: response.content });
+
+      const toolResults: { type: "tool_result"; tool_use_id: string; content: string }[] = [];
+      for (const block of toolCalls) {
+        console.log(`[worker] Tool call [${block.name}]: ${JSON.stringify(block.input)}`);
+        const result = await toolExecutor.execute(block.name, block.input);
+        console.log(`[worker] Tool result [${block.name}]: ${result}`);
+        const affected = extractAffected(result);
+        if (affected?.pageId !== undefined) artifactPageIds.add(affected.pageId);
+        toolResults.push({ type: "tool_result", tool_use_id: block.id, content: result });
+      }
+
+      messages.push({ role: "user", content: toolResults });
     }
 
-    const toolCalls = response.content.filter(
-      (b): b is ToolUseBlock => b.type === "tool_use"
-    );
-
-    console.log(`[worker] LLM response — stop_reason=${response.stopReason} tool_calls=${toolCalls.length} content_blocks=${response.content.map((b) => b.type).join(",")}`);
-
-    if (toolCalls.length === 0 || response.stopReason === "end_turn") {
-      const textBlock = response.content.find((b) => b.type === "text");
-      const summary = textBlock?.type === "text" ? textBlock.text : "Done.";
-      const failed = /^\s*TASK_FAILED:/i.test(summary);
-      return { text: appendArtifacts(summary, artifactPageIds), usage, failed };
-    }
-
-    messages.push({ role: "assistant", content: response.content });
-
-    const toolResults: { type: "tool_result"; tool_use_id: string; content: string }[] = [];
-    for (const block of toolCalls) {
-      console.log(`[worker] Tool call [${block.name}]: ${JSON.stringify(block.input)}`);
-      const result = await executeTool(execConn, block.name, block.input, jobId, toolContext);
-      console.log(`[worker] Tool result [${block.name}]: ${result}`);
-      const affected = extractAffected(result);
-      if (affected?.pageId !== undefined) artifactPageIds.add(affected.pageId);
-      toolResults.push({ type: "tool_result", tool_use_id: block.id, content: result });
-    }
-
-    messages.push({ role: "user", content: toolResults });
+    return {
+      text: appendArtifacts("Reached maximum tool iterations.", artifactPageIds),
+      usage,
+    };
+  } finally {
+    await toolExecutor.disconnect();
   }
-
-  return {
-    text: appendArtifacts("Reached maximum tool iterations.", artifactPageIds),
-    usage,
-  };
 }
 
 // ── Task planner ───────────────────────────────────────────────────────────────

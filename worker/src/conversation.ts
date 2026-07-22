@@ -41,9 +41,9 @@ import { buildPageContext } from "./llm.js";
 import { readComponentNodeText } from "./component-authoring.js";
 import {
   getConversationTools,
-  executeTool,
   toolContextFromAiUserConfigRow,
 } from "./tools.js";
+import { CompositeToolExecutor } from "./composite-tool-executor.js";
 import { SystemPromptBuilder } from "./prompt-builder.js";
 import {
   discoverInstructionPages,
@@ -511,7 +511,10 @@ async function handleConversationMessage(
   msg: ConversationMessageRow,
   selfHex: string,
   logTag: string,
-  opts: { bypassWatermark?: boolean } = {},
+  opts: {
+    bypassWatermark?: boolean;
+    getMcpRuntimeConn?: () => ConnLike | undefined;
+  } = {},
 ): Promise<void> {
   // Per-conversation turn lock. The dedup key intentionally OMITS the message
   // id: only one turn may run per (responder, conversation) at a time. A
@@ -528,6 +531,7 @@ async function handleConversationMessage(
   const allToolCalls: StoredToolCall[] = [];
   let thinkingText = "";
   let responseText = "";
+  let toolExecutor: CompositeToolExecutor | undefined;
 
   try {
     const conv = conn.db.conversation.id.find(msg.conversationId) as
@@ -733,7 +737,17 @@ async function handleConversationMessage(
       messageId: aiMsgId,
     };
 
-    const tools: ToolDef[] = getConversationTools() as ToolDef[];
+    const staticTools: ToolDef[] = getConversationTools() as ToolDef[];
+    toolExecutor = await CompositeToolExecutor.create({
+      conn,
+      conversationId: conv.id,
+      agentId: selfHex,
+      currentPageId: conv.pageId,
+      staticTools,
+      toolContext,
+      mcpRuntimeConn: opts.getMcpRuntimeConn?.(),
+    });
+    const tools: ToolDef[] = [...staticTools, ...toolExecutor.getToolDefs()];
     /** All raw tool result strings this turn — for assessing success when the model omits a text reply. */
     const toolResultLog: string[] = [];
     /** Text emitted in earlier tool iterations of this turn, preserved so the
@@ -928,13 +942,7 @@ async function handleConversationMessage(
           console.log(
             `${logTag} tool call [${block.name}]: ${JSON.stringify(block.input).slice(0, 200)}`,
           );
-          const result = await executeTool(
-            conn,
-            block.name,
-            block.input,
-            BigInt(0),
-            toolContext,
-          );
+          const result = await toolExecutor.execute(block.name, block.input);
           console.log(`${logTag} tool result [${block.name}]: ${result.slice(0, 200)}`);
           toolResultLog.push(result);
 
@@ -1026,13 +1034,7 @@ async function handleConversationMessage(
           console.log(
             `${logTag} tool call [${block.name}]: ${JSON.stringify(block.input).slice(0, 200)}`,
           );
-          const result = await executeTool(
-            conn,
-            block.name,
-            block.input,
-            BigInt(0),
-            toolContext,
-          );
+          const result = await toolExecutor.execute(block.name, block.input);
           console.log(`${logTag} tool result [${block.name}]: ${result.slice(0, 200)}`);
           toolResultLog.push(result);
           const ok = toolResultWasOk(result);
@@ -1171,6 +1173,16 @@ async function handleConversationMessage(
       );
     }
   } finally {
+    if (toolExecutor) {
+      try {
+        await toolExecutor.disconnect();
+      } catch (err) {
+        console.warn(
+          `${logTag} failed to disconnect MCP clients:`,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
     // end() returns true if a message arrived mid-turn and was deferred.
     // Queue-on-release: pick up the newest one now, bypassing the timestamp
     // watermark (the reply we just sent post-dates it).
@@ -1179,6 +1191,7 @@ async function handleConversationMessage(
       if (latest && latest.id > msg.id) {
         void handleConversationMessage(conn, latest, selfHex, logTag, {
           bypassWatermark: true,
+          getMcpRuntimeConn: opts.getMcpRuntimeConn,
         });
       }
     }
@@ -1196,6 +1209,7 @@ export function registerConversationHandlers(
   conn: ConnLike,
   selfIdentity: Identity,
   logTag = "[conversation]",
+  getMcpRuntimeConn?: () => ConnLike | undefined,
 ): void {
   const selfHex = selfIdentity.toHexString();
 
@@ -1205,7 +1219,7 @@ export function registerConversationHandlers(
       // server posted for a job this AI delegated. `isParticipant` +
       // watermark guards inside handleConversationMessage keep this scoped.
       if (isTriggerMessage(msg, selfHex)) {
-        void handleConversationMessage(conn, msg, selfHex, logTag);
+        void handleConversationMessage(conn, msg, selfHex, logTag, { getMcpRuntimeConn });
       }
     },
   );
@@ -1225,6 +1239,7 @@ export async function processRecentConversationMessages(
   conn: ConnLike,
   selfIdentity: Identity,
   logTag = "[conversation]",
+  getMcpRuntimeConn?: () => ConnLike | undefined,
 ): Promise<void> {
   const selfHex = selfIdentity.toHexString();
 
@@ -1250,6 +1265,6 @@ export async function processRecentConversationMessages(
     `${logTag} catch-up: ${latestByConv.size} conversation(s) with a pending trigger`,
   );
   for (const msg of latestByConv.values()) {
-    await handleConversationMessage(conn, msg, selfHex, logTag);
+    await handleConversationMessage(conn, msg, selfHex, logTag, { getMcpRuntimeConn });
   }
 }

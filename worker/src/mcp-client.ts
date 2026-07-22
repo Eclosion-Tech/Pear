@@ -1,5 +1,5 @@
 /**
- * MCP SSE client — connects to a single MCP server endpoint, lists tools,
+ * MCP HTTP client — connects to a single MCP server endpoint, lists tools,
  * and calls tools on demand.
  *
  * Trust boundary: all results from external MCP servers are wrapped in a
@@ -14,7 +14,10 @@
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import { ssrfSafeFetch } from "./ssrf.js";
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -33,6 +36,8 @@ export interface McpServerConfig {
   endpoint: string;
   /** Optional API key sent as Bearer token in requests. */
   apiKey: string | undefined;
+  /** Auth scheme confirmed at install time. */
+  authScheme: string;
   /** Capability strings confirmed at install time. */
   capabilities: string[];
 }
@@ -45,7 +50,7 @@ export class McpClient {
   readonly config: McpServerConfig;
 
   private client: Client;
-  private transport: SSEClientTransport | undefined;
+  private transport: Transport | undefined;
   private tools: McpToolDef[] = [];
   private connected = false;
 
@@ -61,17 +66,45 @@ export class McpClient {
   async connect(): Promise<void> {
     if (this.connected) return;
 
-    const url = new URL(this.config.endpoint);
-    const headers: Record<string, string> = {};
-    if (this.config.apiKey) {
-      headers["Authorization"] = `Bearer ${this.config.apiKey}`;
+    if (this.config.authScheme === "OAuth") {
+      throw new Error("OAuth MCP extensions are not supported yet; use an API key or no auth");
     }
 
-    this.transport = new SSEClientTransport(url, { requestInit: { headers } });
-    await this.client.connect(this.transport);
-    this.connected = true;
+    const url = new URL(this.config.endpoint);
+    if (url.protocol !== "https:") {
+      throw new Error("MCP endpoint must use HTTPS");
+    }
 
-    await this.refreshTools();
+    const guardedFetch = this.createGuardedFetch();
+    let streamableError: unknown;
+    try {
+      const transport = new StreamableHTTPClientTransport(url, { fetch: guardedFetch });
+      await this.connectTransport(transport);
+    } catch (err) {
+      streamableError = err;
+      await this.closeCurrentTransport();
+      this.client = this.createProtocolClient();
+
+      try {
+        const transport = new SSEClientTransport(url, {
+          fetch: guardedFetch,
+          eventSourceInit: { fetch: guardedFetch },
+        });
+        await this.connectTransport(transport);
+      } catch (sseError) {
+        await this.closeCurrentTransport();
+        throw new Error(
+          `Streamable HTTP failed (${errorMessage(streamableError)}); ` +
+            `legacy SSE fallback failed (${errorMessage(sseError)})`,
+        );
+      }
+    }
+
+    await withTimeout(
+      this.refreshTools(),
+      15_000,
+      `Timed out listing tools from ${this.config.endpoint}`,
+    );
   }
 
   /** Refresh the tool list from the server. */
@@ -106,7 +139,11 @@ export class McpClient {
       throw new Error(`McpClient(${this.config.name}) is not connected`);
     }
 
-    const result = await this.client.callTool({ name, arguments: input });
+    const result = await withTimeout(
+      this.client.callTool({ name, arguments: input }),
+      60_000,
+      `Timed out calling MCP tool ${name}`,
+    );
 
     // Extract text content from the result
     const content = result.content as { type: string; text?: string }[];
@@ -121,14 +158,89 @@ export class McpClient {
     return `${MCP_RESULT_HEADER}\nServer: ${this.config.name}\nTool: ${name}\n\n${body}`;
   }
 
-  /** Close the SSE connection. */
+  /** Close the active MCP transport. */
   async disconnect(): Promise<void> {
-    if (!this.connected) return;
-    await this.transport?.close();
-    this.connected = false;
+    await this.closeCurrentTransport();
   }
 
   get isConnected(): boolean {
     return this.connected;
+  }
+
+  private createProtocolClient(): Client {
+    return new Client(
+      { name: "pear-worker", version: "0.1.0" },
+      { capabilities: {} },
+    );
+  }
+
+  private async connectTransport(transport: Transport): Promise<void> {
+    this.transport = transport;
+    await withTimeout(
+      this.client.connect(transport),
+      15_000,
+      `Timed out connecting to ${this.config.endpoint}`,
+    );
+    this.connected = true;
+  }
+
+  private async closeCurrentTransport(): Promise<void> {
+    try {
+      await this.transport?.close();
+    } catch {
+      // Best-effort cleanup after a failed handshake.
+    }
+    this.transport = undefined;
+    this.connected = false;
+  }
+
+  /**
+   * Route every MCP request through Pear's DNS/redirect SSRF guard and attach
+   * credentials inside the trusted worker. The API key never appears in tool
+   * definitions, prompts, logs, or browser-visible tables.
+   */
+  private createGuardedFetch(): typeof fetch {
+    return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = input instanceof Request ? input.url : input.toString();
+      const headers = new Headers(input instanceof Request ? input.headers : undefined);
+      new Headers(init?.headers).forEach((value, key) => headers.set(key, value));
+      if (this.config.apiKey) headers.set("Authorization", `Bearer ${this.config.apiKey}`);
+
+      let inheritedBody: BodyInit | undefined;
+      if (
+        input instanceof Request &&
+        init?.body === undefined &&
+        input.method !== "GET" &&
+        input.method !== "HEAD"
+      ) {
+        inheritedBody = await input.clone().arrayBuffer();
+      }
+
+      const requestInit: Omit<RequestInit, "redirect" | "signal"> = {
+        ...init,
+        method: init?.method ?? (input instanceof Request ? input.method : undefined),
+        headers,
+        body: init?.body ?? inheritedBody,
+      };
+      return ssrfSafeFetch(url, requestInit);
+    };
+  }
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }

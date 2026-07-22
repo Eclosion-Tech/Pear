@@ -3665,16 +3665,24 @@ export async function executeTool(
 export class StaticToolExecutor {
   private readonly conn: ConnLike;
   private readonly jobId: bigint;
+  private readonly defs: Array<{ name: string }>;
+  private readonly defaultToolContext: ToolCallContext;
 
-  constructor(conn: ConnLike, jobId: bigint = BigInt(0)) {
+  constructor(
+    conn: ConnLike,
+    jobId: bigint = BigInt(0),
+    defs: Array<{ name: string }> = getConversationTools(),
+    defaultToolContext: ToolCallContext = {},
+  ) {
     this.conn = conn;
     this.jobId = jobId;
+    this.defs = defs;
+    this.defaultToolContext = defaultToolContext;
   }
 
   /** Returns the names of all tools registered in this executor. */
   toolNames(): Set<string> {
-    const defs = [...PEAR_TOOLS, ...WEB_TOOLS];
-    return new Set(defs.map((t) => t.name));
+    return new Set(this.defs.map((t) => t.name));
   }
 
   /** Returns true if this executor handles the named tool. */
@@ -3686,7 +3694,7 @@ export class StaticToolExecutor {
   async execute(
     toolName: string,
     input: Record<string, unknown>,
-    toolContext: ToolCallContext = {},
+    toolContext: ToolCallContext = this.defaultToolContext,
   ): Promise<string> {
     return executeTool(this.conn, toolName, input, this.jobId, toolContext);
   }

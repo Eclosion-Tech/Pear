@@ -15,6 +15,11 @@ export function useInstalledExtensions() {
   return { installed, isReady };
 }
 
+export function useExtensionRuntimeHealth() {
+  const [health, isReady] = useTable(tables.extension_runtime_health);
+  return { health, isReady };
+}
+
 // ── Reducer hooks ─────────────────────────────────────────────────────────────
 
 export function usePublishExtension() {
@@ -70,3 +75,7 @@ export type ExtensionManifestRow = ReturnType<
 export type InstalledExtensionRow = ReturnType<
   typeof useInstalledExtensions
 >["installed"][number];
+
+export type ExtensionRuntimeHealthRow = ReturnType<
+  typeof useExtensionRuntimeHealth
+>["health"][number];
