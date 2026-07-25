@@ -36,5 +36,5 @@ export default __t.row({
   linkedConversationId: __t.option(__t.u64()).name("linked_conversation_id"),
   timelineJson: __t.option(__t.string()).name("timeline_json"),
   componentTreeJson: __t.option(__t.string()).name("component_tree_json"),
-  mentions: __t.array(__t.identity()),
+  mentions: __t.option(__t.array(__t.identity())),
 });

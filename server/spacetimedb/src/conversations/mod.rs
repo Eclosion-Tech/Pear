@@ -433,8 +433,22 @@ pub struct ConversationMessage {
     /// Empty for human messages, which wake unconditionally and never consult
     /// this field.
     ///
+    /// `None` on rows that predate the column, and on messages that address
+    /// nobody. Treated identically to an empty list by every consumer.
+    ///
+    /// Modelled as `Option<Vec<_>>` rather than a bare `Vec` for a hard-won
+    /// reason: AutoMigrate refuses a new column without a `#[default]`
+    /// annotation ("Adding a column mentions to table conversation_message
+    /// requires a default value annotation"), and `#[default(Vec::new())]` does
+    /// not compile — a `Vec` destructor cannot run in const context (E0493).
+    /// `Option` has a const-evaluable default, which is why every other column
+    /// added to this module uses one. A bare `Vec` compiles fine and then
+    /// dead-letters every workspace at publish, because `cargo check` never
+    /// exercises the migration planner.
+    ///
     /// MUST stay last: AutoMigrate only supports columns appended at the end.
-    pub mentions: Vec<Identity>,
+    #[default(None::<Vec<Identity>>)]
+    pub mentions: Option<Vec<Identity>>,
 }
 
 /// What a `ConversationAttachment` carries.
@@ -666,7 +680,7 @@ pub fn send_message(
     // Resolved here too, so a plain human send from the composer records the
     // same structured addressing as the attachment path — the two client
     // branches must not disagree about who a message mentions.
-    let mentions = resolve_mentions_in_content(ctx, &content);
+    let mentions = Some(resolve_mentions_in_content(ctx, &content));
 
     ctx.db.conversation_message().insert(ConversationMessage {
         id: next_conversation_message_id(ctx),
@@ -768,7 +782,7 @@ pub fn send_addressed_message(
         cache_read_input_tokens: 0,
         linked_conversation_id: None,
         component_tree_json: None,
-        mentions,
+        mentions: Some(mentions),
     });
 
     ctx.db.conversation().id().update(Conversation {
@@ -808,7 +822,7 @@ pub fn send_user_message(
     // Humans get structured mentions with no client work: the reducer resolves
     // them, so `@Kira` in the composer becomes an addressable record usable for
     // notifications later.
-    let mentions = resolve_mentions_in_content(ctx, &content);
+    let mentions = Some(resolve_mentions_in_content(ctx, &content));
 
     let message = ctx.db.conversation_message().insert(ConversationMessage {
         id: next_conversation_message_id(ctx),
@@ -1130,7 +1144,7 @@ pub fn record_compaction(
         conversation_id,
         sender: MessageSender::System("compaction".to_string()),
         component_tree_json: None,
-        mentions: vec![],
+        mentions: None,
         content: summary,
         job_id: None,
         created_at: ctx.timestamp,
@@ -1366,7 +1380,7 @@ fn post_feedback_trigger(ctx: &ReducerContext, conversation_id: u64, note: &str)
         conversation_id,
         sender: MessageSender::System("feedback".to_string()),
         component_tree_json: None,
-        mentions: vec![],
+        mentions: None,
         content: body,
         job_id: None,
         created_at: ctx.timestamp,

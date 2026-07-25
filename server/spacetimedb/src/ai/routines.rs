@@ -416,7 +416,7 @@ pub fn run_ai_user_routine(ctx: &ReducerContext, routine: AiUserRoutine) -> Resu
         tool_calls_json: None,
         timeline_json: None,
         component_tree_json: None,
-        mentions: vec![],
+        mentions: None,
         input_tokens: 0,
         output_tokens: 0,
         cache_creation_input_tokens: 0,
