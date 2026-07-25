@@ -18,7 +18,11 @@
  * the valid tones" and a page that just never changes.
  */
 
-import { parseTheme, type Theme } from "@eclosion-tech/pulp";
+// Narrow subpath, not the package root: the Cloudflare API gateway bundles this
+// module, and pulp's main entry re-exports React, ProseMirror, Yjs and dnd-kit.
+// Importing from "." drags the whole editor into a Worker that only needs a
+// pure token parser. Matches how component-tree.ts imports rich-text helpers.
+import { parseTheme, type Theme } from "@eclosion-tech/pulp/style/theme";
 import type { StdbTransport } from "../api-endpoint";
 import { selectSurfaceNodes } from "./component-tree";
 import { encodeU64 } from "./encode";
