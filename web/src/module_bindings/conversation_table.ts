@@ -35,4 +35,6 @@ export default __t.row({
   blockAnchor: __t.option(__t.u64()).name("block_anchor"),
   modelOverride: __t.option(__t.string()).name("model_override"),
   effortOverride: __t.option(__t.string()).name("effort_override"),
+  resolvedBy: __t.option(__t.identity()).name("resolved_by"),
+  resolvedAt: __t.option(__t.timestamp()).name("resolved_at"),
 });

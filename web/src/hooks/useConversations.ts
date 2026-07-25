@@ -156,8 +156,17 @@ export function useAddConversationParticipant() {
   return useReducer(reducers.addConversationParticipant);
 }
 
+/**
+ * Resolve a thread. Enforced, not cosmetic: the module refuses new messages on
+ * a non-Active conversation, so resolving a comment thread genuinely ends it.
+ */
 export function useCloseConversation() {
   return useReducer(reducers.closeConversation);
+}
+
+/** Reopen a resolved thread. Without this, resolving would be a one-way door. */
+export function useReopenConversation() {
+  return useReducer(reducers.reopenConversation);
 }
 
 /**

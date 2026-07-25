@@ -716,6 +716,11 @@ fn decode_conversation(v: &Value) -> Result<Conversation, String> {
         block_anchor: opt_u64_at(m, "blockAnchor")?,
         model_override: opt_string_at(m, "modelOverride")?,
         effort_override: opt_string_at(m, "effortOverride")?,
+        // Resolution attribution is not carried across an import: the
+        // resolving identity belongs to the source workspace and would not
+        // resolve here. Imported threads keep their status but lose "who".
+        resolved_by: None,
+        resolved_at: None,
     })
 }
 

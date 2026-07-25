@@ -7,9 +7,126 @@ use spacetimedb::{
     Table, Timestamp,
 };
 
+use crate::access_control::helpers::require_page_write;
 use crate::ai::ai_user_profile;
 use crate::id_counters::alloc_id;
 use crate::pages::page;
+
+/// Resolve `@display-name` spans in `content` to AI-user identities.
+///
+/// Server-side on purpose. Addressing drives AI-to-AI wake gating (and, later,
+/// notifications), so there must be exactly one implementation — a client and a
+/// worker each parsing their own way would drift, and a mention that resolves
+/// differently depending on who sent it is a bug nobody can reproduce. Doing it
+/// here also means humans get structured mentions with no client changes at all.
+///
+/// Longest name first so `@Kiran` beats `@Kira`, and a match must not run into
+/// another word character, which is what stops `@Kira` claiming `@Kiran`.
+/// Substring matching alone fires on the wrong agent, and a brake that fires on
+/// the wrong agent is not a brake.
+pub(crate) fn resolve_mentions_in_content(
+    ctx: &ReducerContext,
+    content: &str,
+) -> Vec<Identity> {
+    let profiles: Vec<(String, Identity)> = ctx
+        .db
+        .ai_user_profile()
+        .iter()
+        .filter(|p| !p.display_name.trim().is_empty())
+        .map(|p| (p.display_name.clone(), p.identity))
+        .collect();
+    match_mentions(content, profiles)
+}
+
+/// The matcher itself, split from table access so it is unit-testable without a
+/// `ReducerContext`.
+pub(crate) fn match_mentions(
+    content: &str,
+    profiles: Vec<(String, Identity)>,
+) -> Vec<Identity> {
+    let lower = content.to_lowercase();
+
+    let mut profiles: Vec<(String, Identity)> = profiles
+        .into_iter()
+        .map(|(name, id)| (name.to_lowercase(), id))
+        .collect();
+    profiles.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+
+    let mut claimed: Vec<(usize, usize)> = Vec::new();
+    let mut out: Vec<Identity> = Vec::new();
+
+    for (name, identity) in profiles {
+        let needle = format!("@{name}");
+        let mut from = 0usize;
+        while let Some(rel) = lower[from..].find(&needle) {
+            let start = from + rel;
+            let end = start + needle.len();
+            from = end;
+
+            // Reject when the name runs into more word characters.
+            let runs_on = lower[end..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '-');
+            if runs_on {
+                continue;
+            }
+            // Reject overlaps with a longer name already matched here.
+            if claimed.iter().any(|(s, e)| start < *e && end > *s) {
+                continue;
+            }
+            claimed.push((start, end));
+            if !out.contains(&identity) {
+                out.push(identity);
+            }
+            break;
+        }
+    }
+    out
+}
+
+/// True when `identity` is a *current* participant of `conversation_id`.
+///
+/// Excludes members who have left. Removal is honest — the row stays for the
+/// audit trail (`left_at`) — so a membership check that ignored it would keep
+/// granting authority to someone already removed from the thread. Matches the
+/// filtering in `visibility.rs` and `access_control/reducers.rs`.
+pub(crate) fn is_conversation_participant(
+    ctx: &ReducerContext,
+    conversation_id: u64,
+    identity: Identity,
+) -> bool {
+    ctx.db.conversation_participant().iter().any(|p| {
+        p.conversation_id == conversation_id && p.identity == identity && p.left_at.is_none()
+    })
+}
+
+/// Authority to change a conversation's lifecycle (resolve / reopen).
+///
+/// Participants always qualify. For a page-attached thread, page-write holders
+/// also qualify — a comment thread on a page you can edit is yours to resolve,
+/// and this is what keeps workspace admins working without a separate admin
+/// concept.
+///
+/// This exists because `close_conversation` was deliberately unguarded at the
+/// reducer level, relying on deployments to restrict callers at the HTTP/API
+/// layer. That assumption stops holding the moment an AI user can call it
+/// through a tool: without this, any AI could close any conversation in the
+/// workspace, including a human's private DM.
+fn require_conversation_authority(
+    ctx: &ReducerContext,
+    conv: &Conversation,
+) -> Result<(), String> {
+    if is_conversation_participant(ctx, conv.id, ctx.sender()) {
+        return Ok(());
+    }
+    if let Some(page_id) = conv.page_id {
+        if require_page_write(ctx, page_id).is_ok() {
+            return Ok(());
+        }
+    }
+    Err("Not a participant in this conversation".to_string())
+}
 
 pub(crate) fn next_conversation_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "conversation", || {
@@ -191,10 +308,22 @@ pub struct Conversation {
     /// when the resolved model supports an effort knob; ignored otherwise.
     /// `None` (the default) means "use the model's default effort".
     ///
-    /// Must remain last for schema migration (STDB only allows additive
-    /// changes at the end of a struct).
     #[default(None::<String>)]
     pub effort_override: Option<String>,
+    /// Who resolved this thread, when `status == Closed`. Drives the gutter's
+    /// "Resolved by X" attribution — which matters most once AI users can
+    /// resolve threads themselves, since otherwise a thread silently vanishes
+    /// from the page with no indication of who decided it was done.
+    ///
+    /// Cleared on `reopen_conversation`.
+    #[default(None::<Identity>)]
+    pub resolved_by: Option<Identity>,
+    /// When it was resolved. Paired with `resolved_by`.
+    ///
+    /// Must remain last for schema migration (STDB only allows additive
+    /// changes at the end of a struct).
+    #[default(None::<Timestamp>)]
+    pub resolved_at: Option<Timestamp>,
 }
 
 /// Membership join between conversations and identities. The worker
@@ -286,9 +415,26 @@ pub struct ConversationMessage {
     /// read-only in the thread via `<StaticComponentTree>` / pulp `<BlockView>`.
     /// Authored by an AI turn (see `set_message_component_tree`); render-only,
     /// no interactive return-path yet (custom-view runtime ADR D7).
-    /// MUST stay last: AutoMigrate only supports columns appended at the end.
     #[default(None::<String>)]
     pub component_tree_json: Option<String>,
+    /// Identities this message explicitly addresses.
+    ///
+    /// Structured rather than parsed out of `content` at read time, because it
+    /// is load-bearing for AI-to-AI wake gating (ticket 14264): an AI wakes
+    /// another AI only when addressed, so "who is addressed" must be exact.
+    /// Substring matching on display names over-matches — "Kira" inside
+    /// "Kiran" — and a brake that fires on the wrong agent is not a brake.
+    ///
+    /// Resolved once at send time against the known profile list and stored, so
+    /// the wake decision is a set-membership test rather than text analysis, and
+    /// a later display-name change cannot retroactively rewrite who a past
+    /// message addressed.
+    ///
+    /// Empty for human messages, which wake unconditionally and never consult
+    /// this field.
+    ///
+    /// MUST stay last: AutoMigrate only supports columns appended at the end.
+    pub mentions: Vec<Identity>,
 }
 
 /// What a `ConversationAttachment` carries.
@@ -417,12 +563,31 @@ pub fn create_conversation(
         updated_at: ctx.timestamp,
         // Default to Private even on public pages — most conversations are
         // thinking, not conclusions. Initiator can expand later.
-        visibility: ConversationVisibility::Private,
+        // A block-anchored thread is a *comment on the page*, and a comment is
+        // expected to be visible to anyone who can see what it is attached to.
+        // Anyone wanting a private conversation with an AI user about a page
+        // uses the AI sidebar, which stays `Private`.
+        //
+        // This is also what makes `conversation_participant` mean the right
+        // thing for comments: on a `PageInheriting` thread, participants are a
+        // *wake list* (who gets notified / responds), not an access-control
+        // list, so adding someone is no longer a sharing decision.
+        //
+        // NB: neither value is enforced today — the conversation tables have no
+        // `client_visibility_filter`. See the RLS ticket; this sets the correct
+        // intent so the fix is a filter rather than also a data migration.
+        visibility: if block_anchor.is_some() {
+            ConversationVisibility::PageInheriting
+        } else {
+            ConversationVisibility::Private
+        },
         kind: ConversationKind::ContextThread,
         canonical_key: None,
         block_anchor,
         model_override: None,
         effort_override: None,
+        resolved_by: None,
+        resolved_at: None,
     });
 
     let mut seen: Vec<Identity> = Vec::new();
@@ -498,6 +663,11 @@ pub fn send_message(
         return Err("Conversation is closed".to_string());
     }
 
+    // Resolved here too, so a plain human send from the composer records the
+    // same structured addressing as the attachment path — the two client
+    // branches must not disagree about who a message mentions.
+    let mentions = resolve_mentions_in_content(ctx, &content);
+
     ctx.db.conversation_message().insert(ConversationMessage {
         id: next_conversation_message_id(ctx),
         conversation_id,
@@ -505,6 +675,7 @@ pub fn send_message(
         content,
         job_id,
         component_tree_json: None,
+        mentions,
         created_at: ctx.timestamp,
         status: status.unwrap_or(MessageStatus::Complete),
         thinking,
@@ -515,6 +686,89 @@ pub fn send_message(
         cache_creation_input_tokens: cache_creation_input_tokens.unwrap_or(0),
         cache_read_input_tokens: cache_read_input_tokens.unwrap_or(0),
         linked_conversation_id,
+    });
+
+    ctx.db.conversation().id().update(Conversation {
+        updated_at: ctx.timestamp,
+        ..conv
+    });
+
+    Ok(())
+}
+
+/// Send a message that explicitly addresses other participants.
+///
+/// A separate reducer from `send_message` for the same reason
+/// `send_user_message` is: `send_message` has many worker call sites and
+/// widening its signature would touch all of them.
+///
+/// This is the path an AI user takes to address another AI user. The `mentions`
+/// list is what makes AI-to-AI wake gating exact — see `ConversationMessage.mentions`
+/// and the worker's `shouldWakeFor`. Callers resolve display names to identities
+/// *before* calling, so the stored record cannot be re-interpreted later by a
+/// display-name change.
+///
+/// Only participants may post, matching `send_message`'s effective contract.
+#[reducer]
+pub fn send_addressed_message(
+    ctx: &ReducerContext,
+    conversation_id: u64,
+    content: String,
+    mentions: Vec<Identity>,
+) -> Result<(), String> {
+    let conv = ctx
+        .db
+        .conversation()
+        .id()
+        .find(conversation_id)
+        .ok_or("Conversation not found")?;
+    if conv.status != ConversationStatus::Active {
+        // The brake: a resolved thread refuses new messages, which is what stops
+        // two AI users ping-ponging in a comment thread.
+        return Err("Conversation is closed".to_string());
+    }
+    if !is_conversation_participant(ctx, conversation_id, ctx.sender()) {
+        return Err("Not a participant in this conversation".to_string());
+    }
+    // Union the caller's explicit list with anything written as `@name`, so an
+    // agent that simply writes the mention is addressed correctly without having
+    // to also populate the parameter.
+    let mut mentions = mentions;
+    for m in resolve_mentions_in_content(ctx, &content) {
+        if !mentions.contains(&m) {
+            mentions.push(m);
+        }
+    }
+
+    // Addressing a non-participant would be a message nobody can act on: the
+    // addressee never sees the conversation, so the mention is a silent no-op.
+    for m in &mentions {
+        if !is_conversation_participant(ctx, conversation_id, *m) {
+            return Err(
+                "Cannot address an identity that is not a participant in this conversation"
+                    .to_string(),
+            );
+        }
+    }
+
+    ctx.db.conversation_message().insert(ConversationMessage {
+        id: next_conversation_message_id(ctx),
+        conversation_id,
+        sender: MessageSender::User(ctx.sender()),
+        content,
+        job_id: None,
+        created_at: ctx.timestamp,
+        status: MessageStatus::Complete,
+        thinking: None,
+        tool_calls_json: None,
+        timeline_json: None,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        linked_conversation_id: None,
+        component_tree_json: None,
+        mentions,
     });
 
     ctx.db.conversation().id().update(Conversation {
@@ -551,6 +805,11 @@ pub fn send_user_message(
         return Err("Message must have text or at least one attachment".to_string());
     }
 
+    // Humans get structured mentions with no client work: the reducer resolves
+    // them, so `@Kira` in the composer becomes an addressable record usable for
+    // notifications later.
+    let mentions = resolve_mentions_in_content(ctx, &content);
+
     let message = ctx.db.conversation_message().insert(ConversationMessage {
         id: next_conversation_message_id(ctx),
         conversation_id,
@@ -568,6 +827,7 @@ pub fn send_user_message(
         cache_read_input_tokens: 0,
         linked_conversation_id: None,
         component_tree_json: None,
+        mentions,
     });
 
     for spec in attachments {
@@ -741,8 +1001,47 @@ pub fn close_conversation(ctx: &ReducerContext, conversation_id: u64) -> Result<
         .id()
         .find(conversation_id)
         .ok_or("Conversation not found")?;
+    require_conversation_authority(ctx, &conv)?;
+
+    // Resolving is a real brake, not just a UI state: `send_message` refuses
+    // any conversation that is not Active, so a resolved thread cannot be
+    // posted to. That is what stops two AI users ping-ponging in a comment
+    // thread — the affordance and the safety mechanism are the same mechanism.
     ctx.db.conversation().id().update(Conversation {
         status: ConversationStatus::Closed,
+        resolved_by: Some(ctx.sender()),
+        resolved_at: Some(ctx.timestamp),
+        updated_at: ctx.timestamp,
+        ..conv
+    });
+    Ok(())
+}
+
+/// Reopen a resolved conversation, restoring it to `Active`.
+///
+/// Google-Docs semantics: resolving is reversible. Without this, `close` is a
+/// one-way door and "resolve" becomes a trap rather than a tidy-up — the thread
+/// can never be continued, only recreated, losing its history and anchor.
+///
+/// Same authority as closing: participants, or page-write holders on a
+/// page-attached thread.
+#[reducer]
+pub fn reopen_conversation(ctx: &ReducerContext, conversation_id: u64) -> Result<(), String> {
+    let conv = ctx
+        .db
+        .conversation()
+        .id()
+        .find(conversation_id)
+        .ok_or("Conversation not found")?;
+    require_conversation_authority(ctx, &conv)?;
+
+    // Attribution is cleared: a reopened thread has no resolution to attribute,
+    // and leaving stale `resolved_by` behind would make the gutter claim the
+    // thread was resolved by someone who has since been overruled.
+    ctx.db.conversation().id().update(Conversation {
+        status: ConversationStatus::Active,
+        resolved_by: None,
+        resolved_at: None,
         updated_at: ctx.timestamp,
         ..conv
     });
@@ -831,6 +1130,7 @@ pub fn record_compaction(
         conversation_id,
         sender: MessageSender::System("compaction".to_string()),
         component_tree_json: None,
+        mentions: vec![],
         content: summary,
         job_id: None,
         created_at: ctx.timestamp,
@@ -926,6 +1226,8 @@ pub fn find_or_create_dm(
         block_anchor: None,
         model_override: None,
         effort_override: None,
+        resolved_by: None,
+        resolved_at: None,
     });
 
     insert_dm_participants(ctx, conv.id, me, other_identity);
@@ -972,6 +1274,8 @@ pub fn find_or_create_ai_dm(
         block_anchor: None,
         model_override: None,
         effort_override: None,
+        resolved_by: None,
+        resolved_at: None,
     });
 
     insert_dm_participants(ctx, conv.id, me, ai_identity);
@@ -1062,6 +1366,7 @@ fn post_feedback_trigger(ctx: &ReducerContext, conversation_id: u64, note: &str)
         conversation_id,
         sender: MessageSender::System("feedback".to_string()),
         component_tree_json: None,
+        mentions: vec![],
         content: body,
         job_id: None,
         created_at: ctx.timestamp,
@@ -1099,4 +1404,74 @@ pub fn clear_message_feedback(ctx: &ReducerContext, message_id: u64) -> Result<(
         ctx.db.message_feedback().id().delete(&id);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod mention_tests {
+    use super::match_mentions;
+    use spacetimedb::Identity;
+
+    fn id(byte: u8) -> Identity {
+        Identity::from_byte_array([byte; 32])
+    }
+
+    fn profiles() -> Vec<(String, Identity)> {
+        vec![("Kira".to_string(), id(1)), ("Scribe".to_string(), id(2))]
+    }
+
+    #[test]
+    fn resolves_a_simple_mention() {
+        assert_eq!(match_mentions("hey @Kira take a look", profiles()), vec![id(1)]);
+    }
+
+    #[test]
+    fn is_case_insensitive() {
+        assert_eq!(match_mentions("@kira", profiles()), vec![id(1)]);
+        assert_eq!(match_mentions("@KIRA", profiles()), vec![id(1)]);
+    }
+
+    #[test]
+    fn a_bare_name_is_not_a_mention() {
+        assert!(match_mentions("Kira should look", profiles()).is_empty());
+    }
+
+    /// The case that motivated structured mentions: substring matching would
+    /// have `@Kiran` wake Kira, and a brake that fires on the wrong agent is
+    /// not a brake.
+    #[test]
+    fn longer_name_wins_and_shorter_does_not_over_match() {
+        let p = vec![("Kira".to_string(), id(1)), ("Kiran".to_string(), id(3))];
+        assert_eq!(match_mentions("@Kiran please review", p.clone()), vec![id(3)]);
+        assert_eq!(match_mentions("@Kira please review", p), vec![id(1)]);
+    }
+
+    #[test]
+    fn resolves_several_distinct_mentions() {
+        let out = match_mentions("@Kira and @Scribe both", profiles());
+        assert_eq!(out.len(), 2);
+        assert!(out.contains(&id(1)));
+        assert!(out.contains(&id(2)));
+    }
+
+    #[test]
+    fn unknown_names_resolve_to_nothing() {
+        assert!(match_mentions("@Nobody around", profiles()).is_empty());
+    }
+
+    #[test]
+    fn a_mention_is_not_duplicated() {
+        assert_eq!(match_mentions("@Kira @Kira @Kira", profiles()), vec![id(1)]);
+    }
+
+    #[test]
+    fn punctuation_after_a_name_still_matches() {
+        assert_eq!(match_mentions("@Kira, thoughts?", profiles()), vec![id(1)]);
+        assert_eq!(match_mentions("(@Kira)", profiles()), vec![id(1)]);
+    }
+
+    #[test]
+    fn empty_display_names_are_ignored() {
+        let p = vec![("".to_string(), id(9)), ("Kira".to_string(), id(1))];
+        assert_eq!(match_mentions("@Kira", p), vec![id(1)]);
+    }
 }

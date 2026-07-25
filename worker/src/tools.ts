@@ -124,7 +124,14 @@ export function getPearTools(
  * create pages, databases, add properties, etc. directly in chat.
  */
 export function getConversationTools(): Anthropic.Messages.Tool[] {
-  return [...PEAR_TOOLS, ...WEB_TOOLS, ...SANDBOX_TOOLS, ...MEMORY_TOOLS, ...UI_TOOLS];
+  return [
+    ...PEAR_TOOLS,
+    ...WEB_TOOLS,
+    ...SANDBOX_TOOLS,
+    ...MEMORY_TOOLS,
+    ...UI_TOOLS,
+    ...THREAD_TOOLS,
+  ];
 }
 
 /**
@@ -135,6 +142,83 @@ export function getConversationTools(): Anthropic.Messages.Tool[] {
 export function getStaticToolDefs(): Anthropic.Messages.Tool[] {
   return [...PEAR_TOOLS, ...WEB_TOOLS, ...MEMORY_TOOLS];
 }
+
+// ── Thread tools (AI-to-AI conversation, ticket 14264) ───────────────────────
+//
+// Chat-only: each needs `ctx.conversationId`, so they are deliberately absent
+// from `getStaticToolDefs()` (the MCP / Orcha surface).
+//
+// Addressing another AI user is what wakes it — an AI wakes another AI only when
+// explicitly mentioned, and only while the exchange is inside the hop budget
+// (see `shouldWakeFor`). Resolving is the enforced end: the module refuses new
+// messages on a resolved thread, so it is a real stop and not a UI convention.
+
+const THREAD_TOOLS: Anthropic.Messages.Tool[] = [
+  {
+    name: "post_to_thread",
+    description:
+      "Post a message into a conversation thread you participate in, optionally addressing other " +
+      "participants by writing `@Their Name` in the text. Addressing another AI user is what wakes " +
+      "it to respond — an unaddressed message is recorded but wakes nobody. Use this to ask a " +
+      "specific teammate for input on a comment thread, then wait for their reply rather than " +
+      "answering for them. " +
+      "Defaults to the current thread; pass conversation_id only to post into a different one you " +
+      "are a participant of. " +
+      "Note: an AI-to-AI exchange is capped — after several consecutive AI messages with no human " +
+      "in between, further AI messages stop waking anyone, so keep exchanges short and get to a " +
+      "conclusion. A resolved thread rejects new messages entirely.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        content: {
+          type: "string",
+          description:
+            "The message text. Mention a teammate as `@Their Display Name` to wake them.",
+        },
+        conversation_id: {
+          type: "number",
+          description: "Optional — defaults to the current thread.",
+        },
+      },
+      required: ["content"],
+    },
+  },
+  {
+    name: "resolve_thread",
+    description:
+      "Mark a conversation thread resolved, the way you would resolve a comment in a document. " +
+      "Use it when the question is settled and nothing further is needed — it collapses the thread " +
+      "out of the page and stops any further back-and-forth, because a resolved thread rejects new " +
+      "messages. Prefer resolving over trailing off: it is how a thread ends cleanly. " +
+      "Reversible with `reopen_thread`. Defaults to the current thread.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        conversation_id: {
+          type: "number",
+          description: "Optional — defaults to the current thread.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "reopen_thread",
+    description:
+      "Reopen a thread that was resolved, restoring it to active so messages can be posted again. " +
+      "Use when something turns out to be unfinished after all. Defaults to the current thread.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        conversation_id: {
+          type: "number",
+          description: "Optional — defaults to the current thread.",
+        },
+      },
+      required: [],
+    },
+  },
+];
 
 // ── Generative UI tool (custom-view runtime, M1b-lite) ────────────────────────
 
@@ -2007,6 +2091,67 @@ export async function executeTool(
   try {
     requireChatWriteGrant(conn, toolName, input, toolContext);
     switch (toolName) {
+      case "post_to_thread":
+      case "resolve_thread":
+      case "reopen_thread": {
+        // Thread tools (ticket 14264). All three default to the thread this
+        // turn is running in; an explicit id is allowed but the module still
+        // checks participation, so this cannot reach a thread the AI is not in.
+        const explicit = input.conversation_id;
+        const conversationId =
+          typeof explicit === "number" ? BigInt(explicit) : toolContext.conversationId;
+        if (!conversationId) {
+          return JSON.stringify({
+            ok: false,
+            error: `${toolName} is only available during a chat turn, or with an explicit conversation_id.`,
+          });
+        }
+
+        try {
+          if (toolName === "post_to_thread") {
+            const content = String(input.content ?? "").trim();
+            if (!content) {
+              return JSON.stringify({ ok: false, error: "post_to_thread needs content." });
+            }
+            // Mentions are resolved server-side from the text (the module's
+            // `match_mentions` is the single implementation), so nothing is
+            // passed here — an explicit list would be a second source of truth.
+            await conn.reducers.sendAddressedMessage({
+              conversationId,
+              content,
+              mentions: [],
+            });
+            return JSON.stringify({
+              ok: true,
+              conversation_id: Number(conversationId),
+              posted: true,
+            });
+          }
+
+          if (toolName === "resolve_thread") {
+            await conn.reducers.closeConversation({ conversationId });
+            return JSON.stringify({
+              ok: true,
+              conversation_id: Number(conversationId),
+              resolved: true,
+            });
+          }
+
+          await conn.reducers.reopenConversation({ conversationId });
+          return JSON.stringify({
+            ok: true,
+            conversation_id: Number(conversationId),
+            reopened: true,
+          });
+        } catch (err) {
+          return JSON.stringify({
+            ok: false,
+            conversation_id: Number(conversationId),
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
       case "render_ui": {
         // Emits a read-only component_tree_v1 onto the current assistant
         // message (custom-view runtime, M1b-lite). Only meaningful in a chat

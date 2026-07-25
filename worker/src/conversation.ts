@@ -100,6 +100,8 @@ type ConversationMessageRow = {
   outputTokens: number;
   cacheCreationInputTokens: number;
   cacheReadInputTokens: number;
+  /** Identities this message explicitly addresses; empty for human messages. */
+  mentions?: Array<{ toHexString(): string }>;
 };
 
 type AiUserProfileRow = {
@@ -168,13 +170,113 @@ function isSystemTrigger(msg: ConversationMessageRow): boolean {
   );
 }
 
-/** True if `msg` should wake the AI user for a turn: a message from another
- * user, or a system trigger (job completion / routine). */
-function isTriggerMessage(
+/**
+ * Maximum consecutive AI-authored messages before AI→AI wakes stop.
+ *
+ * The hard backstop under the cooperative signals. Mention-gating, resolving a
+ * thread, and thumbs-up all depend on the model *choosing* to stop, which
+ * covers the ordinary case and none of the expensive one — two agents that keep
+ * tagging each other ("thanks @X, anything else?") loop forever and bill for it.
+ * Any human message resets the budget, which matches the intent: agents
+ * collaborating on a human's behalf, not unattended.
+ */
+export const MAX_AI_HOPS = 6;
+
+/** Identity hexes of every AI user in the workspace. `ai_user_profile` is a
+ * public table with no visibility filter, so the worker sees all of them. */
+export function aiIdentityHexes(conn: ConnLike): Set<string> {
+  const out = new Set<string>();
+  for (const row of conn.db.ai_user_profile.iter() as Iterable<AiUserProfileRow>) {
+    out.add(identityHex(row.identity));
+  }
+  return out;
+}
+
+/**
+ * Does `msg` explicitly address this AI user?
+ *
+ * Reads the structured `mentions` list rather than scanning `content`. Text
+ * matching over-matches — "Kira" inside "Kiran" — and a brake that fires on the
+ * wrong agent is not a brake. Addressing is resolved once at send time against
+ * the real profile list (the module's `match_mentions`, which is the single
+ * implementation — see `conversations/mod.rs`) and stored as identities, so
+ * this is a set-membership test and a later display-name change cannot rewrite
+ * who a past message addressed.
+ *
+ * **Fail-closed**: a message with no `mentions` addresses nobody. For a
+ * loop-prevention gate, silently not waking is recoverable; silently waking
+ * forever is not.
+ */
+export function addressesSelf(
   msg: ConversationMessageRow,
   selfHex: string,
 ): boolean {
-  return isFromOtherUser(msg, selfHex) || isSystemTrigger(msg);
+  const mentions = msg.mentions;
+  if (!mentions || mentions.length === 0) return false;
+  return mentions.some((m) => identityHex(m) === selfHex);
+}
+
+/**
+ * Consecutive AI-authored messages at the tail of a conversation.
+ *
+ * Derived from message history rather than stored as a counter — no schema
+ * change, nothing to keep in sync, and it self-heals: whatever the tail actually
+ * looks like *is* the depth. Walks newest-first and stops at the first
+ * human-authored message, which is what makes human participation reset the
+ * budget. `System(...)` messages neither count nor reset.
+ */
+export function aiHopDepth(
+  conn: ConnLike,
+  conversationId: bigint,
+  aiHexes: Set<string>,
+): number {
+  const msgs: ConversationMessageRow[] = [];
+  for (const m of conn.db.conversation_message.iter() as Iterable<ConversationMessageRow>) {
+    if (m.conversationId === conversationId) msgs.push(m);
+  }
+  msgs.sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+
+  let depth = 0;
+  for (const m of msgs) {
+    if (m.sender.tag !== "User") continue;
+    if (!aiHexes.has(identityHex(m.sender.value))) break;
+    depth++;
+  }
+  return depth;
+}
+
+/**
+ * Should `msg` wake this AI user for a turn?
+ *
+ * Human messages and system triggers behave exactly as before. The new rule is
+ * for AI-authored messages: an AI wakes another AI only when **explicitly
+ * addressed**, and only while the exchange is within `MAX_AI_HOPS`.
+ *
+ * Without the addressing rule, every AI participant wakes on every AI message —
+ * `isFromOtherUser` never distinguished humans from AI users, so AI→AI chatter
+ * was already possible and already unbounded. Mention-gating flips the default
+ * from broadcast-wake to explicit-wake; the hop budget bounds what remains.
+ */
+export function shouldWakeFor(
+  conn: ConnLike,
+  msg: ConversationMessageRow,
+  selfHex: string,
+): boolean {
+  if (isSystemTrigger(msg)) return true;
+  if (!isFromOtherUser(msg, selfHex)) return false;
+
+  const aiHexes = aiIdentityHexes(conn);
+  if (!aiHexes.has(identityHex(msg.sender.value))) return true; // human — unchanged
+
+  if (!addressesSelf(msg, selfHex)) return false;
+
+  if (aiHopDepth(conn, msg.conversationId, aiHexes) >= MAX_AI_HOPS) {
+    console.warn(
+      `[conversation] AI hop budget (${MAX_AI_HOPS}) reached in conversation ${msg.conversationId}; not waking. A human message resets it.`,
+    );
+    return false;
+  }
+  return true;
 }
 
 /** Highest message id currently visible in `conversationId` (0 if none). Used
@@ -500,7 +602,7 @@ function latestTriggerMessage(
   let latest: ConversationMessageRow | undefined;
   for (const m of conn.db.conversation_message.iter() as Iterable<ConversationMessageRow>) {
     if (m.conversationId !== conversationId) continue;
-    if (!isTriggerMessage(m, selfHex)) continue;
+    if (!shouldWakeFor(conn, m, selfHex)) continue;
     if (!latest || m.id > latest.id) latest = m;
   }
   return latest;
@@ -1218,7 +1320,7 @@ export function registerConversationHandlers(
       // Wake on a message from another user, or on a job-completion trigger the
       // server posted for a job this AI delegated. `isParticipant` +
       // watermark guards inside handleConversationMessage keep this scoped.
-      if (isTriggerMessage(msg, selfHex)) {
+      if (shouldWakeFor(conn, msg, selfHex)) {
         void handleConversationMessage(conn, msg, selfHex, logTag, { getMcpRuntimeConn });
       }
     },
@@ -1249,7 +1351,7 @@ export async function processRecentConversationMessages(
   // handleConversationMessage dedups anything already answered.
   const latestByConv = new Map<bigint, ConversationMessageRow>();
   for (const msg of conn.db.conversation_message.iter() as Iterable<ConversationMessageRow>) {
-    if (!isTriggerMessage(msg, selfHex)) continue;
+    if (!shouldWakeFor(conn, msg, selfHex)) continue;
     const current = latestByConv.get(msg.conversationId);
     if (
       !current ||

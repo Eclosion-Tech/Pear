@@ -416,6 +416,7 @@ pub fn run_ai_user_routine(ctx: &ReducerContext, routine: AiUserRoutine) -> Resu
         tool_calls_json: None,
         timeline_json: None,
         component_tree_json: None,
+        mentions: vec![],
         input_tokens: 0,
         output_tokens: 0,
         cache_creation_input_tokens: 0,
@@ -484,6 +485,8 @@ fn ensure_routine_conversation(
         block_anchor: None,
         model_override: None,
         effort_override: None,
+        resolved_by: None,
+        resolved_at: None,
     });
     ctx.db.conversation_participant().insert(ConversationParticipant {
         id: next_conversation_participant_id(ctx),

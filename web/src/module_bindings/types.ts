@@ -682,6 +682,8 @@ export const Conversation = __t.object("Conversation", {
   blockAnchor: __t.option(__t.u64()),
   modelOverride: __t.option(__t.string()),
   effortOverride: __t.option(__t.string()),
+  resolvedBy: __t.option(__t.identity()),
+  resolvedAt: __t.option(__t.timestamp()),
 });
 export type Conversation = __Infer<typeof Conversation>;
 
@@ -733,6 +735,7 @@ export const ConversationMessage = __t.object("ConversationMessage", {
   linkedConversationId: __t.option(__t.u64()),
   timelineJson: __t.option(__t.string()),
   componentTreeJson: __t.option(__t.string()),
+  mentions: __t.array(__t.identity()),
 });
 export type ConversationMessage = __Infer<typeof ConversationMessage>;
 

@@ -573,6 +573,8 @@ fn decode_conversation(v: &Value) -> Result<Conversation, String> {
         block_anchor: None,
         model_override: None,
         effort_override: None,
+        resolved_by: None,
+        resolved_at: None,
     })
 }
 

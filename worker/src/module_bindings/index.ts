@@ -144,6 +144,7 @@ import RemoveConversationParticipantReducer from "./remove_conversation_particip
 import RenameBridgeDeviceReducer from "./rename_bridge_device_reducer";
 import RenamePropertyReducer from "./rename_property_reducer";
 import RenameViewReducer from "./rename_view_reducer";
+import ReopenConversationReducer from "./reopen_conversation_reducer";
 import ReorderPropertyReducer from "./reorder_property_reducer";
 import ReplacePageDocReducer from "./replace_page_doc_reducer";
 import ReportExtensionRuntimeHealthReducer from "./report_extension_runtime_health_reducer";
@@ -169,6 +170,7 @@ import SaveYjsStateReducer from "./save_yjs_state_reducer";
 import SeedAgentInstructionPropertyReducer from "./seed_agent_instruction_property_reducer";
 import SeedBuiltinExtensionsReducer from "./seed_builtin_extensions_reducer";
 import SeedSensorRegistryReducer from "./seed_sensor_registry_reducer";
+import SendAddressedMessageReducer from "./send_addressed_message_reducer";
 import SendMessageReducer from "./send_message_reducer";
 import SendUserMessageReducer from "./send_user_message_reducer";
 import SetAiUserApiKeyReducer from "./set_ai_user_api_key_reducer";
@@ -1310,6 +1312,7 @@ const reducersSchema = __reducers(
   __reducerSchema("rename_bridge_device", RenameBridgeDeviceReducer),
   __reducerSchema("rename_property", RenamePropertyReducer),
   __reducerSchema("rename_view", RenameViewReducer),
+  __reducerSchema("reopen_conversation", ReopenConversationReducer),
   __reducerSchema("reorder_property", ReorderPropertyReducer),
   __reducerSchema("replace_page_doc", ReplacePageDocReducer),
   __reducerSchema("report_extension_runtime_health", ReportExtensionRuntimeHealthReducer),
@@ -1335,6 +1338,7 @@ const reducersSchema = __reducers(
   __reducerSchema("seed_agent_instruction_property", SeedAgentInstructionPropertyReducer),
   __reducerSchema("seed_builtin_extensions", SeedBuiltinExtensionsReducer),
   __reducerSchema("seed_sensor_registry", SeedSensorRegistryReducer),
+  __reducerSchema("send_addressed_message", SendAddressedMessageReducer),
   __reducerSchema("send_message", SendMessageReducer),
   __reducerSchema("send_user_message", SendUserMessageReducer),
   __reducerSchema("set_ai_user_api_key", SetAiUserApiKeyReducer),
