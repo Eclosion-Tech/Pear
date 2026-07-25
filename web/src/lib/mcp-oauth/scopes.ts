@@ -29,6 +29,7 @@ const SCOPE_TOOLS: Record<McpOauthScope, readonly string[]> = {
   [SCOPE_MEMORY]: ["remember", "list_memory", "read_memory", "search_memory"],
   [SCOPE_PAGES_READ]: [
     "get_page",
+    "get_page_theme",
     "list_child_pages",
     "search_pages",
     "get_schema_id",
@@ -41,6 +42,7 @@ const SCOPE_TOOLS: Record<McpOauthScope, readonly string[]> = {
     "delete_property",
     "update_page_content",
     "update_page_title",
+    "set_page_theme",
     "delete_page",
     "restore_page",
     "move_page",

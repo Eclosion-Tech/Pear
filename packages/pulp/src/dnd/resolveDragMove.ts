@@ -1,5 +1,6 @@
 import type { BlockId, BlockTree } from "../types";
 import { parseBlockSortableId, parseContainerDropId } from "./containerDropId";
+import { isVirtualId } from "../repeater/virtualId";
 
 export type DragMoveArgs = {
   componentId: BlockId;
@@ -28,6 +29,12 @@ function canDropInto(
   newParentId: BlockId,
 ): boolean {
   if (movingId === newParentId) return false;
+  // Virtual (materialized) nodes are structurally read-only (ADR D2): nothing
+  // drags out of a virtual subtree and nothing drops into one. Today this also
+  // falls out of the `byId` lookups below — virtual nodes are never in the
+  // tree — but that is incidental, and a reducer-level move against a
+  // synthetic id would be nonsense, so the invariant is asserted directly.
+  if (isVirtualId(movingId) || isVirtualId(newParentId)) return false;
   const moving = tree.byId.get(movingId);
   const parent = tree.byId.get(newParentId);
   if (!moving || !parent) return false;

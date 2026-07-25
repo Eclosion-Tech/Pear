@@ -17,6 +17,11 @@ export const PEAR_REGISTRY_REQUIRED_TYPES = [
   "ImageBlock",
   "Audio",
   "PageLink",
+  // Custom-view runtime M2. Listed so `useEnsureBuiltinComponentTypes` runs
+  // pending migrations on workspaces provisioned before the type existed —
+  // without it, a repeater on an older workspace renders as an unregistered
+  // component with no path to recovery.
+  "Repeater",
 ] as const;
 
 /** Pear sprint-4 slash / turn-into items — extends pulp's curated set. */

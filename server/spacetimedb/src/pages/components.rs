@@ -240,6 +240,16 @@ pub(crate) fn next_component_type_definition_id(ctx: &ReducerContext) -> u64 {
 /// prefixed extensions (e.g. `"$pear:propertyRef"`) can be added later
 /// without changing the storage format.
 mod prop_schemas {
+    /// `style_v1` token block (PEAR_STYLE_VOCABULARY_ADR, S1).
+    ///
+    /// Inlined per component rather than shared, because `BuiltinSpec.prop_schema`
+    /// is `&'static str` and Rust cannot concatenate consts at compile time
+    /// without macro gymnastics. Worth revisiting when a third component adopts
+    /// it; duplicating a closed enum twice is cheaper than the refactor today.
+    ///
+    /// Note this schema is advisory — `ComponentNode::props` is validated on the
+    /// client only (see the field doc). The renderer's allowlist in
+    /// `pulp/style/tokens.ts` is the actual enforcement point (ADR D5).
     pub const CONTAINER: &str = r#"{
   "type": "object",
   "properties": {
@@ -247,7 +257,41 @@ mod prop_schemas {
     "direction": { "enum": ["row", "column"] },
     "gap": { "type": "number" },
     "padding": { "type": "number" },
-    "backgroundColor": { "type": "string" }
+    "backgroundColor": { "type": "string" },
+    "style": {
+      "type": "object",
+      "properties": {
+        "padding":  { "enum": ["none", "xs", "sm", "md", "lg", "xl"] },
+        "paddingX": { "enum": ["none", "xs", "sm", "md", "lg", "xl"] },
+        "paddingY": { "enum": ["none", "xs", "sm", "md", "lg", "xl"] },
+        "gap":      { "enum": ["none", "xs", "sm", "md", "lg", "xl"] },
+        "indent":   { "enum": ["none", "xs", "sm", "md", "lg", "xl"] }
+      }
+    },
+    "theme": {
+      "type": "object",
+      "properties": {
+        "v": { "const": 1 },
+        "accent":  { "enum": ["default", "blue", "green", "yellow", "orange", "red", "purple", "pink"] },
+        "font":    { "enum": ["system", "serif", "mono"] },
+        "density": { "enum": ["compact", "normal", "comfortable"] },
+        "radius":  { "enum": ["none", "sm", "md", "lg", "full"] },
+        "background": {
+          "type": "object",
+          "properties": {
+            "kind":       { "enum": ["none", "tone", "gradient", "image"] },
+            "tone":       { "enum": ["default", "blue", "green", "yellow", "orange", "red", "purple", "pink"] },
+            "gradient":   { "enum": ["dawn", "dusk", "ocean", "forest", "ember", "violet"] },
+            "storageKey": { "type": "string" },
+            "attachmentId": { "type": "string" },
+            "fit":        { "enum": ["cover", "contain", "tile", "center"] },
+            "opacity":    { "type": "number", "minimum": 0, "maximum": 100 }
+          },
+          "required": ["kind"]
+        }
+      },
+      "required": ["v"]
+    }
   },
   "required": ["layout"]
 }"#;
@@ -345,6 +389,79 @@ mod prop_schemas {
     "columns": { "type": "array", "items": { "type": "integer" } }
   },
   "required": ["databaseId"]
+}"#;
+
+    /// Repeater — the custom-view runtime's core primitive (ADR D1/D5).
+    ///
+    /// `dataSource` is the committed v1 shape: versioned, bounded, typed.
+    /// `v` is mandatory and the schema pins it to `1` — configs live in
+    /// user-owned rows and are forever, so evolution happens by version rather
+    /// than by mutating what a shipped `v: 1` means.
+    ///
+    /// The fences here are deliberate and permanent: predicates are typed
+    /// property comparisons only, with no expressions, joins, aggregation, or
+    /// OR-trees. A view that outgrows this escalates to a sandboxed expression
+    /// (tier 4) or a module (tier 5) — the query language does not grow.
+    ///
+    /// The template is not in props: it is the repeater's stored children (D6).
+    pub const REPEATER: &str = r#"{
+  "type": "object",
+  "properties": {
+    "dataSource": {
+      "type": "object",
+      "properties": {
+        "v": { "const": 1 },
+        "entity": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": { "const": "pages" },
+                "parentId": { "type": ["integer", "string", "null"] },
+                "includeDescendants": { "type": "boolean" }
+              },
+              "required": ["kind"]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": { "const": "database" },
+                "schemaId": { "type": ["integer", "string"] },
+                "includeDescendants": { "type": "boolean" }
+              },
+              "required": ["kind", "schemaId"]
+            }
+          ]
+        },
+        "filter": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "property": { "type": "string" },
+              "op": { "enum": ["eq", "neq", "lt", "gt", "contains", "isEmpty"] },
+              "value": { "type": ["string", "number", "boolean", "null"] }
+            },
+            "required": ["property", "op"]
+          }
+        },
+        "sort": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "property": { "type": "string" },
+              "dir": { "enum": ["asc", "desc"] }
+            },
+            "required": ["property", "dir"]
+          }
+        },
+        "limit": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["v", "entity"]
+    }
+  },
+  "required": ["dataSource"]
 }"#;
 
     pub const MARKDOWN_TABLE: &str = r#"{
@@ -583,6 +700,18 @@ fn builtin_specs() -> Vec<BuiltinSpec> {
             accepts_children: false,
         },
         BuiltinSpec {
+            component_type: "Repeater",
+            display_name: "Repeater",
+            description: "Binds a dataSource to a template and instantiates the template per result row at render time. The template is the repeater's stored children; instantiated nodes are virtual — never persisted, never reducer-visible.",
+            prop_schema: prop_schemas::REPEATER,
+            // Both entity kinds are reachable from one node type, and the
+            // capability summary exists so the harness layer can reason without
+            // walking the prop graph — so a repeater declares the union.
+            capabilities: vec![ReadsDatabase, ReadsProperty],
+            has_yjs_state: false,
+            accepts_children: true,
+        },
+        BuiltinSpec {
             component_type: "MarkdownTable",
             display_name: "Markdown table",
             description: "Static table parsed from GitHub-Flavored Markdown for documents and generated UI.",
@@ -745,6 +874,33 @@ pub(crate) fn migrate_heading_yjs_registry_v1(ctx: &ReducerContext) {
     def.prop_schema = prop_schemas::HEADING.to_string();
     def.has_yjs_state = true;
     def.accepts_children = true;
+    ctx.db.component_type_definition().id().update(def);
+}
+
+/// Publish the `style_v1` token block on the live `Container` definition
+/// (PEAR_STYLE_VOCABULARY_ADR, S1).
+///
+/// `seed_builtin_component_types` only *inserts* missing types, so an existing
+/// workspace keeps its original `Container` schema forever without this — same
+/// reason `migrate_heading_yjs_registry_v1` exists.
+///
+/// Nothing breaks if this does not run: prop schemas are advisory and the
+/// renderer's allowlist is the real gate, so `style` would simply be
+/// undocumented rather than rejected. It runs so the schema tells the truth,
+/// which matters most for agents reading the registry to learn what they may
+/// author.
+pub(crate) fn migrate_container_style_v1(ctx: &ReducerContext) {
+    let Some(mut def) = ctx
+        .db
+        .component_type_definition()
+        .component_type()
+        .find("Container".to_string())
+    else {
+        seed_builtin_component_types(ctx);
+        return;
+    };
+
+    def.prop_schema = prop_schemas::CONTAINER.to_string();
     ctx.db.component_type_definition().id().update(def);
 }
 

@@ -27,6 +27,9 @@ import { SettingsPopover } from "@/src/components/SettingsPopover";
 import { ContextMenu, type ContextMenuItem } from "@/src/components/ContextMenu";
 import { QuickSwitcher } from "@/src/components/QuickSwitcher";
 import { EmojiPicker } from "@/src/components/EmojiPicker";
+import { RepeaterSidebarTree } from "@/src/components/RepeaterSidebarTree";
+import { useRepeaterSidebarFlagState } from "@/src/lib/repeater/sidebarFlag";
+import { measureDelivery, recordMount } from "@/src/lib/repeater/paintMetrics";
 import type { PageRow } from "@/src/hooks/usePages";
 import { filterNavVisiblePages } from "@/src/hooks/usePages";
 import { useWorkspace } from "@/src/providers/WorkspaceProvider";
@@ -459,6 +462,32 @@ export function Sidebar() {
     .filter((p) => p.parentId == null)
     .sort((a, b) => a.sortOrder - b.sortOrder);
 
+  const { enabled: repeaterSidebar, settled: flagSettled } = useRepeaterSidebarFlagState();
+
+  // Time the bespoke path exactly as the repeater path is timed, so the M3
+  // back-out bar compares like with like rather than against a remembered
+  // number. Measured from the delivery that changed `navPages` through to the
+  // frame that paints it.
+  //
+  // Gated on `flagSettled`: before the localStorage override is read, this
+  // component renders once under the build default even when the repeater is
+  // the one actually being measured. Recording that render attributes a
+  // cold-start mount to whichever side happens to lose the race.
+  const measuring = flagSettled && !repeaterSidebar;
+  const bespokeCommitRef = useRef<(() => void) | null>(null);
+  if (measuring) {
+    bespokeCommitRef.current = measureDelivery("bespoke-sidebar");
+  }
+  useEffect(() => {
+    if (!measuring) return;
+    bespokeCommitRef.current?.();
+    bespokeCommitRef.current = null;
+  }, [navPages, measuring]);
+
+  useEffect(() => {
+    if (measuring) recordMount("bespoke-sidebar");
+  }, [measuring]);
+
   const updatePageIcon = useUpdatePageIcon();
   const [isCreating, setIsCreating] = useState(false);
   const [pendingNav, setPendingNav] = useState<Set<bigint> | null>(null);
@@ -822,6 +851,11 @@ export function Sidebar() {
       <nav className="flex-1 overflow-y-auto px-2 py-2">
         {sidebarMode === "inbox" ? (
           <InboxView />
+        ) : repeaterSidebar ? (
+          // M3 flag — off by default. Renders the same page tree through the
+          // repeater runtime so the two paths can be compared on one clock.
+          // Navigate-only; see `sidebarFlag.ts` for why.
+          <RepeaterSidebarTree />
         ) : roots.length === 0 && !isReady ? (
           <div className="px-2 py-1 text-xs text-neutral-400 dark:text-neutral-500">Loading…</div>
         ) : roots.length === 0 ? (

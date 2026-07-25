@@ -15,6 +15,7 @@
 import type { McpContext, McpToolEntry } from "./types";
 import { getPageRow, listChildren, allLivePages, getPageContent } from "./pages";
 import { readComponentTreeDoc } from "./component-tree";
+import { getPageTheme, setPageTheme } from "./theme";
 import { createPage } from "./create-page";
 import { queryDatabase, setRowProperties } from "./database";
 import {
@@ -163,6 +164,56 @@ const updatePageContentTool: McpToolEntry = {
     const markdown = String(input.markdown ?? input.content ?? "");
     const result = await writePageContent(ctx.transport, page, markdown, { snapshot: true });
     return JSON.stringify(result);
+  },
+};
+
+const setPageThemeTool: McpToolEntry = {
+  name: "set_page_theme",
+  description:
+    "Set or clear a page's visual theme (background, accent colour, font, density, corner radius). " +
+    "Every value is a token from a closed set — arbitrary CSS, colour codes, class names and URLs are " +
+    "refused, not stored. Pass theme: null to clear. " +
+    "accent/background.tone: default|blue|green|yellow|orange|red|purple|pink. " +
+    "background.kind: none|tone|gradient|image. " +
+    "background.gradient: dawn|dusk|ocean|forest|ember|violet. " +
+    "font: system|serif|mono. density: compact|normal|comfortable. radius: none|sm|md|lg|full. " +
+    "For an image background pass background.storageKey (an uploaded attachment's object id), " +
+    "optional fit (cover|contain|tile|center) and opacity (0-100).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      page_id: { type: "number" },
+      theme: {
+        type: ["object", "null"],
+        description:
+          'Theme object with a mandatory { "v": 1 }, or null to clear. ' +
+          'Example: { "v": 1, "background": { "kind": "gradient", "gradient": "dusk" }, "accent": "purple", "font": "serif" }',
+      },
+    },
+    required: ["page_id", "theme"],
+  },
+  execute: async (ctx, input) => {
+    const pageId = Number(input.page_id);
+    const page = await getPageRow(ctx.transport, pageId);
+    if (!page) return JSON.stringify({ ok: false, error: "Page not found" });
+    const result = await setPageTheme(ctx.transport, pageId, input.theme ?? null);
+    return JSON.stringify(result);
+  },
+};
+
+const getPageThemeTool: McpToolEntry = {
+  name: "get_page_theme",
+  description:
+    "Read the visual theme currently stored on a page, or null if it has none.",
+  inputSchema: {
+    type: "object",
+    properties: { page_id: { type: "number" } },
+    required: ["page_id"],
+  },
+  execute: async (ctx, input) => {
+    const pageId = Number(input.page_id);
+    const theme = await getPageTheme(ctx.transport, pageId);
+    return JSON.stringify({ ok: true, page_id: pageId, theme });
   },
 };
 
@@ -582,6 +633,8 @@ export function buildToolRegistry(): McpToolEntry[] {
     getPageTool,
     updatePageContentTool,
     updatePageTitleTool,
+    setPageThemeTool,
+    getPageThemeTool,
     listChildPagesTool,
     searchPagesTool,
     getSchemaIdTool,

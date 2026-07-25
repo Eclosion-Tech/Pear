@@ -16,7 +16,7 @@ use crate::automations::seed_automation_primitives_inner;
 use crate::harness::{harness_template, HarnessTemplate};
 use crate::module_install::ensure_publisher_identity_recorded;
 use crate::pages::components::seed_builtin_component_types;
-use crate::pages::components::migrate_heading_yjs_registry_v1;
+use crate::pages::components::{migrate_container_style_v1, migrate_heading_yjs_registry_v1};
 use crate::pages::{page, Page};
 use crate::sensors::seed_sensor_registry_inner;
 /// Records which one-shot data migrations have already run on this database.
@@ -197,6 +197,17 @@ pub fn run_pending_migrations(ctx: &ReducerContext) -> Result<(), String> {
         "ai_user_memory_creator_read_v1",
         backfill_ai_user_memory_creator_read_inner
     );
+    // Custom-view runtime M2: seeds the `Repeater` component type.
+    run_step!(ctx, "component_type_repeater_v1", |ctx: &ReducerContext| {
+        seed_builtin_component_types(ctx);
+        Ok::<(), String>(())
+    });
+    // Style vocabulary S1: publishes the `style_v1` token block on the live
+    // `Container` definition (the seed only inserts missing types).
+    run_step!(ctx, "component_container_style_v1", |ctx: &ReducerContext| {
+        migrate_container_style_v1(ctx);
+        Ok::<(), String>(())
+    });
     Ok(())
 }
 

@@ -364,6 +364,15 @@ class FakeStdb implements StdbTransport {
         this.pageContent.set(Number(pageId), content);
         return;
       }
+      case "update_component_props": {
+        const [componentId, propsJson] = args as [number, string];
+        const node = this.nodes.find(
+          (n) => n.id === Number(componentId) && n.deletedAtMicros == null,
+        );
+        if (!node) fail("Component not found");
+        node!.props = String(propsJson);
+        return;
+      }
       case "update_page_title": {
         const [pageId, title] = args as [number, string];
         if (!String(title).trim()) fail("Title is required");
@@ -531,6 +540,132 @@ async function run(
   return JSON.parse(await entry.execute(ctxFor(fake), input));
 }
 
+// ── Page theme (style_v1 S5) ───────────────────────────────────────────────────
+
+describe("set_page_theme", () => {
+  /** The root container's stored props, as the renderer would read them. */
+  function rootProps(fake: FakeStdb, pageId: number): Record<string, unknown> {
+    const root = fake.nodes.find((n) => n.surfaceId === pageId && n.parentId === null);
+    return JSON.parse(root?.props ?? "{}") as Record<string, unknown>;
+  }
+
+  test("writes a valid theme onto the page's root container", async () => {
+    const fake = new FakeStdb();
+    fake.seedPage({ id: 900, title: "Themed" });
+    fake.seedTree(900, "");
+    const pageId = 900;
+    const res = await run(fake, "set_page_theme", {
+      page_id: pageId,
+      theme: { v: 1, background: { kind: "gradient", gradient: "dusk" }, accent: "purple" },
+    });
+
+    expect(res.ok).toBe(true);
+    expect(rootProps(fake, pageId).theme).toEqual({
+      v: 1,
+      background: { kind: "gradient", gradient: "dusk" },
+      accent: "purple",
+    });
+  });
+
+  test("merges rather than replacing — layout and style survive", async () => {
+    const fake = new FakeStdb();
+    fake.seedPage({ id: 900, title: "Themed" });
+    fake.seedTree(900, "");
+    const pageId = 900;
+    const root = fake.nodes.find((n) => n.surfaceId === pageId && n.parentId === null)!;
+    root.props = JSON.stringify({ layout: "stack", style: { gap: "sm" } });
+
+    await run(fake, "set_page_theme", { page_id: pageId, theme: { v: 1, font: "serif" } });
+
+    const props = rootProps(fake, pageId);
+    expect(props.layout).toBe("stack");
+    expect(props.style).toEqual({ gap: "sm" });
+    expect(props.theme).toEqual({ v: 1, font: "serif" });
+  });
+
+  test("refuses arbitrary CSS and never stores it", async () => {
+    const fake = new FakeStdb();
+    fake.seedPage({ id: 900, title: "Themed" });
+    fake.seedTree(900, "");
+    const pageId = 900;
+
+    const res = await run(fake, "set_page_theme", {
+      page_id: pageId,
+      theme: { v: 1, accent: "#ff00ff", font: "Comic Sans MS" },
+    });
+
+    // `accent`/`font` are dropped by the allowlist, leaving a valid empty theme.
+    expect(res.ok).toBe(true);
+    expect(rootProps(fake, pageId).theme).toEqual({ v: 1 });
+  });
+
+  test("rejects a theme missing its version, with a usable error", async () => {
+    const fake = new FakeStdb();
+    fake.seedPage({ id: 900, title: "Themed" });
+    fake.seedTree(900, "");
+    const pageId = 900;
+    const res = await run(fake, "set_page_theme", {
+      page_id: pageId,
+      theme: { accent: "blue" },
+    });
+
+    expect(res.ok).toBe(false);
+    expect(String(res.error)).toMatch(/v: 1/);
+    expect(rootProps(fake, pageId).theme).toBeUndefined();
+  });
+
+  test("refuses a URL as a background storage key", async () => {
+    const fake = new FakeStdb();
+    fake.seedPage({ id: 900, title: "Themed" });
+    fake.seedTree(900, "");
+    const pageId = 900;
+    await run(fake, "set_page_theme", {
+      page_id: pageId,
+      theme: {
+        v: 1,
+        background: { kind: "image", storageKey: "https://evil.example/x.png" },
+      },
+    });
+    expect(rootProps(fake, pageId).theme).toEqual({ v: 1 });
+  });
+
+  test("null clears the theme without disturbing other props", async () => {
+    const fake = new FakeStdb();
+    fake.seedPage({ id: 900, title: "Themed" });
+    fake.seedTree(900, "");
+    const pageId = 900;
+    const root = fake.nodes.find((n) => n.surfaceId === pageId && n.parentId === null)!;
+    root.props = JSON.stringify({ layout: "stack" });
+
+    await run(fake, "set_page_theme", { page_id: pageId, theme: { v: 1, font: "mono" } });
+    await run(fake, "set_page_theme", { page_id: pageId, theme: null });
+
+    const props = rootProps(fake, pageId);
+    expect(props.theme).toBeUndefined();
+    expect(props.layout).toBe("stack");
+  });
+
+  test("round-trips through get_page_theme", async () => {
+    const fake = new FakeStdb();
+    fake.seedPage({ id: 900, title: "Themed" });
+    fake.seedTree(900, "");
+    const pageId = 900;
+    await run(fake, "set_page_theme", {
+      page_id: pageId,
+      theme: { v: 1, density: "comfortable", radius: "lg" },
+    });
+    const res = await run(fake, "get_page_theme", { page_id: pageId });
+    expect(res.theme).toEqual({ v: 1, density: "comfortable", radius: "lg" });
+  });
+
+  test("reports a missing page rather than writing anywhere", async () => {
+    const fake = new FakeStdb();
+    const res = await run(fake, "set_page_theme", { page_id: 999999, theme: { v: 1 } });
+    expect(res.ok).toBe(false);
+    expect(String(res.error)).toMatch(/not found/i);
+  });
+});
+
 // ── Registry shape ─────────────────────────────────────────────────────────────
 
 describe("registry", () => {
@@ -541,6 +676,7 @@ describe("registry", () => {
       "delete_page",
       "delete_property",
       "get_page",
+      "get_page_theme",
       "get_schema_id",
       "list_child_pages",
       "list_memory",
@@ -552,6 +688,7 @@ describe("registry", () => {
       "restore_page",
       "search_memory",
       "search_pages",
+      "set_page_theme",
       "set_row_properties",
       "update_page_content",
       "update_page_title",

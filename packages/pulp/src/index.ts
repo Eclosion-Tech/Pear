@@ -46,6 +46,66 @@ export type {
 } from "./registry";
 export { registerCoreBlocks } from "./registerCoreBlocks";
 
+// Style vocabulary (style_v1 — PEAR_STYLE_VOCABULARY_ADR)
+export {
+  SPACE_TOKENS,
+  parseStyleTokens,
+  readStyleTokens,
+  isEmptyStyle,
+} from "./style/tokens";
+export type { SpaceToken, StyleTokens } from "./style/tokens";
+export {
+  TONE_TOKENS,
+  GRADIENT_TOKENS,
+  FONT_TOKENS,
+  DENSITY_TOKENS,
+  RADIUS_TOKENS,
+  FIT_TOKENS,
+  parseTheme,
+  readTheme,
+  resolveTheme,
+} from "./style/theme";
+export type {
+  Theme,
+  ThemeBackground,
+  ToneToken,
+  GradientToken,
+  FontToken,
+  DensityToken,
+  RadiusToken,
+  FitToken,
+} from "./style/theme";
+
+// Repeater primitive (custom-view runtime, ADR D1–D5)
+export { RepeaterRenderer } from "./repeater/RepeaterRenderer";
+export { VirtualNodeView } from "./repeater/VirtualNodeView";
+export {
+  IncrementalMaterializer,
+  materializeNaive,
+} from "./repeater/materialize";
+export type { VirtualNode } from "./repeater/materialize";
+export {
+  buildTemplate,
+  findRecursionSlot,
+  hasRecursionPoint,
+  resolveProps,
+  templateSignature,
+  REPEAT_CHILDREN_PROP,
+} from "./repeater/template";
+export type { TemplateNode } from "./repeater/template";
+export { virtualId, isVirtualId, VIRTUAL_NAMESPACE } from "./repeater/virtualId";
+export { parseDataSource, dataSourceEquals } from "./repeater/dataSource";
+export type {
+  DataSourceConfig,
+  DataSourceEntity,
+  Predicate,
+  PredicateOp,
+  PredicateValue,
+  QueryResolver,
+  RepeaterRow,
+  SortRule,
+} from "./repeater/dataSource";
+
 // Chrome + menus
 export { BlockChrome, BlockChromeHeaderControls } from "./BlockChrome";
 export type { BlockChromeGutterMode } from "./BlockChrome";

@@ -4,11 +4,20 @@ import { Children, useMemo } from "react";
 import {
   BlockChromeHeaderControls,
   ContainerDropZone,
+  isVirtualId,
   knownSiblingIdsForParent,
+  parseStyleTokens,
+  parseTheme,
   usePulp,
   useSurfaceFocus,
   type BlockRendererProps,
 } from "@eclosion-tech/pulp";
+import { styleClasses } from "@/src/components/component-renderers/style/spaceClasses";
+import {
+  themeClasses,
+  themeStyle,
+} from "@/src/components/component-renderers/style/themeStyles";
+import { usePearWorkspaceSlug } from "@/src/lib/blobUpload";
 
 /**
  * Built-in `Container` component. Layout primitive — flex / grid / stack
@@ -29,13 +38,40 @@ import {
 type ContainerProps = {
   layout?: "flex" | "grid" | "stack";
   direction?: "row" | "column";
+  /** @deprecated numeric scale — prefer `style.gap` (style_v1). Still honoured. */
   gap?: number;
+  /** @deprecated numeric scale — prefer `style.padding` (style_v1). Still honoured. */
   padding?: number;
+  /**
+   * @deprecated raw CSS value — the one prop that cannot be theme-aware, and
+   * the reason the style vocabulary exists. Honoured for existing trees; a
+   * later migration rewrites stored values to a `tone` token (ADR D7).
+   */
   backgroundColor?: string;
+  style?: unknown;
+  /**
+   * Page Theme (style_v1 S2, ADR D9). Stored on the *root* container, which is
+   * why it needs no new `Page` column and why it serializes into
+   * `component_tree_v1` — and therefore travels on export and fork — for free.
+   */
+  theme?: unknown;
 };
 
 export function ContainerRenderer({ node, def, tree, children }: BlockRendererProps) {
   const props = useMemo<ContainerProps>(() => safeParse(node.props), [node.props]);
+  // style_v1 tokens. Parsed through pulp's allowlist (ADR D5) — unknown keys
+  // and values resolve to unset and never reach the DOM.
+  const styleTokens = useMemo(() => parseStyleTokens(props.style), [props.style]);
+  const tokenClasses = styleClasses(styleTokens);
+
+  // Page Theme rides the root container (D9). Applying it here rather than in a
+  // wrapper means CSS's own inheritance carries font and accent to descendants
+  // — no second cascade to reason about, which is what keeps the "tokens do not
+  // cascade" rule honest while Theme still establishes page-level context.
+  const slug = usePearWorkspaceSlug();
+  const theme = useMemo(() => parseTheme(props.theme), [props.theme]);
+  const themeClassNames = themeClasses(theme);
+  const themeInlineStyle = useMemo(() => themeStyle(theme, slug), [theme, slug]);
   const { insertBlock } = usePulp();
   const focus = useSurfaceFocus();
   const acceptsChildren = def.acceptsChildren;
@@ -87,13 +123,38 @@ export function ContainerRenderer({ node, def, tree, children }: BlockRendererPr
       (isEmpty ? "py-2" : "pt-7 pb-2") +
       " group/container";
 
+  // A materialized container is structurally read-only (ADR D2): nothing drops
+  // into a virtual subtree. `canDropInto` already rejects such a move, but
+  // registering the drop target anyway would advertise an affordance that
+  // silently does nothing — so skip the zone entirely.
+  //
+  // `nestedChrome` is dropped too. Its dashed border and `min-h` exist to make
+  // an *editable* empty container discoverable; on a derived node there is
+  // nothing to drop in, so it renders as an empty placeholder box under every
+  // leaf row. A virtual container with no children should occupy no space.
+  //
+  // Spacing comes from `style` tokens the template sets — not from a hardcoded
+  // class here, which would bake one surface's layout policy into every
+  // consumer of Container. A materialized container with no tokens occupies no
+  // space at all, which is what leaf rows want.
+  if (isVirtualId(node.id)) {
+    return (
+      <div
+        className={`${layoutClass} ${directionClass} ${tokenClasses} ${themeClassNames}`}
+        style={{ ...style, ...themeInlineStyle }}
+      >
+        {children}
+      </div>
+    );
+  }
+
   return (
     <ContainerDropZone
       containerId={node.id}
       tree={tree}
       acceptsChildren={acceptsChildren}
-      className={`${layoutClass} ${directionClass} ${nestedChrome}`}
-      style={style}
+      className={`${layoutClass} ${directionClass} ${nestedChrome} ${tokenClasses} ${themeClassNames}`}
+      style={{ ...style, ...themeInlineStyle }}
       header={
         isRoot ? undefined : (
           <div

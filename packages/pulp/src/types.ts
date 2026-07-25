@@ -102,6 +102,14 @@ export type PulpConfig = {
    * and generative-chat rendering. Mutations are never invoked in this mode.
    */
   readOnly?: boolean;
+  /**
+   * Supplies rows to `Repeater` nodes (ADR D1). Pulp owns materialization and
+   * virtual-node rendering; the host owns storage, so it maps a
+   * `DataSourceConfig` onto its own subscriptions. Absent means repeaters
+   * render their template with a "no resolver configured" notice rather than
+   * failing — a host that doesn't do data binding still renders the tree.
+   */
+  queryResolver?: import("./repeater/dataSource").QueryResolver;
 };
 
 export type PulpContextValue = {
