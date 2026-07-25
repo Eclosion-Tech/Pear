@@ -30,6 +30,7 @@ const SCOPE_TOOLS: Record<McpOauthScope, readonly string[]> = {
   [SCOPE_PAGES_READ]: [
     "get_page",
     "get_page_theme",
+    "list_page_threads",
     "list_child_pages",
     "search_pages",
     "get_schema_id",
@@ -43,6 +44,9 @@ const SCOPE_TOOLS: Record<McpOauthScope, readonly string[]> = {
     "update_page_content",
     "update_page_title",
     "set_page_theme",
+    "post_to_thread",
+    "resolve_thread",
+    "reopen_thread",
     "delete_page",
     "restore_page",
     "move_page",

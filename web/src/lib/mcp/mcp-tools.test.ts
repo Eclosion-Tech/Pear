@@ -51,6 +51,11 @@ class FakeStdb implements StdbTransport {
   nodes: FakeNode[] = [];
   yjs = new Map<number, string>(); // node id → hex
   pageContent = new Map<number, string>();
+  /** Block-anchored comment threads. `kind` 0 = ContextThread; `status` 0 = Active, 1 = Closed. */
+  conversations: Array<{
+    id: number; pageId: number | null; blockAnchor: number | null; kind: number; status: number;
+  }> = [];
+  convMessages: Array<{ id: number; conversationId: number; content: string }> = [];
   aiUserConfig: Array<{ id: number }> = [{ id: 7 }];
   aiUserMemory: Array<{ aiUserId: number; rootPageId: number }> = [];
   snapshots: Array<{ id: number; pageId: number }> = [];
@@ -197,6 +202,22 @@ class FakeStdb implements StdbTransport {
           property_definition_id: v.propDefId,
           value: v.value,
         })) as Row[];
+    }
+    if (q.includes("FROM conversation_message")) {
+      return this.convMessages.map((m) => ({
+        id: m.id,
+        conversation_id: m.conversationId,
+        content: m.content,
+      })) as Row[];
+    }
+    if (q.includes("FROM conversation")) {
+      return this.conversations.map((c) => ({
+        id: c.id,
+        page_id: this.optNum(c.pageId),
+        block_anchor: this.optNum(c.blockAnchor),
+        status: [c.status, []],
+        kind: [c.kind, []],
+      })) as Row[];
     }
     if (q.includes("FROM component_node")) {
       // Single-surface (`surface_id = ?`) and bulk OR-chain forms both filter
@@ -362,6 +383,32 @@ class FakeStdb implements StdbTransport {
           );
         }
         this.pageContent.set(Number(pageId), content);
+        return;
+      }
+      case "send_addressed_message": {
+        const [conversationId, content] = args as [number, string];
+        const conv = this.conversations.find((c) => c.id === Number(conversationId));
+        if (!conv) fail("Conversation not found");
+        if (conv!.status !== 0) fail("Conversation is closed");
+        this.convMessages.push({
+          id: this.convMessages.length + 1,
+          conversationId: Number(conversationId),
+          content: String(content),
+        });
+        return;
+      }
+      case "close_conversation": {
+        const [conversationId] = args as [number];
+        const conv = this.conversations.find((c) => c.id === Number(conversationId));
+        if (!conv) fail("Conversation not found");
+        conv!.status = 1;
+        return;
+      }
+      case "reopen_conversation": {
+        const [conversationId] = args as [number];
+        const conv = this.conversations.find((c) => c.id === Number(conversationId));
+        if (!conv) fail("Conversation not found");
+        conv!.status = 0;
         return;
       }
       case "update_component_props": {
@@ -666,6 +713,96 @@ describe("set_page_theme", () => {
   });
 });
 
+
+// ── Comment threads (ticket 14264) ────────────────────────────────────────────
+
+describe("comment threads", () => {
+  function seedThreads(fake: FakeStdb) {
+    fake.seedPage({ id: 900, title: "Doc with comments" });
+    fake.seedTree(900, "");
+    fake.conversations.push(
+      { id: 1, pageId: 900, blockAnchor: 2001, kind: 0, status: 0 },
+      { id: 2, pageId: 900, blockAnchor: 2002, kind: 0, status: 1 }, // resolved
+      { id: 3, pageId: 900, blockAnchor: null, kind: 0, status: 0 }, // sidebar chat
+      { id: 4, pageId: 999, blockAnchor: 2003, kind: 0, status: 0 }, // other page
+    );
+    fake.convMessages.push(
+      { id: 1, conversationId: 1, content: "first" },
+      { id: 2, conversationId: 1, content: "latest here" },
+    );
+    return 900;
+  }
+
+  test("lists only block-anchored threads on the page, active by default", async () => {
+    const fake = new FakeStdb();
+    const pageId = seedThreads(fake);
+    const res = await run(fake, "list_page_threads", { page_id: pageId });
+    const ids = (res.threads as Array<{ conversation_id: number }>).map((t) => t.conversation_id);
+    // 2 is resolved, 3 has no anchor (sidebar), 4 is another page.
+    expect(ids).toEqual([1]);
+  });
+
+  test("include_resolved surfaces resolved threads", async () => {
+    const fake = new FakeStdb();
+    const pageId = seedThreads(fake);
+    const res = await run(fake, "list_page_threads", { page_id: pageId, include_resolved: true });
+    const threads = res.threads as Array<{ conversation_id: number; status: string }>;
+    expect(threads.map((t) => t.conversation_id).sort()).toEqual([1, 2]);
+    expect(threads.find((t) => t.conversation_id === 2)!.status).toBe("resolved");
+  });
+
+  test("reports message count and a preview of the newest message", async () => {
+    const fake = new FakeStdb();
+    const pageId = seedThreads(fake);
+    const res = await run(fake, "list_page_threads", { page_id: pageId });
+    const t = (res.threads as Array<Record<string, unknown>>)[0];
+    expect(t.message_count).toBe(2);
+    expect(t.last_message_preview).toBe("latest here");
+  });
+
+  test("post_to_thread appends a message", async () => {
+    const fake = new FakeStdb();
+    seedThreads(fake);
+    const res = await run(fake, "post_to_thread", {
+      conversation_id: 1,
+      content: "@Kira can you check this?",
+    });
+    expect(res.ok).toBe(true);
+    expect(fake.convMessages.at(-1)!.content).toBe("@Kira can you check this?");
+  });
+
+  test("post_to_thread rejects empty content without calling a reducer", async () => {
+    const fake = new FakeStdb();
+    seedThreads(fake);
+    const before = fake.calls.length;
+    const res = await run(fake, "post_to_thread", { conversation_id: 1, content: "   " });
+    expect(res.ok).toBe(false);
+    expect(fake.calls.length).toBe(before);
+  });
+
+  test("resolve then reopen round-trips, and a resolved thread rejects posts", async () => {
+    const fake = new FakeStdb();
+    seedThreads(fake);
+
+    expect((await run(fake, "resolve_thread", { conversation_id: 1 })).ok).toBe(true);
+    // Resolving is a real brake: the module refuses new messages.
+    const blocked = await run(fake, "post_to_thread", { conversation_id: 1, content: "more" });
+    expect(blocked.ok).toBe(false);
+    expect(String(blocked.error)).toMatch(/closed/i);
+
+    expect((await run(fake, "reopen_thread", { conversation_id: 1 })).ok).toBe(true);
+    expect((await run(fake, "post_to_thread", { conversation_id: 1, content: "more" })).ok).toBe(true);
+  });
+
+  test("reducer rejections surface as ok:false", async () => {
+    const fake = new FakeStdb();
+    seedThreads(fake);
+    const res = await run(fake, "resolve_thread", { conversation_id: 99999 });
+    expect(res.ok).toBe(false);
+    expect(String(res.error)).toMatch(/not found/i);
+  });
+});
+
 // ── Registry shape ─────────────────────────────────────────────────────────────
 
 describe("registry", () => {
@@ -680,11 +817,15 @@ describe("registry", () => {
       "get_schema_id",
       "list_child_pages",
       "list_memory",
+      "list_page_threads",
       "list_properties",
       "move_page",
+      "post_to_thread",
       "query_database",
       "read_memory",
       "remember",
+      "reopen_thread",
+      "resolve_thread",
       "restore_page",
       "search_memory",
       "search_pages",

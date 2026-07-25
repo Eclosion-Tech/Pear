@@ -16,6 +16,12 @@ import type { McpContext, McpToolEntry } from "./types";
 import { getPageRow, listChildren, allLivePages, getPageContent } from "./pages";
 import { readComponentTreeDoc } from "./component-tree";
 import { getPageTheme, setPageTheme } from "./theme";
+import {
+  listPageThreads,
+  postToThread,
+  reopenThread,
+  resolveThread,
+} from "./threads";
 import { createPage } from "./create-page";
 import { queryDatabase, setRowProperties } from "./database";
 import {
@@ -165,6 +171,94 @@ const updatePageContentTool: McpToolEntry = {
     const result = await writePageContent(ctx.transport, page, markdown, { snapshot: true });
     return JSON.stringify(result);
   },
+};
+
+const listPageThreadsTool: McpToolEntry = {
+  name: "list_page_threads",
+  description:
+    "List the comment threads anchored to blocks on a page — the discussion happening in the page's " +
+    "margin, as distinct from the AI sidebar. Returns each thread's conversation_id, the block it is " +
+    "anchored to, whether it is resolved, its message count and a preview of the latest message. " +
+    "Use this to find a thread before posting to or resolving it. Resolved threads are omitted " +
+    "unless include_resolved is true.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      page_id: { type: "number" },
+      include_resolved: {
+        type: "boolean",
+        description: "Include resolved threads. Defaults to false.",
+      },
+    },
+    required: ["page_id"],
+  },
+  execute: async (ctx, input) => {
+    const pageId = Number(input.page_id);
+    const page = await getPageRow(ctx.transport, pageId);
+    if (!page) return JSON.stringify({ ok: false, error: "Page not found" });
+    const threads = await listPageThreads(
+      ctx.transport,
+      pageId,
+      input.include_resolved === true,
+    );
+    return JSON.stringify({ ok: true, page_id: pageId, threads });
+  },
+};
+
+const postToThreadTool: McpToolEntry = {
+  name: "post_to_thread",
+  description:
+    "Post a message into a comment thread you participate in. Address a teammate by writing " +
+    "`@Their Name` in the text — that is what wakes an AI user to respond, and an unaddressed " +
+    "message is recorded but wakes nobody. Find thread ids with `list_page_threads`. " +
+    "A resolved thread rejects new messages; reopen it first if you need to continue. " +
+    "Note that AI-to-AI exchanges are capped: after several consecutive AI messages with no human " +
+    "in between, further AI messages stop waking anyone.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      conversation_id: { type: "number" },
+      content: {
+        type: "string",
+        description: "Message text. Mention a teammate as `@Their Display Name` to wake them.",
+      },
+    },
+    required: ["conversation_id", "content"],
+  },
+  execute: async (ctx, input) =>
+    JSON.stringify(
+      await postToThread(ctx.transport, Number(input.conversation_id), String(input.content ?? "")),
+    ),
+};
+
+const resolveThreadTool: McpToolEntry = {
+  name: "resolve_thread",
+  description:
+    "Mark a comment thread resolved, the way you would resolve a comment in a document. Use it when " +
+    "the question is settled — it collapses the thread out of the page and stops further replies, " +
+    "because a resolved thread rejects new messages. Prefer resolving over trailing off. " +
+    "Reversible with `reopen_thread`.",
+  inputSchema: {
+    type: "object",
+    properties: { conversation_id: { type: "number" } },
+    required: ["conversation_id"],
+  },
+  execute: async (ctx, input) =>
+    JSON.stringify(await resolveThread(ctx.transport, Number(input.conversation_id))),
+};
+
+const reopenThreadTool: McpToolEntry = {
+  name: "reopen_thread",
+  description:
+    "Reopen a resolved comment thread so messages can be posted again. Use when something turns out " +
+    "to be unfinished after all.",
+  inputSchema: {
+    type: "object",
+    properties: { conversation_id: { type: "number" } },
+    required: ["conversation_id"],
+  },
+  execute: async (ctx, input) =>
+    JSON.stringify(await reopenThread(ctx.transport, Number(input.conversation_id))),
 };
 
 const setPageThemeTool: McpToolEntry = {
@@ -635,6 +729,10 @@ export function buildToolRegistry(): McpToolEntry[] {
     updatePageTitleTool,
     setPageThemeTool,
     getPageThemeTool,
+    listPageThreadsTool,
+    postToThreadTool,
+    resolveThreadTool,
+    reopenThreadTool,
     listChildPagesTool,
     searchPagesTool,
     getSchemaIdTool,

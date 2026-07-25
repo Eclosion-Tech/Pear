@@ -145,8 +145,14 @@ export function getStaticToolDefs(): Anthropic.Messages.Tool[] {
 
 // ── Thread tools (AI-to-AI conversation, ticket 14264) ───────────────────────
 //
-// Chat-only: each needs `ctx.conversationId`, so they are deliberately absent
-// from `getStaticToolDefs()` (the MCP / Orcha surface).
+// Chat-only: reachable solely through `getConversationTools()`, which only the
+// chat turn consumes (`conversation.ts`). They are NOT on the MCP surface —
+// that is a separate registry, `buildToolRegistry()` in
+// `web/src/lib/mcp/tools.ts`, which both MCP servers (`worker/src/mcp/http.ts`
+// and `stdio.ts`) build from via `createPearMcpServer`.
+//
+// (`getStaticToolDefs()` below claims to be the MCP surface. It has no callers
+// and is not wired to anything — do not rely on it for gating.)
 //
 // Addressing another AI user is what wakes it — an AI wakes another AI only when
 // explicitly mentioned, and only while the exchange is inside the hop budget
