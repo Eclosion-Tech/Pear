@@ -35,6 +35,10 @@ import {
   registerBridgeSql,
   unregisterBridgeSql,
 } from "./bridge-sql.js";
+import {
+  registerMcpTransport,
+  unregisterMcpTransport,
+} from "./mcp-parity-tools.js";
 
 const RECONNECT_CAP_MS = 30_000;
 const RECONNECT_BASE_MS = 1_500;
@@ -168,11 +172,22 @@ export class AiUserWorker {
           identity.toHexString(),
           createBridgeSqlClient({ uri: this.uri, dbName: this.dbName, token: this.token }),
         );
+        // Same uri/dbName/token, so the shared MCP tool implementations run with
+        // this AI user's RLS scope — that is what lets the chat surface reach
+        // page authoring, theming and threads without a second implementation.
+        registerMcpTransport(identity.toHexString(), {
+          uri: this.uri,
+          dbName: this.dbName,
+          token: this.token,
+        });
         this.registerHandlers(conn, identity);
       })
       .onDisconnect(() => {
         console.log(`${this.logTag} disconnected`);
-        if (this.aiUserIdentity) unregisterBridgeSql(this.aiUserIdentity.toHexString());
+        if (this.aiUserIdentity) {
+          unregisterBridgeSql(this.aiUserIdentity.toHexString());
+          unregisterMcpTransport(this.aiUserIdentity.toHexString());
+        }
         this.conn = null;
         this.aiUserIdentity = null;
         // Drop the cached provider for this AI user so the next connect

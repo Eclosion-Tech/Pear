@@ -18,6 +18,11 @@ import { ssrfSafeFetch } from "./ssrf.js";
 import { getBridgeSql } from "./bridge-sql.js";
 import { runSandboxBash } from "./sandbox-bash.js";
 import {
+  executeMcpParityTool,
+  getMcpParityToolDefs,
+  isMcpParityTool,
+} from "./mcp-parity-tools.js";
+import {
   readAiUserMemoryPage,
   searchAiUserMemory,
 } from "./workspace-context.js";
@@ -125,6 +130,10 @@ export function getPearTools(
  */
 export function getConversationTools(): Anthropic.Messages.Tool[] {
   return [
+    // Parity with the MCP surface: page authoring, theming and thread
+    // management, taken verbatim from the shared registry rather than
+    // reimplemented. See mcp-parity-tools.ts.
+    ...getMcpParityToolDefs(),
     ...PEAR_TOOLS,
     ...WEB_TOOLS,
     ...SANDBOX_TOOLS,
@@ -2096,6 +2105,16 @@ export async function executeTool(
   console.log(`[tools] Executing ${toolName} — input: ${JSON.stringify(input)}`);
   try {
     requireChatWriteGrant(conn, toolName, input, toolContext);
+    // Parity tools run through the shared MCP implementation so chat and MCP
+    // can never drift apart on validation or error text.
+    if (isMcpParityTool(toolName)) {
+      return await executeMcpParityTool(
+        toolContext.aiIdentityHex,
+        toolContext.aiUserId,
+        toolName,
+        input,
+      );
+    }
     switch (toolName) {
       case "post_to_thread":
       case "resolve_thread":
