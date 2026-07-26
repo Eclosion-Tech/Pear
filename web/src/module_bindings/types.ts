@@ -1513,3 +1513,12 @@ export const ViewType = __t.enum("ViewType", {
 });
 export type ViewType = __Infer<typeof ViewType>;
 
+export const WorkspaceSetting = __t.object("WorkspaceSetting", {
+  id: __t.u64(),
+  key: __t.string(),
+  valueJson: __t.string(),
+  updatedBy: __t.identity(),
+  updatedAt: __t.timestamp(),
+});
+export type WorkspaceSetting = __Infer<typeof WorkspaceSetting>;
+

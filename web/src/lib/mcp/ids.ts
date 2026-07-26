@@ -17,7 +17,8 @@ export type CounterName =
   | "component_node"
   | "database_schema"
   | "property_definition"
-  | "page_snapshot";
+  | "page_snapshot"
+  | "conversation";
 
 export async function readCounter(
   transport: StdbTransport,

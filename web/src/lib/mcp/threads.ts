@@ -14,7 +14,8 @@
  */
 
 import type { StdbTransport } from "../api-endpoint";
-import { encodeU64 } from "./encode";
+import { encodeOption, encodeU64 } from "./encode";
+import { readCounter } from "./ids";
 
 export type ThreadSummary = {
   conversation_id: number;
@@ -118,6 +119,117 @@ export async function listPageThreads(
   }
 
   return threads;
+}
+
+/**
+ * Start a comment thread anchored to a block.
+ *
+ * MCP can only create *block-anchored threads on a page* — never a detached or
+ * sidebar conversation. A comment on a block is page-visible and belongs to the
+ * page; a detached thread is a private side channel, and an agent opening those
+ * unprompted is not something this surface should enable.
+ *
+ * Participants may be AI users or people. On a page-visible thread a participant
+ * is a wake list rather than an access grant, so adding someone does not widen
+ * who can read it — it says who should look. Tagging a person is how they find
+ * out something needs them, which is the point. The caller is added as Initiator
+ * by the reducer.
+ *
+ * `create_conversation` returns nothing (reducers never do), so the new id is
+ * recovered from the gap-free `id_counter` the same way `create_page` does.
+ */
+export async function createThread(
+  transport: StdbTransport,
+  args: { pageId: number; blockId: number; participants: string[]; content?: string },
+): Promise<ThreadActionResult & { block_anchor?: number }> {
+  const { pageId, blockId, participants, content } = args;
+
+  // Resolve names → identities across both AI users and people. Anything
+  // unmatched is an error rather than a silent drop: a thread that quietly
+  // excludes the person you meant to ask is worse than a failed call.
+  const identities: string[] = [];
+  if (participants.length > 0) {
+    const [aiProfiles, people] = await Promise.all([
+      transport.sql<{ identity: string; display_name: string }>(
+        `SELECT identity, display_name FROM ai_user_profile`,
+      ),
+      transport.sql<{ identity: string; name: string }>(`SELECT identity, name FROM user`),
+    ]);
+    const byName = new Map<string, string>();
+    const known: string[] = [];
+    for (const p of aiProfiles) {
+      const n = String(p.display_name).trim();
+      if (!n) continue;
+      byName.set(n.toLowerCase(), p.identity);
+      known.push(n);
+    }
+    for (const u of people) {
+      const n = String(u.name).trim();
+      if (!n) continue;
+      // AI display names win a collision — they are the ones addressed by tools.
+      if (!byName.has(n.toLowerCase())) {
+        byName.set(n.toLowerCase(), u.identity);
+        known.push(n);
+      }
+    }
+
+    const missing: string[] = [];
+    for (const name of participants) {
+      const id = byName.get(name.trim().toLowerCase());
+      if (id) {
+        if (!identities.includes(id)) identities.push(id);
+      } else {
+        missing.push(name);
+      }
+    }
+    if (missing.length > 0) {
+      return {
+        ok: false,
+        error:
+          `Unknown participant(s): ${missing.join(", ")}. ` +
+          `Known: ${known.join(", ") || "(none)"}.`,
+      };
+    }
+  }
+
+  const before = await readCounter(transport, "conversation");
+  try {
+    await transport.call("create_conversation", [
+      encodeOption(encodeU64(pageId)),
+      identities,
+      encodeOption(encodeU64(blockId)),
+    ]);
+  } catch (err) {
+    return { ok: false, error: reducerErrorMessage(err) };
+  }
+
+  const after = await readCounter(transport, "conversation");
+  if (after <= before) {
+    return { ok: false, error: "create_conversation did not allocate a conversation id" };
+  }
+  const conversationId = after;
+
+  if (content && content.trim()) {
+    const posted = await postToThread(transport, conversationId, content);
+    if (!posted.ok) {
+      // The thread exists either way — report the partial outcome rather than
+      // implying nothing happened.
+      return {
+        ok: true,
+        conversation_id: conversationId,
+        block_anchor: blockId,
+        created: true,
+        first_message_error: posted.error,
+      };
+    }
+  }
+
+  return {
+    ok: true,
+    conversation_id: conversationId,
+    block_anchor: blockId,
+    created: true,
+  };
 }
 
 export type ThreadActionResult =

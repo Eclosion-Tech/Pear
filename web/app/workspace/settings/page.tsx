@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
+import { AgentPolicySettings } from "@/src/components/AgentPolicySettings";
 import { AiUsersSettings } from "@/src/components/AiUsersSettings";
 import { ApiEndpointsSettings } from "@/src/components/ApiEndpointsSettings";
 import { ExtensionsSettings } from "@/src/components/ExtensionsSettings";
@@ -59,6 +60,8 @@ export default function SettingsPage() {
         <MembersSettings />
 
         <AiUsersSettings />
+
+        <AgentPolicySettings />
 
         <section className="mb-10">
           <ExtensionsSettings />

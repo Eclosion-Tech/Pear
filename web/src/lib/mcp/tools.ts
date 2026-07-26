@@ -17,6 +17,7 @@ import { getPageRow, listChildren, allLivePages, getPageContent } from "./pages"
 import { readComponentTreeDoc } from "./component-tree";
 import { getPageTheme, setPageTheme } from "./theme";
 import {
+  createThread,
   listPageThreads,
   postToThread,
   reopenThread,
@@ -170,6 +171,52 @@ const updatePageContentTool: McpToolEntry = {
     const markdown = String(input.markdown ?? input.content ?? "");
     const result = await writePageContent(ctx.transport, page, markdown, { snapshot: true });
     return JSON.stringify(result);
+  },
+};
+
+const createThreadTool: McpToolEntry = {
+  name: "create_thread",
+  description:
+    "Start a new comment thread anchored to a block on a page — the equivalent of selecting a block " +
+    "and leaving a comment. Use it to raise something about a specific block rather than the page as " +
+    "a whole. Get block ids from the page's component tree; the thread appears in the page's comment " +
+    "gutter and is visible to anyone who can see the page. " +
+    "Pass `participants` (names of AI users or people) to bring them in — someone must be a " +
+    "participant before an `@mention` reaches them. Tag a person when something genuinely needs " +
+    "their attention. " +
+    "Pass `content` to post the opening message in the same call.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      page_id: { type: "number" },
+      block_id: {
+        type: "number",
+        description: "ComponentNode id of the block to anchor the comment to.",
+      },
+      content: { type: "string", description: "Optional opening message." },
+      participants: {
+        type: "array",
+        items: { type: "string" },
+        description: 'Names of AI users or people to add, e.g. ["Kira", "Kara Raynoha"].',
+      },
+    },
+    required: ["page_id", "block_id"],
+  },
+  execute: async (ctx, input) => {
+    const pageId = Number(input.page_id);
+    const page = await getPageRow(ctx.transport, pageId);
+    if (!page) return JSON.stringify({ ok: false, error: "Page not found" });
+    const participants = Array.isArray(input.participants)
+      ? (input.participants as unknown[]).map(String)
+      : [];
+    return JSON.stringify(
+      await createThread(ctx.transport, {
+        pageId,
+        blockId: Number(input.block_id),
+        participants,
+        content: input.content === undefined ? undefined : String(input.content),
+      }),
+    );
   },
 };
 
@@ -729,6 +776,7 @@ export function buildToolRegistry(): McpToolEntry[] {
     updatePageTitleTool,
     setPageThemeTool,
     getPageThemeTool,
+    createThreadTool,
     listPageThreadsTool,
     postToThreadTool,
     resolveThreadTool,

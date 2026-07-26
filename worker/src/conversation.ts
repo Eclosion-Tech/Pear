@@ -171,7 +171,7 @@ function isSystemTrigger(msg: ConversationMessageRow): boolean {
 }
 
 /**
- * Maximum consecutive AI-authored messages before AI→AI wakes stop.
+ * Fallback hop budget when the workspace has not set one.
  *
  * The hard backstop under the cooperative signals. Mention-gating, resolving a
  * thread, and thumbs-up all depend on the model *choosing* to stop, which
@@ -179,8 +179,35 @@ function isSystemTrigger(msg: ConversationMessageRow): boolean {
  * tagging each other ("thanks @X, anything else?") loop forever and bill for it.
  * Any human message resets the budget, which matches the intent: agents
  * collaborating on a human's behalf, not unattended.
+ *
+ * This is the *default*; the live value comes from the `ai.max_hops` workspace
+ * setting (admin-only, capped server-side). Kept here rather than mirrored in
+ * the module so there is one fallback that cannot drift.
  */
 export const MAX_AI_HOPS = 6;
+
+/** Workspace setting key for the hop budget. */
+const SETTING_AI_MAX_HOPS = "ai.max_hops";
+
+/**
+ * The workspace's configured hop budget, or the default.
+ *
+ * Read per decision rather than cached: an admin lowering the limit because
+ * agents are burning tokens right now should take effect on the next message,
+ * not after a worker restart. The lookup is a scan of a table with a handful of
+ * rows, on a path that already scans conversation history.
+ */
+export function aiHopBudget(conn: ConnLike): number {
+  const table = conn.db.workspace_setting;
+  if (!table) return MAX_AI_HOPS;
+  for (const row of table.iter() as Iterable<{ key: string; valueJson: string }>) {
+    if (row.key !== SETTING_AI_MAX_HOPS) continue;
+    const parsed = Number.parseInt(String(row.valueJson).trim(), 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    return MAX_AI_HOPS;
+  }
+  return MAX_AI_HOPS;
+}
 
 /** Identity hexes of every AI user in the workspace. `ai_user_profile` is a
  * public table with no visibility filter, so the worker sees all of them. */
@@ -270,9 +297,10 @@ export function shouldWakeFor(
 
   if (!addressesSelf(msg, selfHex)) return false;
 
-  if (aiHopDepth(conn, msg.conversationId, aiHexes) >= MAX_AI_HOPS) {
+  const budget = aiHopBudget(conn);
+  if (aiHopDepth(conn, msg.conversationId, aiHexes) >= budget) {
     console.warn(
-      `[conversation] AI hop budget (${MAX_AI_HOPS}) reached in conversation ${msg.conversationId}; not waking. A human message resets it.`,
+      `[conversation] AI hop budget (${budget}) reached in conversation ${msg.conversationId}; not waking. A human message resets it.`,
     );
     return false;
   }

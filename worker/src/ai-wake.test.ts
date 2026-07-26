@@ -16,7 +16,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { MAX_AI_HOPS, aiHopDepth, shouldWakeFor } from "./conversation.js";
+import { MAX_AI_HOPS, aiHopBudget, aiHopDepth, shouldWakeFor } from "./conversation.js";
 
 const HUMAN = "aa" + "0".repeat(62);
 const AI_SELF = "bb" + "0".repeat(62);
@@ -47,9 +47,14 @@ function msg(
 }
 
 /** Minimal ConnLike: the profile table and the message table. */
-function fakeConn(messages: unknown[], aiHexes: string[] = [AI_SELF, AI_OTHER]) {
+function fakeConn(
+  messages: unknown[],
+  aiHexes: string[] = [AI_SELF, AI_OTHER],
+  settings: Array<{ key: string; valueJson: string }> = [],
+) {
   return {
     db: {
+      workspace_setting: { iter: () => settings },
       ai_user_profile: {
         iter: () =>
           aiHexes.map((hex) => ({
@@ -158,4 +163,36 @@ test("a human stepping in re-enables waking after the budget is spent", () => {
   history.push(trigger);
 
   assert.equal(shouldWakeFor(fakeConn(history), trigger, AI_SELF), true);
+});
+
+// ── configurable hop budget ───────────────────────────────────────────────────
+
+test("falls back to the default budget when the workspace has not set one", () => {
+  assert.equal(aiHopBudget(fakeConn([])), MAX_AI_HOPS);
+});
+
+test("uses the workspace setting when present", () => {
+  const conn = fakeConn([], [AI_SELF, AI_OTHER], [{ key: "ai.max_hops", valueJson: "2" }]);
+  assert.equal(aiHopBudget(conn), 2);
+});
+
+test("a malformed or zero setting falls back rather than removing the brake", () => {
+  for (const bad of ["", "abc", "0", "-3"]) {
+    const conn = fakeConn([], [AI_SELF, AI_OTHER], [{ key: "ai.max_hops", valueJson: bad }]);
+    assert.equal(aiHopBudget(conn), MAX_AI_HOPS);
+  }
+});
+
+test("a lowered budget actually stops waking sooner", () => {
+  const history: unknown[] = [
+    msg(AI_OTHER, "one", 1n, [AI_SELF]),
+    msg(AI_SELF, "two", 1n, [AI_OTHER]),
+  ];
+  const trigger = msg(AI_OTHER, "three", 1n, [AI_SELF]);
+  history.push(trigger);
+
+  // Default budget still allows it; a budget of 2 does not.
+  assert.equal(shouldWakeFor(fakeConn(history), trigger, AI_SELF), true);
+  const tight = fakeConn(history, [AI_SELF, AI_OTHER], [{ key: "ai.max_hops", valueJson: "2" }]);
+  assert.equal(shouldWakeFor(tight, trigger, AI_SELF), false);
 });

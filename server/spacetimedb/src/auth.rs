@@ -375,3 +375,108 @@ pub fn set_user_preference(
     }
     Ok(())
 }
+
+// ============================================================
+// Workspace settings
+// ============================================================
+
+pub(crate) fn next_workspace_setting_id(ctx: &ReducerContext) -> u64 {
+    alloc_id(ctx, "workspace_setting", || {
+        ctx.db
+            .workspace_setting()
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
+    })
+}
+
+/// Workspace-wide policy, as opposed to `UserPreference` which is per-person.
+///
+/// Some knobs govern how the workspace behaves for everyone — notably how far
+/// an AI-to-AI exchange may run before it stops waking anyone. That is not a
+/// personal preference: one member raising their own limit would change what
+/// agents do in threads other people read, and it needs to be inspectable by
+/// whoever is accountable for the token spend.
+///
+/// Deliberately a generic key/value table rather than a column per knob, so a
+/// new policy needs no migration. Values are JSON so a knob can grow structure
+/// later without changing the shape here.
+#[table(accessor = workspace_setting, public)]
+pub struct WorkspaceSetting {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[unique]
+    pub key: String,
+    pub value_json: String,
+    pub updated_by: Identity,
+    pub updated_at: Timestamp,
+}
+
+/// Key for the AI-to-AI hop budget. See `MAX_AI_HOPS` in the worker.
+pub const SETTING_AI_MAX_HOPS: &str = "ai.max_hops";
+
+/// Ceiling on the configurable hop budget. The *default* when unset lives with
+/// the consumer (the worker's `MAX_AI_HOPS`), so there is one fallback rather
+/// than two that can drift.
+///
+///
+/// A setting is not an escape hatch: the point of the budget is that a runaway
+/// agent exchange is bounded, and a workspace that sets it to a million has
+/// removed the brake while believing it still has one. High enough to be
+/// generous, low enough to stay a brake.
+pub const AI_MAX_HOPS_CEILING: u32 = 50;
+
+/// Set a workspace-wide setting. Admin-only: this is policy, not preference.
+#[reducer]
+pub fn set_workspace_setting(
+    ctx: &ReducerContext,
+    key: String,
+    value_json: String,
+) -> Result<(), String> {
+    if key.trim().is_empty() {
+        return Err("setting key cannot be empty".to_string());
+    }
+    if !sender_is_admin(ctx) {
+        return Err("Only a workspace admin can change workspace settings".to_string());
+    }
+
+    // Validate the knobs we know about, so a bad value is rejected at the
+    // boundary rather than silently falling back to a default at read time —
+    // an admin who sets a limit should be told it did not take.
+    if key == SETTING_AI_MAX_HOPS {
+        let parsed: u32 = value_json
+            .trim()
+            .parse()
+            .map_err(|_| format!("{SETTING_AI_MAX_HOPS} must be a whole number"))?;
+        if parsed == 0 {
+            return Err(format!(
+                "{SETTING_AI_MAX_HOPS} must be at least 1; use 1 to allow a single AI reply"
+            ));
+        }
+        if parsed > AI_MAX_HOPS_CEILING {
+            return Err(format!(
+                "{SETTING_AI_MAX_HOPS} may not exceed {AI_MAX_HOPS_CEILING} — the budget exists to bound a runaway exchange"
+            ));
+        }
+    }
+
+    if let Some(existing) = ctx.db.workspace_setting().key().find(&key) {
+        ctx.db.workspace_setting().id().update(WorkspaceSetting {
+            value_json,
+            updated_by: ctx.sender(),
+            updated_at: ctx.timestamp,
+            ..existing
+        });
+    } else {
+        ctx.db.workspace_setting().insert(WorkspaceSetting {
+            id: next_workspace_setting_id(ctx),
+            key,
+            value_json,
+            updated_by: ctx.sender(),
+            updated_at: ctx.timestamp,
+        });
+    }
+    Ok(())
+}

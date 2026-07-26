@@ -56,6 +56,9 @@ class FakeStdb implements StdbTransport {
     id: number; pageId: number | null; blockAnchor: number | null; kind: number; status: number;
   }> = [];
   convMessages: Array<{ id: number; conversationId: number; content: string }> = [];
+  conversationParticipants: Array<{ conversationId: number; identity: string }> = [];
+  aiProfiles: Array<{ identity: string; display_name: string }> = [];
+  users: Array<{ identity: string; name: string }> = [];
   aiUserConfig: Array<{ id: number }> = [{ id: 7 }];
   aiUserMemory: Array<{ aiUserId: number; rootPageId: number }> = [];
   snapshots: Array<{ id: number; pageId: number }> = [];
@@ -71,6 +74,7 @@ class FakeStdb implements StdbTransport {
     ["database_schema", 100],
     ["property_definition", 600],
     ["page_snapshot", 10],
+    ["conversation", 500],
   ]);
   /** Extra ids to burn per insert_component — simulates a concurrent writer. */
   interleavePerInsert = 0;
@@ -202,6 +206,12 @@ class FakeStdb implements StdbTransport {
           property_definition_id: v.propDefId,
           value: v.value,
         })) as Row[];
+    }
+    if (q.includes("FROM ai_user_profile")) {
+      return this.aiProfiles as Row[];
+    }
+    if (q.includes("FROM user")) {
+      return this.users as Row[];
     }
     if (q.includes("FROM conversation_message")) {
       return this.convMessages.map((m) => ({
@@ -383,6 +393,31 @@ class FakeStdb implements StdbTransport {
           );
         }
         this.pageContent.set(Number(pageId), content);
+        return;
+      }
+      case "create_conversation": {
+        const [pageOpt, identities, anchorOpt] = args as [
+          { some?: number } | unknown[],
+          string[],
+          { some?: number } | unknown[],
+        ];
+        const unwrap = (v: unknown): number | null => {
+          if (v && typeof v === "object" && "some" in (v as Record<string, unknown>)) {
+            return Number((v as { some: number }).some);
+          }
+          return null;
+        };
+        const pid = unwrap(pageOpt);
+        if (pid !== null && !this.pages.some((p) => p.id === pid)) fail("Page not found");
+        const id = this.alloc("conversation");
+        this.conversations.push({
+          id,
+          pageId: pid,
+          blockAnchor: unwrap(anchorOpt),
+          kind: 0,
+          status: 0,
+        });
+        this.conversationParticipants.push(...(identities ?? []).map((i) => ({ conversationId: id, identity: String(i) })));
         return;
       }
       case "send_addressed_message": {
@@ -794,6 +829,61 @@ describe("comment threads", () => {
     expect((await run(fake, "post_to_thread", { conversation_id: 1, content: "more" })).ok).toBe(true);
   });
 
+
+  test("create_thread anchors a new thread and posts the opening message", async () => {
+    const fake = new FakeStdb();
+    seedThreads(fake);
+    fake.aiProfiles.push({ identity: "0xkira", display_name: "Kira" });
+    fake.users.push({ identity: "0xkara", name: "Kara Raynoha" });
+
+    const res = await run(fake, "create_thread", {
+      page_id: 900,
+      block_id: 2001,
+      content: "@Kira does this section still hold?",
+      participants: ["Kira", "Kara Raynoha"],
+    });
+
+    expect(res.ok).toBe(true);
+    const cid = res.conversation_id as number;
+    const conv = fake.conversations.find((c) => c.id === cid)!;
+    expect(conv.pageId).toBe(900);
+    expect(conv.blockAnchor).toBe(2001);
+    // Both an AI teammate and a person were seeded — tagging a person is how
+    // they find out something needs them.
+    const seeded = fake.conversationParticipants
+      .filter((p) => p.conversationId === cid)
+      .map((p) => p.identity)
+      .sort();
+    expect(seeded).toEqual(["0xkara", "0xkira"]);
+    expect(fake.convMessages.at(-1)!.content).toContain("@Kira");
+  });
+
+  test("create_thread rejects an unknown participant rather than silently dropping them", async () => {
+    const fake = new FakeStdb();
+    seedThreads(fake);
+    fake.aiProfiles.push({ identity: "0xkira", display_name: "Kira" });
+    const before = fake.conversations.length;
+
+    const res = await run(fake, "create_thread", {
+      page_id: 900,
+      block_id: 2001,
+      participants: ["Nobody"],
+    });
+
+    expect(res.ok).toBe(false);
+    expect(String(res.error)).toMatch(/Unknown participant/i);
+    // Nothing was created — a half-made thread would be worse than a clear failure.
+    expect(fake.conversations.length).toBe(before);
+  });
+
+  test("create_thread reports a missing page", async () => {
+    const fake = new FakeStdb();
+    seedThreads(fake);
+    const res = await run(fake, "create_thread", { page_id: 424242, block_id: 1 });
+    expect(res.ok).toBe(false);
+    expect(String(res.error)).toMatch(/not found/i);
+  });
+
   test("reducer rejections surface as ok:false", async () => {
     const fake = new FakeStdb();
     seedThreads(fake);
@@ -810,6 +900,7 @@ describe("registry", () => {
     expect([...tools.keys()].sort()).toEqual([
       "add_property",
       "create_page",
+      "create_thread",
       "delete_page",
       "delete_property",
       "get_page",

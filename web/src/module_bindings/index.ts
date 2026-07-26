@@ -202,6 +202,7 @@ import SetSharedContextReducer from "./set_shared_context_reducer";
 import SetUserAdminReducer from "./set_user_admin_reducer";
 import SetUserPreferenceReducer from "./set_user_preference_reducer";
 import SetUserProfileReducer from "./set_user_profile_reducer";
+import SetWorkspaceSettingReducer from "./set_workspace_setting_reducer";
 import SubmitResultReducer from "./submit_result_reducer";
 import TakeSnapshotReducer from "./take_snapshot_reducer";
 import TakeSnapshotWithContentReducer from "./take_snapshot_with_content_reducer";
@@ -298,6 +299,7 @@ import SensorRegistryRow from "./sensor_registry_table";
 import StructuralSensorFindingRow from "./structural_sensor_finding_table";
 import UserRow from "./user_table";
 import UserPreferenceRow from "./user_preference_table";
+import WorkspaceSettingRow from "./workspace_setting_table";
 
 /** Type-only namespace exports for generated type groups. */
 
@@ -1184,6 +1186,21 @@ const tablesSchema = __schema({
       { name: 'user_preference_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, UserPreferenceRow),
+  workspace_setting: __table({
+    name: 'workspace_setting',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'key', algorithm: 'btree', columns: [
+        'key',
+      ] },
+    ],
+    constraints: [
+      { name: 'workspace_setting_id_key', constraint: 'unique', columns: ['id'] },
+      { name: 'workspace_setting_key_key', constraint: 'unique', columns: ['key'] },
+    ],
+  }, WorkspaceSettingRow),
   ai_extension_runtime: __table({
     name: 'ai_extension_runtime',
     indexes: [
@@ -1370,6 +1387,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_user_admin", SetUserAdminReducer),
   __reducerSchema("set_user_preference", SetUserPreferenceReducer),
   __reducerSchema("set_user_profile", SetUserProfileReducer),
+  __reducerSchema("set_workspace_setting", SetWorkspaceSettingReducer),
   __reducerSchema("submit_result", SubmitResultReducer),
   __reducerSchema("take_snapshot", TakeSnapshotReducer),
   __reducerSchema("take_snapshot_with_content", TakeSnapshotWithContentReducer),

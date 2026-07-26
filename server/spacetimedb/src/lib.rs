@@ -48,7 +48,8 @@ pub use crate::api_endpoints::{
     DatabaseRowMarker, HttpMethod, PropertyValueInput,
 };
 pub use crate::auth::{
-    user, user_credential, user_preference, User, UserCredential, UserPreference,
+    user, user_credential, user_preference, workspace_setting, User, UserCredential,
+    UserPreference, WorkspaceSetting,
 };
 pub use crate::automations::{
     automation_action, automation_capability, automation_condition, automation_event_queue,

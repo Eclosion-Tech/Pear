@@ -556,6 +556,12 @@ pub fn create_conversation(
 ) -> Result<(), String> {
     if let Some(pid) = page_id {
         ctx.db.page().id().find(pid).ok_or("Page not found")?;
+        // Starting a thread on a page is a write to that page's surface, so it
+        // needs the same authority as editing it. Previously unguarded, which
+        // was survivable only because no agent could reach this reducer — that
+        // stops being true the moment `create_thread` is on the MCP surface.
+        // Open-by-default, so this is a no-op on pages without access rules.
+        require_page_write(ctx, pid)?;
     }
     // A block anchor only makes sense for a page-attached thread.
     if block_anchor.is_some() && page_id.is_none() {

@@ -32,7 +32,7 @@ use crate::{
     orcha_shared_context, orcha_task, orcha_usage_event, page, page_access_request,
     page_access_rule, page_content, page_property_value, page_property_value_history,
     page_snapshot, page_yjs_state, property_definition, review_agent_binding, review_annotation,
-    structural_sensor_finding, user, user_preference,
+    structural_sensor_finding, user, user_preference, workspace_setting,
 };
 use crate::{
     AccessRequestStatus, AiEvaluation, AiPrimitive, AiUserConfig, AiUserProfile, AiUserRole,
@@ -69,6 +69,7 @@ const IMPORT_SESSION_ID: u64 = 1;
 const IMPORT_V2_TABLES: &[&str] = &[
     "user",
     "user_preference",
+    "workspace_setting",
     "page",
     "page_content",
     "page_yjs_state",
@@ -406,6 +407,7 @@ fn import_rows(ctx: &ReducerContext, table_name: &str, arr: &[Value]) -> Result<
     let counts: (u64, u64) = match table_name {
         "user" => plain!(user, decode_user),
         "user_preference" => plain!(user_preference, decode_user_preference),
+        "workspace_setting" => plain!(workspace_setting, decode_workspace_setting),
         "page" => plain!(page, decode_page),
         "page_content" => plain!(page_content, decode_page_content),
         "page_yjs_state" => plain!(page_yjs_state, decode_page_yjs_state),

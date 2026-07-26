@@ -19,7 +19,7 @@ use crate::{
     PagePropertyValueHistory, PageSnapshot, PageType, PageYjsState, ParticipantRole, Permission,
     Principal, PropertyDefinition, PropertyType, PropertyValue, ReviewAgentBinding,
     ReviewAnnotation, ReviewMode, ReviewSeverity, ReviewSubject, SnapshotType, User,
-    UserPreference, ViewType,
+    UserPreference, ViewType, WorkspaceSetting,
 };
 use serde_json::Value;
 use spacetimedb::{Identity, Timestamp};
@@ -399,6 +399,17 @@ pub(super) fn decode_user_preference(v: &Value) -> Result<UserPreference, String
         identity: decode_identity(m.get("identity").ok_or("identity")?)?,
         key: string_at(m, "key")?,
         value_json: string_at(m, "valueJson")?,
+        updated_at: decode_timestamp(m.get("updatedAt").ok_or("updatedAt")?)?,
+    })
+}
+
+pub(super) fn decode_workspace_setting(v: &Value) -> Result<WorkspaceSetting, String> {
+    let m = obj(v, "workspace_setting")?;
+    Ok(WorkspaceSetting {
+        id: u64_at(m, "id")?,
+        key: string_at(m, "key")?,
+        value_json: string_at(m, "valueJson")?,
+        updated_by: decode_identity(m.get("updatedBy").ok_or("updatedBy")?)?,
         updated_at: decode_timestamp(m.get("updatedAt").ok_or("updatedAt")?)?,
     })
 }
