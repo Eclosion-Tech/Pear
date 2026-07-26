@@ -40,7 +40,7 @@ import { useCreateConversation } from "@/src/hooks/useConversations";
 import { useSpacetimeDB } from "spacetimedb/react";
 import { registerPearBuiltinRenderers } from "./built-in";
 import { PEAR_SLASH_ITEMS, slashItemsForDefs } from "./pearSlashItems";
-import { usePagesQueryResolver } from "@/src/lib/repeater/pagesResolver";
+import { useQueryResolver } from "@/src/lib/repeater/queryResolver";
 
 registerCoreBlocks();
 registerPearBuiltinRenderers();
@@ -320,7 +320,7 @@ export function ComponentTreeRenderer({
 
   // Supplies rows to `Repeater` nodes (custom-view runtime, ADR D1). Stable
   // identity, so including it here does not churn the config memo.
-  const queryResolver = usePagesQueryResolver();
+  const queryResolver = useQueryResolver();
 
   const config = useMemo(
     () => ({

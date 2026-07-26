@@ -24,84 +24,12 @@
  */
 
 import type { Page } from "@/src/module_bindings/types";
-import type { DataSourceConfig, Predicate, RepeaterRow, SortRule } from "@eclosion-tech/pulp";
+import type { DataSourceConfig, RepeaterRow } from "@eclosion-tech/pulp";
+import { applyFilter, comparatorFor } from "./rowFilter";
 
 /** Hidden subtrees (AI-user memory roots and the like) never surface in views. */
 function isVisible(page: Page): boolean {
   return page.deletedAt == null && !page.isHidden;
-}
-
-/**
- * Read a property for filtering/sorting. Tagged enums (`pageType`) compare by
- * their tag, so `{ property: "pageType", op: "eq", value: "Database" }` works.
- */
-function propertyOf(page: Page, property: string): unknown {
-  const v = (page as unknown as Record<string, unknown>)[property];
-  if (v !== null && typeof v === "object" && "tag" in (v as Record<string, unknown>)) {
-    return (v as { tag: unknown }).tag;
-  }
-  return v;
-}
-
-function asComparable(v: unknown): string | number | null {
-  if (v == null) return null;
-  if (typeof v === "bigint") return Number(v);
-  if (typeof v === "number" || typeof v === "string") return v;
-  if (typeof v === "boolean") return v ? 1 : 0;
-  if (typeof v === "object" && "microsSinceUnixEpoch" in (v as Record<string, unknown>)) {
-    return Number((v as { microsSinceUnixEpoch: bigint }).microsSinceUnixEpoch);
-  }
-  return String(v);
-}
-
-function isEmptyValue(v: unknown): boolean {
-  return v == null || v === "" || (Array.isArray(v) && v.length === 0);
-}
-
-function matches(page: Page, p: Predicate): boolean {
-  const actual = propertyOf(page, p.property);
-
-  if (p.op === "isEmpty") return isEmptyValue(actual);
-  if (p.op === "contains") {
-    if (actual == null) return false;
-    return String(actual).toLowerCase().includes(String(p.value ?? "").toLowerCase());
-  }
-
-  const a = asComparable(actual);
-  // Ids are bigint-backed; a config written by hand or by an agent will often
-  // carry them as strings, so coerce rather than silently never matching.
-  const b =
-    typeof p.value === "string" && typeof actual === "bigint"
-      ? Number(p.value)
-      : asComparable(p.value ?? null);
-
-  switch (p.op) {
-    case "eq":
-      return a === b;
-    case "neq":
-      return a !== b;
-    case "lt":
-      return a !== null && b !== null && a < b;
-    case "gt":
-      return a !== null && b !== null && a > b;
-  }
-}
-
-function compareBy(sort: SortRule[]) {
-  return (x: Page, y: Page): number => {
-    for (const rule of sort) {
-      const a = asComparable(propertyOf(x, rule.property));
-      const b = asComparable(propertyOf(y, rule.property));
-      if (a === b) continue;
-      // Rows missing a value sort last regardless of direction, matching the
-      // grid's existing behaviour so the two views agree.
-      if (a === null) return 1;
-      if (b === null) return -1;
-      const cmp = a < b ? -1 : 1;
-      return rule.dir === "desc" ? -cmp : cmp;
-    }
-    return 0;
-  };
 }
 
 /** Ids of every descendant of `rootId`, and nothing else. */
@@ -148,17 +76,22 @@ export function evaluatePagesQuery(
     scoped = pages.filter((p) => (p.parentId ?? null) === parentId && isVisible(p));
   }
 
-  for (const p of config.filter ?? []) {
-    scoped = scoped.filter((page) => matches(page, p));
-  }
-
-  scoped =
+  // Filtering and sorting are shared with the database resolver so a predicate
+  // behaves identically whichever entity produced the row.
+  let rows = applyFilter(scoped as unknown as RepeaterRow[], config.filter);
+  rows =
     config.sort && config.sort.length > 0
-      ? scoped.slice().sort(compareBy(config.sort))
-      : scoped.slice().sort((a, b) => a.sortOrder - b.sortOrder);
+      ? rows.slice().sort(comparatorFor(config.sort))
+      : rows
+          .slice()
+          .sort(
+            (a, b) =>
+              Number((a as unknown as Page).sortOrder) -
+              Number((b as unknown as Page).sortOrder),
+          );
 
-  if (config.limit !== undefined) scoped = scoped.slice(0, config.limit);
+  if (config.limit !== undefined) rows = rows.slice(0, config.limit);
 
   // Cast, not map — see the identity note above.
-  return scoped as unknown as RepeaterRow[];
+  return rows;
 }

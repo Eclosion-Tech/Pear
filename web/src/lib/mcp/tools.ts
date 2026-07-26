@@ -15,6 +15,12 @@
 import type { McpContext, McpToolEntry } from "./types";
 import { getPageRow, listChildren, allLivePages, getPageContent } from "./pages";
 import { readComponentTreeDoc } from "./component-tree";
+import {
+  deleteComponent,
+  getPageComponents,
+  insertComponent,
+  updateComponentProps,
+} from "./authoring";
 import { getPageTheme, setPageTheme } from "./theme";
 import {
   createThread,
@@ -173,6 +179,103 @@ const updatePageContentTool: McpToolEntry = {
     const result = await writePageContent(ctx.transport, page, markdown, { snapshot: true });
     return JSON.stringify(result);
   },
+};
+
+const getPageComponentsTool: McpToolEntry = {
+  name: "get_page_components",
+  description:
+    "Read a page's component tree: every block with its component_id, component_type, order and " +
+    "parsed props, nested as it renders. Use this before authoring UI — you need a component_id to " +
+    "insert under, and current props to modify without dropping keys. " +
+    "This is the structural view; `get_page` returns rendered text instead.",
+  inputSchema: {
+    type: "object",
+    properties: { page_id: { type: "number" } },
+    required: ["page_id"],
+  },
+  execute: async (ctx, input) =>
+    JSON.stringify(await getPageComponents(ctx.transport, Number(input.page_id))),
+};
+
+const insertComponentTool: McpToolEntry = {
+  name: "insert_component",
+  description:
+    "Add a component to a page's tree — the way to build UI rather than prose. " +
+    "`update_page_content` only writes markdown-shaped blocks; this reaches the rest of the " +
+    "registry (Container, Repeater, Button, Form, Input, PageLink, Image) and is the only way to " +
+    "set props such as a Repeater's `dataSource` or a component's `style` tokens. " +
+    "Build nested structures by inserting the parent first and passing the returned component_id " +
+    "as parent_id for its children. Find parent ids with `get_page_components`. " +
+    "Returns the new component_id.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      parent_id: {
+        type: "number",
+        description: "component_id of the parent — the page's root container, or a container you just created.",
+      },
+      component_type: {
+        type: "string",
+        description: "Registered type, e.g. Container, Repeater, PageLink, Button, RichText.",
+      },
+      props: {
+        type: "object",
+        description:
+          'Props for the component, e.g. {"layout":"stack","style":{"indent":"md"}} or a Repeater\'s ' +
+          '{"dataSource":{"v":1,"entity":{"kind":"pages","parentId":68}}}.',
+      },
+      after_sibling_id: {
+        type: "number",
+        description: "Insert after this sibling. Omit to append at the end.",
+      },
+    },
+    required: ["parent_id", "component_type"],
+  },
+  execute: async (ctx, input) =>
+    JSON.stringify(
+      await insertComponent(ctx.transport, {
+        parentId: Number(input.parent_id),
+        componentType: String(input.component_type ?? ""),
+        props: input.props ?? {},
+        afterSiblingId:
+          input.after_sibling_id === undefined ? undefined : Number(input.after_sibling_id),
+      }),
+    ),
+};
+
+const updateComponentPropsTool: McpToolEntry = {
+  name: "update_component_props",
+  description:
+    "Replace a component's props — use it to configure a Repeater's dataSource, set style tokens, " +
+    "or change any component's settings. This REPLACES the whole props object, so read the current " +
+    "props with `get_page_components` and merge rather than sending only the keys you are changing.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      component_id: { type: "number" },
+      props: { type: "object", description: "The complete new props object." },
+    },
+    required: ["component_id", "props"],
+  },
+  execute: async (ctx, input) =>
+    JSON.stringify(
+      await updateComponentProps(ctx.transport, Number(input.component_id), input.props ?? {}),
+    ),
+};
+
+const deleteComponentTool: McpToolEntry = {
+  name: "delete_component",
+  description:
+    "Remove a component from a page's tree. Deleting a container removes what it holds. " +
+    "Note that a comment thread anchored to a deleted block detaches — it stays reachable in the " +
+    "page's gutter and re-attaches if the block is restored.",
+  inputSchema: {
+    type: "object",
+    properties: { component_id: { type: "number" } },
+    required: ["component_id"],
+  },
+  execute: async (ctx, input) =>
+    JSON.stringify(await deleteComponent(ctx.transport, Number(input.component_id))),
 };
 
 const createThreadTool: McpToolEntry = {
@@ -804,6 +907,10 @@ export function buildToolRegistry(): McpToolEntry[] {
     updatePageTitleTool,
     setPageThemeTool,
     getPageThemeTool,
+    getPageComponentsTool,
+    insertComponentTool,
+    updateComponentPropsTool,
+    deleteComponentTool,
     createThreadTool,
     listPageThreadsTool,
     readThreadTool,

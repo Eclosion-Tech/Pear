@@ -28,6 +28,21 @@ export const PEAR_REGISTRY_REQUIRED_TYPES = [
 export const PEAR_SLASH_ITEMS: SlashMenuItem[] = [
   ...SPRINT_3B_SLASH_ITEMS,
   {
+    id: "repeater",
+    section: "Data",
+    label: "Repeater",
+    description:
+      "Repeat a template for every row of a data source. Blocks placed inside become the template.",
+    componentType: "Repeater",
+    // A repeater with no dataSource renders a visible "invalid data source"
+    // notice rather than nothing, so an unconfigured one is obvious and
+    // recoverable instead of silently blank.
+    defaultProps: {
+      dataSource: { v: 1, entity: { kind: "pages", parentId: null } },
+    },
+    searchTokens: ["repeat", "repeater", "list", "rows", "data", "query", "view"],
+  },
+  {
     id: "bullet-list",
     section: "Lists",
     label: "Bullet list",

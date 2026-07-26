@@ -295,6 +295,48 @@ describe("identity preservation (the 12x that D3 turns on)", () => {
   });
 });
 
+describe("row-scoped actions (D6 v1 interactivity)", () => {
+  test("a Button's nested action prop resolves per row", () => {
+    // This is what makes a materialized list actually clickable: `navigate` is
+    // read-only in effect, so it needs none of M5's capability model, but the
+    // row id has to survive into a *nested* prop object for it to work.
+    const tree = treeOf([
+      node(REPEATER, null, "Repeater", {}),
+      node(200n, REPEATER, "Card", {}, 0),
+      node(201n, 200n, "Button", {
+        label: "Open",
+        action: { type: "navigate", pageId: "{{row.id}}" },
+      }, 0),
+    ]);
+    const out = materializeNaive(REPEATER, SURFACE, buildTemplate(tree, REPEATER), [
+      row(41n),
+      row(42n),
+    ]);
+    const actions = flatten(out)
+      .filter((n) => n.componentType === "Button")
+      .map((n) => JSON.parse(n.props).action);
+
+    assertNavigate(actions[0], "41");
+    assertNavigate(actions[1], "42");
+  });
+
+  test("a non-placeholder action prop is left alone", () => {
+    const tree = treeOf([
+      node(REPEATER, null, "Repeater", {}),
+      node(200n, REPEATER, "Button", {
+        label: "Docs",
+        action: { type: "open_url", url: "https://example.com/docs" },
+      }),
+    ]);
+    const out = materializeNaive(REPEATER, SURFACE, buildTemplate(tree, REPEATER), [row(1n)]);
+    expect(JSON.parse(out[0].props).action.url).toBe("https://example.com/docs");
+  });
+});
+
+function assertNavigate(action: unknown, expectedPageId: string) {
+  expect(action).toEqual({ type: "navigate", pageId: expectedPageId });
+}
+
 describe("rooting rules", () => {
   test("a flat template ignores parentId — every row renders", () => {
     // The M4 shape: children of a project page all carry parentId = the
