@@ -19,6 +19,7 @@ import { getPageTheme, setPageTheme } from "./theme";
 import {
   createThread,
   listPageThreads,
+  readThread,
   postToThread,
   reopenThread,
   resolveThread,
@@ -249,6 +250,33 @@ const listPageThreadsTool: McpToolEntry = {
       input.include_resolved === true,
     );
     return JSON.stringify({ ok: true, page_id: pageId, threads });
+  },
+};
+
+const readThreadTool: McpToolEntry = {
+  name: "read_thread",
+  description:
+    "Read the messages in a comment thread, oldest to newest, with each author resolved to a name. " +
+    "Use it after `list_page_threads` to see what a discussion actually says before replying. " +
+    "Long threads return the most recent messages (the tail is what a reply needs) with " +
+    "truncated: true.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      conversation_id: { type: "number" },
+      limit: {
+        type: "number",
+        description: "Max messages to return, newest-biased. Defaults to 50.",
+      },
+    },
+    required: ["conversation_id"],
+  },
+  execute: async (ctx, input) => {
+    const rawLimit = Number(input.limit);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 200) : 50;
+    return JSON.stringify(
+      await readThread(ctx.transport, Number(input.conversation_id), limit),
+    );
   },
 };
 
@@ -778,6 +806,7 @@ export function buildToolRegistry(): McpToolEntry[] {
     getPageThemeTool,
     createThreadTool,
     listPageThreadsTool,
+    readThreadTool,
     postToThreadTool,
     resolveThreadTool,
     reopenThreadTool,

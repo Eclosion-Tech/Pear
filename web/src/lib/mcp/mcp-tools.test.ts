@@ -55,7 +55,9 @@ class FakeStdb implements StdbTransport {
   conversations: Array<{
     id: number; pageId: number | null; blockAnchor: number | null; kind: number; status: number;
   }> = [];
-  convMessages: Array<{ id: number; conversationId: number; content: string }> = [];
+  convMessages: Array<{
+    id: number; conversationId: number; content: string; senderHex?: string;
+  }> = [];
   conversationParticipants: Array<{ conversationId: number; identity: string }> = [];
   aiProfiles: Array<{ identity: string; display_name: string }> = [];
   users: Array<{ identity: string; name: string }> = [];
@@ -218,6 +220,8 @@ class FakeStdb implements StdbTransport {
         id: m.id,
         conversation_id: m.conversationId,
         content: m.content,
+        sender: [0, m.senderHex ?? "0xhuman"],
+        created_at: [NOW_MICROS],
       })) as Row[];
     }
     if (q.includes("FROM conversation")) {
@@ -795,6 +799,47 @@ describe("comment threads", () => {
     expect(t.last_message_preview).toBe("latest here");
   });
 
+
+  test("read_thread returns messages oldest-first with authors resolved", async () => {
+    const fake = new FakeStdb();
+    seedThreads(fake);
+    fake.aiProfiles.push({ identity: "0xkira", display_name: "Kira" });
+    fake.users.push({ identity: "0xkara", name: "Kara Raynoha" });
+    fake.convMessages.push(
+      { id: 10, conversationId: 1, content: "from a person", senderHex: "0xkara" },
+      { id: 11, conversationId: 1, content: "from an agent", senderHex: "0xkira" },
+    );
+
+    const res = await run(fake, "read_thread", { conversation_id: 1 });
+    expect(res.ok).toBe(true);
+    const msgs = res.messages as Array<{ author: string; is_ai: boolean; content: string }>;
+    expect(msgs.at(-2)!.author).toBe("Kara Raynoha");
+    expect(msgs.at(-2)!.is_ai).toBe(false);
+    expect(msgs.at(-1)!.author).toBe("Kira");
+    expect(msgs.at(-1)!.is_ai).toBe(true);
+  });
+
+  test("read_thread keeps the newest messages when truncating", async () => {
+    const fake = new FakeStdb();
+    seedThreads(fake);
+    for (let i = 0; i < 10; i++) {
+      fake.convMessages.push({ id: 100 + i, conversationId: 1, content: `m${i}` });
+    }
+    const res = await run(fake, "read_thread", { conversation_id: 1, limit: 3 });
+    expect(res.truncated).toBe(true);
+    const msgs = res.messages as Array<{ content: string }>;
+    expect(msgs).toHaveLength(3);
+    // The tail is what a reply needs.
+    expect(msgs.at(-1)!.content).toBe("m9");
+  });
+
+  test("read_thread reports an unknown conversation", async () => {
+    const fake = new FakeStdb();
+    seedThreads(fake);
+    const res = await run(fake, "read_thread", { conversation_id: 4242 });
+    expect(res.ok).toBe(false);
+  });
+
   test("post_to_thread appends a message", async () => {
     const fake = new FakeStdb();
     seedThreads(fake);
@@ -914,6 +959,7 @@ describe("registry", () => {
       "post_to_thread",
       "query_database",
       "read_memory",
+      "read_thread",
       "remember",
       "reopen_thread",
       "resolve_thread",

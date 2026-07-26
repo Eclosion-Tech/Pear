@@ -232,6 +232,95 @@ export async function createThread(
   };
 }
 
+export type ThreadMessage = {
+  message_id: number;
+  author: string;
+  is_ai: boolean;
+  content: string;
+  created_at: string | null;
+};
+
+/**
+ * Read a thread's messages.
+ *
+ * Without this the other tools are half-blind: `list_page_threads` gives a
+ * one-line preview, which is enough to pick a thread and nothing like enough to
+ * answer what it asks. Authors are resolved to names rather than identity hex —
+ * an agent reading a discussion needs to know who said what.
+ */
+export async function readThread(
+  transport: StdbTransport,
+  conversationId: number,
+  limit: number,
+): Promise<
+  | { ok: true; conversation_id: number; status: "active" | "resolved"; messages: ThreadMessage[]; truncated: boolean }
+  | { ok: false; error: string }
+> {
+  const convs = await transport.sql<RawConversation>(
+    `SELECT id, page_id, block_anchor, status, kind FROM conversation`,
+  );
+  const conv = convs.find((c) => Number(c.id) === conversationId);
+  if (!conv) return { ok: false, error: "Conversation not found" };
+
+  const [rows, aiProfiles, people] = await Promise.all([
+    transport.sql<RawMessage & { sender: unknown; created_at?: unknown }>(
+      `SELECT id, conversation_id, sender, content, created_at FROM conversation_message`,
+    ),
+    transport.sql<{ identity: string; display_name: string }>(
+      `SELECT identity, display_name FROM ai_user_profile`,
+    ),
+    transport.sql<{ identity: string; name: string }>(`SELECT identity, name FROM user`),
+  ]);
+
+  const aiByHex = new Map(aiProfiles.map((p) => [String(p.identity), p.display_name]));
+  const personByHex = new Map(people.map((u) => [String(u.identity), u.name]));
+
+  const mine = rows
+    .filter((m) => Number(m.conversation_id) === conversationId)
+    .sort((a, b) => Number(a.id) - Number(b.id));
+
+  const truncated = mine.length > limit;
+  // Keep the NEWEST when truncating: the tail is what a reply needs.
+  const windowed = truncated ? mine.slice(mine.length - limit) : mine;
+
+  const messages: ThreadMessage[] = windowed.map((m) => {
+    // `MessageSender` is `User(Identity)` | `System(String)` — wire shape
+    // `[variantIndex, payload]`.
+    let author = "unknown";
+    let isAi = false;
+    const sender = m.sender as unknown;
+    if (Array.isArray(sender) && sender.length === 2) {
+      if (sender[0] === 0) {
+        const hex = String(Array.isArray(sender[1]) ? sender[1][0] : sender[1]);
+        const ai = aiByHex.get(hex);
+        if (ai) {
+          author = ai;
+          isAi = true;
+        } else {
+          author = personByHex.get(hex) || `${hex.slice(0, 8)}…`;
+        }
+      } else {
+        author = "system";
+      }
+    }
+    return {
+      message_id: Number(m.id),
+      author,
+      is_ai: isAi,
+      content: m.content ?? "",
+      created_at: null,
+    };
+  });
+
+  return {
+    ok: true,
+    conversation_id: conversationId,
+    status: variantIndex(conv.status) === 1 ? "resolved" : "active",
+    messages,
+    truncated,
+  };
+}
+
 export type ThreadActionResult =
   | { ok: true; conversation_id: number; [k: string]: unknown }
   | { ok: false; error: string };

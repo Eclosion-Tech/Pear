@@ -31,6 +31,7 @@ const SCOPE_TOOLS: Record<McpOauthScope, readonly string[]> = {
     "get_page",
     "get_page_theme",
     "list_page_threads",
+    "read_thread",
     "list_child_pages",
     "search_pages",
     "get_schema_id",

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useSpacetimeDB } from "spacetimedb/react";
 import Markdown, { type Components } from "react-markdown";
@@ -947,7 +947,12 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
   const [allSnapshots] = useTable(tables.page_snapshot);
 
   const isActive = conversation.status.tag === "Active";
+  /** Fallback label / the thread's primary agent — used where no single message is in scope. */
   const aiName = aiUser?.displayName ?? "AI";
+  /** Identity hex → profile, so each message can be credited to its real author. */
+  const aiProfileByHex = new Map(
+    allAiProfiles.map((p) => [p.identity.toHexString(), p]),
+  );
 
   const lastMessage = messages[messages.length - 1];
   // After the identity refactor, both human and AI senders are tagged "User";
@@ -975,9 +980,38 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
   });
   const inFlightAiMsgId = inFlightAiMsg?.id;
 
+  // Follow new output only when the reader is already at the bottom. Scrolling
+  // someone back down while they are reading earlier messages — which a
+  // streaming turn does on every token — makes the transcript unreadable
+  // exactly when there is most to read. `pinnedToBottom` is sampled *before*
+  // the DOM grows, so a mid-scroll reader stays put.
+  const pinnedToBottom = useRef(true);
+
   useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      // A small slack so "near enough" counts — landing a pixel short of the
+      // end should not silently stop following.
+      pinnedToBottom.current =
+        el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    };
+    onScroll();
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!pinnedToBottom.current) return;
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages.length, isAiActive, lastMessage?.content, lastMessage?.thinking, lastMessage?.status?.tag]);
+
+  // Opening a thread should always start at the newest message, regardless of
+  // where the previous thread was scrolled to.
+  useLayoutEffect(() => {
+    pinnedToBottom.current = true;
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  }, [conversation.id]);
 
   const uploading = pending.some((a) => a.kind === "image" && a.status === "uploading");
   const readySpecs = toAttachmentSpecs(pending);
@@ -1194,6 +1228,14 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
             senderIdentity!.toHexString() === identity.toHexString();
           const isQueued =
             isHuman && inFlightAiMsgId != null && msg.id > inFlightAiMsgId;
+          // Attribute to whoever actually wrote it. A thread can hold several AI
+          // users, so labelling every AI message with the conversation's first
+          // participant credits the wrong agent as soon as a second one replies.
+          const senderName = isHuman
+            ? "User"
+            : (senderIdentity &&
+                aiProfileByHex.get(senderIdentity.toHexString())?.displayName) ??
+              aiName;
 
           return (
             <div key={String(msg.id)} className={`flex ${isMe ? "justify-end" : "justify-start"}`}>
@@ -1208,7 +1250,7 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
               >
                 {!isMe && (
                   <p className="text-xs font-medium mb-0.5 opacity-60">
-                    {isHuman ? "User" : aiName}
+                    {senderName}
                   </p>
                 )}
                 {isHuman ? (
@@ -1227,7 +1269,7 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
                     )}
                   </>
                 ) : (
-                  <AiMessageContent msg={msg} aiName={aiName} />
+                  <AiMessageContent msg={msg} aiName={senderName} />
                 )}
                 {msg.jobId != null && <InlineJobCard jobId={msg.jobId} />}
               </div>

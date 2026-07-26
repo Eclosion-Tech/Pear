@@ -32,6 +32,9 @@ import {
  * finished agent chatter from cluttering a page while leaving it recoverable.
  */
 
+/** Sentinel anchor key for the detached-threads card. */
+const DETACHED_KEY = "__detached__";
+
 type ThreadRow = {
   id: bigint;
   resolved: boolean;
@@ -97,6 +100,20 @@ export function BlockThreadGutter({
   const anchorsKey = [...byBlock.keys()].sort().join(",");
 
   const [positions, setPositions] = useState<{ top: number; threads: BlockThreads }[]>([]);
+  /**
+   * Threads whose anchor block is no longer on the page.
+   *
+   * Block deletion is a *soft* delete that never clears `block_anchor`, so the
+   * node still exists but is filtered out of the render — which used to make the
+   * thread silently vanish while staying Active. Surfacing them detached keeps
+   * the discussion reachable, and because nothing is mutated they re-attach on
+   * their own if the block is restored.
+   *
+   * Deliberately not re-anchored to a sibling: the conversation was about the
+   * deleted block, and silently pointing it at a neighbour would assert
+   * something untrue and would survive an undo.
+   */
+  const [detached, setDetached] = useState<BlockThreads[]>([]);
   const [openAnchor, setOpenAnchor] = useState<string | null>(null);
   const [showResolved, setShowResolved] = useState<Set<string>>(new Set());
 
@@ -105,14 +122,19 @@ export function BlockThreadGutter({
     if (!container) return;
     const containerTop = container.getBoundingClientRect().top;
     const next: { top: number; threads: BlockThreads }[] = [];
+    const orphans: BlockThreads[] = [];
     for (const threads of byBlock.values()) {
       // pulp renders each block element with id="block-<nodeId>".
       const el = container.querySelector(`[id="block-${threads.anchor}"]`);
-      if (!el) continue;
+      if (!el) {
+        orphans.push(threads);
+        continue;
+      }
       const top = el.getBoundingClientRect().top - containerTop + container.scrollTop;
       next.push({ top, threads });
     }
     setPositions(next);
+    setDetached(orphans);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [containerRef, anchorsKey, byBlock]);
 
@@ -162,12 +184,74 @@ export function BlockThreadGutter({
     };
   }, [openAnchor]);
 
-  if (positions.length === 0) return null;
+  if (positions.length === 0 && detached.length === 0) return null;
+
+  const detachedActive = detached.reduce((n, t) => n + t.active.length, 0);
+  const detachedResolved = detached.reduce((n, t) => n + t.resolved.length, 0);
+  const detachedOpen = openAnchor === DETACHED_KEY;
 
   return (
     // Overlay spans the container; only the controls capture pointer events so
     // the editor underneath stays fully interactive.
     <div className="pointer-events-none absolute inset-0 z-10">
+      {detached.length > 0 && (
+        <div style={{ top: 0 }} className="absolute -right-7">
+          <button
+            onClick={() => setOpenAnchor(detachedOpen ? null : DETACHED_KEY)}
+            className="pointer-events-auto flex h-5 min-w-5 items-center justify-center gap-0.5 rounded-full bg-amber-100 px-1 text-[10px] font-medium text-amber-700 shadow-sm ring-1 ring-amber-300/50 transition-colors hover:bg-amber-200 dark:bg-amber-900/50 dark:text-amber-300 dark:ring-amber-700/50 dark:hover:bg-amber-900/80"
+            title={`${detachedActive + detachedResolved} thread(s) whose block was deleted`}
+          >
+            ⚠
+            {detachedActive + detachedResolved > 1 && (
+              <span>{detachedActive + detachedResolved}</span>
+            )}
+          </button>
+
+          {detachedOpen && (
+            <div
+              ref={cardRef}
+              className="pointer-events-auto absolute right-0 top-6 z-20 w-64 rounded-md border border-neutral-200 bg-white p-1.5 shadow-lg dark:border-neutral-700 dark:bg-neutral-900"
+            >
+              <p className="px-1.5 py-1 text-[10px] leading-tight text-neutral-500 dark:text-neutral-400">
+                The block these were about was deleted. They will re-attach if it
+                is restored.
+              </p>
+              {detached.flatMap((t) => [...t.active, ...t.resolved]).map((t) => (
+                <div
+                  key={String(t.id)}
+                  className="flex items-center gap-1 rounded px-1.5 py-1 text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                >
+                  <button
+                    onClick={() => {
+                      onOpenThread(t.id);
+                      setOpenAnchor(null);
+                    }}
+                    className="flex-1 truncate text-left text-neutral-700 dark:text-neutral-200"
+                  >
+                    {t.resolved ? (
+                      <span className="text-neutral-400 dark:text-neutral-500">
+                        Resolved by {nameFor(t.resolvedBy)}
+                      </span>
+                    ) : (
+                      <span>Thread #{String(t.id)}</span>
+                    )}
+                  </button>
+                  <button
+                    onClick={() =>
+                      t.resolved
+                        ? reopenConversation({ conversationId: t.id })
+                        : closeConversation({ conversationId: t.id })
+                    }
+                    className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium text-neutral-500 ring-1 ring-neutral-200 transition-colors hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:ring-neutral-700 dark:hover:bg-neutral-700 dark:hover:text-neutral-100"
+                  >
+                    {t.resolved ? "Reopen" : "Resolve"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       {positions.map(({ top, threads }) => {
         const { anchor, active, resolved } = threads;
         // A block whose threads are all resolved shows a muted marker rather
