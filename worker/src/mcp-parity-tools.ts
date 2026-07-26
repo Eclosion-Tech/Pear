@@ -36,6 +36,15 @@ import { wsUriToHttpBase } from "./bridge-sql.js";
  * there too. This names only what was missing.
  */
 const PARITY_TOOL_NAMES = new Set([
+  // Migrated from the worker's own catalogue after a schema diff showed the two
+  // copies had drifted apart in ways that cost the chat surface real ability:
+  // the MCP `create_page` accepts `properties` (set row columns in one call) and
+  // `query_database` accepts `offset` (page through results) — neither of which
+  // the worker's copy had, so an AI user in chat literally could not page a
+  // database. Deleting the duplicate is the fix; patching it would have kept two
+  // copies to keep in step.
+  "create_page",
+  "query_database",
   // Page UI authoring (M2/M4 — the reason a repeater can exist on a page)
   "get_page_components",
   "insert_component",
@@ -49,6 +58,71 @@ const PARITY_TOOL_NAMES = new Set([
   "create_thread",
   "read_thread",
   "list_page_threads",
+  // Page and property CRUD, memory reads. These had a full second
+  // implementation in `tools.ts` reading through the subscribed `conn.db`.
+  // Migrating them is not only de-duplication: the worker's copies verified
+  // their own writes with `waitFor(() => conn.db…)`, i.e. they confirmed a
+  // fire-and-forget reducer landed by polling the subscription — the exact
+  // path known to drop AI-user incrementals under multi-filter RLS (the
+  // reason `bridge-sql.ts` exists, and ticket 14372). The MCP copies read
+  // back over HTTP instead, which is the path that actually reports the
+  // truth.
+  //
+  // Write authorization is NOT weakened by this: `requireChatWriteGrant` runs
+  // in `executeTool` BEFORE parity dispatch, so the chat page-ACL still gates
+  // every one of these. And the transport carries the AI user's own token
+  // (`ai-user-worker.ts` registers it from the same connection), so RLS scope
+  // is identical to what the subscription had.
+  "add_property",
+  "delete_property",
+  "get_schema_id",
+  "list_properties",
+  "update_page_content",
+  "update_page_title",
+  "search_pages",
+  "list_child_pages",
+  "get_page",
+  "delete_page",
+  "restore_page",
+  "move_page",
+  // Both surfaces scope these to the caller's own memory subtree with the same
+  // check and the same error text.
+  "read_memory",
+  "search_memory",
+  // `remember` and `list_memory` had NO chat equivalent, which left the chat
+  // surface holding `mark_memory_consolidated` — "call this at the END of a
+  // memory-consolidation pass" — with no way to write a memory or enumerate the
+  // subtree it was being asked to consolidate. Reading was possible, so the gap
+  // read as "memory is broken" rather than "a tool is missing".
+  "remember",
+  "list_memory",
+  // Batch row write with per-column type coercion. Chat keeps its own
+  // `set_property_value`/`set_property_values` (single-cell and explicitly
+  // typed); this adds the whole-row path MCP already had.
+  "set_row_properties",
+  // Share the implementation but NOT the schema — see AMBIENT_CONVERSATION_TOOLS.
+  "post_to_thread",
+  "resolve_thread",
+  "reopen_thread",
+]);
+
+/**
+ * Tools whose chat schema differs from their MCP schema.
+ *
+ * Chat runs inside a conversation; MCP does not. So `conversation_id` is
+ * required over MCP but optional in chat, where it defaults to the thread the
+ * turn is running in. That is a genuine difference in what the caller must
+ * supply — but it is a difference in the *schema*, not the *behaviour*, so it
+ * does not justify a second implementation. The id is filled in from the turn
+ * context here and the shared implementation runs unchanged.
+ *
+ * An explicit id is still allowed: the module checks participation, so this
+ * cannot reach a thread the AI is not in.
+ */
+const AMBIENT_CONVERSATION_TOOLS = new Set([
+  "post_to_thread",
+  "resolve_thread",
+  "reopen_thread",
 ]);
 
 /**
@@ -87,6 +161,29 @@ function toolsByName(): Map<string, McpToolEntry> {
   return registry;
 }
 
+/**
+ * Drop `conversation_id` from `required` and say what happens when it is
+ * omitted. The property itself stays — an explicit id is still valid.
+ */
+function toChatSchema(schema: unknown): Anthropic.Messages.Tool["input_schema"] {
+  const s = (schema ?? {}) as {
+    properties?: Record<string, unknown>;
+    required?: string[];
+  };
+  return {
+    ...s,
+    properties: {
+      ...s.properties,
+      conversation_id: {
+        type: "number",
+        description:
+          "Defaults to the thread this turn is running in. Pass an id only to act on a different thread.",
+      },
+    },
+    required: (s.required ?? []).filter((r) => r !== "conversation_id"),
+  } as Anthropic.Messages.Tool["input_schema"];
+}
+
 /** Anthropic tool defs for the parity set, converted from the MCP entries. */
 export function getMcpParityToolDefs(): Anthropic.Messages.Tool[] {
   const out: Anthropic.Messages.Tool[] = [];
@@ -95,7 +192,9 @@ export function getMcpParityToolDefs(): Anthropic.Messages.Tool[] {
     out.push({
       name: entry.name,
       description: entry.description,
-      input_schema: entry.inputSchema as Anthropic.Messages.Tool["input_schema"],
+      input_schema: AMBIENT_CONVERSATION_TOOLS.has(entry.name)
+        ? toChatSchema(entry.inputSchema)
+        : (entry.inputSchema as Anthropic.Messages.Tool["input_schema"]),
     });
   }
   return out;
@@ -112,9 +211,38 @@ export function isMcpParityTool(name: string): boolean {
  * registered — that only happens if the AI-user connection has not finished
  * connecting, and a tool result the model can read beats an exception it cannot.
  */
+/**
+ * Fill `conversation_id` from the turn context for the ambient thread tools.
+ *
+ * Exported for testing: this is the one piece of chat-specific behaviour left in
+ * the parity path, so it is worth pinning independently of a live transport.
+ * An explicit id always wins over the ambient one.
+ */
+export function resolveAmbientConversation(
+  toolName: string,
+  input: Record<string, unknown>,
+  conversationId: bigint | undefined,
+): { input: Record<string, unknown> } | { error: string } {
+  if (!AMBIENT_CONVERSATION_TOOLS.has(toolName)) return { input };
+  if (input.conversation_id != null) return { input };
+  if (conversationId === undefined) {
+    return {
+      error: `${toolName} is only available during a chat turn, or with an explicit conversation_id.`,
+    };
+  }
+  return { input: { ...input, conversation_id: Number(conversationId) } };
+}
+
+export interface ParityCallContext {
+  /** The AI user's identity, used to look up its registered transport. */
+  identityHex?: string;
+  aiUserId?: bigint;
+  /** The thread this turn is running in, if any. */
+  conversationId?: bigint;
+}
+
 export async function executeMcpParityTool(
-  identityHex: string | undefined,
-  aiUserId: bigint | undefined,
+  ctx: ParityCallContext,
   toolName: string,
   input: Record<string, unknown>,
 ): Promise<string> {
@@ -122,8 +250,8 @@ export async function executeMcpParityTool(
   if (!entry) {
     return JSON.stringify({ ok: false, error: `Unknown tool ${toolName}` });
   }
-  const transport = identityHex ? transports.get(identityHex) : undefined;
-  if (!transport || aiUserId === undefined) {
+  const transport = ctx.identityHex ? transports.get(ctx.identityHex) : undefined;
+  if (!transport || ctx.aiUserId === undefined) {
     return JSON.stringify({
       ok: false,
       error:
@@ -131,8 +259,13 @@ export async function executeMcpParityTool(
         "Retry in a moment.",
     });
   }
+
+  const resolved = resolveAmbientConversation(toolName, input, ctx.conversationId);
+  if ("error" in resolved) return JSON.stringify({ ok: false, error: resolved.error });
+  const args = resolved.input;
+
   try {
-    return await entry.execute({ transport, aiUserId }, input);
+    return await entry.execute({ transport, aiUserId: ctx.aiUserId }, args);
   } catch (err) {
     return JSON.stringify({
       ok: false,

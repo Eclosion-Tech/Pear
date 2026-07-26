@@ -1331,6 +1331,20 @@ describe("database tools", () => {
     expect(res.truncated).toBe(false);
   });
 
+  test("query_database skips trashed rows", async () => {
+    // Ported from the worker's own query_database suite when that duplicate
+    // implementation was deleted — `listChildren` filters deleted pages, but
+    // nothing on this side asserted it, so migrating would have silently
+    // dropped the coverage.
+    const fake = tasksFake();
+    const before = await run(fake, "query_database", { page_id: 800 });
+    fake.pages.find((p) => p.id === 810)!.deletedAtMicros = NOW_MICROS;
+    const after = await run(fake, "query_database", { page_id: 800 });
+
+    expect((after.rows as unknown[]).length).toBe((before.rows as unknown[]).length - 1);
+    expect((after.rows as Array<{ page_id: number }>).some((r) => r.page_id === 810)).toBe(false);
+  });
+
   test("query_database rejects non-Database pages and unknown filter columns", async () => {
     const fake = tasksFake();
     const notDb = await run(fake, "query_database", { page_id: 200 });
@@ -1351,6 +1365,19 @@ describe("database tools", () => {
       property_filter: { property: "Status", equals: "done" },
     });
     expect((filtered.rows as unknown[]).length).toBe(1);
+
+    // `contains` is a case-insensitive substring, where `equals` is whole-cell.
+    // Ported from the worker's suite when that duplicate was deleted.
+    const substr = await run(fake, "query_database", {
+      page_id: 800,
+      property_filter: { property: "Status", contains: "DON" },
+    });
+    expect((substr.rows as unknown[]).length).toBe(1);
+    const noSubstr = await run(fake, "query_database", {
+      page_id: 800,
+      property_filter: { property: "Status", equals: "DON" },
+    });
+    expect((noSubstr.rows as unknown[]).length).toBe(0);
 
     const page1 = await run(fake, "query_database", { page_id: 800, limit: 2 });
     expect(page1.returned_rows).toBe(2);

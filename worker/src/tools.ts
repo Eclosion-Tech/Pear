@@ -7,7 +7,6 @@
  */
 
 import type Anthropic from "@anthropic-ai/sdk";
-import { writeComponentTreeDoc, readComponentTreeDoc } from "./component-authoring.js";
 import {
   appendPanelToBlob,
   specHasContent,
@@ -22,10 +21,6 @@ import {
   getMcpParityToolDefs,
   isMcpParityTool,
 } from "./mcp-parity-tools.js";
-import {
-  readAiUserMemoryPage,
-  searchAiUserMemory,
-} from "./workspace-context.js";
 // ConnLike avoids importing the full generated DbConnection class (whose
 // db/reducers properties are only resolved in the generated bindings context).
 export interface ConnLike {
@@ -169,70 +164,6 @@ export function getStaticToolDefs(): Anthropic.Messages.Tool[] {
 // messages on a resolved thread, so it is a real stop and not a UI convention.
 
 const THREAD_TOOLS: Anthropic.Messages.Tool[] = [
-  {
-    name: "post_to_thread",
-    description:
-      "Post a message into a conversation thread you participate in, optionally addressing other " +
-      "participants by writing `@Their Name` in the text. Addressing another AI user is what wakes " +
-      "it to respond — an unaddressed message is recorded but wakes nobody. Use this to ask a " +
-      "specific teammate for input on a comment thread, then wait for their reply rather than " +
-      "answering for them. " +
-      "Defaults to the current thread; pass conversation_id only to post into a different one you " +
-      "are a participant of. " +
-      "Note: an AI-to-AI exchange is capped — after several consecutive AI messages with no human " +
-      "in between, further AI messages stop waking anyone, so keep exchanges short and get to a " +
-      "conclusion. A resolved thread rejects new messages entirely.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        content: {
-          type: "string",
-          description:
-            "The message text. Mention a teammate as `@Their Display Name` to wake them.",
-        },
-        conversation_id: {
-          type: "number",
-          description: "Optional — defaults to the current thread.",
-        },
-      },
-      required: ["content"],
-    },
-  },
-  {
-    name: "resolve_thread",
-    description:
-      "Mark a conversation thread resolved, the way you would resolve a comment in a document. " +
-      "Use it when the question is settled and nothing further is needed — it collapses the thread " +
-      "out of the page and stops any further back-and-forth, because a resolved thread rejects new " +
-      "messages. Prefer resolving over trailing off: it is how a thread ends cleanly. " +
-      "Reversible with `reopen_thread`. Defaults to the current thread.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        conversation_id: {
-          type: "number",
-          description: "Optional — defaults to the current thread.",
-        },
-      },
-      required: [],
-    },
-  },
-  {
-    name: "reopen_thread",
-    description:
-      "Reopen a thread that was resolved, restoring it to active so messages can be posted again. " +
-      "Use when something turns out to be unfinished after all. Defaults to the current thread.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        conversation_id: {
-          type: "number",
-          description: "Optional — defaults to the current thread.",
-        },
-      },
-      required: [],
-    },
-  },
 ];
 
 // ── Generative UI tool (custom-view runtime, M1b-lite) ────────────────────────
@@ -288,33 +219,6 @@ const UI_TOOLS: Anthropic.Messages.Tool[] = [
 // ── Memory tools (on-demand private-memory access, assessment #19) ────────────
 
 const MEMORY_TOOLS: Anthropic.Messages.Tool[] = [
-  {
-    name: "read_memory",
-    description:
-      "Read the full body of one of your private memory pages by id. The memory index in your " +
-      "system prompt lists every page's id and a snippet; call this to open the full text of one. " +
-      "Only your own memory subtree is accessible.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        page_id: { type: "number", description: "The memory page id, from the index." },
-      },
-      required: ["page_id"],
-    },
-  },
-  {
-    name: "search_memory",
-    description:
-      "Search your private memory pages (titles + bodies) for a query string and return matching " +
-      "pages with snippets. Use before read_memory when you don't know which page holds something.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        query: { type: "string", description: "Case-insensitive substring to find." },
-      },
-      required: ["query"],
-    },
-  },
   {
     name: "mark_memory_consolidated",
     description:
@@ -916,92 +820,6 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
     },
   },
   {
-    name: "create_page",
-    description:
-      "Create a new Pear page as a child of an existing page. " +
-      "Use page_type 'Database' for structured data with columns, 'Doc' for rich text.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        parent_id: {
-          type: "number",
-          description: "Parent page ID. Use 0 to create at the workspace root, or the current page's ID to nest under it.",
-        },
-        page_type: { type: "string", enum: ["Doc", "Database"] },
-        title: { type: "string" },
-      },
-      required: ["parent_id", "page_type", "title"],
-    },
-  },
-  {
-    name: "add_property",
-    description:
-      "Add a property (column) to a Database page. " +
-      "First call create_page with page_type='Database', then use the returned schema_id to add properties. " +
-      "For Select/MultiSelect include config: '{\"options\":[\"A\",\"B\"]}'.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        schema_id: {
-          type: "number",
-          description: "Database schema ID returned by create_page or get_schema_id.",
-        },
-        name: { type: "string" },
-        property_type: {
-          type: "string",
-          enum: ["Text", "Number", "Date", "Select", "MultiSelect", "Relation", "Checkbox", "Url", "Person", "File"],
-        },
-        config: {
-          type: "string",
-          description:
-            "JSON string. For Select/MultiSelect: '{\"options\":[\"Option1\",\"Option2\"]}'. Otherwise '{}'.",
-        },
-      },
-      required: ["schema_id", "name", "property_type"],
-    },
-  },
-  {
-    name: "get_schema_id",
-    description: "Get the database schema ID for an existing Database page.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        page_id: { type: "number" },
-      },
-      required: ["page_id"],
-    },
-  },
-  {
-    name: "delete_property",
-    description:
-      "Permanently delete one Database property (column) by property_definition_id. " +
-      "Existing values in that column become inaccessible. Use only when the user clearly asked " +
-      "to remove that specific column; call list_properties first to confirm its id and name.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        property_definition_id: {
-          type: "number",
-          description: "The exact property id returned by list_properties.",
-        },
-      },
-      required: ["property_definition_id"],
-    },
-  },
-  {
-    name: "list_properties",
-    description:
-      "List all property definitions (columns) for a database schema. " +
-      "Returns each property's id, name, and type. Use the id as property_definition_id when calling set_property_value.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        schema_id: { type: "number" },
-      },
-      required: ["schema_id"],
-    },
-  },
-  {
     name: "create_row",
     description:
       "Create a new row in a Database page. In Pear each row is a child page. " +
@@ -1070,36 +888,6 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
     },
   },
   {
-    name: "update_page_content",
-    description:
-      "Write or replace the text content of a Doc page. " +
-      "Pass markdown — headings (#/##/###), bullet lists (- item), numbered lists (1. item), " +
-      "and plain paragraphs are all supported. The worker converts markdown to BlockNote format automatically.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        page_id: { type: "number" },
-        markdown: {
-          type: "string",
-          description: "Markdown text to write into the page.",
-        },
-      },
-      required: ["page_id", "markdown"],
-    },
-  },
-  {
-    name: "update_page_title",
-    description: "Rename an existing page.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        page_id: { type: "number" },
-        title: { type: "string" },
-      },
-      required: ["page_id", "title"],
-    },
-  },
-  {
     name: "list_bridge_devices",
     description:
       "List the Pear Bridge devices paired to this workspace (id, name, platform, whether currently " +
@@ -1154,101 +942,6 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
         },
       },
       required: ["page_id", "permission", "reason"],
-    },
-  },
-  {
-    name: "search_pages",
-    description:
-      "Search the workspace for pages by title (case-insensitive substring match). " +
-      "Returns matching pages with their id, title, page_type, and parent_id. " +
-      "Use this to find existing pages before creating new ones or to look up page IDs.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        query: { type: "string", description: "Search term to match against page titles." },
-      },
-      required: ["query"],
-    },
-  },
-  {
-    name: "list_child_pages",
-    description:
-      "List all child pages of a given parent page. " +
-      "Returns each child's id, title, page_type, and sort_order. " +
-      "Use parent_id=0 to list root-level pages.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        parent_id: {
-          type: "number",
-          description: "Parent page ID. Use 0 to list root-level pages.",
-        },
-      },
-      required: ["parent_id"],
-    },
-  },
-  {
-    name: "get_page",
-    description:
-      "Get details about a specific page by ID, including its title, type, parent, and content. " +
-      "Long pages are returned in windows: when the response has `truncated: true`, call again with " +
-      "`offset` set to the returned `next_offset` to read the rest.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        page_id: { type: "number" },
-        offset: {
-          type: "number",
-          description:
-            "Character offset to start reading from (default 0). Use the `next_offset` from a " +
-            "truncated response to continue reading a long page.",
-        },
-      },
-      required: ["page_id"],
-    },
-  },
-  {
-    name: "delete_page",
-    description:
-      "Move a page to the trash (soft delete — reversible with restore_page). The page and its " +
-      "children stop appearing in the workspace but are not permanently erased. Use only when the user " +
-      "clearly asked to delete/remove a page; confirm the target id first.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        page_id: { type: "number", description: "The page to trash." },
-      },
-      required: ["page_id"],
-    },
-  },
-  {
-    name: "restore_page",
-    description:
-      "Restore a page previously moved to the trash (undo delete_page).",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        page_id: { type: "number", description: "The trashed page to restore." },
-      },
-      required: ["page_id"],
-    },
-  },
-  {
-    name: "move_page",
-    description:
-      "Move a page to a new parent (re-parent it in the workspace tree). Pass new_parent_id = 0 (or " +
-      "omit it) to move the page to the workspace root. Requires write access on both the page and the " +
-      "destination parent.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        page_id: { type: "number", description: "The page to move." },
-        new_parent_id: {
-          type: "number",
-          description: "Destination parent page id; 0 or omitted = workspace root.",
-        },
-      },
-      required: ["page_id"],
     },
   },
   {
@@ -1330,46 +1023,6 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
         },
       },
       required: ["job_id"],
-    },
-  },
-  {
-    name: "query_database",
-    description:
-      "Read rows from a Database page. Returns the database's columns (name + type) and its rows with " +
-      "their cell values, respecting your page access. Use this to answer questions over structured data " +
-      "or to read back a row you just created — `get_page` does NOT return database rows. Optionally " +
-      "filter with `property_filter` (simple equality/contains on ONE named column, or the special " +
-      "\"title\" column). Output is capped; `total_rows` vs `returned_rows` and a `truncated` flag tell " +
-      "you when there is more — narrow with `property_filter` or a lower `limit` to see specific rows. " +
-      "Read-only.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        page_id: { type: "number", description: "The Database page's id." },
-        limit: {
-          type: "number",
-          description: "Max rows to return (default 50, capped at 100).",
-        },
-        property_filter: {
-          type: "object",
-          description:
-            "Optional filter on a single column. Set `property` to a column name (or \"title\") and " +
-            "provide `equals` and/or `contains`.",
-          properties: {
-            property: { type: "string" },
-            equals: {
-              description: "Keep rows whose column value equals this (compared as text).",
-            },
-            contains: {
-              type: "string",
-              description:
-                "Keep rows whose column value contains this substring (case-insensitive).",
-            },
-          },
-          required: ["property"],
-        },
-      },
-      required: ["page_id"],
     },
   },
   {
@@ -1899,56 +1552,6 @@ async function maybeRequestWriteAccessAfterDenied(
   }
 }
 
-/**
- * Take an automatic pre-edit snapshot of a page before an agent overwrites its
- * content (assessment #4/#25). `take_snapshot` reads the live substrate and
- * handles both BlockNote and ComponentTree formats, so one call captures a
- * restorable point regardless of page format. We read the new snapshot row back
- * to confirm the reducer actually committed — reducer calls are fire-and-forget
- * (#31), so without the read-back a server-side failure would silently break the
- * safety net the system prompt promises. Best-effort: a content edit is never
- * blocked on snapshot failure, but the outcome is reported so the claim is honest.
- */
-async function takePreEditSnapshot(
-  conn: ConnLike,
-  pageId: bigint,
-): Promise<{ taken: boolean; snapshot_id?: number }> {
-  type SnapRow = { id: bigint; pageId: bigint; snapshotType?: { tag?: string } };
-  const before = new Set(
-    [...(conn.db.page_snapshot.iter() as Iterable<SnapRow>)]
-      .filter((s) => String(s.pageId) === String(pageId))
-      .map((s) => String(s.id)),
-  );
-  try {
-    await conn.reducers.takeSnapshot({
-      pageId,
-      snapshotType: { tag: "PreAgentEdit" },
-    });
-  } catch (err) {
-    console.warn(
-      `[tools] pre-edit snapshot call failed for page ${pageId}: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
-    return { taken: false };
-  }
-  const fresh = await waitFor(() =>
-    [...(conn.db.page_snapshot.iter() as Iterable<SnapRow>)].find(
-      (s) =>
-        String(s.pageId) === String(pageId) &&
-        !before.has(String(s.id)) &&
-        s.snapshotType?.tag === "PreAgentEdit",
-    ),
-  );
-  if (!fresh) {
-    console.warn(
-      `[tools] pre-edit snapshot for page ${pageId} was not confirmed (reducer may have failed server-side)`,
-    );
-    return { taken: false };
-  }
-  return { taken: true, snapshot_id: Number(fresh.id) };
-}
-
 type ValueEq = (actual: unknown, expected: unknown) => boolean;
 
 const PROPERTY_VALUE_EQ: Record<string, ValueEq> = {
@@ -1981,26 +1584,6 @@ const PROPERTY_VALUE_EQ: Record<string, ValueEq> = {
     return aa.every((v, i) => v === ee[i]);
   },
 };
-
-function pageContentMatches(
-  conn: ConnLike,
-  pageId: bigint,
-  expectedContent: string,
-): boolean {
-  type ContentRow = { pageId: bigint; content: string };
-  const row = [...(conn.db.page_content.iter() as Iterable<ContentRow>)].find(
-    (c) => String(c.pageId) === String(pageId),
-  );
-  return row?.content === expectedContent;
-}
-
-function pageTitleMatches(conn: ConnLike, pageId: bigint, expectedTitle: string): boolean {
-  type PageRow = { id: bigint; title: string };
-  const row = [...(conn.db.page.iter() as Iterable<PageRow>)].find(
-    (p) => String(p.id) === String(pageId),
-  );
-  return row?.title === expectedTitle;
-}
 
 function propertyValueMatches(
   conn: ConnLike,
@@ -2106,77 +1689,21 @@ export async function executeTool(
   try {
     requireChatWriteGrant(conn, toolName, input, toolContext);
     // Parity tools run through the shared MCP implementation so chat and MCP
-    // can never drift apart on validation or error text.
+    // can never drift apart on validation or error text. `conversationId` lets
+    // the thread tools default to the thread this turn is running in, which is
+    // the one thing chat knows that an MCP client does not.
     if (isMcpParityTool(toolName)) {
       return await executeMcpParityTool(
-        toolContext.aiIdentityHex,
-        toolContext.aiUserId,
+        {
+          identityHex: toolContext.aiIdentityHex,
+          aiUserId: toolContext.aiUserId,
+          conversationId: toolContext.conversationId,
+        },
         toolName,
         input,
       );
     }
     switch (toolName) {
-      case "post_to_thread":
-      case "resolve_thread":
-      case "reopen_thread": {
-        // Thread tools (ticket 14264). All three default to the thread this
-        // turn is running in; an explicit id is allowed but the module still
-        // checks participation, so this cannot reach a thread the AI is not in.
-        const explicit = input.conversation_id;
-        const conversationId =
-          typeof explicit === "number" ? BigInt(explicit) : toolContext.conversationId;
-        if (!conversationId) {
-          return JSON.stringify({
-            ok: false,
-            error: `${toolName} is only available during a chat turn, or with an explicit conversation_id.`,
-          });
-        }
-
-        try {
-          if (toolName === "post_to_thread") {
-            const content = String(input.content ?? "").trim();
-            if (!content) {
-              return JSON.stringify({ ok: false, error: "post_to_thread needs content." });
-            }
-            // Mentions are resolved server-side from the text (the module's
-            // `match_mentions` is the single implementation), so nothing is
-            // passed here — an explicit list would be a second source of truth.
-            await conn.reducers.sendAddressedMessage({
-              conversationId,
-              content,
-              mentions: [],
-            });
-            return JSON.stringify({
-              ok: true,
-              conversation_id: Number(conversationId),
-              posted: true,
-            });
-          }
-
-          if (toolName === "resolve_thread") {
-            await conn.reducers.closeConversation({ conversationId });
-            return JSON.stringify({
-              ok: true,
-              conversation_id: Number(conversationId),
-              resolved: true,
-            });
-          }
-
-          await conn.reducers.reopenConversation({ conversationId });
-          return JSON.stringify({
-            ok: true,
-            conversation_id: Number(conversationId),
-            reopened: true,
-          });
-        } catch (err) {
-          return JSON.stringify({
-            ok: false,
-            conversation_id: Number(conversationId),
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-
       case "render_ui": {
         // Emits a read-only component_tree_v1 onto the current assistant
         // message (custom-view runtime, M1b-lite). Only meaningful in a chat
@@ -2227,95 +1754,6 @@ export async function executeTool(
         });
         return JSON.stringify({ ok: true, rendered: true, appended: existing != null });
       }
-      case "create_page": {
-        // parent_id=0 means root (no parent). Map to undefined so the SDK
-        // sends Option::None rather than Option::Some(0) which is an invalid page id.
-        const rawParentId = input.parent_id as number;
-        const parentId = rawParentId > 0 ? BigInt(rawParentId) : undefined;
-        const pageType = input.page_type as string;
-        const title = input.title as string;
-
-        // Snapshot existing page + schema IDs before the call.
-        const existingPageIds = new Set(
-          [...(conn.db.page.iter() as Iterable<AnyRow>)].map((p) => p.id as bigint)
-        );
-        const existingSchemaIds = new Set(
-          [...(conn.db.database_schema.iter() as Iterable<AnyRow>)].map((s) => s.id as bigint)
-        );
-
-        console.log(`[tools] create_page: calling reducer — parentId=${parentId ?? "root"}, pageType=${pageType}, title="${title}"`);
-        await conn.reducers.createPage({
-          parentId,
-          pageType: { tag: pageType },
-          title,
-        });
-        console.log(`[tools] create_page: reducer called, waiting for page row…`);
-
-        // Wait for the new page row to appear in the subscription.
-        const newPage = await waitFor(() =>
-          [...(conn.db.page.iter() as Iterable<AnyRow>)].find(
-            (p) => !existingPageIds.has(p.id as bigint) && p.title === title
-          )
-        );
-
-        if (!newPage) {
-          const allTitles = [...(conn.db.page.iter() as Iterable<AnyRow>)].map((p) => `${p.id}:${p.title}`).join(", ");
-          console.warn(`[tools] create_page: waitFor timed out. Existing pages: ${allTitles}`);
-          return JSON.stringify({ ok: false, error: `Page "${title}" created but could not read back row — subscription may be slow.` });
-        }
-        console.log(`[tools] create_page: found new page id=${newPage.id}`);
-
-        const result: Record<string, unknown> = {
-          ok: true,
-          page_id: Number(newPage.id as bigint),
-          title: newPage.title,
-          page_type: pageType,
-        };
-
-        // Auto-store page_id in shared context so sibling tasks can reference it.
-        const ctxKey = titleToContextKey(title);
-        try {
-          await conn.reducers.setSharedContext({
-            jobId,
-            key: ctxKey,
-            value: String(newPage.id as bigint),
-            createdBy: "pear-worker",
-          });
-        } catch { /* non-fatal */ }
-
-        // For Database pages: explicitly create the schema so the worker can
-        // immediately add properties without waiting for the browser to open
-        // the page (which is when the browser would lazily create the schema).
-        if (pageType === "Database") {
-          console.log(`[tools] create_page: calling createDatabaseSchema for page ${newPage.id}`);
-          await conn.reducers.createDatabaseSchema({
-            pageId: newPage.id as bigint,
-            name: title,
-          });
-          console.log(`[tools] create_page: createDatabaseSchema called, waiting for schema row…`);
-
-          const newSchema = await waitFor(() =>
-            [...(conn.db.database_schema.iter() as Iterable<AnyRow>)].find(
-              (s) =>
-                !existingSchemaIds.has(s.id as bigint) &&
-                String(s.pageId) === String(newPage.id)
-            )
-          );
-
-          if (newSchema) {
-            result.schema_id = Number(newSchema.id as bigint);
-            result.next_step = `Schema ready. Now call add_property with schema_id=${result.schema_id} for EVERY column listed in the task before returning your summary.`;
-            console.log(`[tools] create_page: schema id=${newSchema.id}`);
-          } else {
-            const allSchemas = [...(conn.db.database_schema.iter() as Iterable<AnyRow>)].map((s) => `${s.id}:${s.pageId}`).join(", ");
-            console.warn(`[tools] create_page: schema waitFor timed out. Schemas: ${allSchemas}`);
-            result.schema_warning = "Schema creation may still be in progress — call get_schema_id before add_property.";
-          }
-        }
-
-        return JSON.stringify(result);
-      }
-
       case "list_automation_primitives": {
         type PrimitiveRow = {
           name: string;
@@ -2518,155 +1956,6 @@ export async function executeTool(
         const limit = Math.max(1, Math.min(100, Number(input.limit ?? 25)));
         await conn.reducers.processPendingAutomationEvents({ limit });
         return JSON.stringify({ ok: true, processed_up_to: limit });
-      }
-
-      case "add_property": {
-        const schemaId = BigInt(input.schema_id as number);
-        const name = input.name as string;
-        const propertyType = input.property_type as string;
-        const config = (input.config as string | undefined) ?? "{}";
-
-        const existingIds = new Set(
-          [...(conn.db.property_definition.iter() as Iterable<AnyRow>)].map((p) => p.id as bigint)
-        );
-
-        console.log(`[tools] add_property: schemaId=${schemaId} name="${name}" type=${propertyType} config=${config}`);
-        await conn.reducers.addProperty({
-          schemaId,
-          name,
-          propertyType: { tag: propertyType },
-          config,
-        });
-        console.log(`[tools] add_property: reducer called`);
-
-        const newProp = await waitFor(() =>
-          [...(conn.db.property_definition.iter() as Iterable<AnyRow>)].find(
-            (p) => !existingIds.has(p.id as bigint) && p.name === name
-          )
-        );
-
-        return JSON.stringify({
-          ok: true,
-          property_id: newProp ? Number(newProp.id as bigint) : undefined,
-          name,
-          property_type: propertyType,
-        });
-      }
-
-      case "get_schema_id": {
-        const pageId = BigInt(input.page_id as number);
-        const schema = [...(conn.db.database_schema.iter() as Iterable<AnyRow>)].find(
-          (s) => s.pageId === pageId
-        );
-        if (!schema) return JSON.stringify({ ok: false, error: "No schema found for this page" });
-        return JSON.stringify({ ok: true, schema_id: Number(schema.id as bigint) });
-      }
-
-      case "delete_property": {
-        const propertyDefinitionId = BigInt(input.property_definition_id as number);
-        const property = [...(conn.db.property_definition.iter() as Iterable<AnyRow>)].find(
-          (p) => String(p.id) === String(propertyDefinitionId),
-        );
-        if (!property) {
-          return JSON.stringify({ ok: false, error: "Property definition not found" });
-        }
-        const name = String(property.name ?? "");
-        await conn.reducers.deleteProperty({ propertyDefinitionId });
-        const removed = await waitFor(() =>
-          [...(conn.db.property_definition.iter() as Iterable<AnyRow>)].some(
-            (p) => String(p.id) === String(propertyDefinitionId),
-          )
-            ? undefined
-            : true,
-        );
-        if (!removed) {
-          return JSON.stringify({
-            ok: false,
-            error: "delete_property reducer returned but the property still exists",
-          });
-        }
-        return JSON.stringify({
-          ok: true,
-          property_definition_id: Number(propertyDefinitionId),
-          name,
-        });
-      }
-
-      case "update_page_content": {
-        const pageId = BigInt(input.page_id as number);
-
-        // Automatic pre-edit snapshot so a destructive content overwrite is
-        // restorable (assessment #4/#25). Write grant has already been enforced
-        // by requireChatWriteGrant above, so we only snapshot edits we're about
-        // to actually attempt. Covers both page formats (take_snapshot reads the
-        // substrate). Never blocks the edit on snapshot failure.
-        const snap = await takePreEditSnapshot(conn, pageId);
-
-        // ComponentTree pages can't be written by the legacy BlockNote reducer
-        // (it's rejected server-side; and because reducer calls are
-        // fire-and-forget, that rejection would otherwise surface as a false
-        // positive — the reported "tool complete but nothing changed" bug,
-        // assessment #27/#31). Route these to the component-node authoring path.
-        const pageRow = conn.db.page?.id?.find?.(pageId) as
-          | { contentFormat?: { tag?: string } }
-          | undefined;
-        if (pageRow?.contentFormat?.tag === "ComponentTree") {
-          const md = (input.markdown ?? input.content) as string | undefined;
-          const result = await writeComponentTreeDoc(conn, pageId, md ?? "");
-          return JSON.stringify({ ...result, snapshot_id: snap.snapshot_id });
-        }
-
-        // Accept either a `markdown` string (new) or a raw `content` JSON string (legacy).
-        const raw = (input.markdown ?? input.content) as string | undefined;
-        if (!raw) {
-          return JSON.stringify({ ok: false, error: "markdown field was empty or missing — likely hit max_tokens. Try a shorter response." });
-        }
-        let content: string;
-        if (input.markdown) {
-          content = markdownToBlockNote(raw);
-          console.log(`[tools] update_page_content: converted ${raw.length} chars markdown → ${content.length} chars BlockNote JSON`);
-        } else {
-          try { JSON.parse(raw); content = raw; } catch {
-            content = markdownToBlockNote(raw);
-          }
-        }
-        await conn.reducers.updatePageContent({ pageId, content });
-
-        // Verify post-condition so reducer-side failures don't become false
-        // positives (#31): content row must match what we wrote.
-        const confirmed = await waitFor(() =>
-          pageContentMatches(conn, pageId, content) ? true : undefined,
-        );
-        if (!confirmed) {
-          return JSON.stringify({
-            ok: false,
-            page_id: Number(pageId),
-            snapshot_id: snap.snapshot_id,
-            error:
-              "update_page_content did not commit (content read-back mismatch or no update visible).",
-          });
-        }
-
-        return JSON.stringify({ ok: true, page_id: Number(pageId), snapshot_id: snap.snapshot_id });
-      }
-
-      case "update_page_title": {
-        const pageId = BigInt(input.page_id as number);
-        const title = input.title as string;
-        await conn.reducers.updatePageTitle({ pageId, title });
-
-        const confirmed = await waitFor(() =>
-          pageTitleMatches(conn, pageId, title) ? true : undefined,
-        );
-        if (!confirmed) {
-          return JSON.stringify({
-            ok: false,
-            page_id: Number(pageId),
-            error: "update_page_title did not commit (title read-back mismatch or no update visible).",
-          });
-        }
-
-        return JSON.stringify({ ok: true, page_id: Number(pageId), title });
       }
 
       case "request_page_access": {
@@ -3012,158 +2301,6 @@ export async function executeTool(
         });
       }
 
-      case "list_properties": {
-        const schemaId = BigInt(input.schema_id as number);
-        type PropRow = { id: bigint; schemaId: bigint; name: string; propertyType: { tag: string }; order: number };
-        const props = [...(conn.db.property_definition.iter() as Iterable<PropRow>)]
-          .filter((p) => String(p.schemaId) === String(schemaId))
-          .sort((a, b) => a.order - b.order)
-          .map((p) => ({ property_definition_id: Number(p.id), name: p.name, type: p.propertyType.tag }));
-        console.log(`[tools] list_properties: schema ${schemaId} → ${props.length} props`);
-        return JSON.stringify({ ok: true, properties: props });
-      }
-
-      case "query_database": {
-        if (!Number.isFinite(Number(input.page_id))) {
-          return JSON.stringify({ ok: false, error: "page_id is required" });
-        }
-        const pageId = BigInt(Math.trunc(Number(input.page_id)));
-        type QPageRow = {
-          id: bigint;
-          parentId: bigint | undefined;
-          title: string;
-          pageType: { tag: string };
-          deletedAt: unknown;
-        };
-        const dbPage = [...(conn.db.page.iter() as Iterable<QPageRow>)].find(
-          (p) => p.id === pageId,
-        );
-        if (!dbPage) {
-          return JSON.stringify({
-            ok: false,
-            error: `Page ${Number(pageId)} not found or not accessible`,
-          });
-        }
-        if (dbPage.pageType.tag !== "Database") {
-          return JSON.stringify({
-            ok: false,
-            error: `Page ${Number(pageId)} is a ${dbPage.pageType.tag} page, not a Database. Use get_page for non-database pages.`,
-          });
-        }
-
-        type QSchemaRow = { id: bigint; pageId: bigint; name: string };
-        const schema = [...(conn.db.database_schema.iter() as Iterable<QSchemaRow>)].find(
-          (s) => String(s.pageId) === String(pageId),
-        );
-        if (!schema) {
-          return JSON.stringify({
-            ok: false,
-            error: `Database page ${Number(pageId)} has no schema`,
-          });
-        }
-
-        type QPropRow = {
-          id: bigint;
-          schemaId: bigint;
-          name: string;
-          propertyType: { tag: string };
-          order: number;
-        };
-        const props = [...(conn.db.property_definition.iter() as Iterable<QPropRow>)]
-          .filter((p) => String(p.schemaId) === String(schema.id))
-          .sort((a, b) => a.order - b.order);
-
-        // Cell values grouped by row page id → propertyDefinitionId → value.
-        type QPVRow = {
-          pageId: bigint;
-          propertyDefinitionId: bigint;
-          value: { tag: string; value: unknown };
-        };
-        const valuesByRow = new Map<string, Map<string, { tag: string; value: unknown }>>();
-        for (const pv of conn.db.page_property_value.iter() as Iterable<QPVRow>) {
-          const rid = String(pv.pageId);
-          let m = valuesByRow.get(rid);
-          if (!m) {
-            m = new Map();
-            valuesByRow.set(rid, m);
-          }
-          m.set(String(pv.propertyDefinitionId), pv.value);
-        }
-
-        const renderRow = (r: QPageRow): Record<string, unknown> => {
-          const cells = valuesByRow.get(String(r.id));
-          const out: Record<string, unknown> = { page_id: Number(r.id), title: r.title };
-          for (const p of props) out[p.name] = renderCellValue(cells?.get(String(p.id)));
-          return out;
-        };
-
-        let matched = [...(conn.db.page.iter() as Iterable<QPageRow>)]
-          .filter((p) => !p.deletedAt && String(p.parentId) === String(pageId))
-          .sort((a, b) => Number(a.id - b.id))
-          .map(renderRow);
-
-        const filter = input.property_filter as
-          | { property?: string; equals?: unknown; contains?: string }
-          | undefined;
-        if (filter?.property) {
-          const propName = filter.property;
-          const known = propName === "title" || props.some((p) => p.name === propName);
-          if (!known) {
-            return JSON.stringify({
-              ok: false,
-              error: `Unknown property "${propName}". Known columns: ${["title", ...props.map((p) => p.name)].join(", ")}`,
-            });
-          }
-          const eq = filter.equals;
-          const contains =
-            typeof filter.contains === "string" ? filter.contains.toLowerCase() : undefined;
-          matched = matched.filter((row) => {
-            const cell = row[propName];
-            const text =
-              cell == null ? "" : Array.isArray(cell) ? cell.join(", ") : String(cell);
-            if (eq !== undefined && String(eq).toLowerCase() !== text.toLowerCase()) return false;
-            if (contains !== undefined && !text.toLowerCase().includes(contains)) return false;
-            return true;
-          });
-        }
-
-        const totalRows = matched.length;
-        let limit = Number(input.limit);
-        if (!Number.isFinite(limit) || limit <= 0) limit = 50;
-        limit = Math.min(limit, 100);
-        let rows = matched.slice(0, limit);
-
-        // Keep the payload under a char budget so a wide/large table can't blow
-        // up the context: halve the row set until it fits (the `truncated` flag
-        // already tells the model there's more).
-        const CHAR_BUDGET = 8000;
-        const build = () => {
-          const truncated = rows.length < totalRows;
-          return JSON.stringify({
-            ok: true,
-            page_id: Number(pageId),
-            database_title: dbPage.title,
-            columns: props.map((p) => ({ name: p.name, type: p.propertyType.tag })),
-            total_rows: totalRows,
-            returned_rows: rows.length,
-            truncated,
-            note: truncated
-              ? "Showing a subset of rows — narrow with property_filter or a lower limit to see specific rows."
-              : undefined,
-            rows,
-          });
-        };
-        let payload = build();
-        while (payload.length > CHAR_BUDGET && rows.length > 1) {
-          rows = rows.slice(0, Math.ceil(rows.length / 2));
-          payload = build();
-        }
-        console.log(
-          `[tools] query_database: page ${Number(pageId)} → ${rows.length}/${totalRows} row(s), ${props.length} col(s)`,
-        );
-        return payload;
-      }
-
       case "list_sensor_findings": {
         type FindingRow = {
           id: bigint;
@@ -3366,163 +2503,6 @@ export async function executeTool(
           page_id: Number(pageId),
           count: applied.length,
           property_definition_ids: applied.map((a) => a.property_definition_id),
-        });
-      }
-
-      case "search_pages": {
-        const query = (input.query as string).toLowerCase();
-        type PageRow = { id: bigint; parentId: bigint | undefined; title: string; pageType: { tag: string }; deletedAt: unknown };
-        const matches = [...(conn.db.page.iter() as Iterable<PageRow>)]
-          .filter((p) => !p.deletedAt && p.title.toLowerCase().includes(query))
-          .slice(0, 20)
-          .map((p) => ({
-            page_id: Number(p.id),
-            title: p.title,
-            page_type: p.pageType.tag,
-            parent_id: p.parentId ? Number(p.parentId) : null,
-          }));
-        return JSON.stringify({ ok: true, results: matches });
-      }
-
-      case "list_child_pages": {
-        const rawParentId = input.parent_id as number;
-        const parentId = rawParentId > 0 ? BigInt(rawParentId) : undefined;
-        type PageRow = { id: bigint; parentId: bigint | undefined; title: string; pageType: { tag: string }; sortOrder: number; deletedAt: unknown };
-        const children = [...(conn.db.page.iter() as Iterable<PageRow>)]
-          .filter((p) => {
-            if (p.deletedAt) return false;
-            if (parentId === undefined) return p.parentId === undefined || p.parentId === null;
-            return String(p.parentId) === String(parentId);
-          })
-          .sort((a, b) => a.sortOrder - b.sortOrder)
-          .map((p) => ({
-            page_id: Number(p.id),
-            title: p.title,
-            page_type: p.pageType.tag,
-            sort_order: p.sortOrder,
-          }));
-        return JSON.stringify({ ok: true, parent_id: rawParentId, children });
-      }
-
-      case "get_page": {
-        const pageId = BigInt(input.page_id as number);
-        type PageRow = { id: bigint; parentId: bigint | undefined; title: string; pageType: { tag: string }; deletedAt: unknown; createdAt: unknown };
-        const page = [...(conn.db.page.iter() as Iterable<PageRow>)].find((p) => p.id === pageId);
-        if (!page) return JSON.stringify({ ok: false, error: "Page not found" });
-
-        // ComponentTree pages keep no `page_content` blob — their text lives in
-        // ComponentNode rows + per-node Yjs state. Reconstruct from there; fall
-        // back to the legacy blob for BlockNote/Database pages (#27, read side).
-        const treeContent = readComponentTreeDoc(conn, pageId);
-        let content: string;
-        if (treeContent !== undefined) {
-          content = treeContent;
-        } else {
-          type ContentRow = { pageId: bigint; content: string };
-          const contentRow = [...(conn.db.page_content.iter() as Iterable<ContentRow>)].find((c) => c.pageId === pageId);
-          content = contentRow?.content ?? "";
-        }
-
-        // Window long pages instead of silently clipping them (#317): the read
-        // is a local cache walk so size costs nothing here — the bound exists
-        // only to keep a single tool result from flooding the model's context.
-        const offset = Math.max(0, Math.trunc((input.offset as number | undefined) ?? 0));
-        const window = content.slice(offset, offset + GET_PAGE_WINDOW_CHARS);
-        const truncated = offset + window.length < content.length;
-
-        return JSON.stringify({
-          ok: true,
-          page_id: Number(page.id),
-          title: page.title,
-          page_type: page.pageType.tag,
-          parent_id: page.parentId ? Number(page.parentId) : null,
-          content: window,
-          total_chars: content.length,
-          offset,
-          truncated,
-          next_offset: truncated ? offset + window.length : undefined,
-          // A Database page's rows live in property tables, not `content` — point
-          // the model at the tool that can actually read them.
-          next_step:
-            page.pageType.tag === "Database"
-              ? "This is a Database page; its rows are NOT in `content`. Call query_database(page_id) to read its columns and rows."
-              : undefined,
-        });
-      }
-
-      case "delete_page": {
-        const pageId = BigInt(input.page_id as number);
-        type PageRow = { id: bigint; title: string; deletedAt: unknown };
-        const before = [...(conn.db.page.iter() as Iterable<PageRow>)].find((p) => p.id === pageId);
-        if (!before) return JSON.stringify({ ok: false, error: "Page not found" });
-        // Subtree delete: trashing a page takes its children with it (the
-        // tool description has always promised this).
-        await conn.reducers.deletePageSubtree({ pageId });
-        const gone = await waitFor(() => {
-          const row = [...(conn.db.page.iter() as Iterable<PageRow>)].find((p) => p.id === pageId);
-          return row?.deletedAt ? true : undefined;
-        });
-        if (!gone) {
-          return JSON.stringify({
-            ok: false,
-            page_id: Number(pageId),
-            error: "delete_page did not commit (page still shows as not deleted).",
-          });
-        }
-        return JSON.stringify({
-          ok: true,
-          page_id: Number(pageId),
-          title: before.title,
-          note: "Moved to trash. Reversible with restore_page.",
-        });
-      }
-
-      case "restore_page": {
-        const pageId = BigInt(input.page_id as number);
-        type PageRow = { id: bigint; title: string; deletedAt: unknown };
-        const before = [...(conn.db.page.iter() as Iterable<PageRow>)].find((p) => p.id === pageId);
-        if (!before) return JSON.stringify({ ok: false, error: "Page not found" });
-        await conn.reducers.restorePage({ pageId });
-        const back = await waitFor(() => {
-          const row = [...(conn.db.page.iter() as Iterable<PageRow>)].find((p) => p.id === pageId);
-          return row && !row.deletedAt ? true : undefined;
-        });
-        if (!back) {
-          return JSON.stringify({
-            ok: false,
-            page_id: Number(pageId),
-            error: "restore_page did not commit (page still shows as trashed).",
-          });
-        }
-        return JSON.stringify({ ok: true, page_id: Number(pageId), title: before.title });
-      }
-
-      case "move_page": {
-        const pageId = BigInt(input.page_id as number);
-        const rawParent = numericInputToBigInt(input.new_parent_id);
-        // 0 or omitted → workspace root (None).
-        const newParentId =
-          rawParent !== undefined && rawParent !== BigInt(0) ? rawParent : undefined;
-        type PageRow = { id: bigint; parentId: bigint | undefined; title: string };
-        const before = [...(conn.db.page.iter() as Iterable<PageRow>)].find((p) => p.id === pageId);
-        if (!before) return JSON.stringify({ ok: false, error: "Page not found" });
-        await conn.reducers.movePage({ pageId, newParentId, afterPageId: undefined });
-        const moved = await waitFor(() => {
-          const row = [...(conn.db.page.iter() as Iterable<PageRow>)].find((p) => p.id === pageId);
-          if (!row) return undefined;
-          return String(row.parentId ?? "") === String(newParentId ?? "") ? true : undefined;
-        });
-        if (!moved) {
-          return JSON.stringify({
-            ok: false,
-            page_id: Number(pageId),
-            error: "move_page did not commit (parent read-back mismatch).",
-          });
-        }
-        return JSON.stringify({
-          ok: true,
-          page_id: Number(pageId),
-          new_parent_id: newParentId !== undefined ? Number(newParentId) : null,
         });
       }
 
@@ -3748,40 +2728,6 @@ export async function executeTool(
         console.log(`[tools] fetch_url: "${url}"`);
         const content = await fetchUrlContent(url);
         return JSON.stringify({ ok: true, url, content });
-      }
-
-      case "read_memory": {
-        if (toolContext.aiUserId === undefined) {
-          return JSON.stringify({ ok: false, error: "Memory tools are only available in AI-user chat." });
-        }
-        const pageId = BigInt(input.page_id as number | string);
-        const found = readAiUserMemoryPage(conn, toolContext.aiUserId, pageId);
-        if (!found) {
-          return JSON.stringify({ ok: false, error: `No memory page ${pageId} in your memory subtree.` });
-        }
-        return JSON.stringify({
-          ok: true,
-          page_id: Number(pageId),
-          title: found.title,
-          content: found.content,
-        });
-      }
-
-      case "search_memory": {
-        if (toolContext.aiUserId === undefined) {
-          return JSON.stringify({ ok: false, error: "Memory tools are only available in AI-user chat." });
-        }
-        const query = input.query as string;
-        const results = searchAiUserMemory(conn, toolContext.aiUserId, query);
-        return JSON.stringify({
-          ok: true,
-          query,
-          matches: results.map((m) => ({
-            page_id: Number(m.pageId),
-            title: m.title,
-            snippet: m.snippet,
-          })),
-        });
       }
 
       case "mark_memory_consolidated": {
