@@ -31,7 +31,11 @@ export function DocPage({ page }: DocPageProps) {
   const deletePage = useDeletePageSubtree();
   const iconButtonRef = useRef<HTMLButtonElement>(null);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
-  const [contents] = useTable(tables.page_content);
+  // Scoped: only this page's body — unscoped this pulled every document in
+  // the workspace into the cache while any doc was open.
+  const [contents] = useTable(
+    tables.page_content.where((c) => c.pageId.eq(page.id)),
+  );
   const content = contents.find((c) => c.pageId === page.id);
 
   const [allPages] = useTable(tables.page);

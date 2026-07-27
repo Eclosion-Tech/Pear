@@ -4,6 +4,7 @@ import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback, useMem
 import { useRouter } from "next/navigation";
 import { useSpacetimeDB } from "spacetimedb/react";
 import Markdown, { type Components } from "react-markdown";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import remarkGfm from "remark-gfm";
 import {
   useOrchaJobs,
@@ -1020,6 +1021,27 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
   const [dragOver, setDragOver] = useState(false);
   const workspaceSlug = usePearWorkspaceSlug();
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Windowed transcript (ticket 14386): only ~a viewport of messages mounts.
+  // Heights vary (markdown, tool cards, attachments) so rows are measured;
+  // tanstack's ResizeObserver re-measures the streaming message as it grows,
+  // which keeps the pinned-to-bottom autoscroll math correct.
+  const msgVirtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 96,
+    overscan: 8,
+  });
+  const msgVirtualItems = msgVirtualizer.getVirtualItems();
+  const msgPadTop =
+    msgVirtualItems.length > 0 ? Math.max(0, msgVirtualItems[0].start) : 0;
+  const msgPadBottom =
+    msgVirtualItems.length > 0
+      ? Math.max(
+          0,
+          msgVirtualizer.getTotalSize() -
+            msgVirtualItems[msgVirtualItems.length - 1].end,
+        )
+      : 0;
   // Page rows + snapshots for resolving a dropped page into a text snapshot.
   const [allPages] = useTable(tables.page);
   const [allSnapshots] = useTable(tables.page_snapshot);
@@ -1301,13 +1323,15 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
       </div>
 
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3 min-h-0">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 min-h-0">
         {messages.length === 0 && (
           <p className="text-xs text-neutral-400 text-center py-8">
             Conversation started — waiting for response…
           </p>
         )}
-        {messages.map((msg) => {
+        {msgPadTop > 0 && <div aria-hidden="true" style={{ height: msgPadTop }} />}
+        {msgVirtualItems.map((vi) => {
+          const msg = messages[vi.index];
           // System messages render as their own thing; for User-tagged messages
           // we tell humans from AI users by membership in ai_user_profile.
           const senderIdentity = msg.sender.tag === "User" ? msg.sender.value : undefined;
@@ -1330,7 +1354,12 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
               aiName;
 
           return (
-            <div key={String(msg.id)} className={`flex ${isMe ? "justify-end" : "justify-start"}`}>
+            <div
+              key={String(msg.id)}
+              ref={msgVirtualizer.measureElement}
+              data-index={vi.index}
+              className={`flex pt-3 ${isMe ? "justify-end" : "justify-start"}`}
+            >
               <div
                 className={`max-w-[85%] rounded-xl px-3 py-2 ${
                   isMe
@@ -1378,6 +1407,9 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
             </div>
           );
         })}
+        {msgPadBottom > 0 && (
+          <div aria-hidden="true" style={{ height: msgPadBottom }} />
+        )}
       </div>
 
       {/* Context bar — shows what the AI user can see, plus pending

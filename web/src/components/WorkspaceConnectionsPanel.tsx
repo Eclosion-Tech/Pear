@@ -137,7 +137,25 @@ export function WorkspaceConnectionsPanel() {
     }
     setBusy(true);
     setMsg(null);
+    // The export reads the client cache, but the app only subscribes to what
+    // the UI needs (no subscribeToAllTables since 14384) — so hydrate the
+    // full cache on demand and release it after the snapshot is built.
+    let exportSub: { unsubscribe: () => void } | null = null;
     try {
+      await new Promise<void>((resolve, reject) => {
+        exportSub = conn
+          .subscriptionBuilder()
+          .onApplied(() => resolve())
+          .onError((ctx) => {
+            const err = (ctx as { event?: unknown }).event;
+            reject(err instanceof Error ? err : new Error("Export subscription failed"));
+          })
+          .subscribe(
+            Object.values(tables).map(
+              (t) => `SELECT * FROM ${(t as { sourceName: string }).sourceName}`,
+            ),
+          );
+      });
       const snap = buildPearSnapshotV2(conn.db, {
         wsUri: resolveWorkspaceWsUri(activeWorkspace.wsUri),
         dbName: resolveWorkspaceDbName(activeWorkspace.dbName),
@@ -149,6 +167,11 @@ export function WorkspaceConnectionsPanel() {
     } catch (e) {
       setMsg(e instanceof Error ? e.message : `${e}`);
     } finally {
+      try {
+        (exportSub as { unsubscribe: () => void } | null)?.unsubscribe();
+      } catch {
+        // Already torn down (e.g. disconnect mid-export) — nothing to release.
+      }
       setBusy(false);
     }
   }

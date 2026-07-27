@@ -56,6 +56,7 @@ import {
   PropertyTypePicker,
   type PropertyTypeTag,
 } from "./PropertyTypePicker";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { FloatingPopup } from "./FloatingPopup";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 
@@ -697,6 +698,51 @@ export function GridView({ page }: GridViewProps) {
 
   // ── View mode (grid / list) ──────────────────────────────────────────────────
   const [viewMode, setViewMode] = useState<"grid" | "list" | "kanban">("grid");
+
+  // ── Row virtualization (ticket 14386) ──────────────────────────────────────
+  // Windowed against DatabasePage's overflow-auto scroller: only ~a viewport
+  // of <GridRow>s mounts instead of all R rows (the DOM was R×(P+2) cells).
+  // Rows are ~36px (h-9); measureElement corrects for borders/zoom drift.
+  const [gridScrollEl, setGridScrollEl] = useState<HTMLElement | null>(null);
+  const [gridScrollMargin, setGridScrollMargin] = useState(0);
+  useEffect(() => {
+    let el: HTMLElement | null = tableRef.current?.parentElement ?? null;
+    while (el) {
+      const { overflowY } = getComputedStyle(el);
+      if (overflowY === "auto" || overflowY === "scroll") break;
+      el = el.parentElement;
+    }
+    setGridScrollEl(el);
+  }, []);
+  useEffect(() => {
+    if (!gridScrollEl || !tableRef.current) return;
+    setGridScrollMargin(
+      tableRef.current.getBoundingClientRect().top -
+        gridScrollEl.getBoundingClientRect().top +
+        gridScrollEl.scrollTop,
+    );
+  }, [gridScrollEl, filterBarOpen, sortBarOpen, viewMode]);
+  const rowVirtualizer = useVirtualizer({
+    count: sortedRows.length,
+    getScrollElement: () => gridScrollEl,
+    estimateSize: () => 36,
+    overscan: 12,
+    scrollMargin: gridScrollMargin,
+  });
+  const virtualRows = rowVirtualizer.getVirtualItems();
+  const virtualPadTop =
+    virtualRows.length > 0
+      ? Math.max(0, virtualRows[0].start - rowVirtualizer.options.scrollMargin)
+      : 0;
+  const virtualPadBottom =
+    virtualRows.length > 0
+      ? Math.max(
+          0,
+          rowVirtualizer.getTotalSize() -
+            (virtualRows[virtualRows.length - 1].end -
+              rowVirtualizer.options.scrollMargin),
+        )
+      : 0;
 
   // ── Row multi-select ────────────────────────────────────────────────────────
   const [selectedRowIds, setSelectedRowIds] = useState<Set<bigint>>(new Set());
@@ -1456,9 +1502,17 @@ export function GridView({ page }: GridViewProps) {
                 </td>
               </tr>
             )}
-            {sortedRows.map((row, rowIdx) => (
+            {virtualPadTop > 0 && (
+              <tr aria-hidden="true" style={{ height: virtualPadTop }} />
+            )}
+            {virtualRows.map((vi) => {
+              const row = sortedRows[vi.index];
+              const rowIdx = vi.index;
+              return (
               <GridRow
                 key={String(row.id)}
+                virtualIndex={vi.index}
+                measureRef={rowVirtualizer.measureElement}
                 row={row}
                 rowIdx={rowIdx}
                 properties={displayProperties}
@@ -1524,7 +1578,11 @@ export function GridView({ page }: GridViewProps) {
                   });
                 }}
               />
-            ))}
+              );
+            })}
+            {virtualPadBottom > 0 && (
+              <tr aria-hidden="true" style={{ height: virtualPadBottom }} />
+            )}
           </tbody>
         </table>
       </div>
@@ -2527,6 +2585,8 @@ function GridRow({
   values,
   allPages,
   users,
+  virtualIndex,
+  measureRef,
   selectedCells,
   editingCell,
   isRowSelected,
@@ -2551,6 +2611,9 @@ function GridRow({
   /** Raw page rows + workspace users, subscribed once in GridView (for Relation/Person cells). */
   allPages: readonly PageRow[];
   users: UserRow[];
+  /** Windowing (14386): index + measure callback from GridView's virtualizer. */
+  virtualIndex?: number;
+  measureRef?: (el: HTMLTableRowElement | null) => void;
   selectedCells: Set<string>;
   editingCell: string | null;
   isRowSelected: boolean;
@@ -2594,7 +2657,10 @@ function GridRow({
   );
 
   return (
-    <tr className={`border-b border-neutral-200/60 dark:border-neutral-800/60 hover:bg-neutral-50 dark:hover:bg-neutral-900/40 group${isRowSelected ? " bg-blue-50/60 dark:bg-blue-950/30" : ""}`}>
+    <tr
+      ref={measureRef}
+      data-index={virtualIndex}
+      className={`border-b border-neutral-200/60 dark:border-neutral-800/60 hover:bg-neutral-50 dark:hover:bg-neutral-900/40 group${isRowSelected ? " bg-blue-50/60 dark:bg-blue-950/30" : ""}`}>
       <td
         className={`px-3 py-0 h-9 border-r border-neutral-200 dark:border-neutral-800 sticky left-0 z-[1] transition-colors [box-shadow:1px_0_0_0_#e5e7eb] dark:[box-shadow:1px_0_0_0_#262626] ${isRowSelected ? "bg-blue-50/80 dark:bg-blue-950/40 group-hover:bg-blue-100/60 dark:group-hover:bg-blue-950/60" : "bg-white dark:bg-neutral-950 group-hover:bg-neutral-50 dark:group-hover:bg-neutral-900/40"}`}
         onContextMenu={onRowContextMenu}

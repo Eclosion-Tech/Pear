@@ -494,6 +494,7 @@ export function RichTextEditor({
     const tryClaimAutofocus = () => {
       const claimPlacement = shouldClaimFocusRef.current?.();
       if (!claimPlacement) return false;
+      sawFocusIntent = true;
       focusDebug("tryClaimAutofocus", {
         componentId: idStr(componentId),
         placement: claimPlacement,
@@ -523,19 +524,25 @@ export function RichTextEditor({
     };
 
     const focusRetryTimeouts: number[] = [];
+    // Retries exist for the "intent aimed at this block but the view wasn't
+    // focusable yet" race. Only schedule them when an attempt actually saw a
+    // focus intent (the intent is consumed on match, so it can't be
+    // re-checked) — without the gate, every block on a plain page open
+    // scheduled 9 timers in the first 1.5s (ticket 14382).
+    let sawFocusIntent = false;
     // Double rAF so we run after Strict Mode remount + parent registerFocusable.
     if (typeof requestAnimationFrame !== "undefined") {
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           if (viewRef.current !== editorView) return;
-          if (!tryClaimAutofocus()) scheduleAutofocusRetries();
+          if (!tryClaimAutofocus() && sawFocusIntent) scheduleAutofocusRetries();
         });
       });
     } else {
       focusRetryTimeouts.push(
         window.setTimeout(() => {
           if (viewRef.current !== editorView) return;
-          if (!tryClaimAutofocus()) scheduleAutofocusRetries();
+          if (!tryClaimAutofocus() && sawFocusIntent) scheduleAutofocusRetries();
         }, 0),
       );
     }

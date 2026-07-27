@@ -178,7 +178,13 @@ export function buildConnectionBuilder(
         if (typeof window !== "undefined") {
           localStorage.setItem(tokenKey, newToken);
         }
-        conn.subscriptionBuilder().subscribeToAllTables();
+        // No subscribeToAllTables here — every consumer subscribes through
+        // useTable (per-query subscriptions), and the SDK documents mixing
+        // the two as unsupported (dropped subscriptions / corrupted cache).
+        // It also downloaded the entire workspace on connect: every document
+        // body, every historical page_snapshot, every Yjs blob, and all
+        // audit/log tables, gating first paint on workspace size (14384).
+        // Full-cache consumers (snapshot export) subscribe on demand.
       })
       .onConnectError((_ctx, error) => {
         console.error("[SpacetimeDB] Connection error:", error);

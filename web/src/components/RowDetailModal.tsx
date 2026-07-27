@@ -24,7 +24,10 @@ interface RowDetailModalProps {
 
 export function RowDetailModal({ page, parentPage, onClose }: RowDetailModalProps) {
   const router = useRouter();
-  const [contents] = useTable(tables.page_content);
+  // Scoped: only this row-page's body (see DocPage).
+  const [contents] = useTable(
+    tables.page_content.where((c) => c.pageId.eq(page.id)),
+  );
   const content = contents.find((c) => c.pageId === page.id);
   const updateTitle = useUpdatePageTitle();
   const deletePage = useDeletePage();
