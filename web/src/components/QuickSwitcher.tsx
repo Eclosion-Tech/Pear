@@ -104,23 +104,28 @@ export function QuickSwitcher({ open, onClose }: QuickSwitcherProps) {
   const pagesRef = useRef(pages);
   pagesRef.current = pages;
 
-  /** Stable string — only changes when a page id or embedding presence changes (not array identity). */
+  /** Stable string — only changes when a page id or embedding presence changes (not array identity).
+   *  Gated on `open`: decoding an embedding allocates a 384-float array per
+   *  page, and the switcher is mounted (closed) on every Sidebar render —
+   *  don't pay O(pages × 384) while nothing is visible. */
   const embeddingIndexKey = useMemo(
     () =>
-      pages
-        .map((p) => `${p.id}:${getPageEmbeddingVector(p) ? "1" : "0"}`)
-        .join("|"),
-    [pages]
+      open
+        ? pages
+            .map((p) => `${p.id}:${getPageEmbeddingVector(p) ? "1" : "0"}`)
+            .join("|")
+        : "",
+    [pages, open]
   );
 
   const hasEmbeddings = useMemo(
-    () => pages.some((p) => getPageEmbeddingVector(p) !== null),
-    [pages]
+    () => open && pages.some((p) => getPageEmbeddingVector(p) !== null),
+    [pages, open]
   );
 
   useEffect(() => {
     const q = query.trim();
-    if (q.length < 2) {
+    if (!open || q.length < 2) {
       setSemanticBusy(false);
       setSemanticScores((prev) => (prev.size === 0 ? prev : new Map()));
       return;
@@ -168,7 +173,7 @@ export function QuickSwitcher({ open, onClose }: QuickSwitcherProps) {
       })();
     }, 280);
     return () => clearTimeout(t);
-  }, [query, embeddingIndexKey]);
+  }, [query, embeddingIndexKey, open]);
 
   const results = useMemo<ResultRow[]>(() => {
     const q = query.trim();

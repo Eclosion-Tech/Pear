@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { useTable, useReducer } from "spacetimedb/react";
 import { tables, reducers } from "@/src/module_bindings";
 
@@ -11,12 +12,16 @@ export function useOrchaJobs() {
 /** Jobs linked to a specific Pear page, newest first. */
 export function useOrchaJobsForPage(pageId: bigint) {
   const { jobs, isReady } = useOrchaJobs();
-  const pageJobs = jobs
-    .filter((j) => j.pageId === pageId)
-    .sort(
-      (a, b) =>
-        Number(b.createdAt.microsSinceUnixEpoch - a.createdAt.microsSinceUnixEpoch)
-    );
+  const pageJobs = useMemo(
+    () =>
+      jobs
+        .filter((j) => j.pageId === pageId)
+        .sort(
+          (a, b) =>
+            Number(b.createdAt.microsSinceUnixEpoch - a.createdAt.microsSinceUnixEpoch)
+        ),
+    [jobs, pageId],
+  );
   return { jobs: pageJobs, isReady };
 }
 
@@ -27,7 +32,10 @@ export function useOrchaTasks() {
 
 export function useOrchaTasksForJob(jobId: bigint) {
   const tasks = useOrchaTasks();
-  return tasks.filter((t) => t.jobId === jobId);
+  return useMemo(
+    () => tasks.filter((t) => t.jobId === jobId),
+    [tasks, jobId],
+  );
 }
 
 export function useOrchaAgents() {

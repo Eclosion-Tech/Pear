@@ -3,10 +3,40 @@
 interface PageMigratingShellProps {
   error?: string | null;
   onRetry?: () => void;
+  /** Lazy migration is switched off (`NEXT_PUBLIC_LAZY_BLOCKNOTE_MIGRATION=false`). */
+  disabled?: boolean;
 }
 
-/** Shown while BlockNote → ComponentTree lazy migration runs (no PearEditor flash). */
-export function PageMigratingShell({ error, onRetry }: PageMigratingShellProps) {
+/**
+ * Shown while BlockNote → ComponentTree lazy migration runs, and as the
+ * terminal state when migration failed or is disabled (there is no legacy
+ * editor to fall back to).
+ */
+export function PageMigratingShell({
+  error,
+  onRetry,
+  disabled,
+}: PageMigratingShellProps) {
+  if (disabled) {
+    return (
+      <div
+        className="rounded-lg border border-neutral-200 dark:border-neutral-800
+                   bg-neutral-50 dark:bg-neutral-900/50 px-4 py-6 text-sm
+                   text-neutral-600 dark:text-neutral-400"
+      >
+        <p className="font-medium text-neutral-800 dark:text-neutral-200">
+          This page is still in the legacy format
+        </p>
+        <p className="mt-2">
+          Lazy migration is disabled
+          (<code className="font-mono text-xs">NEXT_PUBLIC_LAZY_BLOCKNOTE_MIGRATION=false</code>).
+          Run the batch migration (<code className="font-mono text-xs">pnpm --filter web migrate-blocknote</code>)
+          or re-enable lazy migration to edit this page.
+        </p>
+      </div>
+    );
+  }
+
   if (error) {
     return (
       <div

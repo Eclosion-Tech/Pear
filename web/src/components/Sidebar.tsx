@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
 import {
@@ -16,11 +16,13 @@ import { useCurrentUser } from "@/src/hooks/useUser";
 import { useSpacetimeDB } from "spacetimedb/react";
 import {
   useInboxConversations,
-  useUnreadCountForConversation,
-  useMessagesForConversation,
+  useConversationMessages,
+  useConversationParticipants,
+  isVisibleConversationMessage,
   type ConversationRow,
+  type ConversationMessageRow,
 } from "@/src/hooks/useConversations";
-import { useAiUserInConversation } from "@/src/hooks/useAiUsers";
+import { useAiUserProfiles } from "@/src/hooks/useAiUsers";
 import { useTable, useReducer } from "spacetimedb/react";
 import { tables, reducers } from "@/src/module_bindings";
 import { SettingsPopover } from "@/src/components/SettingsPopover";
@@ -71,6 +73,56 @@ function InboxView() {
   const router = useRouter();
   const { identity } = useSpacetimeDB();
   const conversations = useInboxConversations(identity);
+  const messages = useConversationMessages();
+  const participants = useConversationParticipants();
+  const { profiles: aiProfiles } = useAiUserProfiles();
+
+  // One pass over the message/participant tables for the whole inbox. The
+  // previous shape — every InboxRow scanning + sorting the entire message
+  // table twice via its own hooks — was O(conversations × messages log
+  // messages) per render, re-triggered ~3×/sec during any AI streaming turn.
+  const inboxData = useMemo(() => {
+    const meHex = identity?.toHexString();
+    const lastByConv = new Map<bigint, ConversationMessageRow>();
+    const watermarkByConv = new Map<bigint, bigint>();
+    const participantHexesByConv = new Map<bigint, Set<string>>();
+
+    for (const p of participants) {
+      const hex = p.identity.toHexString();
+      let set = participantHexesByConv.get(p.conversationId);
+      if (!set) {
+        set = new Set();
+        participantHexesByConv.set(p.conversationId, set);
+      }
+      set.add(hex);
+      if (meHex && hex === meHex) {
+        watermarkByConv.set(p.conversationId, p.lastViewedMessageId ?? 0n);
+      }
+    }
+
+    const unreadByConv = new Map<bigint, number>();
+    for (const m of messages) {
+      if (!isVisibleConversationMessage(m)) continue;
+      const prev = lastByConv.get(m.conversationId);
+      if (
+        !prev ||
+        m.createdAt.microsSinceUnixEpoch > prev.createdAt.microsSinceUnixEpoch
+      ) {
+        lastByConv.set(m.conversationId, m);
+      }
+      if (meHex) {
+        const watermark = watermarkByConv.get(m.conversationId) ?? 0n;
+        if (m.id > watermark) {
+          unreadByConv.set(
+            m.conversationId,
+            (unreadByConv.get(m.conversationId) ?? 0) + 1,
+          );
+        }
+      }
+    }
+    return { lastByConv, unreadByConv, participantHexesByConv };
+  }, [messages, participants, identity]);
+
   if (!identity) {
     return (
       <div className="px-2 py-2 text-xs text-neutral-400 dark:text-neutral-500 italic">
@@ -87,15 +139,24 @@ function InboxView() {
   }
   return (
     <div>
-      {conversations.map((conv) => (
-        <InboxRow
-          key={String(conv.id)}
-          conversation={conv}
-          onClick={() =>
-            router.push(`/workspace/${conv.pageId}?conversation=${conv.id}`)
-          }
-        />
-      ))}
+      {conversations.map((conv) => {
+        const hexes = inboxData.participantHexesByConv.get(conv.id);
+        const aiUser = hexes
+          ? aiProfiles.find((p) => hexes.has(p.identity.toHexString()))
+          : undefined;
+        return (
+          <InboxRow
+            key={String(conv.id)}
+            conversation={conv}
+            aiUserName={aiUser?.displayName}
+            last={inboxData.lastByConv.get(conv.id)}
+            unread={inboxData.unreadByConv.get(conv.id) ?? 0}
+            onClick={() =>
+              router.push(`/workspace/${conv.pageId}?conversation=${conv.id}`)
+            }
+          />
+        );
+      })}
       <StructuralFindingsList />
     </div>
   );
@@ -161,16 +222,17 @@ function StructuralFindingsList() {
 
 function InboxRow({
   conversation,
+  aiUserName,
+  last,
+  unread,
   onClick,
 }: {
   conversation: ConversationRow;
+  aiUserName: string | undefined;
+  last: ConversationMessageRow | undefined;
+  unread: number;
   onClick: () => void;
 }) {
-  const { identity } = useSpacetimeDB();
-  const aiUser = useAiUserInConversation(conversation.id);
-  const messages = useMessagesForConversation(conversation.id);
-  const unread = useUnreadCountForConversation(conversation.id, identity);
-  const last = messages[messages.length - 1];
   const isActive = conversation.status.tag === "Active";
   const kindLabel =
     conversation.kind.tag === "Dm" ? "DM"
@@ -188,7 +250,7 @@ function InboxRow({
       <span className="flex-1 min-w-0">
         <span className="flex items-center gap-1.5">
           <span className="truncate text-xs font-medium">
-            {aiUser?.displayName ?? "Conversation"}
+            {aiUserName ?? "Conversation"}
           </span>
           {kindLabel && (
             <span className="text-[9px] font-semibold uppercase px-1 py-px rounded bg-neutral-200 dark:bg-neutral-700 text-neutral-500 dark:text-neutral-400 shrink-0">
@@ -216,9 +278,11 @@ function InboxRow({
 
 // ─── Single page row in the sidebar tree ──────────────────────────────────────
 
+const NO_CHILD_PAGES: PageRow[] = [];
+
 interface SidebarItemProps {
   page: PageRow;
-  allPages: PageRow[];
+  childrenByParent: ReadonlyMap<bigint, PageRow[]>;
   depth: number;
   activeId: string | undefined;
   expandedIds: Set<string>;
@@ -240,7 +304,7 @@ interface SidebarItemProps {
 
 function SidebarItem({
   page,
-  allPages,
+  childrenByParent,
   depth,
   activeId,
   expandedIds,
@@ -269,9 +333,7 @@ function SidebarItem({
   const icon = page.icon ?? defaultIcon;
   const showEmojiPicker = emojiPickerPageId === page.id;
 
-  const children = allPages
-    .filter((p) => p.parentId === page.id)
-    .sort((a, b) => a.sortOrder - b.sortOrder);
+  const children = childrenByParent.get(page.id) ?? NO_CHILD_PAGES;
   const hasChildren = children.length > 0;
 
   // Drag-over state for the "drop into" highlight
@@ -415,7 +477,7 @@ function SidebarItem({
             <SidebarItem
               key={String(child.id)}
               page={child}
-              allPages={allPages}
+              childrenByParent={childrenByParent}
               depth={depth + 1}
               activeId={activeId}
               expandedIds={expandedIds}
@@ -449,7 +511,7 @@ export function Sidebar() {
   const activeId = pathname?.split("/").pop() ?? undefined;
 
   const { pages, isReady } = usePages();
-  const navPages = filterNavVisiblePages(pages);
+  const navPages = useMemo(() => filterNavVisiblePages(pages), [pages]);
   const { pages: deletedPages } = useDeletedPages();
   const createPage = useCreatePage();
   const deletePageSubtree = useDeletePageSubtree();
@@ -458,9 +520,30 @@ export function Sidebar() {
   const { user, displayName, initials } = useCurrentUser();
   const { workspaces, activeId: activeWorkspaceId, switchWorkspace } = useWorkspace();
 
-  const roots = navPages
-    .filter((p) => p.parentId == null)
-    .sort((a, b) => a.sortOrder - b.sortOrder);
+  const roots = useMemo(
+    () =>
+      navPages
+        .filter((p) => p.parentId == null)
+        .sort((a, b) => a.sortOrder - b.sortOrder),
+    [navPages],
+  );
+
+  // One pass over the tree instead of an O(pages) filter per SidebarItem —
+  // the tree renders N nodes, so per-node filtering is O(N × pages) on every
+  // render (and on every dragover frame while dragging).
+  const childrenByParent = useMemo(() => {
+    const map = new Map<bigint, PageRow[]>();
+    for (const p of navPages) {
+      if (p.parentId == null) continue;
+      const list = map.get(p.parentId);
+      if (list) list.push(p);
+      else map.set(p.parentId, [p]);
+    }
+    for (const list of map.values()) {
+      list.sort((a, b) => a.sortOrder - b.sortOrder);
+    }
+    return map;
+  }, [navPages]);
 
   const { enabled: repeaterSidebar, settled: flagSettled } = useRepeaterSidebarFlagState();
 
@@ -526,7 +609,21 @@ export function Sidebar() {
 
   // DnD state
   const [draggingId, setDraggingId] = useState<bigint | null>(null);
-  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
+  const [dropTarget, setDropTargetState] = useState<DropTarget | null>(null);
+  // `dragover` fires ~60Hz with a fresh object each time; bail out when the
+  // target hasn't actually changed so dragging doesn't re-render the whole
+  // tree per frame.
+  const setDropTarget = useCallback((next: DropTarget | null) => {
+    setDropTargetState((prev) =>
+      prev === next ||
+      (prev != null &&
+        next != null &&
+        prev.type === next.type &&
+        prev.pageId === next.pageId)
+        ? prev
+        : next,
+    );
+  }, []);
   const draggingIdRef = useRef<bigint | null>(null);
 
   // Keep a stable ref to pages so the auto-expand effect can read the latest
@@ -868,7 +965,7 @@ export function Sidebar() {
               <SidebarItem
                 key={String(page.id)}
                 page={page}
-                allPages={navPages}
+                childrenByParent={childrenByParent}
                 depth={0}
                 activeId={activeId}
                 expandedIds={expandedIds}

@@ -1,12 +1,22 @@
 "use client";
 
+import { useMemo } from "react";
 import { useTable, useReducer, useSpacetimeDB } from "spacetimedb/react";
 import { tables, reducers } from "@/src/module_bindings";
+
+// All derivations in this file are wrapped in useMemo keyed on the raw
+// useTable snapshot, which is referentially stable between row events
+// (useSyncExternalStore caches it). Unmemoized `.filter()` here returns a
+// fresh array identity every render, which silently defeats every
+// downstream useMemo/effect dep in consumers (ticket 14378).
 
 /** All non-deleted pages, live-synced. */
 export function usePages() {
   const [pages, isReady] = useTable(tables.page);
-  const active = pages.filter((p) => p.deletedAt == null);
+  const active = useMemo(
+    () => pages.filter((p) => p.deletedAt == null),
+    [pages],
+  );
   return { pages: active, isReady };
 }
 
@@ -18,31 +28,42 @@ export function filterNavVisiblePages<T extends { isHidden: boolean }>(pages: T[
 /** Child pages of a given parent (the "rows" of a database). */
 export function useChildPages(parentId: bigint) {
   const { pages, isReady } = usePages();
-  const children = pages.filter((p) => p.parentId === parentId);
+  const children = useMemo(
+    () => pages.filter((p) => p.parentId === parentId),
+    [pages, parentId],
+  );
   return { children, isReady };
 }
 
 /** Root-level pages (no parent). */
 export function useRootPages() {
   const { pages, isReady } = usePages();
-  const roots = pages.filter((p) => p.parentId == null);
+  const roots = useMemo(
+    () => pages.filter((p) => p.parentId == null),
+    [pages],
+  );
   return { roots, isReady };
 }
+
+const NO_ANCESTORS: Array<{ id: bigint; title: string }> = [];
 
 /** Ancestors of a page from root to immediate parent (for breadcrumbs). */
 export function usePageAncestors(pageId: bigint) {
   const { pages } = usePages();
-  const page = pages.find((p) => p.id === pageId);
-  if (!page) return [];
-  const ancestors: Array<{ id: bigint; title: string }> = [];
-  let parentId = page.parentId;
-  while (parentId != null) {
-    const parent = pages.find((p) => p.id === parentId);
-    if (!parent) break;
-    ancestors.unshift({ id: parent.id, title: parent.title || "Untitled" });
-    parentId = parent.parentId;
-  }
-  return ancestors;
+  return useMemo(() => {
+    const byId = new Map(pages.map((p) => [p.id, p]));
+    const page = byId.get(pageId);
+    if (!page) return NO_ANCESTORS;
+    const ancestors: Array<{ id: bigint; title: string }> = [];
+    let parentId = page.parentId;
+    while (parentId != null) {
+      const parent = byId.get(parentId);
+      if (!parent) break;
+      ancestors.unshift({ id: parent.id, title: parent.title || "Untitled" });
+      parentId = parent.parentId;
+    }
+    return ancestors;
+  }, [pages, pageId]);
 }
 
 export function useMovePage() {
@@ -161,10 +182,18 @@ export function useRestorePageToSnapshot() {
 /** Snapshots for a page, newest first. */
 export function usePageSnapshots(pageId: bigint) {
   const [snapshots] = useTable(tables.page_snapshot);
-  const forPage = snapshots
-    .filter((s) => s.pageId === pageId)
-    .sort((a, b) => Number(b.snapshotAt.microsSinceUnixEpoch - a.snapshotAt.microsSinceUnixEpoch));
-  return forPage;
+  return useMemo(
+    () =>
+      snapshots
+        .filter((s) => s.pageId === pageId)
+        .sort((a, b) =>
+          Number(
+            b.snapshotAt.microsSinceUnixEpoch -
+              a.snapshotAt.microsSinceUnixEpoch,
+          ),
+        ),
+    [snapshots, pageId],
+  );
 }
 
 /** Permanently delete every trashed page the caller can write. */
@@ -179,7 +208,10 @@ export function usePurgePage() {
 /** Soft-deleted pages (in trash). */
 export function useDeletedPages() {
   const [pages, isReady] = useTable(tables.page);
-  const deleted = pages.filter((p) => p.deletedAt != null);
+  const deleted = useMemo(
+    () => pages.filter((p) => p.deletedAt != null),
+    [pages],
+  );
   return { pages: deleted, isReady };
 }
 
@@ -219,7 +251,10 @@ export function useConnection() {
 /** Attachments for a page (files in S3/MinIO, metadata in SpacetimeDB). */
 export function usePageAttachments(pageId: bigint) {
   const [attachments] = useTable(tables.attachment);
-  return attachments.filter((a) => a.pageId === pageId);
+  return useMemo(
+    () => attachments.filter((a) => a.pageId === pageId),
+    [attachments, pageId],
+  );
 }
 
 export function useCreateAttachment() {

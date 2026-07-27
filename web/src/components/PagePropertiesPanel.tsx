@@ -1,8 +1,11 @@
 "use client";
 
 import { useMemo } from "react";
+import { useTable } from "spacetimedb/react";
+import { tables } from "@/src/module_bindings";
 import { PropertyCell } from "./PropertyCell";
 import { usePagePropertyValues, usePropertyDefinitions } from "@/src/hooks/useDatabase";
+import { useUsers } from "@/src/hooks/useUser";
 import { buildSiblingValues } from "@/src/lib/formulaEval";
 
 export function PagePropertiesPanel({
@@ -13,6 +16,10 @@ export function PagePropertiesPanel({
   properties: ReturnType<typeof usePropertyDefinitions>;
 }) {
   const values = usePagePropertyValues(pageId);
+  // Subscribed once for the whole panel — Relation/Person cells resolve
+  // titles and names from these instead of subscribing per cell.
+  const [allPages] = useTable(tables.page);
+  const { users } = useUsers();
 
   const siblingValues = useMemo(
     () => buildSiblingValues(values, properties),
@@ -35,6 +42,8 @@ export function PagePropertiesPanel({
                 definition={prop}
                 value={val?.value}
                 siblingValues={siblingValues}
+                allPages={allPages}
+                users={users}
               />
             </div>
           </div>

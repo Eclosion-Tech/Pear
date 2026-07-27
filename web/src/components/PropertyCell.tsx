@@ -1,15 +1,10 @@
 "use client";
 
 import { useState, useRef, useEffect, useMemo } from "react";
-import { useTable } from "spacetimedb/react";
-import { tables } from "@/src/module_bindings";
-import {
-  useSetPropertyValue,
-  useChildPages,
-} from "@/src/hooks/usePages";
+import { useSetPropertyValue, type PageRow } from "@/src/hooks/usePages";
 import { useUpdatePropertyConfig } from "@/src/hooks/useDatabase";
 import type { PropertyDefinitionRow, PagePropertyValueRow } from "@/src/hooks/useDatabase";
-import { useUsers, type UserRow } from "@/src/hooks/useUser";
+import { type UserRow } from "@/src/hooks/useUser";
 import { FloatingPopup } from "./FloatingPopup";
 import { formatDateOnly } from "../lib/date-only";
 import { uploadWorkspaceBlob, usePearWorkspaceSlug } from "@/src/lib/blobUpload";
@@ -45,6 +40,14 @@ interface PropertyCellProps {
    * (Escape) so the parent can move focus to the next cell.
    */
   onRequestNavigate?: (dir: NavigateDir) => void;
+  /**
+   * Page rows (raw table, deleted included so relation chips keep resolving
+   * titles) and workspace users, subscribed ONCE by the hosting surface —
+   * a grid renders one PropertyCell per cell, and per-cell useTable calls
+   * each opened their own duplicate server subscription (ticket 14379).
+   */
+  allPages: readonly PageRow[];
+  users: UserRow[];
 }
 
 export function PropertyCell({
@@ -54,6 +57,8 @@ export function PropertyCell({
   siblingValues = {},
   forceEdit,
   onRequestNavigate,
+  allPages,
+  users,
 }: PropertyCellProps) {
   const setPropertyValue = useSetPropertyValue();
   const updatePropertyConfig = useUpdatePropertyConfig();
@@ -161,6 +166,7 @@ export function PropertyCell({
         <RelationCell
           value={value?.tag === "Relation" ? (value.value as bigint[]) : []}
           config={definition.config}
+          allPages={allPages}
           onSave={(v) => save({ tag: "Relation", value: v })}
         />
       );
@@ -169,6 +175,7 @@ export function PropertyCell({
       return (
         <PersonCell
           value={value?.tag === "Person" ? (value.value as string[]) : []}
+          users={users}
           onSave={(v) => save({ tag: "Person", value: v })}
         />
       );
@@ -885,10 +892,13 @@ interface RelationConfig {
 function RelationCell({
   value,
   config,
+  allPages,
   onSave,
 }: {
   value: bigint[];
   config: string;
+  /** Raw page rows from the hosting surface's single subscription. */
+  allPages: readonly PageRow[];
   onSave: (v: bigint[]) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -910,11 +920,14 @@ function RelationCell({
     }
   })();
 
-  const { children: allLinkedPages } = useChildPages(
-    targetPageId ?? BigInt(0)
+  const allLinkedPages = useMemo(
+    () =>
+      allPages.filter(
+        (p) => p.parentId === (targetPageId ?? BigInt(0)) && p.deletedAt == null,
+      ),
+    [allPages, targetPageId],
   );
 
-  const [allPages] = useTable(tables.page);
   const linkedPageTitles = valueStrs.map((idStr) => {
     const page = allPages.find((p) => p.id.toString() === idStr);
     return { idStr, title: page?.title ?? `#${idStr}` };
@@ -1055,16 +1068,18 @@ function userInitials(user: UserRow): string {
 
 function PersonCell({
   value,
+  users,
   onSave,
 }: {
   value: string[];
+  /** Deduplicated workspace users from the hosting surface's single subscription. */
+  users: UserRow[];
   onSave: (v: string[]) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const anchorRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const { users } = useUsers();
 
   const usersByIdentity = useMemo(() => {
     const map = new Map<string, UserRow>();

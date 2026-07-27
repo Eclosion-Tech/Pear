@@ -710,18 +710,22 @@ function EditableRichText({
   // the prosemirror view (and the user's IME / selection) on every scroll.
   const live = inViewport || hasFocus;
 
-  // Static-mode HTML — only re-rendered when static mode is active or
-  // about to be re-entered. Subscribing to `update` keeps the off-screen
-  // HTML fresh as remote deltas arrive.
-  const [html, setHtml] = useState<string>(() => yDocToHtml(doc));
+  // Static-mode HTML. Only maintained while static: in live mode ProseMirror
+  // renders the doc and `html` is unused, so serializing on every local
+  // keystroke would be pure waste. The live→static flip happens a full
+  // viewport away (rootMargin 100%), so the effect-time recompute at the
+  // transition is never visible. Blocks mount live, so the initial value is
+  // never rendered either — skip the mount-time serialization.
+  const [html, setHtml] = useState<string>("");
   useEffect(() => {
+    if (live) return;
     const update = () => setHtml(yDocToHtml(doc));
-    update();
+    update(); // catch edits made while live (incl. the live→static flip)
     doc.on("update", update);
     return () => {
       doc.off("update", update);
     };
-  }, [doc]);
+  }, [doc, live]);
 
   return (
     // `min-h-[1.5em]` keeps the wrapper non-zero-height even for empty

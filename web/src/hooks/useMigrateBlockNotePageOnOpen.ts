@@ -126,10 +126,6 @@ export function useMigrateBlockNotePageOnOpen(
     isComponentTree || status === "not_needed" || status === "done";
   const showMigrating =
     !showComponentTree && (status === "pending" || status === "migrating");
-  const showPearEditor =
-    !showComponentTree &&
-    !showMigrating &&
-    (status === "disabled" || status === "failed");
 
   return {
     status,
@@ -137,6 +133,5 @@ export function useMigrateBlockNotePageOnOpen(
     retry,
     showComponentTree,
     showMigrating,
-    showPearEditor,
   };
 }

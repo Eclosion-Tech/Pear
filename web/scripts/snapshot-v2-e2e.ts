@@ -269,7 +269,8 @@ async function main(): Promise<void> {
   );
   expect(
     "Yjs bytes byte-identical",
-    Boolean(restoredYjs) && Buffer.from(restoredYjs.data).equals(Buffer.from(yjsBytes)),
+    restoredYjs !== undefined &&
+      Buffer.from(restoredYjs.data).equals(Buffer.from(yjsBytes)),
     `got ${restoredYjs ? Buffer.from(restoredYjs.data).toString("hex") : "none"}`,
   );
   const restoredCt = rows<Page>(conn, "page").find(

@@ -3,6 +3,7 @@
 import {
   createContext,
   useContext,
+  useMemo,
   type ReactNode,
 } from "react";
 import type { PulpContextValue, PulpMutations, PulpConfig, BlockTree } from "../types";
@@ -20,11 +21,17 @@ export function PulpProvider({
   mutations: PulpMutations;
   children: ReactNode;
 }) {
-  const value: PulpContextValue = {
-    tree,
-    config,
-    ...mutations,
-  };
+  // Memoized so a host re-render with unchanged inputs doesn't publish a new
+  // context object — an inline literal here re-renders every usePulp()
+  // consumer (every BlockNodeView) and defeats their memo().
+  const value: PulpContextValue = useMemo(
+    () => ({
+      tree,
+      config,
+      ...mutations,
+    }),
+    [tree, config, mutations],
+  );
   return (
     <PulpContext.Provider value={value}>{children}</PulpContext.Provider>
   );

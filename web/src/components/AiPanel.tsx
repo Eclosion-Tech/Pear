@@ -1,14 +1,16 @@
 "use client";
 
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from "react";
+import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useSpacetimeDB } from "spacetimedb/react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  useOrchaJobs,
   useOrchaTasksForJob,
   type OrchaJobRow,
 } from "@/src/hooks/useOrcha";
+import type { BridgeCommand, MessageFeedback } from "@/src/module_bindings/types";
 import {
   useConversations,
   useInboxConversations,
@@ -150,10 +152,7 @@ function JobCard({ job }: { job: OrchaJobRow }) {
  * subagent-style card — the full expandable task breakdown (`JobCard`) framed
  * so it reads as "this message spawned a background subagent."
  */
-function InlineJobCard({ jobId }: { jobId: bigint }) {
-  const [jobs] = useTable(tables.orcha_job);
-  const job = jobs.find((j) => j.id === jobId);
-  if (!job) return null;
+function InlineJobCard({ job }: { job: OrchaJobRow }) {
   return (
     <div className="mt-2 pl-2.5 border-l-2 border-violet-300/60 dark:border-violet-600/40">
       <div className="flex items-center gap-1.5 mb-1.5">
@@ -176,6 +175,8 @@ function InlineJobCard({ jobId }: { jobId: bigint }) {
 // OFF by default — without it a GFM table renders as one line of raw pipes).
 // Wide tables scroll within the narrow chat panel instead of overflowing it.
 const MD_REMARK_PLUGINS = [remarkGfm];
+/** Stable empty array so attachment-less messages don't churn props. */
+const NO_MESSAGE_ATTACHMENTS: ConversationAttachmentRow[] = [];
 const MD_COMPONENTS: Components = {
   table: ({ node: _node, ...props }) => (
     <div className="overflow-x-auto">
@@ -183,6 +184,20 @@ const MD_COMPONENTS: Components = {
     </div>
   ),
 };
+
+/**
+ * react-markdown parses synchronously in render with no caching, so it must
+ * only re-render when its source text changes. During streaming the worker
+ * flushes ~every 300ms; this memo caps each flush's parse cost at the one
+ * message (segment) that grew instead of the whole transcript.
+ */
+const MemoMarkdown = memo(function MemoMarkdown({ text }: { text: string }) {
+  return (
+    <Markdown remarkPlugins={MD_REMARK_PLUGINS} components={MD_COMPONENTS}>
+      {text}
+    </Markdown>
+  );
+});
 
 function ThinkingBlock({ thinking, isStreaming }: { thinking: string; isStreaming: boolean }) {
   const [expanded, setExpanded] = useState(isStreaming);
@@ -298,22 +313,24 @@ const TOOL_ICONS: Record<string, string> = {
 function ToolCallItem({
   tc,
   conversationId,
+  bridgeCommands,
 }: {
   tc: ToolCallInfo;
   conversationId: bigint;
+  /** bridge_command rows already scoped to this conversation (hoisted to the thread). */
+  bridgeCommands: BridgeCommand[];
 }) {
   const router = useRouter();
-  const [bridgeCommands] = useTable(tables.bridge_command);
   const confirmCommand = useReducer(reducers.confirmBridgeCommand);
   const denyCommand = useReducer(reducers.denyBridgeCommand);
   const [bridgeBusy, setBridgeBusy] = useState<string | null>(null);
 
-  // Most-recent bridge_command for this conversation matching a command string —
-  // links a tool_bash call to its live row (status + approval).
+  // Most-recent bridge_command matching a command string — links a tool_bash
+  // call to its live row (status + approval).
   const matchBridge = (command: string) =>
     bridgeCommands
-      .filter((c) => c.conversationId === conversationId && c.command === command)
-      .reduce<(typeof bridgeCommands)[number] | undefined>(
+      .filter((c) => c.command === command)
+      .reduce<BridgeCommand | undefined>(
         (best, c) => (best && best.id > c.id ? best : c),
         undefined,
       );
@@ -452,9 +469,11 @@ function ToolCallItem({
 function ToolCallsDisplay({
   toolCallsJson,
   conversationId,
+  bridgeCommands,
 }: {
   toolCallsJson: string;
   conversationId: bigint;
+  bridgeCommands: BridgeCommand[];
 }) {
   let calls: ToolCallInfo[] = [];
   try {
@@ -466,7 +485,7 @@ function ToolCallsDisplay({
   return (
     <div className="mt-1.5 mb-1.5 space-y-1">
       {calls.map((tc, i) => (
-        <ToolCallItem key={i} tc={tc} conversationId={conversationId} />
+        <ToolCallItem key={i} tc={tc} conversationId={conversationId} bridgeCommands={bridgeCommands} />
       ))}
     </div>
   );
@@ -481,11 +500,13 @@ function TimelineDisplay({
   blocks,
   toolCallsJson,
   conversationId,
+  bridgeCommands,
   streaming,
 }: {
   blocks: TimelineBlock[];
   toolCallsJson: string | undefined;
   conversationId: bigint;
+  bridgeCommands: BridgeCommand[];
   streaming: boolean;
 }) {
   const byId = useMemo(() => {
@@ -509,14 +530,14 @@ function TimelineDisplay({
               key={i}
               className="ai-message-md text-sm leading-relaxed prose prose-sm prose-neutral dark:prose-invert max-w-none"
             >
-              <Markdown remarkPlugins={MD_REMARK_PLUGINS} components={MD_COMPONENTS}>
-                {b.text}
-              </Markdown>
+              <MemoMarkdown text={b.text} />
             </div>
           ) : null;
         }
         const tc = byId.get(b.id);
-        return tc ? <ToolCallItem key={i} tc={tc} conversationId={conversationId} /> : null;
+        return tc ? (
+          <ToolCallItem key={i} tc={tc} conversationId={conversationId} bridgeCommands={bridgeCommands} />
+        ) : null;
       })}
       {streaming && <span className="animate-pulse">|</span>}
     </div>
@@ -525,7 +546,22 @@ function TimelineDisplay({
 
 // ── AI message content with status-aware rendering ────────────────────────────
 
-function AiMessageContent({ msg, aiName }: { msg: ConversationMessageRow; aiName: string }) {
+// Memoized on the message row object: the SDK's table cache only replaces a
+// row object when that row changes, so during streaming only the growing
+// message re-renders — not the whole transcript.
+const AiMessageContent = memo(function AiMessageContent({
+  msg,
+  aiName,
+  bridgeCommands,
+  feedback,
+}: {
+  msg: ConversationMessageRow;
+  aiName: string;
+  /** bridge_command rows scoped to this conversation (hoisted to the thread). */
+  bridgeCommands: BridgeCommand[];
+  /** Current user's feedback row for this message, if any. */
+  feedback: MessageFeedback | undefined;
+}) {
   const status = msg.status?.tag ?? "Complete";
   const thinking = msg.thinking;
   const toolCallsJson = msg.toolCallsJson;
@@ -559,21 +595,24 @@ function AiMessageContent({ msg, aiName }: { msg: ConversationMessageRow; aiName
           blocks={timelineBlocks}
           toolCallsJson={toolCallsJson}
           conversationId={msg.conversationId}
+          bridgeCommands={bridgeCommands}
           streaming={status === "Streaming"}
         />
       ) : (
         <>
           {/* Tool calls */}
           {toolCallsJson && (
-            <ToolCallsDisplay toolCallsJson={toolCallsJson} conversationId={msg.conversationId} />
+            <ToolCallsDisplay
+              toolCallsJson={toolCallsJson}
+              conversationId={msg.conversationId}
+              bridgeCommands={bridgeCommands}
+            />
           )}
 
           {/* Message content */}
           {msg.content && (
             <div className="ai-message-md text-sm leading-relaxed prose prose-sm prose-neutral dark:prose-invert max-w-none">
-              <Markdown remarkPlugins={MD_REMARK_PLUGINS} components={MD_COMPONENTS}>
-                {msg.content}
-              </Markdown>
+              <MemoMarkdown text={msg.content} />
               {status === "Streaming" && <span className="animate-pulse">|</span>}
             </div>
           )}
@@ -604,11 +643,11 @@ function AiMessageContent({ msg, aiName }: { msg: ConversationMessageRow; aiName
       {/* Human review: thumbs up/down feedback on the finished turn. Replaces the
           old self-graded "intent check" banner with a durable, RLS-scoped signal. */}
       {status === "Complete" && (msg.content || toolCallsJson) && (
-        <MessageFeedbackControl messageId={msg.id} />
+        <MessageFeedbackControl messageId={msg.id} mine={feedback} />
       )}
     </>
   );
-}
+});
 
 // ── Message feedback (thumbs up/down) ─────────────────────────────────────────
 
@@ -618,13 +657,18 @@ function AiMessageContent({ msg, aiName }: { msg: ConversationMessageRow; aiName
  * we find this message's row to reflect/toggle the current rating. Re-clicking
  * the active rating clears it; clicking the other flips it in place.
  */
-function MessageFeedbackControl({ messageId }: { messageId: bigint }) {
-  const [feedback] = useTable(tables.message_feedback);
+function MessageFeedbackControl({
+  messageId,
+  mine,
+}: {
+  messageId: bigint;
+  /** This user's feedback row for this message (table is RLS-scoped to the rater). */
+  mine: MessageFeedback | undefined;
+}) {
   const setFeedback = useReducer(reducers.setMessageFeedback);
   const clearFeedback = useReducer(reducers.clearMessageFeedback);
   const [busy, setBusy] = useState(false);
 
-  const mine = feedback.find((f) => f.messageId === messageId);
   const current = mine?.rating?.tag as "Up" | "Down" | undefined;
 
   const apply = async (rating: "Up" | "Down") => {
@@ -928,10 +972,44 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
   const aiUser = useAiUserInConversation(conversation.id);
   const messages = useMessagesForConversation(conversation.id);
   const { profiles: allAiProfiles } = useAiUserProfiles();
-  const aiIdentityHexes = new Set(allAiProfiles.map((p) => p.identity.toHexString()));
+  const aiIdentityHexes = useMemo(
+    () => new Set(allAiProfiles.map((p) => p.identity.toHexString())),
+    [allAiProfiles],
+  );
   const sendMessage = useSendMessage();
   const sendUserMessage = useSendUserMessage();
   const conversationAttachments = useAttachmentsForConversation(conversation.id);
+  // Hoisted per-message table subscriptions: one subscription each for
+  // bridge commands, orcha jobs, and feedback instead of one per message /
+  // tool call (a 60-message thread with tool calls held 300+ duplicate
+  // whole-table subscriptions).
+  const [allBridgeCommands] = useTable(tables.bridge_command);
+  const conversationBridgeCommands = useMemo(
+    () => allBridgeCommands.filter((c) => c.conversationId === conversation.id),
+    [allBridgeCommands, conversation.id],
+  );
+  const { jobs: orchaJobs } = useOrchaJobs();
+  const jobsById = useMemo(
+    () => new Map(orchaJobs.map((j) => [j.id, j])),
+    [orchaJobs],
+  );
+  const [allFeedback] = useTable(tables.message_feedback);
+  const feedbackByMessage = useMemo(
+    () => new Map(allFeedback.map((f) => [f.messageId, f])),
+    [allFeedback],
+  );
+
+  // Bucketed once per attachment change — a per-message .filter() in the
+  // message map is O(messages × attachments) on every render.
+  const attachmentsByMessage = useMemo(() => {
+    const map = new Map<bigint, ConversationAttachmentRow[]>();
+    for (const a of conversationAttachments) {
+      const list = map.get(a.messageId);
+      if (list) list.push(a);
+      else map.set(a.messageId, [a]);
+    }
+    return map;
+  }, [conversationAttachments]);
   const closeConversation = useCloseConversation();
   const createConversation = useCreateConversation();
   const router = useRouter();
@@ -950,8 +1028,9 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
   /** Fallback label / the thread's primary agent — used where no single message is in scope. */
   const aiName = aiUser?.displayName ?? "AI";
   /** Identity hex → profile, so each message can be credited to its real author. */
-  const aiProfileByHex = new Map(
-    allAiProfiles.map((p) => [p.identity.toHexString(), p]),
+  const aiProfileByHex = useMemo(
+    () => new Map(allAiProfiles.map((p) => [p.identity.toHexString(), p])),
+    [allAiProfiles],
   );
 
   const lastMessage = messages[messages.length - 1];
@@ -973,11 +1052,17 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
   // Id of the AI turn currently in flight (non-terminal AI message), if any.
   // A human message with a higher id arrived mid-turn and is therefore queued:
   // the worker defers it and picks it up when this turn finishes.
-  const inFlightAiMsg = [...messages].reverse().find((m) => {
-    const sid = m.sender.tag === "User" ? m.sender.value : undefined;
-    const isAi = sid != null && aiIdentityHexes.has(sid.toHexString());
-    return isAi && m.status?.tag !== "Complete" && m.status?.tag !== "Error";
-  });
+  const inFlightAiMsg = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      const sid = m.sender.tag === "User" ? m.sender.value : undefined;
+      const isAi = sid != null && aiIdentityHexes.has(sid.toHexString());
+      if (isAi && m.status?.tag !== "Complete" && m.status?.tag !== "Error") {
+        return m;
+      }
+    }
+    return undefined;
+  }, [messages, aiIdentityHexes]);
   const inFlightAiMsgId = inFlightAiMsg?.id;
 
   // Follow new output only when the reader is already at the bottom. Scrolling
@@ -1003,7 +1088,14 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
 
   useLayoutEffect(() => {
     if (!pinnedToBottom.current) return;
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    // "smooth" restarts its easing animation on every streaming flush (~300ms)
+    // and never settles, keeping the compositor busy for the whole turn — jump
+    // instantly while a turn is in flight and save the eased scroll for
+    // one-off arrivals in an idle thread.
+    scrollRef.current?.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: isAiActive ? "auto" : "smooth",
+    });
   }, [messages.length, isAiActive, lastMessage?.content, lastMessage?.thinking, lastMessage?.status?.tag]);
 
   // Opening a thread should always start at the newest message, regardless of
@@ -1256,7 +1348,7 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
                 {isHuman ? (
                   <>
                     <MessageAttachments
-                      attachments={conversationAttachments.filter((a) => a.messageId === msg.id)}
+                      attachments={attachmentsByMessage.get(msg.id) ?? NO_MESSAGE_ATTACHMENTS}
                     />
                     {msg.content && (
                       <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
@@ -1269,9 +1361,16 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
                     )}
                   </>
                 ) : (
-                  <AiMessageContent msg={msg} aiName={senderName} />
+                  <AiMessageContent
+                    msg={msg}
+                    aiName={senderName}
+                    bridgeCommands={conversationBridgeCommands}
+                    feedback={feedbackByMessage.get(msg.id)}
+                  />
                 )}
-                {msg.jobId != null && <InlineJobCard jobId={msg.jobId} />}
+                {msg.jobId != null && jobsById.has(msg.jobId) && (
+                  <InlineJobCard job={jobsById.get(msg.jobId)!} />
+                )}
               </div>
               {msg.linkedConversationId != null && (
                 <LinkedConversationCard linkedConversationId={msg.linkedConversationId} />
@@ -1623,7 +1722,10 @@ function ConversationListItem({
   const aiUser = useAiUserInConversation(conversation.id);
   const messages = useMessagesForConversation(conversation.id);
   const { profiles: allAiProfiles } = useAiUserProfiles();
-  const aiIdentityHexes = new Set(allAiProfiles.map((p) => p.identity.toHexString()));
+  const aiIdentityHexes = useMemo(
+    () => new Set(allAiProfiles.map((p) => p.identity.toHexString())),
+    [allAiProfiles],
+  );
   const lastMessage = messages[messages.length - 1];
   const isActive = conversation.status.tag === "Active";
   const lastSenderIsHuman =

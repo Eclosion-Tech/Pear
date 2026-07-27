@@ -460,13 +460,17 @@ function EditableHeading({ node, tree, children }: BlockRendererProps) {
   }, []);
 
   const live = inViewport || hasFocus;
-  const [html, setHtml] = useState(() => yDocToHtml(doc));
+  // Static-mode HTML — only maintained while static; live mode renders
+  // ProseMirror and never reads `html`, so a per-keystroke serialization
+  // would be wasted work. See the matching comment in RichText.tsx.
+  const [html, setHtml] = useState("");
   useEffect(() => {
+    if (live) return;
     const update = () => setHtml(yDocToHtml(doc));
-    update();
+    update(); // catch edits made while live (incl. the live→static flip)
     doc.on("update", update);
     return () => doc.off("update", update);
-  }, [doc]);
+  }, [doc, live]);
 
   const alignStyle =
     textAlign === "left" ? undefined : ({ textAlign } as const);

@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { useTable, useSpacetimeDB, useReducer } from "spacetimedb/react";
 import { tables, reducers } from "@/src/module_bindings";
 
@@ -7,32 +8,39 @@ import { tables, reducers } from "@/src/module_bindings";
  *  The same person can have multiple Identity rows (different sessions/devices).
  *  We keep the most recently seen row per email — but if any of the rows
  *  for that email is an admin we surface admin=true on the deduplicated
- *  entry, since admin status follows the *person*, not the device. */
+ *  entry, since admin status follows the *person*, not the device.
+ *
+ *  Memoized on the raw table snapshot: the dedup spread-clones rows, so an
+ *  unmemoized rebuild would churn every UserRow identity each render
+ *  (ticket 14378). */
 export function useUsers() {
   const [users, isReady] = useTable(tables.user);
-  const authenticated = users.filter((u) => u.isAuthenticated);
-  const byEmail = new Map<string, (typeof authenticated)[number]>();
-  for (const u of authenticated) {
-    const key = u.email || u.identity.toHexString();
-    const existing = byEmail.get(key);
-    if (!existing) {
-      byEmail.set(key, u);
-      continue;
+  const deduped = useMemo(() => {
+    const authenticated = users.filter((u) => u.isAuthenticated);
+    const byEmail = new Map<string, (typeof authenticated)[number]>();
+    for (const u of authenticated) {
+      const key = u.email || u.identity.toHexString();
+      const existing = byEmail.get(key);
+      if (!existing) {
+        byEmail.set(key, u);
+        continue;
+      }
+      const newer =
+        u.lastSeenAt.microsSinceUnixEpoch > existing.lastSeenAt.microsSinceUnixEpoch
+          ? u
+          : existing;
+      // Hoist admin=true onto the chosen row — multi-device admins shouldn't
+      // appear as non-admins just because their newest session is from a
+      // device that hadn't been promoted (e.g. a brand-new tab connected
+      // before client_connected ran the bootstrap path).
+      byEmail.set(key, {
+        ...newer,
+        isAdmin: existing.isAdmin || u.isAdmin,
+      });
     }
-    const newer =
-      u.lastSeenAt.microsSinceUnixEpoch > existing.lastSeenAt.microsSinceUnixEpoch
-        ? u
-        : existing;
-    // Hoist admin=true onto the chosen row — multi-device admins shouldn't
-    // appear as non-admins just because their newest session is from a
-    // device that hadn't been promoted (e.g. a brand-new tab connected
-    // before client_connected ran the bootstrap path).
-    byEmail.set(key, {
-      ...newer,
-      isAdmin: existing.isAdmin || u.isAdmin,
-    });
-  }
-  return { users: [...byEmail.values()], isReady };
+    return [...byEmail.values()];
+  }, [users]);
+  return { users: deduped, isReady };
 }
 
 /** Imperative `set_user_admin` call. */

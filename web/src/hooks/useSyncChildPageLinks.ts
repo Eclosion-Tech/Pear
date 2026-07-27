@@ -38,7 +38,7 @@ function parsePageLinkPageId(propsJson: string): string | null {
 }
 
 /**
- * Mirror PearEditor's child-page sync: auto-insert `PageLink` rows for each
+ * Child-page sync: auto-insert `PageLink` rows for each
  * child page missing from the tree, and remove stale links when a child is
  * deleted or reparented away.
  */

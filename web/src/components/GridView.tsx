@@ -14,6 +14,7 @@ import {
   useUpdatePageTitle,
 } from "@/src/hooks/usePages";
 import type { PageRow } from "@/src/hooks/usePages";
+import { useUsers, type UserRow } from "@/src/hooks/useUser";
 import {
   useDatabaseSchema,
   useDatabaseViews,
@@ -87,7 +88,7 @@ function compareForSort(
   a: PageRow,
   b: PageRow,
   rule: SortRule,
-  allValues: PropValRow[],
+  valueByPageProp: ReadonlyMap<string, PropValRow>,
 ): number {
   const dir = rule.direction === "asc" ? 1 : -1;
 
@@ -95,12 +96,8 @@ function compareForSort(
     return dir * (a.title ?? "").localeCompare(b.title ?? "");
   }
 
-  const aEntry = allValues.find(
-    (v) => v.pageId === a.id && v.propertyDefinitionId === rule.propertyId,
-  );
-  const bEntry = allValues.find(
-    (v) => v.pageId === b.id && v.propertyDefinitionId === rule.propertyId,
-  );
+  const aEntry = valueByPageProp.get(`${a.id}|${rule.propertyId}`);
+  const bEntry = valueByPageProp.get(`${b.id}|${rule.propertyId}`);
 
   // Rows missing a value sort last regardless of direction
   if (!aEntry && !bEntry) return 0;
@@ -206,6 +203,9 @@ function isPropValueEmpty(pv: { tag: string; value: unknown }): boolean {
 }
 
 type PropValRow = { pageId: bigint; propertyDefinitionId: bigint; value: { tag: string; value: unknown } };
+/** One row's property values, same element type as `usePagePropertyValues`. */
+type RowPropertyValues = ReturnType<typeof usePagePropertyValues>;
+const NO_ROW_VALUES: RowPropertyValues = [];
 
 function matchesTextOp(text: string, op: FilterOperator, value: string): boolean {
   const t = text.toLowerCase();
@@ -224,7 +224,7 @@ function matchesTextOp(text: string, op: FilterOperator, value: string): boolean
 function matchesFilter(
   row: PageRow,
   filter: FilterRule,
-  allValues: PropValRow[],
+  valueByPageProp: ReadonlyMap<string, PropValRow>,
   properties: PropertyDefinitionRow[],
 ): boolean {
   const { propertyId, operator, value } = filter;
@@ -233,9 +233,7 @@ function matchesFilter(
     return matchesTextOp(row.title ?? "", operator, value);
   }
 
-  const pv = allValues.find(
-    (v) => v.pageId === row.id && v.propertyDefinitionId === propertyId,
-  );
+  const pv = valueByPageProp.get(`${row.id}|${propertyId}`);
 
   if (operator === "is_empty") return !pv || isPropValueEmpty(pv.value);
   if (operator === "is_not_empty") return !!pv && !isPropValueEmpty(pv.value);
@@ -589,8 +587,10 @@ export function GridView({ page }: GridViewProps) {
   const [relationTargetId, setRelationTargetId] = useState<bigint | null>(null);
   const addAnchorRef = useRef<HTMLButtonElement>(null);
 
-  // All Database pages for Relation target picker
+  // All Database pages for Relation target picker; users for Person cells.
+  // Both subscribed once here and threaded to every cell (ticket 14379).
   const [allPages] = useTable(tables.page);
+  const { users } = useUsers();
   const databasePages = allPages.filter(
     (p) => p.pageType.tag === "Database" && !p.deletedAt && p.id !== page.id
   );
@@ -600,12 +600,34 @@ export function GridView({ page }: GridViewProps) {
   const [activeFilters, setActiveFilters] = useState<FilterRule[]>([]);
   const [filterBarOpen, setFilterBarOpen] = useState(false);
 
+  // Two indexes built in one pass so nothing below scans the whole
+  // (workspace-wide) value table: per-row slices for GridRow/ListCellValue,
+  // and a `${pageId}|${propId}` lookup for filter/sort/fill predicates —
+  // .find() inside a sort comparator is O(rows log rows × table).
+  const valuesByPage = useMemo(() => {
+    const map = new Map<bigint, RowPropertyValues>();
+    for (const v of allPropertyValues) {
+      const list = map.get(v.pageId);
+      if (list) list.push(v);
+      else map.set(v.pageId, [v]);
+    }
+    return map;
+  }, [allPropertyValues]);
+
+  const valueByPageProp = useMemo(() => {
+    const map = new Map<string, PropValRow>();
+    for (const v of allPropertyValues as unknown as PropValRow[]) {
+      map.set(`${v.pageId}|${v.propertyDefinitionId}`, v);
+    }
+    return map;
+  }, [allPropertyValues]);
+
   const filteredRows = useMemo(() => {
     if (activeFilters.length === 0) return rows;
     return rows.filter((row) =>
-      activeFilters.every((f) => matchesFilter(row, f, allPropertyValues as unknown as PropValRow[], properties)),
+      activeFilters.every((f) => matchesFilter(row, f, valueByPageProp, properties)),
     );
-  }, [rows, activeFilters, allPropertyValues, properties]);
+  }, [rows, activeFilters, valueByPageProp, properties]);
 
   function addFilter() {
     const firstProp = properties[0] ?? null;
@@ -649,12 +671,12 @@ export function GridView({ page }: GridViewProps) {
     if (activeSort.length === 0) return filteredRows;
     return [...filteredRows].sort((a, b) => {
       for (const rule of activeSort) {
-        const cmp = compareForSort(a, b, rule, allPropertyValues as unknown as PropValRow[]);
+        const cmp = compareForSort(a, b, rule, valueByPageProp);
         if (cmp !== 0) return cmp;
       }
       return 0;
     });
-  }, [filteredRows, activeSort, allPropertyValues]);
+  }, [filteredRows, activeSort, valueByPageProp]);
 
   function addSort() {
     const firstProp = properties[0] ?? null;
@@ -756,9 +778,9 @@ export function GridView({ page }: GridViewProps) {
       isDraggingFillRef.current = false;
 
       if (fillSource && fillTarget && fillSource.rowId !== fillTarget) {
-        const sourceValue = (allPropertyValues as unknown as Array<{ pageId: bigint; propertyDefinitionId: bigint; value: unknown }>)
-          .find((v) => v.pageId === fillSource.rowId && v.propertyDefinitionId === fillSource.propId)
-          ?.value;
+        const sourceValue = valueByPageProp.get(
+          `${fillSource.rowId}|${fillSource.propId}`,
+        )?.value;
 
         if (sourceValue) {
           const sourceIdx = sortedRows.findIndex((r) => r.id === fillSource.rowId);
@@ -793,7 +815,7 @@ export function GridView({ page }: GridViewProps) {
     document.addEventListener("mouseup", onMouseUp);
     return () => document.removeEventListener("mouseup", onMouseUp);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fillSource, fillTarget, sortedRows, allPropertyValues]);
+  }, [fillSource, fillTarget, sortedRows, valueByPageProp]);
 
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -1250,6 +1272,7 @@ export function GridView({ page }: GridViewProps) {
         <ListView
           rows={sortedRows}
           properties={displayProperties}
+          valuesByPage={valuesByPage}
           selectedRowIds={selectedRowIds}
           anyRowsSelected={selectedRowIds.size > 0}
           onRowSelect={toggleRowSelect}
@@ -1439,6 +1462,9 @@ export function GridView({ page }: GridViewProps) {
                 row={row}
                 rowIdx={rowIdx}
                 properties={displayProperties}
+                values={valuesByPage.get(row.id) ?? NO_ROW_VALUES}
+                allPages={allPages}
+                users={users}
                 selectedCells={selectedCells}
                 editingCell={editingCell}
                 isRowSelected={selectedRowIds.has(row.id)}
@@ -2388,6 +2414,7 @@ function OptionsEditor({
 function ListView({
   rows,
   properties,
+  valuesByPage,
   selectedRowIds,
   anyRowsSelected,
   onRowSelect,
@@ -2395,6 +2422,7 @@ function ListView({
 }: {
   rows: PageRow[];
   properties: ReturnType<typeof usePropertyDefinitions>;
+  valuesByPage: ReadonlyMap<bigint, RowPropertyValues>;
   selectedRowIds: Set<bigint>;
   anyRowsSelected: boolean;
   onRowSelect: (rowId: bigint, rowIdx: number, shiftKey: boolean) => void;
@@ -2430,7 +2458,11 @@ function ListView({
             {/* Inline chips for first few select/multi-select properties */}
             <div className="flex items-center gap-1.5 flex-shrink-0">
               {properties.slice(0, 4).map((prop) => (
-                <ListCellValue key={String(prop.id)} row={row} prop={prop} />
+                <ListCellValue
+                  key={String(prop.id)}
+                  values={valuesByPage.get(row.id) ?? NO_ROW_VALUES}
+                  prop={prop}
+                />
               ))}
             </div>
             <button
@@ -2447,8 +2479,7 @@ function ListView({
   );
 }
 
-function ListCellValue({ row, prop }: { row: PageRow; prop: NonNullable<ReturnType<typeof usePropertyDefinitions>[number]> }) {
-  const values = usePagePropertyValues(row.id);
+function ListCellValue({ values, prop }: { values: RowPropertyValues; prop: NonNullable<ReturnType<typeof usePropertyDefinitions>[number]> }) {
   const val = values.find((v) => v.propertyDefinitionId === prop.id);
   if (!val) return null;
   const tag = prop.propertyType.tag;
@@ -2493,6 +2524,9 @@ function GridRow({
   row,
   rowIdx: _rowIdx,
   properties,
+  values,
+  allPages,
+  users,
   selectedCells,
   editingCell,
   isRowSelected,
@@ -2512,6 +2546,11 @@ function GridRow({
   row: PageRow;
   rowIdx: number;
   properties: ReturnType<typeof usePropertyDefinitions>;
+  /** This row's slice of page_property_value, from GridView's valuesByPage index. */
+  values: RowPropertyValues;
+  /** Raw page rows + workspace users, subscribed once in GridView (for Relation/Person cells). */
+  allPages: readonly PageRow[];
+  users: UserRow[];
   selectedCells: Set<string>;
   editingCell: string | null;
   isRowSelected: boolean;
@@ -2528,7 +2567,6 @@ function GridRow({
   onFillDragStart: (rowId: bigint, propId: bigint) => void;
   onFillDragEnter: (rowId: bigint, propId: bigint) => void;
 }) {
-  const values = usePagePropertyValues(row.id);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(row.title);
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -2642,6 +2680,8 @@ function GridRow({
               siblingValues={siblingValues}
               forceEdit={editingCell === cellKey}
               onRequestNavigate={onCellNavigate}
+              allPages={allPages}
+              users={users}
             />
             {showFillHandle && (
               <div

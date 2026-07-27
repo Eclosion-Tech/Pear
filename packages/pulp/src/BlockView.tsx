@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { PulpProvider } from "./context/PulpProvider";
 import { BlockNodeView } from "./BlockNodeView";
 import { EmptyTreeFallback, SkeletonDoc } from "./fallbacks";
@@ -37,11 +37,14 @@ export function BlockView({
     assertRegistryAgainstDefs(tree.defs);
   }, [tree.defs, tree.loading]);
 
-  const mergedConfig: PulpConfig = {
-    idbPrefix: "",
-    ...config,
-    readOnly: true,
-  };
+  const mergedConfig: PulpConfig = useMemo(
+    () => ({
+      idbPrefix: "",
+      ...config,
+      readOnly: true,
+    }),
+    [config],
+  );
 
   if (tree.loading) return <SkeletonDoc />;
   if (!tree.root) return <EmptyTreeFallback />;

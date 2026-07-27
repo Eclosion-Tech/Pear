@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { useTable, useReducer } from "spacetimedb/react";
 import type { Identity } from "spacetimedb";
 import { tables, reducers } from "@/src/module_bindings";
@@ -51,12 +51,16 @@ export function useAiUserProfileByIdentity(identity: Identity | undefined) {
 export function useAiUserInConversation(conversationId: bigint) {
   const [allParticipants] = useTable(tables.conversation_participant);
   const { profiles } = useAiUserProfiles();
-  const participantHexes = new Set(
-    allParticipants
-      .filter((p) => p.conversationId === conversationId)
-      .map((p) => p.identity.toHexString())
-  );
-  return profiles.find((p) => participantHexes.has(p.identity.toHexString()));
+  return useMemo(() => {
+    const participantHexes = new Set(
+      allParticipants
+        .filter((p) => p.conversationId === conversationId)
+        .map((p) => p.identity.toHexString())
+    );
+    return profiles.find((p) =>
+      participantHexes.has(p.identity.toHexString())
+    );
+  }, [allParticipants, profiles, conversationId]);
 }
 
 export function useCreateAiUser() {

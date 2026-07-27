@@ -120,6 +120,15 @@ export function BlockThreadGutter({
   const measure = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
+    // Zero anchored threads (the common case) must cost zero layout work —
+    // this runs from a MutationObserver on the editor container, i.e. on
+    // every edit. Functional updates keep the previous (empty) array
+    // identity so the bail-out doesn't itself cause a re-render.
+    if (byBlock.size === 0) {
+      setPositions((prev) => (prev.length === 0 ? prev : []));
+      setDetached((prev) => (prev.length === 0 ? prev : []));
+      return;
+    }
     const containerTop = container.getBoundingClientRect().top;
     const next: { top: number; threads: BlockThreads }[] = [];
     const orphans: BlockThreads[] = [];
@@ -133,8 +142,22 @@ export function BlockThreadGutter({
       const top = el.getBoundingClientRect().top - containerTop + container.scrollTop;
       next.push({ top, threads });
     }
-    setPositions(next);
-    setDetached(orphans);
+    // Preserve array identity when nothing moved so a no-op measure is a
+    // no-op render. `threads` objects come from the byBlock memo, so
+    // reference equality is meaningful.
+    setPositions((prev) =>
+      prev.length === next.length &&
+      prev.every(
+        (p, i) => p.top === next[i].top && p.threads === next[i].threads,
+      )
+        ? prev
+        : next,
+    );
+    setDetached((prev) =>
+      prev.length === orphans.length && prev.every((p, i) => p === orphans[i])
+        ? prev
+        : orphans,
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [containerRef, anchorsKey, byBlock]);
 
@@ -142,8 +165,14 @@ export function BlockThreadGutter({
     measure();
   }, [measure]);
 
-  // Recompute on editor content / size changes and window resize.
+  // Recompute on editor content / size changes and window resize. Not
+  // attached at all while the page has no anchored threads. `characterData`
+  // is deliberately omitted: pure text edits that shift layout also produce
+  // childList mutations (ProseMirror splits/merges text nodes) or resize the
+  // container (ResizeObserver below), so watching every keystroke's
+  // character data only bought extra forced layouts.
   useEffect(() => {
+    if (byBlock.size === 0) return;
     const container = containerRef.current;
     if (!container) return;
     let raf = 0;
@@ -152,7 +181,7 @@ export function BlockThreadGutter({
       raf = requestAnimationFrame(measure);
     };
     const mo = new MutationObserver(schedule);
-    mo.observe(container, { childList: true, subtree: true, characterData: true });
+    mo.observe(container, { childList: true, subtree: true });
     const ro = new ResizeObserver(schedule);
     ro.observe(container);
     window.addEventListener("resize", schedule);
@@ -162,7 +191,7 @@ export function BlockThreadGutter({
       ro.disconnect();
       window.removeEventListener("resize", schedule);
     };
-  }, [containerRef, measure]);
+  }, [containerRef, measure, byBlock.size]);
 
   // Dismiss the card on outside click / Escape.
   const cardRef = useRef<HTMLDivElement | null>(null);

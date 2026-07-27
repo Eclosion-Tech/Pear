@@ -1,29 +1,46 @@
 "use client";
 
+import { useMemo } from "react";
 import { useTable, useReducer } from "spacetimedb/react";
 import { tables, reducers } from "@/src/module_bindings";
 
+// Derivations are useMemo'd on the stable useTable snapshot so consumers
+// get stable array identities between row events (ticket 14378).
+
 export function useDatabaseSchema(pageId: bigint) {
   const [schemas, isReady] = useTable(tables.database_schema);
-  const schema = schemas.find((s) => s.pageId === pageId);
+  const schema = useMemo(
+    () => schemas.find((s) => s.pageId === pageId),
+    [schemas, pageId],
+  );
   return { schema, isReady };
 }
 
 export function usePropertyDefinitions(schemaId: bigint) {
   const [defs] = useTable(tables.property_definition);
-  return defs
-    .filter((d) => d.schemaId === schemaId)
-    .sort((a, b) => a.order - b.order);
+  return useMemo(
+    () =>
+      defs
+        .filter((d) => d.schemaId === schemaId)
+        .sort((a, b) => a.order - b.order),
+    [defs, schemaId],
+  );
 }
 
 export function usePagePropertyValues(pageId: bigint) {
   const [values] = useTable(tables.page_property_value);
-  return values.filter((v) => v.pageId === pageId);
+  return useMemo(
+    () => values.filter((v) => v.pageId === pageId),
+    [values, pageId],
+  );
 }
 
 export function useDatabaseViews(pageId: bigint) {
   const [views, isReady] = useTable(tables.database_view);
-  const pageViews = views.filter((v) => v.pageId === pageId);
+  const pageViews = useMemo(
+    () => views.filter((v) => v.pageId === pageId),
+    [views, pageId],
+  );
   return { views: pageViews, isReady };
 }
 

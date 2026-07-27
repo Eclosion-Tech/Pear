@@ -18,9 +18,13 @@ export function useApiFieldMappings() {
 
 export function useApiFieldMappingsForEndpoint(endpointId: bigint) {
   const { mappings } = useApiFieldMappings();
-  return mappings
-    .filter((m) => m.endpointId === endpointId)
-    .sort((a, b) => a.fieldOrder - b.fieldOrder);
+  return useMemo(
+    () =>
+      mappings
+        .filter((m) => m.endpointId === endpointId)
+        .sort((a, b) => a.fieldOrder - b.fieldOrder),
+    [mappings, endpointId],
+  );
 }
 
 /**

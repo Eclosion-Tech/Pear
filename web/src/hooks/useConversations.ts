@@ -1,8 +1,12 @@
 "use client";
 
+import { useMemo } from "react";
 import { useTable, useReducer } from "spacetimedb/react";
 import type { Identity } from "spacetimedb";
 import { tables, reducers } from "@/src/module_bindings";
+
+// Derivations are useMemo'd on the stable useTable snapshot so consumers
+// get stable array identities between row events (ticket 14378).
 
 export function useConversations() {
   const [conversations, isReady] = useTable(tables.conversation);
@@ -12,12 +16,16 @@ export function useConversations() {
 /** Conversations for a specific page, newest first. */
 export function useConversationsForPage(pageId: bigint) {
   const { conversations, isReady } = useConversations();
-  const pageConvs = conversations
-    .filter((c) => c.pageId === pageId)
-    .sort(
-      (a, b) =>
-        Number(b.updatedAt.microsSinceUnixEpoch - a.updatedAt.microsSinceUnixEpoch)
-    );
+  const pageConvs = useMemo(
+    () =>
+      conversations
+        .filter((c) => c.pageId === pageId)
+        .sort(
+          (a, b) =>
+            Number(b.updatedAt.microsSinceUnixEpoch - a.updatedAt.microsSinceUnixEpoch)
+        ),
+    [conversations, pageId],
+  );
   return { conversations: pageConvs, isReady };
 }
 
@@ -26,28 +34,35 @@ export function useConversationMessages() {
   return messages;
 }
 
+/**
+ * Hide server-posted system triggers (job completion, scheduled routines,
+ * feedback): they exist only to wake the AI user's worker for a turn. The
+ * AI's follow-up message is the human-facing artifact.
+ */
+export function isVisibleConversationMessage(m: ConversationMessageRow): boolean {
+  return !(
+    m.sender.tag === "System" &&
+    (m.sender.value === "job_completion" ||
+      m.sender.value === "routine" ||
+      m.sender.value === "feedback" ||
+      m.sender.value === "access_resolution")
+  );
+}
+
 /** Messages for a specific conversation, oldest first (chronological). */
 export function useMessagesForConversation(conversationId: bigint) {
   const messages = useConversationMessages();
-  return messages
-    .filter((m) => m.conversationId === conversationId)
-    // Hide server-posted system triggers (job completion, scheduled routines,
-    // feedback): they exist only to wake the AI user's worker for a turn. The
-    // AI's follow-up message is the human-facing artifact.
-    .filter(
-      (m) =>
-        !(
-          m.sender.tag === "System" &&
-          (m.sender.value === "job_completion" ||
-            m.sender.value === "routine" ||
-            m.sender.value === "feedback" ||
-            m.sender.value === "access_resolution")
+  return useMemo(
+    () =>
+      messages
+        .filter((m) => m.conversationId === conversationId)
+        .filter(isVisibleConversationMessage)
+        .sort(
+          (a, b) =>
+            Number(a.createdAt.microsSinceUnixEpoch - b.createdAt.microsSinceUnixEpoch)
         ),
-    )
-    .sort(
-      (a, b) =>
-        Number(a.createdAt.microsSinceUnixEpoch - b.createdAt.microsSinceUnixEpoch)
-    );
+    [messages, conversationId],
+  );
 }
 
 /** All conversation_participant rows. */
@@ -59,7 +74,10 @@ export function useConversationParticipants() {
 /** Participants in a single conversation. */
 export function useParticipantsForConversation(conversationId: bigint) {
   const all = useConversationParticipants();
-  return all.filter((p) => p.conversationId === conversationId);
+  return useMemo(
+    () => all.filter((p) => p.conversationId === conversationId),
+    [all, conversationId],
+  );
 }
 
 /**
@@ -73,19 +91,21 @@ export function useParticipantsForConversation(conversationId: bigint) {
 export function useInboxConversations(identity: Identity | undefined) {
   const { conversations } = useConversations();
   const participants = useConversationParticipants();
-  if (!identity) return [] as ConversationRow[];
-  const meHex = identity.toHexString();
-  const myConvIds = new Set(
-    participants
-      .filter((p) => p.identity.toHexString() === meHex && !p.leftAt)
-      .map((p) => String(p.conversationId)),
-  );
-  return conversations
-    .filter((c) => myConvIds.has(String(c.id)))
-    .sort(
-      (a, b) =>
-        Number(b.updatedAt.microsSinceUnixEpoch - a.updatedAt.microsSinceUnixEpoch),
+  return useMemo(() => {
+    if (!identity) return [] as ConversationRow[];
+    const meHex = identity.toHexString();
+    const myConvIds = new Set(
+      participants
+        .filter((p) => p.identity.toHexString() === meHex && !p.leftAt)
+        .map((p) => String(p.conversationId)),
     );
+    return conversations
+      .filter((c) => myConvIds.has(String(c.id)))
+      .sort(
+        (a, b) =>
+          Number(b.updatedAt.microsSinceUnixEpoch - a.updatedAt.microsSinceUnixEpoch),
+      );
+  }, [conversations, participants, identity]);
 }
 
 /**
@@ -100,14 +120,16 @@ export function useUnreadCountForConversation(
 ): number {
   const messages = useMessagesForConversation(conversationId);
   const participants = useConversationParticipants();
-  if (!identity) return 0;
-  const meHex = identity.toHexString();
-  const me = participants.find(
-    (p) =>
-      p.conversationId === conversationId && p.identity.toHexString() === meHex,
-  );
-  const watermark = me?.lastViewedMessageId ?? 0n;
-  return messages.filter((m) => m.id > watermark).length;
+  return useMemo(() => {
+    if (!identity) return 0;
+    const meHex = identity.toHexString();
+    const me = participants.find(
+      (p) =>
+        p.conversationId === conversationId && p.identity.toHexString() === meHex,
+    );
+    const watermark = me?.lastViewedMessageId ?? 0n;
+    return messages.filter((m) => m.id > watermark).length;
+  }, [messages, participants, conversationId, identity]);
 }
 
 export function useCreateConversation() {
@@ -128,11 +150,13 @@ export function useDmConversation(
   otherIdentity: Identity | undefined,
 ): ConversationRow | undefined {
   const { conversations } = useConversations();
-  if (!myIdentity || !otherIdentity) return undefined;
-  const a = myIdentity.toHexString();
-  const b = otherIdentity.toHexString();
-  const key = a < b ? `${a}-${b}` : `${b}-${a}`;
-  return conversations.find((c) => c.canonicalKey === key);
+  return useMemo(() => {
+    if (!myIdentity || !otherIdentity) return undefined;
+    const a = myIdentity.toHexString();
+    const b = otherIdentity.toHexString();
+    const key = a < b ? `${a}-${b}` : `${b}-${a}`;
+    return conversations.find((c) => c.canonicalKey === key);
+  }, [conversations, myIdentity, otherIdentity]);
 }
 
 export function useSendMessage() {
@@ -147,9 +171,13 @@ export function useSendUserMessage() {
 /** All attachments in a conversation, keyed for per-message lookup by the thread. */
 export function useAttachmentsForConversation(conversationId: bigint) {
   const [attachments] = useTable(tables.conversation_attachment);
-  return attachments
-    .filter((a) => a.conversationId === conversationId)
-    .sort((a, b) => Number(a.id - b.id));
+  return useMemo(
+    () =>
+      attachments
+        .filter((a) => a.conversationId === conversationId)
+        .sort((a, b) => Number(a.id - b.id)),
+    [attachments, conversationId],
+  );
 }
 
 export function useAddConversationParticipant() {
