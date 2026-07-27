@@ -51,17 +51,10 @@ export function useComponentTree(
   surfaceId: bigint,
   nodeCallbacks?: ComponentTreeNodeCallbacks,
 ): ComponentTree {
-  // Scoped to this surface: the server evaluates the WHERE against the
-  // surface_id btree index and only pushes this page's nodes, instead of
-  // every block of every page in the workspace. (The memo below already
-  // filtered by surfaceId — this moves the filter to the subscription.)
-  // component_yjs_state stays unscoped for now: its rows carry only
-  // componentNodeId, so page-scoping it needs a server-side column or a
-  // semijoin subscription (tracked in 14384).
-  const [nodes, nodesReady] = useTable(
-    tables.component_node.where((r) => r.surfaceId.eq(surfaceId)),
-    nodeCallbacks,
-  );
+  // Keep this unfiltered until the SpacetimeDB query builder honors generated
+  // column source names. In SDK 2.0.3, filtering on `surfaceId` emits invalid
+  // SQL against `surfaceId` instead of the server column `surface_id`.
+  const [nodes, nodesReady] = useTable(tables.component_node, nodeCallbacks);
   const [defRows, defsReady] = useTable(tables.component_type_definition);
   const [yjsRows, yjsReady] = useTable(tables.component_yjs_state);
 

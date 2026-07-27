@@ -31,11 +31,10 @@ export function DocPage({ page }: DocPageProps) {
   const deletePage = useDeletePageSubtree();
   const iconButtonRef = useRef<HTMLButtonElement>(null);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
-  // Scoped: only this page's body — unscoped this pulled every document in
-  // the workspace into the cache while any doc was open.
-  const [contents] = useTable(
-    tables.page_content.where((c) => c.pageId.eq(page.id)),
-  );
+  // Keep this unfiltered until the SpacetimeDB query builder honors generated
+  // column source names. In SDK 2.0.3, filtering on `pageId` emits invalid SQL
+  // against `pageId` instead of the server column `page_id`.
+  const [contents] = useTable(tables.page_content);
   const content = contents.find((c) => c.pageId === page.id);
 
   const [allPages] = useTable(tables.page);

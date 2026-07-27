@@ -24,10 +24,9 @@ interface RowDetailModalProps {
 
 export function RowDetailModal({ page, parentPage, onClose }: RowDetailModalProps) {
   const router = useRouter();
-  // Scoped: only this row-page's body (see DocPage).
-  const [contents] = useTable(
-    tables.page_content.where((c) => c.pageId.eq(page.id)),
-  );
+  // SpacetimeDB 2.0.3 emits the generated client key `pageId` in typed SQL
+  // instead of the real server column `page_id`, so filtering fails.
+  const [contents] = useTable(tables.page_content);
   const content = contents.find((c) => c.pageId === page.id);
   const updateTitle = useUpdatePageTitle();
   const deletePage = useDeletePage();
@@ -174,4 +173,3 @@ export function RowDetailModal({ page, parentPage, onClose }: RowDetailModalProp
     </div>
   );
 }
-
