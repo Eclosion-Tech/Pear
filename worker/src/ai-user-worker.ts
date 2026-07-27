@@ -188,11 +188,11 @@ export class AiUserWorker {
           unregisterBridgeSql(this.aiUserIdentity.toHexString());
           unregisterMcpTransport(this.aiUserIdentity.toHexString());
         }
+        if (this.conn) clearProviderCache(this.conn);
         this.conn = null;
         this.aiUserIdentity = null;
         // Drop the cached provider for this AI user so the next connect
         // re-reads the (potentially-rotated) API key from ai_user_config.
-        clearProviderCache();
         if (!this.stopped) {
           this.scheduleReconnect();
         }
@@ -212,7 +212,7 @@ export class AiUserWorker {
   async stop(): Promise<void> {
     this.stopped = true;
     this.clearReconnectTimer();
-    clearProviderCache();
+    if (this.conn) clearProviderCache(this.conn);
     if (this.aiUserIdentity) unregisterBridgeSql(this.aiUserIdentity.toHexString());
     // Actually close the socket. Without this, nulling `conn` leaves the
     // AI-user WebSocket open with its conversation handlers registered — a
@@ -239,11 +239,11 @@ export class AiUserWorker {
     if (configTable) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       configTable.onUpdate?.((_ctx: any, _old: any, row: any) => {
-        invalidateProviderCache(BigInt(row.id));
+        invalidateProviderCache(conn, BigInt(row.id));
       });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       configTable.onDelete?.((_ctx: any, row: any) => {
-        invalidateProviderCache(BigInt(row.id));
+        invalidateProviderCache(conn, BigInt(row.id));
       });
     }
 

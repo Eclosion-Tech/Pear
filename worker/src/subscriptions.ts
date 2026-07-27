@@ -45,6 +45,13 @@ const BRIDGE_TABLE_NAMES = [
   "bridge_device_allowlist",
 ];
 
+// Provider instances contain credential-bearing clients and are cached between
+// turns. API-key/config rotations must therefore arrive as live updates. Keep
+// this table on an isolated query set: the large all-table subscription can
+// still apply its initial snapshot while silently losing incrementals when an
+// unrelated query is degraded.
+const AI_CONFIG_TABLE_NAMES = ["ai_user_config"];
+
 export function subscribeToAvailableTables(
   conn: unknown,
   logTag: string,
@@ -83,28 +90,33 @@ export function subscribeToAvailableTables(
   };
 
   subscribe();
-  subscribeBridgeTables(connection, logTag);
+  subscribeIsolatedTables(connection, logTag, "bridge", BRIDGE_TABLE_NAMES);
+  subscribeIsolatedTables(connection, logTag, "AI config", AI_CONFIG_TABLE_NAMES);
 }
 
 /**
- * Dedicated, isolated subscription for the bridge tables (see BRIDGE_TABLE_NAMES).
- * Kept separate from the main bundle so their realtime INSERT/UPDATE delivery is
- * never degraded by an unrelated query in the big subscription. Each available
- * bridge table is subscribed; a missing one (older module) is skipped.
+ * Subscribe a small group separately from the main bundle so its realtime
+ * INSERT/UPDATE delivery is never degraded by an unrelated query. Each
+ * available table is subscribed; a missing one (older module) is skipped.
  */
-function subscribeBridgeTables(connection: ConnectionLike, logTag: string): void {
+function subscribeIsolatedTables(
+  connection: ConnectionLike,
+  logTag: string,
+  label: string,
+  tableNames: readonly string[],
+): void {
   const present = new Set(ALL_TABLE_NAMES);
   const skipped = new Set<string>();
 
   const subscribe = (): void => {
-    const queries = BRIDGE_TABLE_NAMES.filter(
+    const queries = tableNames.filter(
       (name) => present.has(name) && !skipped.has(name),
     ).map((name) => `SELECT * FROM ${name}`);
     if (queries.length === 0) return;
 
     connection
       .subscriptionBuilder()
-      .onApplied(() => console.log(`${logTag} bridge subscription ready`))
+      .onApplied(() => console.log(`${logTag} ${label} subscription ready`))
       .onError((_ctx: unknown, err: unknown) => {
         const missing = missingTableName(err);
         if (missing && !skipped.has(missing)) {
@@ -112,7 +124,7 @@ function subscribeBridgeTables(connection: ConnectionLike, logTag: string): void
           subscribe();
           return;
         }
-        console.error(`${logTag} bridge subscription error:`, errorMessage(err));
+        console.error(`${logTag} ${label} subscription error:`, errorMessage(err));
       })
       .subscribe(queries);
   };

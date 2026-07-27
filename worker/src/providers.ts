@@ -704,17 +704,23 @@ export interface ResolvedProvider {
   providerTag: CatalogFamily;
 }
 
-/** Cached provider instances keyed by AI user ID. */
-const providerCache = new Map<bigint, ResolvedProvider>();
+/**
+ * Cached provider instances scoped to the AI user's authenticated connection.
+ *
+ * `ai_user_config.id` is only unique inside one workspace, so a process-global
+ * Map keyed by ID can leak one workspace's provider/key into another workspace
+ * whose AI user has the same auto-incremented ID.
+ */
+const providerCaches = new WeakMap<object, Map<bigint, ResolvedProvider>>();
 
-/** Invalidate cached provider for an AI user (call on ai_user_config update/delete). */
-export function invalidateProviderCache(aiUserId: bigint): void {
-  providerCache.delete(aiUserId);
+/** Invalidate one connection's cached provider after config update/delete. */
+export function invalidateProviderCache(conn: object, aiUserId: bigint): void {
+  providerCaches.get(conn)?.delete(aiUserId);
 }
 
-/** Clear the entire provider cache (call on disconnect). */
-export function clearProviderCache(): void {
-  providerCache.clear();
+/** Drop all cached providers owned by a disconnected AI-user connection. */
+export function clearProviderCache(conn: object): void {
+  providerCaches.delete(conn);
 }
 
 /**
@@ -729,6 +735,11 @@ export function getProviderForAiUser(
   conn: { db: Record<string, unknown> },
   aiUserId: bigint,
 ): ResolvedProvider {
+  let providerCache = providerCaches.get(conn);
+  if (!providerCache) {
+    providerCache = new Map<bigint, ResolvedProvider>();
+    providerCaches.set(conn, providerCache);
+  }
   const cached = providerCache.get(aiUserId);
   if (cached) return cached;
 
