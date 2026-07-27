@@ -359,6 +359,8 @@ function AiUserRowEditor({
   const [serperKeyDraft, setSerperKeyDraft] = useState("");
   const [serperBusy, setSerperBusy] = useState(false);
   const [serperMsg, setSerperMsg] = useState<string | null>(null);
+  const [apiKeyBusy, setApiKeyBusy] = useState(false);
+  const [apiKeyMsg, setApiKeyMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [localErr, setLocalErr] = useState<string | null>(null);
   const hostDelegated = isAiUserHostDelegated();
@@ -413,6 +415,9 @@ function AiUserRowEditor({
     const name = displayName.trim();
     const prompt = systemPrompt.trim();
     const modelName = model.trim();
+    // Capture the credential before any awaited profile/config updates can
+    // refresh this row's subscribed props.
+    const newKey = apiKeyDraft.trim();
     if (!name) {
       setLocalErr("Display name is required");
       return;
@@ -422,6 +427,7 @@ function AiUserRowEditor({
       return;
     }
     setLocalErr(null);
+    setApiKeyMsg(null);
     setBusy(true);
     try {
       const nameChanged = name !== profile.displayName;
@@ -482,7 +488,6 @@ function AiUserRowEditor({
           await setAiUserModel({ aiUserId: profile.aiUserId, model: modelName });
         }
       }
-      const newKey = apiKeyDraft.trim();
       if (!isMcp && newKey) {
         if (hostDelegated) {
           await hostUpsertApiKey(profile.aiUserId, newKey);
@@ -493,6 +498,11 @@ function AiUserRowEditor({
           } as unknown as SetAiUserApiKeyParams);
         }
         setApiKeyDraft("");
+        setApiKeyMsg(
+          hostDelegated
+            ? "API key replaced and verified in the workspace database."
+            : "API key replaced.",
+        );
       }
     } catch (e) {
       setLocalErr(e instanceof Error ? e.message : String(e));
@@ -501,7 +511,38 @@ function AiUserRowEditor({
     }
   };
 
-  const rowBusy = busy || memoryBusy || serperBusy || deleteBusy;
+  const onSaveApiKey = async () => {
+    const newKey = apiKeyDraft.trim();
+    setApiKeyMsg(null);
+    setLocalErr(null);
+    if (!newKey) {
+      setLocalErr("Paste a new API key before replacing the current key.");
+      return;
+    }
+    setApiKeyBusy(true);
+    try {
+      if (hostDelegated) {
+        await hostUpsertApiKey(profile.aiUserId, newKey);
+      } else {
+        await setApiKeyReducer({
+          aiUserId: profile.aiUserId,
+          apiKey: newKey,
+        } as unknown as SetAiUserApiKeyParams);
+      }
+      setApiKeyDraft("");
+      setApiKeyMsg(
+        hostDelegated
+          ? "API key replaced and verified in the workspace database."
+          : "API key replaced.",
+      );
+    } catch (e) {
+      setLocalErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setApiKeyBusy(false);
+    }
+  };
+
+  const rowBusy = busy || memoryBusy || serperBusy || apiKeyBusy || deleteBusy;
 
   const summary = isMcp
     ? "External MCP client"
@@ -725,23 +766,40 @@ function AiUserRowEditor({
             </p>
           )}
 
-          <label className="block mt-3">
-            <span className="text-xs font-medium text-neutral-600 dark:text-neutral-400">
-              API key{" "}
-              <span className="text-neutral-400 font-normal">
-                (leave blank to keep the current key{profile.hasApiKey ? "" : " — none set"})
+          <div className="mt-3">
+            <label className="block">
+              <span className="text-xs font-medium text-neutral-600 dark:text-neutral-400">
+                API key{" "}
+                <span className="text-neutral-400 font-normal">
+                  (leave blank to keep the current key{profile.hasApiKey ? "" : " — none set"})
+                </span>
               </span>
-            </span>
-            <input
-              type="password"
-              autoComplete="off"
-              value={apiKeyDraft}
-              onChange={(e) => setApiKeyDraft(e.target.value)}
-              disabled={rowBusy}
-              placeholder="sk-…"
-              className="mt-1 w-full rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-neutral-900 dark:text-white disabled:opacity-50 font-mono"
-            />
-          </label>
+            </label>
+            <div className="mt-1 flex flex-col sm:flex-row gap-2">
+              <input
+                type="password"
+                autoComplete="off"
+                value={apiKeyDraft}
+                onChange={(e) => setApiKeyDraft(e.target.value)}
+                disabled={rowBusy}
+                placeholder="sk-…"
+                className="flex-1 min-w-0 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-neutral-900 dark:text-white disabled:opacity-50 font-mono"
+              />
+              <button
+                type="button"
+                onClick={() => void onSaveApiKey()}
+                disabled={rowBusy || apiKeyDraft.trim() === ""}
+                className="shrink-0 rounded-md border border-neutral-300 dark:border-neutral-600 bg-neutral-100 dark:bg-neutral-800 px-3 py-2 text-sm text-neutral-900 dark:text-white hover:opacity-90 disabled:opacity-50"
+              >
+                {apiKeyBusy ? "Replacing…" : "Replace key"}
+              </button>
+            </div>
+            {apiKeyMsg ? (
+              <p className="mt-1.5 text-xs text-green-700 dark:text-green-300" role="status">
+                {apiKeyMsg}
+              </p>
+            ) : null}
+          </div>
         </div>
         )}
 

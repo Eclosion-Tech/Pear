@@ -123,6 +123,25 @@ const FLUSH_INTERVAL_MS = 300;
 const THINKING_BUDGET = 5_000;
 const MAX_TOOL_ITERATIONS = 15;
 
+/**
+ * Anthropic's explicit thinking tokens share `max_tokens` with visible output,
+ * so its adapter needs extra headroom. OpenAI-compatible adapters (including
+ * OpenRouter) ignore `thinkingBudget` and use their native effort controls;
+ * inflating their output reservation causes avoidable OpenRouter 402s.
+ */
+export function streamTokenBudget(
+  providerTag: string,
+  maxTokens: number,
+): { maxTokens: number; thinkingBudget?: number } {
+  if (providerTag === "Anthropic") {
+    return {
+      maxTokens: maxTokens + THINKING_BUDGET,
+      thinkingBudget: THINKING_BUDGET,
+    };
+  }
+  return { maxTokens };
+}
+
 function identityHex(id: { toHexString(): string } | unknown): string {
   if (id && typeof (id as { toHexString?: () => string }).toHexString === "function") {
     return (id as { toHexString(): string }).toHexString();
@@ -950,21 +969,17 @@ async function handleConversationMessage(
 
     if (aiProvider.chatStream) {
       let cleanFinish = false;
+      const streamBudget = streamTokenBudget(providerTag, maxTokens);
       while (iterations++ < MAX_TOOL_ITERATIONS) {
         let lastFlush = Date.now();
 
-        // Extended thinking shares the `max_tokens` budget with the visible
-        // answer, so the thinking budget must be ADDED on top of the desired
-        // output budget — not max()'d with it, which left only ~4k tokens for
-        // the answer and truncated long replies (assessment #28).
-        const effectiveMaxTokens = maxTokens + THINKING_BUDGET;
         const streamReq: ChatStreamRequest = {
           model,
-          maxTokens: effectiveMaxTokens,
+          maxTokens: streamBudget.maxTokens,
           system: systemBlocks,
           messages: llmMessages,
           tools: tools.length > 0 ? tools : undefined,
-          thinkingBudget: THINKING_BUDGET,
+          thinkingBudget: streamBudget.thinkingBudget,
           effort,
         };
 

@@ -294,11 +294,19 @@ export async function hostPatchAiUserSystemPrompt(
   });
 }
 
-export async function hostUpsertApiKey(aiUserId: bigint, apiKey: string): Promise<void> {
-  await hostFetch(`/${aiUserId}/api-key`, {
+export async function hostUpsertApiKey(
+  aiUserId: bigint,
+  apiKey: string,
+): Promise<{ verified: true }> {
+  const res = await hostFetch(`/${aiUserId}/api-key`, {
     method: "PUT",
     body: JSON.stringify({ apiKey }),
   });
+  const result = (await res.json()) as { verified?: boolean };
+  if (result.verified !== true) {
+    throw new Error("The API key update was not verified by the workspace.");
+  }
+  return { verified: true };
 }
 
 export async function hostClearApiKey(aiUserId: bigint): Promise<void> {
