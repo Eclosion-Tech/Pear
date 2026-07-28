@@ -119,6 +119,7 @@ fn insert_access_request_resolution_message(
             timeline_json: None,
             component_tree_json: None,
             mentions: None,
+            response_targets: None,
             input_tokens: 0,
             output_tokens: 0,
             cache_creation_input_tokens: 0,

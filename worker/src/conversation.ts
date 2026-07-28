@@ -100,8 +100,13 @@ type ConversationMessageRow = {
   outputTokens: number;
   cacheCreationInputTokens: number;
   cacheReadInputTokens: number;
-  /** Identities this message explicitly addresses; empty for human messages. */
+  /** Identities this message explicitly addresses. */
   mentions?: Array<{ toHexString(): string }>;
+  /**
+   * Durable AI responder assignment for human messages. `undefined` is a
+   * legacy/AI/system row; an empty array is an evaluated decision to wake none.
+   */
+  responseTargets?: Array<{ toHexString(): string }>;
 };
 
 type AiUserProfileRow = {
@@ -294,8 +299,11 @@ export function aiHopDepth(
 /**
  * Should `msg` wake this AI user for a turn?
  *
- * Human messages and system triggers behave exactly as before. The new rule is
- * for AI-authored messages: an AI wakes another AI only when **explicitly
+ * Human messages with a durable server-side `responseTargets` assignment wake
+ * only the selected AI workers. Legacy human rows without an assignment retain
+ * the old broadcast behavior so an upgrade cannot strand an unanswered turn.
+ *
+ * For AI-authored messages, an AI wakes another AI only when **explicitly
  * addressed**, and only while the exchange is within `MAX_AI_HOPS`.
  *
  * Without the addressing rule, every AI participant wakes on every AI message —
@@ -308,11 +316,18 @@ export function shouldWakeFor(
   msg: ConversationMessageRow,
   selfHex: string,
 ): boolean {
+  // Placeholders are inserted as User(ai) messages too. Only completed rows are
+  // turns; waking on Thinking/Streaming would let peers react to half a reply.
+  if (msg.status.tag !== "Complete") return false;
   if (isSystemTrigger(msg)) return true;
   if (!isFromOtherUser(msg, selfHex)) return false;
 
   const aiHexes = aiIdentityHexes(conn);
-  if (!aiHexes.has(identityHex(msg.sender.value))) return true; // human — unchanged
+  if (!aiHexes.has(identityHex(msg.sender.value))) {
+    const targets = msg.responseTargets;
+    if (targets === undefined) return true; // legacy human row
+    return targets.some((target) => identityHex(target) === selfHex);
+  }
 
   if (!addressesSelf(msg, selfHex)) return false;
 

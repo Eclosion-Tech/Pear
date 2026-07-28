@@ -85,6 +85,138 @@ pub(crate) fn match_mentions(
     out
 }
 
+/// Choose which AI participants should consider a new human message.
+///
+/// This is deliberately deterministic. Semantic group arbitration can replace
+/// the ambiguous fallback later, but the routing decision must already be
+/// shared and durable before any independent AI worker posts a placeholder.
+///
+/// Priority:
+/// 1. Explicit AI mentions (and only those mentions).
+/// 2. The AI who authored the immediately preceding terminal message.
+/// 3. The targets already chosen for an immediately preceding human message
+///    (rapid messages sent while the selected AI is still working).
+/// 4. The first/oldest active AI participant supplied by the caller.
+pub(crate) fn choose_human_response_targets(
+    explicit_mentions: &[Identity],
+    active_ai_participants: &[Identity],
+    previous_ai_sender: Option<Identity>,
+    previous_response_targets: Option<&[Identity]>,
+) -> Vec<Identity> {
+    let active = |identity: &Identity| active_ai_participants.contains(identity);
+    let filtered_unique = |identities: &[Identity]| {
+        let mut out = Vec::new();
+        for identity in identities {
+            if active(identity) && !out.contains(identity) {
+                out.push(*identity);
+            }
+        }
+        out
+    };
+
+    // A real mention is an explicit routing instruction. Fail closed when the
+    // named AI is not in this thread instead of waking unrelated participants.
+    if !explicit_mentions.is_empty() {
+        return filtered_unique(explicit_mentions);
+    }
+
+    if let Some(identity) = previous_ai_sender {
+        if active(&identity) {
+            return vec![identity];
+        }
+    }
+
+    if let Some(previous) = previous_response_targets {
+        let inherited = filtered_unique(previous);
+        if !inherited.is_empty() {
+            return inherited;
+        }
+    }
+
+    active_ai_participants
+        .first()
+        .copied()
+        .into_iter()
+        .collect()
+}
+
+fn is_ai_user(ctx: &ReducerContext, identity: Identity) -> bool {
+    ctx.db
+        .ai_user_profile()
+        .identity()
+        .find(identity)
+        .is_some()
+}
+
+/// Resolve and persist the responder assignment for a human-authored message.
+///
+/// Active AI participants are sorted by join time so the fallback remains the
+/// thread's original AI rather than depending on table iteration order.
+fn human_response_targets(
+    ctx: &ReducerContext,
+    conversation_id: u64,
+    explicit_mentions: &[Identity],
+) -> Vec<Identity> {
+    let mut active_ai_rows: Vec<_> = ctx
+        .db
+        .conversation_participant()
+        .conversation_id()
+        .filter(&conversation_id)
+        .filter(|participant| {
+            participant.left_at.is_none()
+                && is_ai_user(ctx, participant.identity)
+        })
+        .collect();
+    active_ai_rows.sort_by_key(|participant| {
+        (
+            participant.joined_at.to_micros_since_unix_epoch(),
+            participant.id,
+        )
+    });
+    let active_ai_participants: Vec<Identity> = active_ai_rows
+        .iter()
+        .map(|participant| participant.identity)
+        .collect();
+
+    let previous = ctx
+        .db
+        .conversation_message()
+        .conversation_id()
+        .filter(&conversation_id)
+        .filter(|message| {
+            matches!(message.sender, MessageSender::User(_))
+                && matches!(
+                    message.status,
+                    MessageStatus::Complete | MessageStatus::Error
+                )
+        })
+        .max_by_key(|message| {
+            (
+                message.created_at.to_micros_since_unix_epoch(),
+                message.id,
+            )
+        });
+
+    let mut previous_ai_sender = None;
+    let mut previous_response_targets = None;
+    if let Some(previous) = &previous {
+        if let MessageSender::User(identity) = previous.sender {
+            if is_ai_user(ctx, identity) {
+                previous_ai_sender = Some(identity);
+            } else {
+                previous_response_targets = previous.response_targets.as_deref();
+            }
+        }
+    }
+
+    choose_human_response_targets(
+        explicit_mentions,
+        &active_ai_participants,
+        previous_ai_sender,
+        previous_response_targets,
+    )
+}
+
 /// True when `identity` is a *current* participant of `conversation_id`.
 ///
 /// Excludes members who have left. Removal is honest — the row stays for the
@@ -430,8 +562,8 @@ pub struct ConversationMessage {
     /// a later display-name change cannot retroactively rewrite who a past
     /// message addressed.
     ///
-    /// Empty for human messages, which wake unconditionally and never consult
-    /// this field.
+    /// Human and AI messages both populate this when their text contains a
+    /// mention. Wake routing additionally consults `response_targets`.
     ///
     /// `None` on rows that predate the column, and on messages that address
     /// nobody. Treated identically to an empty list by every consumer.
@@ -446,9 +578,21 @@ pub struct ConversationMessage {
     /// dead-letters every workspace at publish, because `cargo check` never
     /// exercises the migration planner.
     ///
-    /// MUST stay last: AutoMigrate only supports columns appended at the end.
+    /// Kept for exact addressing even though wake routing now uses the durable
+    /// `response_targets` decision below.
     #[default(None::<Vec<Identity>>)]
     pub mentions: Option<Vec<Identity>>,
+    /// AI identities selected to consider this human-authored message.
+    ///
+    /// Stored on the message so every independently running AI-user worker sees
+    /// the same decision before it creates a `Thinking` placeholder. `Some`
+    /// (including an empty vector) means routing was evaluated. `None` is used
+    /// for AI/system messages and legacy rows; workers retain the legacy
+    /// broadcast fallback only for those older human rows.
+    ///
+    /// MUST stay last: AutoMigrate only supports columns appended at the end.
+    #[default(None::<Vec<Identity>>)]
+    pub response_targets: Option<Vec<Identity>>,
 }
 
 /// What a `ConversationAttachment` carries.
@@ -686,7 +830,12 @@ pub fn send_message(
     // Resolved here too, so a plain human send from the composer records the
     // same structured addressing as the attachment path — the two client
     // branches must not disagree about who a message mentions.
-    let mentions = Some(resolve_mentions_in_content(ctx, &content));
+    let mentions = resolve_mentions_in_content(ctx, &content);
+    let response_targets = if is_ai_user(ctx, ctx.sender()) {
+        None
+    } else {
+        Some(human_response_targets(ctx, conversation_id, &mentions))
+    };
 
     ctx.db.conversation_message().insert(ConversationMessage {
         id: next_conversation_message_id(ctx),
@@ -695,7 +844,8 @@ pub fn send_message(
         content,
         job_id,
         component_tree_json: None,
-        mentions,
+        mentions: Some(mentions),
+        response_targets,
         created_at: ctx.timestamp,
         status: status.unwrap_or(MessageStatus::Complete),
         thinking,
@@ -770,6 +920,11 @@ pub fn send_addressed_message(
             );
         }
     }
+    let response_targets = if is_ai_user(ctx, ctx.sender()) {
+        None
+    } else {
+        Some(human_response_targets(ctx, conversation_id, &mentions))
+    };
 
     ctx.db.conversation_message().insert(ConversationMessage {
         id: next_conversation_message_id(ctx),
@@ -789,6 +944,7 @@ pub fn send_addressed_message(
         linked_conversation_id: None,
         component_tree_json: None,
         mentions: Some(mentions),
+        response_targets,
     });
 
     ctx.db.conversation().id().update(Conversation {
@@ -828,7 +984,12 @@ pub fn send_user_message(
     // Humans get structured mentions with no client work: the reducer resolves
     // them, so `@Kira` in the composer becomes an addressable record usable for
     // notifications later.
-    let mentions = Some(resolve_mentions_in_content(ctx, &content));
+    let mentions = resolve_mentions_in_content(ctx, &content);
+    let response_targets = if is_ai_user(ctx, ctx.sender()) {
+        None
+    } else {
+        Some(human_response_targets(ctx, conversation_id, &mentions))
+    };
 
     let message = ctx.db.conversation_message().insert(ConversationMessage {
         id: next_conversation_message_id(ctx),
@@ -847,7 +1008,8 @@ pub fn send_user_message(
         cache_read_input_tokens: 0,
         linked_conversation_id: None,
         component_tree_json: None,
-        mentions,
+        mentions: Some(mentions),
+        response_targets,
     });
 
     for spec in attachments {
@@ -1151,6 +1313,7 @@ pub fn record_compaction(
         sender: MessageSender::System("compaction".to_string()),
         component_tree_json: None,
         mentions: None,
+        response_targets: None,
         content: summary,
         job_id: None,
         created_at: ctx.timestamp,
@@ -1387,6 +1550,7 @@ fn post_feedback_trigger(ctx: &ReducerContext, conversation_id: u64, note: &str)
         sender: MessageSender::System("feedback".to_string()),
         component_tree_json: None,
         mentions: None,
+        response_targets: None,
         content: body,
         job_id: None,
         created_at: ctx.timestamp,
@@ -1428,7 +1592,7 @@ pub fn clear_message_feedback(ctx: &ReducerContext, message_id: u64) -> Result<(
 
 #[cfg(test)]
 mod mention_tests {
-    use super::match_mentions;
+    use super::{choose_human_response_targets, match_mentions};
     use spacetimedb::Identity;
 
     fn id(byte: u8) -> Identity {
@@ -1493,5 +1657,47 @@ mod mention_tests {
     fn empty_display_names_are_ignored() {
         let p = vec![("".to_string(), id(9)), ("Kira".to_string(), id(1))];
         assert_eq!(match_mentions("@Kira", p), vec![id(1)]);
+    }
+
+    #[test]
+    fn explicit_mentions_are_the_exact_response_targets() {
+        let active = vec![id(1), id(2)];
+        assert_eq!(
+            choose_human_response_targets(&[id(2)], &active, Some(id(1)), None),
+            vec![id(2)]
+        );
+    }
+
+    #[test]
+    fn a_mention_of_an_absent_ai_fails_closed() {
+        let active = vec![id(1), id(2)];
+        assert!(choose_human_response_targets(&[id(9)], &active, Some(id(1)), None).is_empty());
+    }
+
+    #[test]
+    fn an_unaddressed_reply_continues_with_the_previous_ai_speaker() {
+        let active = vec![id(1), id(2)];
+        assert_eq!(
+            choose_human_response_targets(&[], &active, Some(id(2)), None),
+            vec![id(2)]
+        );
+    }
+
+    #[test]
+    fn rapid_human_messages_inherit_the_pending_assignment() {
+        let active = vec![id(1), id(2)];
+        assert_eq!(
+            choose_human_response_targets(&[], &active, None, Some(&[id(2)])),
+            vec![id(2)]
+        );
+    }
+
+    #[test]
+    fn a_new_group_turn_falls_back_to_the_original_ai() {
+        let active = vec![id(1), id(2)];
+        assert_eq!(
+            choose_human_response_targets(&[], &active, None, None),
+            vec![id(1)]
+        );
     }
 }

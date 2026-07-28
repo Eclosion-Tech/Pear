@@ -32,6 +32,8 @@ function msg(
   content: string,
   conversationId = 1n,
   mentions: string[] = [],
+  responseTargets: string[] | undefined = undefined,
+  status = "Complete",
 ) {
   return {
     id: nextId++,
@@ -42,7 +44,9 @@ function msg(
         : { tag: "User", value: hexId(senderHex) },
     content,
     createdAt: { microsSinceUnixEpoch: 0n },
+    status: { tag: status },
     mentions: mentions.map(hexId),
+    responseTargets: responseTargets?.map(hexId),
   } as never;
 }
 
@@ -105,9 +109,36 @@ test("hop depth is scoped to one conversation", () => {
 
 // ── wake decisions ────────────────────────────────────────────────────────────
 
-test("a human message wakes without any mention (unchanged behaviour)", () => {
+test("a legacy human message without an assignment still wakes", () => {
   const m = msg(HUMAN, "what do you think?");
   assert.equal(shouldWakeFor(fakeConn([m]), m, AI_SELF), true);
+});
+
+test("a human message wakes only its durably assigned AI", () => {
+  const assignedToSelf = msg(HUMAN, "what do you think?", 1n, [], [AI_SELF]);
+  const assignedElsewhere = msg(HUMAN, "what do you think?", 1n, [], [AI_OTHER]);
+
+  assert.equal(shouldWakeFor(fakeConn([assignedToSelf]), assignedToSelf, AI_SELF), true);
+  assert.equal(
+    shouldWakeFor(fakeConn([assignedElsewhere]), assignedElsewhere, AI_SELF),
+    false,
+  );
+});
+
+test("an evaluated human message with no targets wakes nobody", () => {
+  const m = msg(HUMAN, "@Absent can you help?", 1n, [], []);
+  assert.equal(shouldWakeFor(fakeConn([m]), m, AI_SELF), false);
+});
+
+test("a human message can explicitly target several AI participants", () => {
+  const m = msg(HUMAN, "@Kira and @Scribe both check this", 1n, [], [AI_SELF, AI_OTHER]);
+  assert.equal(shouldWakeFor(fakeConn([m]), m, AI_SELF), true);
+  assert.equal(shouldWakeFor(fakeConn([m]), m, AI_OTHER), true);
+});
+
+test("incomplete AI placeholders never become turns", () => {
+  const m = msg(AI_OTHER, "@Kira", 1n, [AI_SELF], undefined, "Thinking");
+  assert.equal(shouldWakeFor(fakeConn([m]), m, AI_SELF), false);
 });
 
 test("an AI message does NOT wake another AI unless addressed", () => {

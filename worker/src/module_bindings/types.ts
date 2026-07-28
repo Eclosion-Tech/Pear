@@ -736,6 +736,7 @@ export const ConversationMessage = __t.object("ConversationMessage", {
   timelineJson: __t.option(__t.string()),
   componentTreeJson: __t.option(__t.string()),
   mentions: __t.option(__t.array(__t.identity())),
+  responseTargets: __t.option(__t.array(__t.identity())),
 });
 export type ConversationMessage = __Infer<typeof ConversationMessage>;
 

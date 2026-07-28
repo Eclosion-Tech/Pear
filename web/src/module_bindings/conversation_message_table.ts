@@ -37,4 +37,5 @@ export default __t.row({
   timelineJson: __t.option(__t.string()).name("timeline_json"),
   componentTreeJson: __t.option(__t.string()).name("component_tree_json"),
   mentions: __t.option(__t.array(__t.identity())),
+  responseTargets: __t.option(__t.array(__t.identity())).name("response_targets"),
 });

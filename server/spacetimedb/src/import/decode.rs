@@ -687,6 +687,7 @@ pub(super) fn decode_conversation_message(v: &Value) -> Result<ConversationMessa
         linked_conversation_id: opt_u64_at(m, "linkedConversationId")?,
         component_tree_json: opt_string_at(m, "componentTreeJson")?,
         mentions: None,
+        response_targets: None,
     })
 }
 
