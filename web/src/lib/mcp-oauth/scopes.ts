@@ -8,10 +8,16 @@
  */
 
 export const SCOPE_MEMORY = "memory";
+export const SCOPE_CONVERSATIONS_READ = "conversations:read";
 export const SCOPE_PAGES_READ = "pages:read";
 export const SCOPE_PAGES_WRITE = "pages:write";
 
-export const ALL_SCOPES = [SCOPE_MEMORY, SCOPE_PAGES_READ, SCOPE_PAGES_WRITE] as const;
+export const ALL_SCOPES = [
+  SCOPE_MEMORY,
+  SCOPE_CONVERSATIONS_READ,
+  SCOPE_PAGES_READ,
+  SCOPE_PAGES_WRITE,
+] as const;
 export type McpOauthScope = (typeof ALL_SCOPES)[number];
 
 /** Default grant when a client omits `scope` — deliberately memory-only
@@ -21,12 +27,15 @@ export const DEFAULT_SCOPE: McpOauthScope[] = [SCOPE_MEMORY];
 
 export const SCOPE_DESCRIPTIONS: Record<McpOauthScope, string> = {
   [SCOPE_MEMORY]: "Private memory: save and recall its own notes (invisible to other users)",
+  [SCOPE_CONVERSATIONS_READ]:
+    "Conversation history: search and read chats where this AI user is an active participant",
   [SCOPE_PAGES_READ]: "Read workspace pages and search their titles",
   [SCOPE_PAGES_WRITE]: "Create, edit, move, and delete workspace pages",
 };
 
 const SCOPE_TOOLS: Record<McpOauthScope, readonly string[]> = {
   [SCOPE_MEMORY]: ["remember", "list_memory", "read_memory", "search_memory"],
+  [SCOPE_CONVERSATIONS_READ]: ["search_conversations", "read_conversation"],
   [SCOPE_PAGES_READ]: [
     "get_page",
     "get_page_theme",

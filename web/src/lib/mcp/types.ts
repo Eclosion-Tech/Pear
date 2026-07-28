@@ -18,6 +18,8 @@ export interface McpContext {
   transport: StdbTransport;
   /** The AI user acting on this connection (resolved from ai_user_config). */
   aiUserId: bigint;
+  /** Present for native chat turns; lets history search omit the current chat. */
+  conversationId?: bigint;
 }
 
 /** One MCP tool: JSON-Schema surface + stateless executor. */

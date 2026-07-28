@@ -53,13 +53,28 @@ class FakeStdb implements StdbTransport {
   pageContent = new Map<number, string>();
   /** Block-anchored comment threads. `kind` 0 = ContextThread; `status` 0 = Active, 1 = Closed. */
   conversations: Array<{
-    id: number; pageId: number | null; blockAnchor: number | null; kind: number; status: number;
+    id: number;
+    pageId: number | null;
+    blockAnchor: number | null;
+    kind: number;
+    status: number;
+    initiatedBy?: string;
+    createdAtMicros?: number;
+    updatedAtMicros?: number;
   }> = [];
   convMessages: Array<{
-    id: number; conversationId: number; content: string; senderHex?: string;
+    id: number;
+    conversationId: number;
+    content: string;
+    senderHex?: string;
+    createdAtMicros?: number;
   }> = [];
-  conversationParticipants: Array<{ conversationId: number; identity: string }> = [];
-  aiProfiles: Array<{ identity: string; display_name: string }> = [];
+  conversationParticipants: Array<{
+    conversationId: number;
+    identity: string;
+    leftAtMicros?: number | null;
+  }> = [];
+  aiProfiles: Array<{ ai_user_id?: number; identity: string; display_name: string }> = [];
   users: Array<{ identity: string; name: string }> = [];
   aiUserConfig: Array<{ id: number }> = [{ id: 7 }];
   aiUserMemory: Array<{ aiUserId: number; rootPageId: number }> = [];
@@ -216,21 +231,41 @@ class FakeStdb implements StdbTransport {
       return this.users as Row[];
     }
     if (q.includes("FROM conversation_message")) {
-      return this.convMessages.map((m) => ({
+      const ids = new Set(params.map(Number));
+      const rows =
+        q.includes("WHERE conversation_id = ?")
+          ? this.convMessages.filter((m) => ids.has(m.conversationId))
+          : this.convMessages;
+      return rows.map((m) => ({
         id: m.id,
         conversation_id: m.conversationId,
         content: m.content,
         sender: [0, m.senderHex ?? "0xhuman"],
-        created_at: [NOW_MICROS],
+        created_at: [m.createdAtMicros ?? NOW_MICROS],
+      })) as Row[];
+    }
+    if (q.includes("FROM conversation_participant")) {
+      return this.conversationParticipants.map((p) => ({
+        conversation_id: p.conversationId,
+        identity: p.identity,
+        left_at: this.optTs(p.leftAtMicros ?? null),
       })) as Row[];
     }
     if (q.includes("FROM conversation")) {
-      return this.conversations.map((c) => ({
+      const ids = new Set(params.map(Number));
+      const rows =
+        q.includes("WHERE id = ?")
+          ? this.conversations.filter((c) => ids.has(c.id))
+          : this.conversations;
+      return rows.map((c) => ({
         id: c.id,
         page_id: this.optNum(c.pageId),
+        initiated_by: c.initiatedBy ?? "0xhuman",
         block_anchor: this.optNum(c.blockAnchor),
         status: [c.status, []],
         kind: [c.kind, []],
+        created_at: [c.createdAtMicros ?? NOW_MICROS],
+        updated_at: [c.updatedAtMicros ?? NOW_MICROS],
       })) as Row[];
     }
     if (q.includes("FROM component_node")) {
@@ -250,7 +285,8 @@ class FakeStdb implements StdbTransport {
     if (q.includes("FROM page")) {
       let rows = this.pages;
       if (q.includes("WHERE id = ?")) {
-        rows = rows.filter((p) => p.id === Number(params[0]));
+        const ids = new Set(params.map(Number));
+        rows = rows.filter((p) => ids.has(p.id));
       } else if (q.includes("WHERE parent_pk = ? AND title = ?")) {
         rows = rows.filter(
           (p) => (p.parentId ?? 0) === Number(params[0]) && p.title === String(params[1]),
@@ -938,6 +974,225 @@ describe("comment threads", () => {
   });
 });
 
+// ── Cross-conversation history (ticket 323) ───────────────────────────────────
+
+describe("conversation history", () => {
+  function seedConversationHistory(fake: FakeStdb) {
+    const day = 86_400_000_000;
+    fake.aiProfiles.push(
+      { ai_user_id: 7, identity: "0xkira", display_name: "Kira" },
+      { ai_user_id: 8, identity: "0xotherai", display_name: "Other AI" },
+    );
+    fake.users.push(
+      { identity: "0xkara", name: "Kara Raynoha" },
+      { identity: "0xother", name: "Other Person" },
+    );
+    fake.seedPage({ id: 910, title: "Standups" });
+    fake.conversations.push(
+      {
+        id: 10,
+        pageId: 910,
+        blockAnchor: null,
+        kind: 2,
+        status: 0,
+        createdAtMicros: NOW_MICROS - day * 3,
+        updatedAtMicros: NOW_MICROS - day * 2,
+      },
+      {
+        id: 11,
+        pageId: null,
+        blockAnchor: null,
+        kind: 2,
+        status: 0,
+        createdAtMicros: NOW_MICROS - day * 5,
+        updatedAtMicros: NOW_MICROS - day * 4,
+      },
+      {
+        id: 12,
+        pageId: null,
+        blockAnchor: null,
+        kind: 2,
+        status: 0,
+        createdAtMicros: NOW_MICROS - day,
+        updatedAtMicros: NOW_MICROS,
+      },
+      {
+        id: 13,
+        pageId: null,
+        blockAnchor: null,
+        kind: 2,
+        status: 1,
+        createdAtMicros: NOW_MICROS - day * 2,
+        updatedAtMicros: NOW_MICROS - day,
+      },
+    );
+    fake.conversationParticipants.push(
+      { conversationId: 10, identity: "0xkira" },
+      { conversationId: 10, identity: "0xkara" },
+      // A historical membership must not keep granting transcript access.
+      { conversationId: 11, identity: "0xkira", leftAtMicros: NOW_MICROS - day },
+      { conversationId: 11, identity: "0xkara" },
+      { conversationId: 12, identity: "0xotherai" },
+      { conversationId: 12, identity: "0xother" },
+      { conversationId: 13, identity: "0xkira" },
+      { conversationId: 13, identity: "0xkara" },
+    );
+    fake.convMessages.push(
+      {
+        id: 100,
+        conversationId: 10,
+        content: "At the standup we committed to ship conversation recall.",
+        senderHex: "0xkara",
+        createdAtMicros: NOW_MICROS - day * 3,
+      },
+      {
+        id: 101,
+        conversationId: 10,
+        content: "I will take the worker implementation.",
+        senderHex: "0xkira",
+        createdAtMicros: NOW_MICROS - day * 2,
+      },
+      {
+        id: 110,
+        conversationId: 11,
+        content: "Old standup visible only before Kira left.",
+        senderHex: "0xkara",
+        createdAtMicros: NOW_MICROS - day * 4,
+      },
+      {
+        id: 120,
+        conversationId: 12,
+        content: "Private standup for somebody else.",
+        senderHex: "0xother",
+        createdAtMicros: NOW_MICROS,
+      },
+      {
+        id: 130,
+        conversationId: 13,
+        content: "Separate budget review.",
+        senderHex: "0xkara",
+        createdAtMicros: NOW_MICROS - day,
+      },
+    );
+  }
+
+  test("searches only conversations where the calling AI is an active participant", async () => {
+    const fake = new FakeStdb();
+    seedConversationHistory(fake);
+
+    const res = await run(fake, "search_conversations", { query: "standup" });
+    expect(res.ok).toBe(true);
+    const matches = res.conversations as Array<{
+      conversation_id: number;
+      page_title: string | null;
+      participants: string[];
+    }>;
+    expect(matches.map((match) => match.conversation_id)).toEqual([10]);
+    expect(matches[0].page_title).toBe("Standups");
+    expect(matches[0].participants).toEqual(["Kira", "Kara Raynoha"]);
+  });
+
+  test("native chat search excludes its ambient conversation by default", async () => {
+    const fake = new FakeStdb();
+    seedConversationHistory(fake);
+    const entry = tools.get("search_conversations")!;
+    const res = JSON.parse(
+      await entry.execute({ ...ctxFor(fake), conversationId: 10n }, {}),
+    ) as Record<string, unknown>;
+    const ids = (res.conversations as Array<{ conversation_id: number }>).map(
+      (conversation) => conversation.conversation_id,
+    );
+    expect(ids).toEqual([13]);
+    expect(res.excluded_current_conversation).toBe(10);
+  });
+
+  test("rejects invalid activity ranges without reading transcripts", async () => {
+    const fake = new FakeStdb();
+    seedConversationHistory(fake);
+    const res = await run(fake, "search_conversations", {
+      after: "not-a-date",
+    });
+    expect(res.ok).toBe(false);
+    expect(String(res.error)).toMatch(/ISO-8601/);
+  });
+
+  test("reads an accessible transcript with resolved authors and backward pagination", async () => {
+    const fake = new FakeStdb();
+    seedConversationHistory(fake);
+
+    const latest = await run(fake, "read_conversation", {
+      conversation_id: 10,
+      limit: 1,
+    });
+    expect(latest.ok).toBe(true);
+    expect(latest.has_more).toBe(true);
+    expect(latest.next_before_message_id).toBe(101);
+    const latestMessages = latest.messages as Array<{
+      message_id: number;
+      author: string;
+      is_ai: boolean;
+    }>;
+    expect(latestMessages).toEqual([
+      expect.objectContaining({ message_id: 101, author: "Kira", is_ai: true }),
+    ]);
+
+    const older = await run(fake, "read_conversation", {
+      conversation_id: 10,
+      before_message_id: latest.next_before_message_id,
+    });
+    const olderMessages = older.messages as Array<{
+      message_id: number;
+      author: string;
+      is_ai: boolean;
+    }>;
+    expect(olderMessages).toEqual([
+      expect.objectContaining({
+        message_id: 100,
+        author: "Kara Raynoha",
+        is_ai: false,
+      }),
+    ]);
+    expect(older.has_more).toBe(false);
+  });
+
+  test("does not reveal whether an inaccessible conversation id exists", async () => {
+    const fake = new FakeStdb();
+    seedConversationHistory(fake);
+
+    const other = await run(fake, "read_conversation", { conversation_id: 12 });
+    const left = await run(fake, "read_conversation", { conversation_id: 11 });
+    const absent = await run(fake, "read_conversation", { conversation_id: 999 });
+    expect(other).toEqual(absent);
+    expect(left).toEqual(absent);
+    expect(String(other.error)).toMatch(/not found or not accessible/i);
+  });
+
+  test("bounds large transcript results by character budget", async () => {
+    const fake = new FakeStdb();
+    seedConversationHistory(fake);
+    fake.convMessages.push({
+      id: 102,
+      conversationId: 10,
+      content: "x".repeat(5_000),
+      senderHex: "0xkira",
+    });
+
+    const res = await run(fake, "read_conversation", {
+      conversation_id: 10,
+      max_chars: 1_000,
+    });
+    const messages = res.messages as Array<{
+      message_id: number;
+      content: string;
+      content_truncated?: boolean;
+    }>;
+    expect(messages).toHaveLength(1);
+    expect(messages[0].message_id).toBe(102);
+    expect(messages[0].content).toHaveLength(1_000);
+    expect(messages[0].content_truncated).toBe(true);
+  });
+});
+
 // ── Registry shape ─────────────────────────────────────────────────────────────
 
 describe("registry", () => {
@@ -961,12 +1216,14 @@ describe("registry", () => {
       "move_page",
       "post_to_thread",
       "query_database",
+      "read_conversation",
       "read_memory",
       "read_thread",
       "remember",
       "reopen_thread",
       "resolve_thread",
       "restore_page",
+      "search_conversations",
       "search_memory",
       "search_pages",
       "set_page_theme",

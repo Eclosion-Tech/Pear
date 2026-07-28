@@ -58,6 +58,11 @@ const PARITY_TOOL_NAMES = new Set([
   "create_thread",
   "read_thread",
   "list_page_threads",
+  // Cross-session recall (ticket 323). The implementation itself verifies
+  // that the calling AI is still an active participant before returning any
+  // search result or transcript.
+  "search_conversations",
+  "read_conversation",
   // Page and property CRUD, memory reads. These had a full second
   // implementation in `tools.ts` reading through the subscribed `conn.db`.
   // Migrating them is not only de-duplication: the worker's copies verified
@@ -265,7 +270,14 @@ export async function executeMcpParityTool(
   const args = resolved.input;
 
   try {
-    return await entry.execute({ transport, aiUserId: ctx.aiUserId }, args);
+    return await entry.execute(
+      {
+        transport,
+        aiUserId: ctx.aiUserId,
+        conversationId: ctx.conversationId,
+      },
+      args,
+    );
   } catch (err) {
     return JSON.stringify({
       ok: false,

@@ -32,6 +32,8 @@ const EXPECTED = [
   "create_thread",
   "read_thread",
   "list_page_threads",
+  "search_conversations",
+  "read_conversation",
   "add_property",
   "delete_property",
   "get_schema_id",

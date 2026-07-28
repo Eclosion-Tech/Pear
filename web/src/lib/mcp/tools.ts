@@ -45,6 +45,10 @@ import {
   executeRemember,
   executeSearchMemory,
 } from "./memory";
+import {
+  executeReadConversation,
+  executeSearchConversations,
+} from "./conversation-history";
 import { encodeOption, encodeU64 } from "./encode";
 import { reducerErrorMessage } from "./errors";
 
@@ -895,12 +899,87 @@ const searchMemoryTool: McpToolEntry = {
   execute: (ctx, input) => executeSearchMemory(ctx, input),
 };
 
+// ── Conversation history tools ────────────────────────────────────────────────
+
+const searchConversationsTool: McpToolEntry = {
+  name: "search_conversations",
+  description:
+    "Search previous conversations you participated in, including message text, participant " +
+    "names, and attached page titles. Use this when someone refers to an earlier chat or asks " +
+    "what was previously discussed or decided. Returns compact previews and conversation ids; " +
+    "call read_conversation on the best match for the transcript. In native chat, the current " +
+    "conversation is excluded unless include_current is true.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      query: {
+        type: "string",
+        description:
+          "Optional case-insensitive keywords. All words must appear somewhere in the conversation.",
+      },
+      after: {
+        type: "string",
+        description:
+          "Optional ISO-8601 lower bound on conversation activity, inclusive. For one day, pair " +
+          "e.g. after=2026-07-06 with before=2026-07-07.",
+      },
+      before: {
+        type: "string",
+        description: "Optional ISO-8601 upper bound on conversation activity, exclusive.",
+      },
+      limit: {
+        type: "number",
+        description: "Maximum matches to return (default 10, maximum 25).",
+      },
+      include_current: {
+        type: "boolean",
+        description:
+          "Include the currently-running native chat in results. Defaults to false in native chat.",
+      },
+    },
+  },
+  execute: (ctx, input) => executeSearchConversations(ctx, input),
+};
+
+const readConversationTool: McpToolEntry = {
+  name: "read_conversation",
+  description:
+    "Read a previous conversation transcript that you actively participate in. Use a " +
+    "conversation_id from search_conversations. Messages are oldest-to-newest; the newest page " +
+    "is returned by default. If has_more is true, call again with next_before_message_id to page " +
+    "backward. Access to conversations you did not participate in is denied.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      conversation_id: { type: "number" },
+      limit: {
+        type: "number",
+        description: "Maximum messages in this page (default 50, maximum 200).",
+      },
+      before_message_id: {
+        type: "number",
+        description:
+          "Return messages older than this id. Use next_before_message_id from the previous page.",
+      },
+      max_chars: {
+        type: "number",
+        description:
+          "Maximum transcript characters returned in this call (default 40000, maximum 80000).",
+      },
+    },
+    required: ["conversation_id"],
+  },
+  execute: (ctx, input) => executeReadConversation(ctx, input),
+};
+
 export function buildToolRegistry(): McpToolEntry[] {
   return [
     rememberTool,
     listMemoryTool,
     readMemoryTool,
     searchMemoryTool,
+    searchConversationsTool,
+    readConversationTool,
     createPageTool,
     getPageTool,
     updatePageContentTool,

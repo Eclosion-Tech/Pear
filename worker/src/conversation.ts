@@ -557,6 +557,8 @@ const READ_ONLY_TOOLS = new Set([
   "render_ui",
   "read_memory",
   "search_memory",
+  "search_conversations",
+  "read_conversation",
 ]);
 
 /**

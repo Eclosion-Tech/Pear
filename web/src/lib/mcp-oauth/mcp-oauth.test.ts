@@ -189,6 +189,7 @@ describe("scopes", () => {
     expect(memoryOnly("search_memory")).toBe(true);
     expect(memoryOnly("get_page")).toBe(false);
     expect(memoryOnly("delete_page")).toBe(false);
+    expect(memoryOnly("search_conversations")).toBe(false);
 
     const readWrite = toolFilterForScopes(["pages:read", "pages:write"]);
     expect(readWrite("get_page")).toBe(true);
@@ -201,7 +202,13 @@ describe("scopes", () => {
     expect(readWrite("set_row_properties")).toBe(true);
     expect(readWrite("restore_page")).toBe(true);
     expect(readWrite("remember")).toBe(false);
+    expect(readWrite("read_conversation")).toBe(false);
     expect(memoryOnly("query_database")).toBe(false);
+
+    const conversationRead = toolFilterForScopes(["conversations:read"]);
+    expect(conversationRead("search_conversations")).toBe(true);
+    expect(conversationRead("read_conversation")).toBe(true);
+    expect(conversationRead("get_page")).toBe(false);
 
     expect(scopeForTool("update_page_content")).toBe("pages:write");
     expect(scopeForTool("get_schema_id")).toBe("pages:read");
@@ -212,6 +219,8 @@ describe("scopes", () => {
     expect(scopeForTool("set_row_properties")).toBe("pages:write");
     expect(scopeForTool("restore_page")).toBe("pages:write");
     expect(scopeForTool("list_memory")).toBe("memory");
+    expect(scopeForTool("search_conversations")).toBe("conversations:read");
+    expect(scopeForTool("read_conversation")).toBe("conversations:read");
   });
 });
 
