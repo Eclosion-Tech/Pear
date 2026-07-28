@@ -14,13 +14,14 @@ import {
 import type { BridgeCommand, MessageFeedback } from "@/src/module_bindings/types";
 import {
   useConversations,
-  useInboxConversations,
+  useConversationMessages,
+  useConversationParticipants,
   useCreateConversation,
   useFindOrCreateAiDm,
   useFindOrCreateDm,
   useDmConversation,
   useAddConversationParticipant,
-  useMessagesForConversation,
+  isVisibleConversationMessage,
   useSendMessage,
   useSendUserMessage,
   useAttachmentsForConversation,
@@ -51,7 +52,6 @@ import { usePearWorkspaceSlug } from "@/src/lib/blobUpload";
 import { useUsers } from "@/src/hooks/useUser";
 import {
   useAiUserProfiles,
-  useAiUserProfileByIdentity,
   useAiUserInConversation,
   type AiUserProfileRow,
 } from "@/src/hooks/useAiUsers";
@@ -969,10 +969,21 @@ function MenuModelItem({
   );
 }
 
-function ConversationThread({ conversation, onBack, activePageId }: { conversation: ConversationRow; onBack: () => void; activePageId?: bigint }) {
-  const aiUser = useAiUserInConversation(conversation.id);
-  const messages = useMessagesForConversation(conversation.id);
-  const { profiles: allAiProfiles } = useAiUserProfiles();
+function ConversationThread({
+  conversation,
+  messages,
+  aiUser,
+  allAiProfiles,
+  onBack,
+  activePageId,
+}: {
+  conversation: ConversationRow;
+  messages: ConversationMessageRow[];
+  aiUser: AiUserProfileRow | undefined;
+  allAiProfiles: readonly AiUserProfileRow[];
+  onBack: () => void;
+  activePageId?: bigint;
+}) {
   const aiIdentityHexes = useMemo(
     () => new Set(allAiProfiles.map((p) => p.identity.toHexString())),
     [allAiProfiles],
@@ -1060,7 +1071,9 @@ function ConversationThread({ conversation, onBack, activePageId }: { conversati
   // we tell them apart by Identity lookup against ai_user_profile.
   const lastSenderIdentity =
     lastMessage?.sender.tag === "User" ? lastMessage.sender.value : undefined;
-  const lastSenderAiUser = useAiUserProfileByIdentity(lastSenderIdentity);
+  const lastSenderAiUser = lastSenderIdentity
+    ? aiProfileByHex.get(lastSenderIdentity.toHexString())
+    : undefined;
   const lastSenderIsHuman =
     lastMessage?.sender.tag === "User" && !lastSenderAiUser;
   const isAiActive =
@@ -1746,14 +1759,17 @@ function HandoffPanel({
 
 function ConversationListItem({
   conversation,
+  messages,
+  aiUser,
+  allAiProfiles,
   onClick,
 }: {
   conversation: ConversationRow;
+  messages: ConversationMessageRow[];
+  aiUser: AiUserProfileRow | undefined;
+  allAiProfiles: readonly AiUserProfileRow[];
   onClick: () => void;
 }) {
-  const aiUser = useAiUserInConversation(conversation.id);
-  const messages = useMessagesForConversation(conversation.id);
-  const { profiles: allAiProfiles } = useAiUserProfiles();
   const aiIdentityHexes = useMemo(
     () => new Set(allAiProfiles.map((p) => p.identity.toHexString())),
     [allAiProfiles],
@@ -2099,10 +2115,16 @@ interface AiPanelProps {
  * Reducers don't return ids, so we snapshot the existing conversation ids, call
  * `createConversation`, then open the new one initiated by us once it arrives.
  */
-function NewConversationButton({ onOpen }: { onOpen: (id: bigint) => void }) {
+function NewConversationButton({
+  conversations,
+  profiles,
+  onOpen,
+}: {
+  conversations: readonly ConversationRow[];
+  profiles: readonly AiUserProfileRow[];
+  onOpen: (id: bigint) => void;
+}) {
   const { identity } = useSpacetimeDB();
-  const { profiles } = useAiUserProfiles();
-  const { conversations } = useConversations();
   const createConversation = useCreateConversation();
   const [open, setOpen] = useState(false);
   const pendingRef = useRef<Set<string> | null>(null);
@@ -2177,7 +2199,60 @@ function NewConversationButton({ onOpen }: { onOpen: (id: bigint) => void }) {
 export function AiPanel({ pageId, onClose, openConversationId }: AiPanelProps) {
   const { identity } = useSpacetimeDB();
   const { conversations: allConversations } = useConversations();
-  const conversations = useInboxConversations(identity ?? undefined);
+  const allMessages = useConversationMessages();
+  const allParticipants = useConversationParticipants();
+  const { profiles: allAiProfiles } = useAiUserProfiles();
+
+  // Keep one subscription per live conversation table mounted for the panel's
+  // whole lifetime. Previously every list row subscribed to the entire message,
+  // participant, and AI-profile tables; selecting a row tore all of those down
+  // while mounting replacement subscriptions for the thread. That transition
+  // could leave the SDK cache without a live query until a page refresh.
+  const conversations = useMemo(() => {
+    if (!identity) return [] as ConversationRow[];
+    const meHex = identity.toHexString();
+    const myConversationIds = new Set(
+      allParticipants
+        .filter((participant) =>
+          participant.identity.toHexString() === meHex && !participant.leftAt
+        )
+        .map((participant) => String(participant.conversationId)),
+    );
+    return allConversations
+      .filter((conversation) => myConversationIds.has(String(conversation.id)))
+      .sort((a, b) =>
+        Number(b.updatedAt.microsSinceUnixEpoch - a.updatedAt.microsSinceUnixEpoch)
+      );
+  }, [allConversations, allParticipants, identity]);
+
+  const messagesByConversation = useMemo(() => {
+    const grouped = new Map<bigint, ConversationMessageRow[]>();
+    for (const message of allMessages) {
+      if (!isVisibleConversationMessage(message)) continue;
+      const existing = grouped.get(message.conversationId);
+      if (existing) existing.push(message);
+      else grouped.set(message.conversationId, [message]);
+    }
+    for (const messages of grouped.values()) {
+      messages.sort((a, b) =>
+        Number(a.createdAt.microsSinceUnixEpoch - b.createdAt.microsSinceUnixEpoch)
+      );
+    }
+    return grouped;
+  }, [allMessages]);
+
+  const aiUserByConversation = useMemo(() => {
+    const profileByIdentity = new Map(
+      allAiProfiles.map((profile) => [profile.identity.toHexString(), profile]),
+    );
+    const grouped = new Map<bigint, AiUserProfileRow>();
+    for (const participant of allParticipants) {
+      if (grouped.has(participant.conversationId)) continue;
+      const profile = profileByIdentity.get(participant.identity.toHexString());
+      if (profile) grouped.set(participant.conversationId, profile);
+    }
+    return grouped;
+  }, [allAiProfiles, allParticipants]);
 
   const [tab, setTab] = useState<PanelTab>("conversations");
   const [selectedConvId, setSelectedConvId] = useState<bigint | null>(
@@ -2201,6 +2276,9 @@ export function AiPanel({ pageId, onClose, openConversationId }: AiPanelProps) {
       <div className="flex flex-col h-full bg-white dark:bg-neutral-950">
         <ConversationThread
           conversation={selectedConv}
+          messages={messagesByConversation.get(selectedConv.id) ?? []}
+          aiUser={aiUserByConversation.get(selectedConv.id)}
+          allAiProfiles={allAiProfiles}
           onBack={() => setSelectedConvId(null)}
           activePageId={pageId}
         />
@@ -2239,6 +2317,8 @@ export function AiPanel({ pageId, onClose, openConversationId }: AiPanelProps) {
         </div>
         <div className="flex items-center gap-1">
         <NewConversationButton
+          conversations={allConversations}
+          profiles={allAiProfiles}
           onOpen={(id) => {
             setTab("conversations");
             setSelectedConvId(id);
@@ -2274,6 +2354,9 @@ export function AiPanel({ pageId, onClose, openConversationId }: AiPanelProps) {
               <ConversationListItem
                 key={String(conv.id)}
                 conversation={conv}
+                messages={messagesByConversation.get(conv.id) ?? []}
+                aiUser={aiUserByConversation.get(conv.id)}
+                allAiProfiles={allAiProfiles}
                 onClick={() => setSelectedConvId(conv.id)}
               />
             ))}
