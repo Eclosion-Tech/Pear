@@ -23,7 +23,7 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::allowlist::{AllowlistConfig, AllowlistEnforcer, UnlistedPolicy};
 use crate::audit::AuditLog;
 use crate::daemon::{
-    process_command, CommandSource, ExecConfig, IncomingCommand, Outcome, ResultSink,
+    process_incoming, CommandSource, ExecConfig, IncomingCommand, Outcome, ResultSink,
 };
 use crate::pty::PtyLimits;
 
@@ -105,6 +105,26 @@ fn parse_inbound(text: &str) -> Option<IncomingCommand> {
         Ok(Inbound::Command(cmd)) => Some(cmd),
         Err(_) => None,
     }
+}
+
+/// Serialize the device's detected inference providers into a `capabilities`
+/// frame: `{"type":"capabilities","capabilities":[{"provider":…,"available":…,
+/// "version":…,"models":…}]}`. Sent daemon → relay once per connection, right
+/// after the allowlist bootstrap frame is parsed; the relay mirrors each entry
+/// into `report_bridge_device_capability`. An empty detection still produces a
+/// frame (an empty list is itself information: no providers on this device).
+pub fn capabilities_frame(caps: &[crate::providers::ProviderCapability]) -> String {
+    #[derive(serde::Serialize)]
+    struct CapabilitiesFrame<'a> {
+        #[serde(rename = "type")]
+        ty: &'a str,
+        capabilities: &'a [crate::providers::ProviderCapability],
+    }
+    serde_json::to_string(&CapabilitiesFrame {
+        ty: "capabilities",
+        capabilities: caps,
+    })
+    .unwrap_or_else(|_| r#"{"type":"capabilities","capabilities":[]}"#.to_string())
 }
 
 /// Serialize an outcome into a `result` frame: `{"type":"result","command_id":N,
@@ -225,7 +245,7 @@ where
                     match msg {
                         Message::Text(text) => {
                             if let Some(cmd) = parse_inbound(&text) {
-                                let outcome = process_command(&cmd, enforcer, exec, audit);
+                                let outcome = process_incoming(&cmd, enforcer, exec, audit).await;
                                 let json = result_json(cmd.command_id, &outcome)?;
                                 write
                                     .send(Message::Text(json))

@@ -97,6 +97,7 @@ import DisableAutomationReducer from "./disable_automation_reducer";
 import EmptyTrashReducer from "./empty_trash_reducer";
 import EnableAutomationReducer from "./enable_automation_reducer";
 import EnqueueBridgeCommandReducer from "./enqueue_bridge_command_reducer";
+import EnqueueBridgeInferenceReducer from "./enqueue_bridge_inference_reducer";
 import FailNotionImportJobReducer from "./fail_notion_import_job_reducer";
 import FailTaskReducer from "./fail_task_reducer";
 import FindOrCreateAiDmReducer from "./find_or_create_ai_dm_reducer";
@@ -147,6 +148,7 @@ import RenameViewReducer from "./rename_view_reducer";
 import ReopenConversationReducer from "./reopen_conversation_reducer";
 import ReorderPropertyReducer from "./reorder_property_reducer";
 import ReplacePageDocReducer from "./replace_page_doc_reducer";
+import ReportBridgeDeviceCapabilityReducer from "./report_bridge_device_capability_reducer";
 import ReportExtensionRuntimeHealthReducer from "./report_extension_runtime_health_reducer";
 import RequestPageAccessReducer from "./request_page_access_reducer";
 import ResolvePageAccessRequestReducer from "./resolve_page_access_request_reducer";
@@ -174,6 +176,7 @@ import SendAddressedMessageReducer from "./send_addressed_message_reducer";
 import SendMessageReducer from "./send_message_reducer";
 import SendUserMessageReducer from "./send_user_message_reducer";
 import SetAiUserApiKeyReducer from "./set_ai_user_api_key_reducer";
+import SetAiUserInferenceBackendReducer from "./set_ai_user_inference_backend_reducer";
 import SetAiUserModelReducer from "./set_ai_user_model_reducer";
 import SetAiUserRoutineEnabledReducer from "./set_ai_user_routine_enabled_reducer";
 import SetAiUserSerperApiKeyReducer from "./set_ai_user_serper_api_key_reducer";
@@ -258,6 +261,7 @@ import BlockAccessRuleRow from "./block_access_rule_table";
 import BridgeCommandRow from "./bridge_command_table";
 import BridgeCommandResultRow from "./bridge_command_result_table";
 import BridgeDeviceAllowlistRow from "./bridge_device_allowlist_table";
+import BridgeDeviceCapabilityRow from "./bridge_device_capability_table";
 import BridgeDeviceGrantRow from "./bridge_device_grant_table";
 import BridgeDeviceSummaryRow from "./bridge_device_summary_table";
 import ComponentNodeRow from "./component_node_table";
@@ -618,6 +622,20 @@ const tablesSchema = __schema({
       { name: 'bridge_device_allowlist_device_id_key', constraint: 'unique', columns: ['deviceId'] },
     ],
   }, BridgeDeviceAllowlistRow),
+  bridge_device_capability: __table({
+    name: 'bridge_device_capability',
+    indexes: [
+      { name: 'device_id', algorithm: 'btree', columns: [
+        'deviceId',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'bridge_device_capability_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, BridgeDeviceCapabilityRow),
   bridge_device_grant: __table({
     name: 'bridge_device_grant',
     indexes: [
@@ -1282,6 +1300,7 @@ const reducersSchema = __reducers(
   __reducerSchema("empty_trash", EmptyTrashReducer),
   __reducerSchema("enable_automation", EnableAutomationReducer),
   __reducerSchema("enqueue_bridge_command", EnqueueBridgeCommandReducer),
+  __reducerSchema("enqueue_bridge_inference", EnqueueBridgeInferenceReducer),
   __reducerSchema("fail_notion_import_job", FailNotionImportJobReducer),
   __reducerSchema("fail_task", FailTaskReducer),
   __reducerSchema("find_or_create_ai_dm", FindOrCreateAiDmReducer),
@@ -1332,6 +1351,7 @@ const reducersSchema = __reducers(
   __reducerSchema("reopen_conversation", ReopenConversationReducer),
   __reducerSchema("reorder_property", ReorderPropertyReducer),
   __reducerSchema("replace_page_doc", ReplacePageDocReducer),
+  __reducerSchema("report_bridge_device_capability", ReportBridgeDeviceCapabilityReducer),
   __reducerSchema("report_extension_runtime_health", ReportExtensionRuntimeHealthReducer),
   __reducerSchema("request_page_access", RequestPageAccessReducer),
   __reducerSchema("resolve_page_access_request", ResolvePageAccessRequestReducer),
@@ -1359,6 +1379,7 @@ const reducersSchema = __reducers(
   __reducerSchema("send_message", SendMessageReducer),
   __reducerSchema("send_user_message", SendUserMessageReducer),
   __reducerSchema("set_ai_user_api_key", SetAiUserApiKeyReducer),
+  __reducerSchema("set_ai_user_inference_backend", SetAiUserInferenceBackendReducer),
   __reducerSchema("set_ai_user_model", SetAiUserModelReducer),
   __reducerSchema("set_ai_user_routine_enabled", SetAiUserRoutineEnabledReducer),
   __reducerSchema("set_ai_user_serper_api_key", SetAiUserSerperApiKeyReducer),

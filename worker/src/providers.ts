@@ -22,6 +22,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
 import { catalogFamilyFor, effortSupportFor, type CatalogFamily } from "./model-catalog.js";
+import { BridgeInferenceProvider, parseBridgeBackendBinding } from "./bridge-inference.js";
 
 // ── Normalized types ────────────────────────────────────────────────────────────
 
@@ -617,6 +618,8 @@ export interface AiUserConfigRow {
   apiKey: string | undefined;
   systemPrompt: string | undefined;
   maxTokens: number;
+  /** Optional bridge-device transport binding (see bridge-inference.ts). */
+  inferenceBackendJson?: string | undefined;
 }
 
 /**
@@ -759,6 +762,27 @@ export function getProviderForAiUser(
         `hasn't applied yet`,
     );
   }
+
+  // Bridge-device transport binding: completions route through a paired
+  // device's local providers (claude -p / codex / ollama) instead of a cloud
+  // key. Chat-only + non-streaming in v1 (see bridge-inference.ts); an offline
+  // device fails the turn explicitly — never a silent cloud fallback.
+  const bridgeBinding = parseBridgeBackendBinding(config.inferenceBackendJson);
+  if (bridgeBinding) {
+    const entry: ResolvedProvider = {
+      provider: new BridgeInferenceProvider(
+        conn as unknown as ConstructorParameters<typeof BridgeInferenceProvider>[0],
+        config.identity.toHexString(),
+        bridgeBinding,
+      ),
+      model: bridgeBinding.model ?? config.model,
+      maxTokens: config.maxTokens || 8192,
+      providerTag: bridgeCatalogFamily(bridgeBinding.provider),
+    };
+    providerCache.set(aiUserId, entry);
+    return entry;
+  }
+
   if (!config.apiKey && config.provider.tag !== "Ollama") {
     throw new Error(
       `[providers] AI user ${aiUserId} (${config.provider.tag}) has no API key — ` +
@@ -774,6 +798,19 @@ export function getProviderForAiUser(
   };
   providerCache.set(aiUserId, entry);
   return entry;
+}
+
+/** Catalog family for a bridge-device provider slug (drives tier routing). */
+function bridgeCatalogFamily(provider: string): CatalogFamily {
+  switch (provider) {
+    case "claude-code":
+    case "claude":
+      return "Anthropic";
+    case "codex":
+      return "OpenAi";
+    default:
+      return "Ollama";
+  }
 }
 
 /** Convenience: get the default provider (backwards-compatible with env-var config). */

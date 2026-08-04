@@ -221,13 +221,26 @@ impl StdbCommandSource {
     }
 
     async fn poll_once(&mut self) -> Result<(), String> {
-        let (cols, rows) = self
+        // Newer desktop against an older module (no kind/payload_json yet):
+        // retry without the appended columns instead of failing every poll.
+        let full = self
             .http
             .sql(
                 "SELECT id, device_id, session_id, conversation_id, requested_by, command, \
-                 cwd, status, confirmed_at FROM bridge_command",
+                 cwd, status, confirmed_at, kind, payload_json FROM bridge_command",
             )
-            .await?;
+            .await;
+        let (cols, rows) = match full {
+            Ok(ok) => ok,
+            Err(_) => {
+                self.http
+                    .sql(
+                        "SELECT id, device_id, session_id, conversation_id, requested_by, \
+                         command, cwd, status, confirmed_at FROM bridge_command",
+                    )
+                    .await?
+            }
+        };
         let col = |name: &str| cols.iter().position(|c| c == name);
         let (Some(c_id), Some(c_dev), Some(c_sess), Some(c_conv), Some(c_req), Some(c_cmd), Some(c_cwd), Some(c_status), Some(c_conf)) = (
             col("id"),
@@ -242,6 +255,9 @@ impl StdbCommandSource {
         ) else {
             return Err(format!("bridge_command columns missing in {cols:?}"));
         };
+        // Post-inference columns; absent against an older module → None ≡ bash.
+        let c_kind = col("kind");
+        let c_payload = col("payload_json");
 
         for row in rows {
             let id = as_u64(&row[c_id]);
@@ -270,6 +286,12 @@ impl StdbCommandSource {
                 command: as_string(&row[c_cmd]),
                 cwd: unwrap_option(&row[c_cwd]).map(|v| as_string(&v)),
                 confirmed,
+                kind: c_kind
+                    .and_then(|c| unwrap_option(&row[c]))
+                    .map(|v| as_string(&v)),
+                payload_json: c_payload
+                    .and_then(|c| unwrap_option(&row[c]))
+                    .map(|v| as_string(&v)),
             });
         }
         self.primed = true;

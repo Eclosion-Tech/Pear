@@ -27,9 +27,10 @@ use spacetimedb::{reducer, Identity, ReducerContext, Table, Timestamp};
 use crate::ai::ai_user_config;
 use crate::bridge::{
     bridge_command, bridge_command_result, bridge_device, bridge_device_allowlist,
-    bridge_device_grant, bridge_device_summary, bridge_session, next_bridge_command_id,
-    next_bridge_device_grant_id, next_bridge_device_id, next_bridge_session_id, BridgeCommand,
-    BridgeCommandResult, BridgeCommandStatus, BridgeDevice, BridgeDeviceAllowlist,
+    bridge_device_capability, bridge_device_grant, bridge_device_summary, bridge_session,
+    next_bridge_command_id, next_bridge_device_capability_id, next_bridge_device_grant_id,
+    next_bridge_device_id, next_bridge_session_id, BridgeCommand, BridgeCommandResult,
+    BridgeCommandStatus, BridgeDevice, BridgeDeviceAllowlist, BridgeDeviceCapability,
     BridgeDeviceGrant, BridgeDeviceSummary, BridgeSession, UnlistedCommandPolicy,
 };
 use crate::extensions::{tool_call_audit_log, ToolCallAuditLog};
@@ -488,6 +489,101 @@ pub fn enqueue_bridge_command(
         // (BRIDGE_COMMAND_OWNER_FILTER).
         owner_identity: device.owner,
         nonce: if nonce.is_empty() { None } else { Some(nonce) },
+        kind: None,
+        payload_json: None,
+    });
+    Ok(())
+}
+
+/// Hard cap on an inference request body. STDB strings are unbounded; this is a
+/// sanity bound, not a protocol limit (largest existing single-arg precedent is
+/// the 64 MiB Notion import snapshot). A full conversation context fits well
+/// under 1 MiB; anything larger is almost certainly a caller bug.
+const MAX_INFERENCE_PAYLOAD_BYTES: usize = 1_048_576;
+
+/// Enqueue a one-shot inference request (`kind = "inference"`) for a paired
+/// device: the daemon runs it through a local provider adapter — `claude -p`
+/// (Claude subscription), `codex exec`, or the ollama HTTP API — outside the
+/// bash sandbox/allowlist, and reports the result via the normal
+/// `complete_bridge_command` path with a JSON envelope in `stdout`.
+///
+/// Same substrate gates as `enqueue_bridge_command`: live device, default-deny
+/// per-AI-user grant, connected session. Inference never requires human
+/// confirmation (no shell, fixed binary + args daemon-side); rate/cost policy
+/// belongs to the grant + future caps, not the confirmation flow.
+///
+/// `command` is stamped with a short summary (`infer:{provider}:{model}`) so
+/// existing UI/audit surfaces render something meaningful; the request body
+/// (prompt, system, timeout) travels in `payload_json`.
+#[reducer]
+pub fn enqueue_bridge_inference(
+    ctx: &ReducerContext,
+    device_id: u64,
+    provider: String,
+    model: String,
+    payload_json: String,
+    conversation_id: u64,
+    job_id: Option<u64>,
+    task_id: Option<u64>,
+    // See `BridgeCommand::nonce`. Pass "" to skip read-back correlation.
+    nonce: String,
+) -> Result<(), String> {
+    let provider = provider.trim().to_string();
+    if provider.is_empty() {
+        return Err("Provider cannot be empty".to_string());
+    }
+    if provider.len() > 64 {
+        return Err("Provider name too long (max 64 chars)".to_string());
+    }
+    if model.len() > 128 {
+        return Err("Model name too long (max 128 chars)".to_string());
+    }
+    if payload_json.trim().is_empty() {
+        return Err("Inference payload cannot be empty".to_string());
+    }
+    if payload_json.len() > MAX_INFERENCE_PAYLOAD_BYTES {
+        return Err(format!(
+            "Inference payload too large ({} bytes, max {MAX_INFERENCE_PAYLOAD_BYTES})",
+            payload_json.len()
+        ));
+    }
+    let device = live_device(ctx, device_id)?;
+    require_bridge_grant(ctx, device_id)?;
+
+    let session = ctx
+        .db
+        .bridge_session()
+        .iter()
+        .filter(|s| s.device_id == device_id && s.disconnected_at.is_none())
+        .max_by_key(|s| s.connected_at)
+        .ok_or_else(|| format!("No connected bridge session for device {device_id}"))?;
+
+    let summary = if model.is_empty() {
+        format!("infer:{provider}")
+    } else {
+        format!("infer:{provider}:{model}")
+    };
+    let command_id = next_bridge_command_id(ctx);
+    ctx.db.bridge_command().insert(BridgeCommand {
+        id: command_id,
+        device_id,
+        session_id: session.id,
+        conversation_id,
+        job_id,
+        task_id,
+        requested_by: ctx.sender(),
+        command: summary,
+        cwd: None,
+        enqueued_at: ctx.timestamp,
+        status: BridgeCommandStatus::Pending,
+        requires_confirmation: false,
+        confirmed_at: None,
+        confirmed_by: None,
+        device_identity: device.device_identity,
+        owner_identity: device.owner,
+        nonce: if nonce.is_empty() { None } else { Some(nonce) },
+        kind: Some("inference".to_string()),
+        payload_json: Some(payload_json),
     });
     Ok(())
 }
@@ -858,13 +954,98 @@ pub fn revoke_bridge_device_grant(
 }
 
 // ============================================================
+// Device capabilities — self-reported inference providers
+// ============================================================
+
+/// Upsert one provider capability row for the calling device. Called by the
+/// daemon (through the relay, as the device STDB identity) or the embedded
+/// desktop bridge after provider detection at connect time — once per detected
+/// provider. Gated the same way as `complete_bridge_command`: the sender must
+/// BE a paired, non-revoked device (`device_identity == ctx.sender()`), so
+/// neither AI users nor humans can forge a device's capabilities.
+#[reducer]
+pub fn report_bridge_device_capability(
+    ctx: &ReducerContext,
+    provider: String,
+    available: bool,
+    version: Option<String>,
+    models_json: Option<String>,
+) -> Result<(), String> {
+    let provider = provider.trim().to_string();
+    if provider.is_empty() {
+        return Err("Provider cannot be empty".to_string());
+    }
+    if provider.len() > 64 {
+        return Err("Provider name too long (max 64 chars)".to_string());
+    }
+    if version.as_deref().is_some_and(|v| v.len() > 128) {
+        return Err("Version string too long (max 128 chars)".to_string());
+    }
+    if models_json.as_deref().is_some_and(|m| m.len() > 65_536) {
+        return Err("Models list too large (max 64 KiB)".to_string());
+    }
+    if ctx.sender() == Identity::ZERO {
+        return Err("Anonymous identity cannot report capabilities".to_string());
+    }
+    // bridge_device has no index on device_identity (private table, a handful
+    // of rows per workspace) — scan is fine.
+    let device = ctx
+        .db
+        .bridge_device()
+        .iter()
+        .find(|d| d.device_identity == ctx.sender())
+        .ok_or("Only a paired device may report its capabilities")?;
+    if device.revoked_at.is_some() {
+        return Err("Device has been revoked".to_string());
+    }
+
+    let existing = ctx
+        .db
+        .bridge_device_capability()
+        .device_id()
+        .filter(device.id)
+        .find(|c| c.provider == provider);
+    match existing {
+        Some(row) => {
+            ctx.db.bridge_device_capability().id().update(BridgeDeviceCapability {
+                available,
+                version,
+                models_json,
+                detected_at: ctx.timestamp,
+                ..row
+            });
+        }
+        None => {
+            ctx.db.bridge_device_capability().insert(BridgeDeviceCapability {
+                id: next_bridge_device_capability_id(ctx),
+                device_id: device.id,
+                provider,
+                available,
+                version,
+                models_json,
+                detected_at: ctx.timestamp,
+            });
+        }
+    }
+    Ok(())
+}
+
+// ============================================================
 // Audit mirror
 // ============================================================
 
 /// Mirror a bridge command into the existing ToolCallAuditLog. `outcome`
 /// is "allowed" | "denied"; `outcome_detail` points back at the command.
+/// `input_hash` covers the payload for non-bash kinds (the `command` column
+/// only holds a summary there).
 fn write_audit(ctx: &ReducerContext, cmd: &BridgeCommand, outcome: &str, output_hash: &str) {
     use crate::extensions::next_tool_call_audit_log_id;
+    let tool_name = match cmd.kind.as_deref() {
+        Some("inference") => "tool-infer",
+        Some("harness") => "tool-harness",
+        _ => "tool-bash",
+    };
+    let input = cmd.payload_json.as_deref().unwrap_or(&cmd.command);
     ctx.db.tool_call_audit_log().insert(ToolCallAuditLog {
         id: next_tool_call_audit_log_id(ctx),
         conversation_id: cmd.conversation_id,
@@ -872,8 +1053,8 @@ fn write_audit(ctx: &ReducerContext, cmd: &BridgeCommand, outcome: &str, output_
         task_id: cmd.task_id,
         agent_id: identity_short(&cmd.requested_by),
         installed_extension_id: None,
-        tool_name: "tool-bash".to_string(),
-        input_hash: sha256_hex(&cmd.command),
+        tool_name: tool_name.to_string(),
+        input_hash: sha256_hex(input),
         output_hash: output_hash.to_string(),
         outcome: outcome.to_string(),
         outcome_detail: Some(format!("bridge_command:{}", cmd.id)),

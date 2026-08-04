@@ -35,6 +35,18 @@ export interface BridgeCommandSqlRow {
   command: string;
   conversationId: string;
   status: { tag: string };
+  /** Enqueue-correlation token; null on legacy rows / older modules. */
+  nonce: string | null;
+}
+
+/** A `bridge_device_capability` row: one inference provider a device serves. */
+export interface BridgeCapabilitySqlRow {
+  deviceId: string;
+  provider: string;
+  available: boolean;
+  version: string | null;
+  /** JSON array of model names, when the provider enumerates them (ollama). */
+  modelsJson: string | null;
 }
 
 /** A `bridge_command_result` row, shaped to match the subscription-cache rows. */
@@ -52,6 +64,12 @@ export interface BridgeSqlClient {
   commandsForDevice(deviceId: bigint): Promise<BridgeCommandSqlRow[]>;
   /** The `bridge_command_result` for one command id, or undefined if none yet. */
   resultForCommand(commandId: string | bigint): Promise<BridgeResultSqlRow | undefined>;
+  /**
+   * The inference providers one device reports (`bridge_device_capability`;
+   * public, no RLS). Optional so hand-rolled test fakes / older registrations
+   * that only implement the two command reads keep working.
+   */
+  capabilitiesForDevice?(deviceId: bigint): Promise<BridgeCapabilitySqlRow[]>;
 }
 
 // BridgeCommandStatus variant order in server/.../bridge/mod.rs. STDB's HTTP
@@ -181,15 +199,45 @@ export function createBridgeSqlClient(opts: BridgeSqlClientOptions): BridgeSqlCl
 
   return {
     async commandsForDevice(deviceId: bigint): Promise<BridgeCommandSqlRow[]> {
-      const rows = await sql(
-        `SELECT id, device_id, conversation_id, command, status FROM bridge_command WHERE device_id = ${deviceId.toString()}`,
-      );
+      // `nonce` is an appended column; against an older module the SELECT
+      // errors, so retry with the legacy column list rather than failing the
+      // whole wait loop.
+      let rows: Record<string, unknown>[];
+      try {
+        rows = await sql(
+          `SELECT id, device_id, conversation_id, command, status, nonce FROM bridge_command WHERE device_id = ${deviceId.toString()}`,
+        );
+      } catch {
+        rows = await sql(
+          `SELECT id, device_id, conversation_id, command, status FROM bridge_command WHERE device_id = ${deviceId.toString()}`,
+        );
+      }
       return rows.map((r) => ({
         id: String(toBigIntOr0(r.id)),
         deviceId: String(toBigIntOr0(r.device_id)),
         command: typeof r.command === "string" ? r.command : String(decodeOptionSome(r.command) ?? ""),
         conversationId: String(toBigIntOr0(r.conversation_id)),
         status: { tag: decodeStatusTag(r.status) },
+        nonce: toStringOrNull(r.nonce),
+      }));
+    },
+    async capabilitiesForDevice(deviceId: bigint): Promise<BridgeCapabilitySqlRow[]> {
+      let rows: Record<string, unknown>[];
+      try {
+        rows = await sql(
+          `SELECT device_id, provider, available, version, models_json FROM bridge_device_capability WHERE device_id = ${deviceId.toString()}`,
+        );
+      } catch {
+        // Older module without the table — report "no capability data", the
+        // caller treats that as unknown rather than unavailable.
+        return [];
+      }
+      return rows.map((r) => ({
+        deviceId: String(toBigIntOr0(r.device_id)),
+        provider: typeof r.provider === "string" ? r.provider : String(decodeOptionSome(r.provider) ?? ""),
+        available: r.available === true || decodeOptionSome(r.available) === true,
+        version: toStringOrNull(r.version),
+        modelsJson: toStringOrNull(r.models_json),
       }));
     },
     async resultForCommand(commandId: string | bigint): Promise<BridgeResultSqlRow | undefined> {

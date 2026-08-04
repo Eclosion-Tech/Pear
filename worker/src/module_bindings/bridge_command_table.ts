@@ -34,4 +34,6 @@ export default __t.row({
   deviceIdentity: __t.identity().name("device_identity"),
   ownerIdentity: __t.identity().name("owner_identity"),
   nonce: __t.option(__t.string()),
+  kind: __t.option(__t.string()),
+  payloadJson: __t.option(__t.string()).name("payload_json"),
 });

@@ -16,6 +16,7 @@ use pear_bridge::config::{self, Config, ConfigError};
 use pear_bridge::daemon::ExecConfig;
 use pear_bridge::keychain::{KeyringStore, TokenStore};
 use pear_bridge::pair;
+use pear_bridge::providers;
 use pear_bridge::pty::default_shell;
 use pear_bridge::relay::{self, Backoff};
 use pear_bridge::transport;
@@ -425,6 +426,33 @@ async fn run_once(
         limits,
         server_url: server_url.to_string(),
     };
+
+    // Report which inference providers this device can serve (claude / codex /
+    // ollama), so AI users can discover them via `bridge_device_capability`.
+    // Best-effort: a send failure ends the session (socket is dead anyway),
+    // detection itself cannot fail — absent providers just produce no entry.
+    let caps = providers::detect_capabilities().await;
+    eprintln!(
+        "detected inference providers: {}",
+        if caps.is_empty() {
+            "none".to_string()
+        } else {
+            caps.iter()
+                .map(|c| {
+                    format!("{}{}", c.provider, if c.available { "" } else { " (unavailable)" })
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    );
+    {
+        use futures_util::SinkExt;
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            transport::capabilities_frame(&caps),
+        ))
+        .await
+        .map_err(|e| format!("failed to send capabilities frame: {e}"))?;
+    }
 
     eprintln!("connected — waiting for commands");
     transport::run_session(ws, &enforcer, &exec, audit).await

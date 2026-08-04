@@ -70,6 +70,12 @@ pub struct AuditEntry {
     pub cwd: Option<String>,
     /// "allowed" | "denied" | "awaiting_confirmation".
     pub allowlist_result: String,
+    /// Command kind: `None` ≡ "bash" (and for all pre-kind log lines);
+    /// "inference" for provider-adapter runs. Skipped when `None` so the
+    /// canonical JSON — and therefore the hash chain — of legacy entries is
+    /// byte-identical to what older binaries wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
     /// The previous entry's `self_hash`, or [`GENESIS_HASH`] for the first entry.
     pub prev_hash: String,
     /// SHA-256 of this entry's canonical content (see module docs).
@@ -90,6 +96,8 @@ pub struct NewAuditRecord {
     pub command: String,
     pub cwd: Option<String>,
     pub allowlist_result: String,
+    /// See [`AuditEntry::kind`]. `None` for bash commands.
+    pub kind: Option<String>,
 }
 
 /// Append-only writer that maintains the hash chain across appends and across
@@ -144,6 +152,7 @@ impl AuditLog {
             command: rec.command,
             cwd: rec.cwd,
             allowlist_result: rec.allowlist_result,
+            kind: rec.kind,
             prev_hash: self.last_hash.clone(),
             self_hash: String::new(),
         };

@@ -36,6 +36,7 @@ fn record(command_id: u64, command: &str, result: &str) -> NewAuditRecord {
         command: command.to_string(),
         cwd: Some("/Users/kara/Projects/myapp".to_string()),
         allowlist_result: result.to_string(),
+        kind: None,
     }
 }
 

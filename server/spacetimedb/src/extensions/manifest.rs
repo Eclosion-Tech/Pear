@@ -303,6 +303,7 @@ pub(crate) fn create_extension_ai_user(
         allow_evaluation_sharing: false,
         tool_secrets_json: None,
         worker_token: None,
+        inference_backend_json: None,
     });
     ctx.db.ai_user_profile().insert(AiUserProfile {
         ai_user_id: config_row.id,

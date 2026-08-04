@@ -22,6 +22,7 @@ pub mod config;
 pub mod daemon;
 pub mod keychain;
 pub mod pair;
+pub mod providers;
 pub mod pty;
 pub mod relay;
 pub mod sandbox;

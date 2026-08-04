@@ -45,6 +45,17 @@ pub struct IncomingCommand {
     /// True if a human has confirmed this command (`confirmed_at` set). When set,
     /// the `require_confirmation_for` gate is skipped on re-entry.
     pub confirmed: bool,
+    /// Command kind: `None` ≡ "bash". "inference" routes to the provider
+    /// adapters ([`crate::providers`]) instead of the allowlist+PTY path.
+    /// `#[serde(default)]` so frames from an older relay (no kind field) parse
+    /// as bash, and an older daemon receiving a kind-carrying frame ignores the
+    /// unknown field (its allowlist then fail-safes on the summary string).
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Kind-specific request body (JSON) — the inference payload. `command`
+    /// carries only a short summary for non-bash kinds.
+    #[serde(default)]
+    pub payload_json: Option<String>,
 }
 
 /// The result of handling one command, mapped onto the command-lifecycle
@@ -123,6 +134,7 @@ pub fn process_command(
         command: cmd.command.clone(),
         cwd: cmd.cwd.clone(),
         allowlist_result: allowlist_result.to_string(),
+        kind: None,
     });
 
     match effective {
@@ -163,6 +175,57 @@ pub fn process_command(
     }
 }
 
+/// Handle one command of ANY kind. Bash commands go through the existing
+/// synchronous allowlist → audit → PTY path ([`process_command`]); inference
+/// commands go through the provider adapters ([`crate::providers`]) — no
+/// allowlist, no PTY, no sandbox (fixed binary + argument template; the prompt
+/// travels via stdin), but the same audit-before-exec rule. Both production
+/// transports (relay `run_session`, desktop embed `run_loop`) call this.
+pub async fn process_incoming(
+    cmd: &IncomingCommand,
+    enforcer: &AllowlistEnforcer,
+    exec: &ExecConfig,
+    audit: &mut AuditLog,
+) -> Outcome {
+    match cmd.kind.as_deref() {
+        Some("inference") => {
+            // Audit BEFORE executing, mirroring process_command. `command` is
+            // the enqueue-side summary (`infer:{provider}:{model}`) — the
+            // prompt itself is NOT logged (it may carry sensitive context);
+            // the module-side ToolCallAuditLog hashes the full payload.
+            let _ = audit.append(NewAuditRecord {
+                ts: now_timestamp(),
+                device_id: cmd.device_id.to_string(),
+                session_id: cmd.session_id,
+                command_id: cmd.command_id,
+                server: exec.server_url.clone(),
+                requested_by_identity: cmd.requested_by.clone(),
+                conversation_id: cmd.conversation_id,
+                command: cmd.command.clone(),
+                cwd: None,
+                allowlist_result: "allowed".to_string(),
+                kind: Some("inference".to_string()),
+            });
+            let result =
+                crate::providers::run_inference_json(cmd.payload_json.as_deref()).await;
+            Outcome::Completed {
+                exit_code: Some(if result.ok { 0 } else { 1 }),
+                stdout: result.to_json(),
+                stderr: String::new(),
+                duration_ms: result.duration_ms,
+            }
+        }
+        // Unknown kinds are rejected explicitly (a newer server than daemon);
+        // None / "bash" take the classic path.
+        Some(other) if other != "bash" => Outcome::Rejected {
+            reason: format!(
+                "this pear-bridge build does not support command kind \"{other}\" — update pear-bridge"
+            ),
+        },
+        _ => process_command(cmd, enforcer, exec, audit),
+    }
+}
+
 /// Drive the loop: pull commands from `source`, process each, push the outcome to
 /// `sink`. Returns when the source is exhausted (or a sink error). The transport
 /// supplies reconnect/token-refresh around this (see [`crate::relay`]).
@@ -174,7 +237,7 @@ pub async fn run_loop<S: CommandSource, K: ResultSink>(
     audit: &mut AuditLog,
 ) -> Result<(), String> {
     while let Some(cmd) = source.next_command().await {
-        let outcome = process_command(&cmd, enforcer, exec, audit);
+        let outcome = process_incoming(&cmd, enforcer, exec, audit).await;
         sink.send_outcome(cmd.command_id, outcome).await?;
     }
     Ok(())

@@ -115,11 +115,22 @@ pub struct AiUserConfig {
     /// `set_ai_user_worker_token`; pear-cloud's lifecycle stores it out-of-band
     /// and may also write it here. Same visibility as `api_key` (publisher +
     /// the AI user's own identity only) — never echoed to other members.
+    #[default(None::<String>)]
+    pub worker_token: Option<String>,
+    /// Optional inference-backend binding overriding the cloud `provider` /
+    /// `api_key` transport. JSON:
+    /// `{"mode":"bridge","device_id":1,"provider":"claude-code","model":"…"}`.
+    /// `None` (or `mode:"cloud-api"`) = existing behavior. When bound to a
+    /// bridge device, the worker routes this AI user's completions through
+    /// `enqueue_bridge_inference` on that device — the device must also GRANT
+    /// this AI user (`BridgeDeviceGrant`, enforced at enqueue). Offline device
+    /// = explicit turn error, never a silent fallback to the cloud path.
+    /// Set via `set_ai_user_inference_backend`.
     ///
     /// Must remain last for schema migration (STDB only allows additive
     /// changes at the end of a struct).
     #[default(None::<String>)]
-    pub worker_token: Option<String>,
+    pub inference_backend_json: Option<String>,
 }
 
 /// Distinguishes ordinary "do work" AI users from "review work" AI users.
@@ -264,6 +275,7 @@ pub fn create_ai_user(
         allow_evaluation_sharing: false,
         tool_secrets_json: None,
         worker_token: None,
+        inference_backend_json: None,
     });
 
     ctx.db.ai_user_profile().insert(AiUserProfile {
@@ -536,6 +548,34 @@ pub fn set_ai_user_tool_secrets_json(
         .ok_or("AI user config not found")?;
     ctx.db.ai_user_config().id().update(AiUserConfig {
         tool_secrets_json,
+        updated_at: ctx.timestamp,
+        ..config
+    });
+    Ok(())
+}
+
+/// Set or clear the per-AI-user inference-backend binding (see
+/// `AiUserConfig::inference_backend_json`). Sanity caps only — the worker
+/// validates the JSON shape and the enqueue reducer enforces the device grant.
+#[reducer]
+pub fn set_ai_user_inference_backend(
+    ctx: &ReducerContext,
+    ai_user_id: u64,
+    inference_backend_json: Option<String>,
+) -> Result<(), String> {
+    if inference_backend_json.as_deref().is_some_and(|j| j.len() > 4096) {
+        return Err("Inference backend binding too large (max 4 KiB)".to_string());
+    }
+    let inference_backend_json =
+        inference_backend_json.filter(|j| !j.trim().is_empty());
+    let config = ctx
+        .db
+        .ai_user_config()
+        .id()
+        .find(ai_user_id)
+        .ok_or("AI user config not found")?;
+    ctx.db.ai_user_config().id().update(AiUserConfig {
+        inference_backend_json,
         updated_at: ctx.timestamp,
         ..config
     });

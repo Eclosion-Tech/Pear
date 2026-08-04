@@ -37,4 +37,5 @@ export default __t.row({
   allowEvaluationSharing: __t.bool().name("allow_evaluation_sharing"),
   toolSecretsJson: __t.option(__t.string()).name("tool_secrets_json"),
   workerToken: __t.option(__t.string()).name("worker_token"),
+  inferenceBackendJson: __t.option(__t.string()).name("inference_backend_json"),
 });

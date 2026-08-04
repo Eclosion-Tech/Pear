@@ -112,6 +112,7 @@ export const AiUserConfig = __t.object("AiUserConfig", {
   allowEvaluationSharing: __t.bool(),
   toolSecretsJson: __t.option(__t.string()),
   workerToken: __t.option(__t.string()),
+  inferenceBackendJson: __t.option(__t.string()),
 });
 export type AiUserConfig = __Infer<typeof AiUserConfig>;
 
@@ -518,6 +519,8 @@ export const BridgeCommand = __t.object("BridgeCommand", {
   deviceIdentity: __t.identity(),
   ownerIdentity: __t.identity(),
   nonce: __t.option(__t.string()),
+  kind: __t.option(__t.string()),
+  payloadJson: __t.option(__t.string()),
 });
 export type BridgeCommand = __Infer<typeof BridgeCommand>;
 
@@ -577,6 +580,17 @@ export const BridgeDeviceAllowlist = __t.object("BridgeDeviceAllowlist", {
   deviceIdentity: __t.identity(),
 });
 export type BridgeDeviceAllowlist = __Infer<typeof BridgeDeviceAllowlist>;
+
+export const BridgeDeviceCapability = __t.object("BridgeDeviceCapability", {
+  id: __t.u64(),
+  deviceId: __t.u64(),
+  provider: __t.string(),
+  available: __t.bool(),
+  version: __t.option(__t.string()),
+  modelsJson: __t.option(__t.string()),
+  detectedAt: __t.timestamp(),
+});
+export type BridgeDeviceCapability = __Infer<typeof BridgeDeviceCapability>;
 
 export const BridgeDeviceGrant = __t.object("BridgeDeviceGrant", {
   id: __t.u64(),

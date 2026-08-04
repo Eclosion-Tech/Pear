@@ -25,7 +25,8 @@ use crate::{
     api_endpoint, api_endpoint_key, api_field_mapping, attachment, auto_apply_binding,
     automation_action, automation_capability, automation_condition, automation_event_queue,
     automation_rule, automation_run_log, block_access_rule, bridge_command, bridge_command_result,
-    bridge_device_allowlist, bridge_device_summary, component_node, component_type_definition,
+    bridge_device_allowlist, bridge_device_capability, bridge_device_summary, component_node,
+    component_type_definition,
     component_yjs_state, conversation, conversation_attachment, conversation_message,
     conversation_participant, database_row_marker, database_schema, database_view,
     extension_manifest, harness_template, id_counter, installed_extension, orcha_agent, orcha_job,
@@ -41,7 +42,8 @@ use crate::{
     AutomationCapability, AutomationCapabilityKind, AutomationCondition, AutomationConditionKind,
     AutomationEventQueue, AutomationEventStatus, AutomationMode, AutomationRule, AutomationRunLog,
     AutomationScheduleKind, AutomationTriggerKind, BridgeCommand, BridgeCommandResult,
-    BridgeCommandStatus, BridgeDeviceAllowlist, BridgeDeviceSummary, ComponentCapability,
+    BridgeCommandStatus, BridgeDeviceAllowlist, BridgeDeviceCapability, BridgeDeviceSummary,
+    ComponentCapability,
     ComponentNode, ComponentTypeDefinition, ComponentYjsState, Conversation,
     ConversationAttachment, ConversationKind, ConversationVisibility, DatabaseRowMarker,
     ExtensionManifest, ExtensionType, HarnessTemplateSource, InferenceProvider, OrchaJob,
@@ -120,6 +122,7 @@ const IMPORT_V2_TABLES: &[&str] = &[
     "bridge_command",
     "bridge_command_result",
     "bridge_device_allowlist",
+    "bridge_device_capability",
     "bridge_device_grant",
     "bridge_device_summary",
     "structural_sensor_finding",
@@ -474,6 +477,7 @@ fn import_rows(ctx: &ReducerContext, table_name: &str, arr: &[Value]) -> Result<
                         allow_evaluation_sharing: false,
                         tool_secrets_json: None,
                         worker_token: None,
+                        inference_backend_json: None,
                     });
                 }
                 ctx.db.ai_user_profile().insert(p);
@@ -578,6 +582,7 @@ fn import_rows(ctx: &ReducerContext, table_name: &str, arr: &[Value]) -> Result<
             plain!(bridge_device_allowlist, decode_bridge_device_allowlist)
         }
         "bridge_device_grant" => plain!(bridge_device_grant, decode_bridge_device_grant),
+        "bridge_device_capability" => plain!(bridge_device_capability, decode_bridge_device_capability),
         "bridge_device_summary" => plain!(bridge_device_summary, decode_bridge_device_summary),
         "structural_sensor_finding" => {
             plain!(structural_sensor_finding, decode_structural_sensor_finding)
@@ -1305,6 +1310,8 @@ fn decode_bridge_command(v: &Value) -> Result<BridgeCommand, String> {
         device_identity: identity_at_or_zero(m, "deviceIdentity")?,
         owner_identity: identity_at_or_zero(m, "ownerIdentity")?,
         nonce: opt_string_at(m, "nonce")?,
+        kind: opt_string_at(m, "kind")?,
+        payload_json: opt_string_at(m, "payloadJson")?,
     })
 }
 
@@ -1365,6 +1372,19 @@ fn decode_bridge_device_grant(v: &Value) -> Result<BridgeDeviceGrant, String> {
         ai_user_identity: decode_identity(m.get("aiUserIdentity").ok_or("aiUserIdentity")?)?,
         granted_by: decode_identity(m.get("grantedBy").ok_or("grantedBy")?)?,
         granted_at: decode_timestamp(m.get("grantedAt").ok_or("grantedAt")?)?,
+    })
+}
+
+fn decode_bridge_device_capability(v: &Value) -> Result<BridgeDeviceCapability, String> {
+    let m = obj(v, "bridge_device_capability")?;
+    Ok(BridgeDeviceCapability {
+        id: u64_at(m, "id")?,
+        device_id: u64_at(m, "deviceId")?,
+        provider: string_at(m, "provider")?,
+        available: bool_at(m, "available")?,
+        version: opt_string_at(m, "version")?,
+        models_json: opt_string_at(m, "modelsJson")?,
+        detected_at: decode_timestamp(m.get("detectedAt").ok_or("detectedAt")?)?,
     })
 }
 

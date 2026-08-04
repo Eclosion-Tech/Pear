@@ -152,8 +152,38 @@ impl LocalBridge {
 
         let this = Arc::clone(self);
         let source = StdbCommandSource::new(http.clone(), stop_rx);
+        let cap_http = http.clone();
         let sink = StdbResultSink { http };
         tauri::async_runtime::spawn(async move {
+            // Report this device's inference providers (claude/codex/ollama)
+            // before serving commands — the embedded bridge has no relay to
+            // forward a capabilities frame, so it calls the reducer directly
+            // as the device identity. Best-effort: failures are logged, the
+            // command loop starts regardless (e.g. pre-capability module).
+            for cap in pear_bridge::providers::detect_capabilities().await {
+                let version = match &cap.version {
+                    Some(v) => serde_json::json!({ "some": v }),
+                    None => serde_json::json!({ "none": [] }),
+                };
+                let models_json = match cap
+                    .models
+                    .as_ref()
+                    .filter(|m| !m.is_empty())
+                    .and_then(|m| serde_json::to_string(m).ok())
+                {
+                    Some(m) => serde_json::json!({ "some": m }),
+                    None => serde_json::json!({ "none": [] }),
+                };
+                if let Err(e) = cap_http
+                    .call(
+                        "report_bridge_device_capability",
+                        serde_json::json!([cap.provider, cap.available, version, models_json]),
+                    )
+                    .await
+                {
+                    eprintln!("[bridge] capability report failed ({}): {e}", cap.provider);
+                }
+            }
             let result = run_loop(source, sink, &enforcer, &exec, &mut audit).await;
             if let Err(e) = &result {
                 eprintln!("[bridge] loop ended with error: {e}");

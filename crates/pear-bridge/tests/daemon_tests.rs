@@ -83,6 +83,8 @@ fn cmd(id: u64, command: &str, confirmed: bool) -> IncomingCommand {
         command: command.to_string(),
         cwd: None,
         confirmed,
+        kind: None,
+        payload_json: None,
     }
 }
 

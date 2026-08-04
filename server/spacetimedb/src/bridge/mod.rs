@@ -49,6 +49,12 @@ pub(crate) fn next_bridge_device_grant_id(ctx: &ReducerContext) -> u64 {
     })
 }
 
+pub(crate) fn next_bridge_device_capability_id(ctx: &ReducerContext) -> u64 {
+    alloc_id(ctx, "bridge_device_capability", || {
+        ctx.db.bridge_device_capability().iter().map(|r| r.id).max().unwrap_or(0)
+    })
+}
+
 // ============================================================
 // Bridge — enums
 // ============================================================
@@ -220,11 +226,27 @@ pub struct BridgeCommand {
     /// back exactly the command it enqueued (match on `nonce`) instead of on
     /// `(device_id, command)` — two identical in-flight commands no longer
     /// cross-match. Empty for legacy rows / callers that don't supply one.
+    #[default(None::<String>)]
+    pub nonce: Option<String>,
+    /// Command kind discriminator. `None` ≡ "bash" (legacy rows and plain
+    /// tool-bash commands). "inference" = a one-shot inference request whose
+    /// request body lives in `payload_json`; the daemon runs it through a
+    /// provider adapter (claude -p / codex exec / ollama) OUTSIDE the bash
+    /// sandbox and allowlist. "harness" is reserved for bridge harness
+    /// sessions (ticket 14443). String, not enum: adding enum variants is a
+    /// breaking type change for deployed clients (see STATUS_TAGS coupling in
+    /// worker/bridge-sql.ts and desktop stdb.rs), a string is forward-open.
+    #[default(None::<String>)]
+    pub kind: Option<String>,
+    /// Kind-specific request body (JSON), e.g. for kind="inference":
+    /// `{"provider":"claude-code","model":"…","prompt":"…","system":"…",
+    ///   "timeout_seconds":240}`. Capped at 1 MiB by the enqueue reducer.
+    /// `command` holds only a short human-readable summary for UI/audit.
     ///
     /// Must remain last for schema migration (STDB only allows additive changes
     /// at the end of a struct).
     #[default(None::<String>)]
-    pub nonce: Option<String>,
+    pub payload_json: Option<String>,
 }
 
 /// Output and result for a completed command. 1:1 with BridgeCommand.
@@ -299,6 +321,35 @@ pub struct BridgeDeviceSummary {
     /// `open_/close_bridge_session`).
     pub connected: bool,
     pub revoked_at: Option<Timestamp>,
+}
+
+/// Inference providers a paired device exposes (claude-code / codex / ollama),
+/// one row per (device, provider). Self-reported by the device via
+/// `report_bridge_device_capability` at connect time (the daemon detects
+/// installed CLIs / a reachable ollama daemon), so rows describe the last
+/// report, not a live guarantee — pair with `BridgeDeviceSummary.connected`
+/// before enqueueing. Like `BridgeDeviceSummary`: public, no RLS, no secrets —
+/// AI users must be able to read it to discover where they can run inference
+/// (`tool_infer`, per-AI-user inference backends).
+#[table(accessor = bridge_device_capability, public)]
+pub struct BridgeDeviceCapability {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    /// == `BridgeDevice.id`.
+    #[index(btree)]
+    pub device_id: u64,
+    /// Provider slug: "claude-code" | "codex" | "ollama" (forward-open).
+    pub provider: String,
+    /// False when the CLI is installed but currently unusable (e.g. ollama
+    /// daemon not running at last report).
+    pub available: bool,
+    /// Provider CLI/daemon version string, when detectable.
+    pub version: Option<String>,
+    /// JSON array of model names the provider reported (ollama tag list);
+    /// `None` when the provider doesn't enumerate models (claude/codex).
+    pub models_json: Option<String>,
+    pub detected_at: Timestamp,
 }
 
 /// Per-(device, AI user) authorization to run `tool-bash` on a device.
