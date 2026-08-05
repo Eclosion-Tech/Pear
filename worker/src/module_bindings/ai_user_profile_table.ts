@@ -22,4 +22,5 @@ export default __t.row({
   createdAt: __t.timestamp().name("created_at"),
   updatedAt: __t.timestamp().name("updated_at"),
   systemPrompt: __t.option(__t.string()).name("system_prompt"),
+  inferenceBackendJson: __t.option(__t.string()).name("inference_backend_json"),
 });

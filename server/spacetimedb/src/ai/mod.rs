@@ -178,6 +178,15 @@ pub struct AiUserProfile {
     /// and edit instructions without subscribing to the RLS-guarded config row.
     #[default(None::<String>)]
     pub system_prompt: Option<String>,
+    /// Mirrored from `ai_user_config.inference_backend_json` (same reason: the
+    /// RLS-guarded config row is invisible to humans). No secrets — device id,
+    /// provider, model, optional cwd — but visible workspace-wide like the
+    /// rest of the profile. Kept in sync by `set_ai_user_inference_backend`.
+    ///
+    /// Must remain last for schema migration (STDB only allows additive
+    /// changes at the end of a struct).
+    #[default(None::<String>)]
+    pub inference_backend_json: Option<String>,
 }
 
 // ============================================================
@@ -290,6 +299,7 @@ pub fn create_ai_user(
         created_at: ctx.timestamp,
         updated_at: ctx.timestamp,
         system_prompt: system_prompt_for_profile,
+        inference_backend_json: None,
     });
 
     log::info!(
@@ -557,6 +567,8 @@ pub fn set_ai_user_tool_secrets_json(
 /// Set or clear the per-AI-user inference-backend binding (see
 /// `AiUserConfig::inference_backend_json`). Sanity caps only — the worker
 /// validates the JSON shape and the enqueue reducer enforces the device grant.
+/// Mirrored onto `AiUserProfile` so the settings UI (which cannot read the
+/// RLS-guarded config row as a human) can display the current binding.
 #[reducer]
 pub fn set_ai_user_inference_backend(
     ctx: &ReducerContext,
@@ -575,10 +587,17 @@ pub fn set_ai_user_inference_backend(
         .find(ai_user_id)
         .ok_or("AI user config not found")?;
     ctx.db.ai_user_config().id().update(AiUserConfig {
-        inference_backend_json,
+        inference_backend_json: inference_backend_json.clone(),
         updated_at: ctx.timestamp,
         ..config
     });
+    if let Some(profile) = ctx.db.ai_user_profile().ai_user_id().find(ai_user_id) {
+        ctx.db.ai_user_profile().ai_user_id().update(AiUserProfile {
+            inference_backend_json,
+            updated_at: ctx.timestamp,
+            ..profile
+        });
+    }
     Ok(())
 }
 

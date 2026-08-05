@@ -99,6 +99,10 @@ export function useSetAiUserSerperApiKey() {
   return useReducer(reducers.setAiUserSerperApiKey);
 }
 
+export function useSetAiUserInferenceBackend() {
+  return useReducer(reducers.setAiUserInferenceBackend);
+}
+
 export function useDeleteAiUser() {
   return useReducer(reducers.deleteAiUser);
 }

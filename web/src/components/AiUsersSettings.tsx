@@ -27,6 +27,7 @@ import {
   type AiUserProfileRow,
 } from "@/src/hooks/useAiUsers";
 import { useWorkerLiveness } from "@/src/hooks/useOrcha";
+import { InferenceBackendSection } from "@/src/components/InferenceBackendSection";
 import {
   hostCreateAiUser,
   hostDeleteAiUser,
@@ -670,6 +671,14 @@ function AiUserRowEditor({
             </>
           )}
         </div>
+        )}
+
+        {!isMcp && (
+          <InferenceBackendSection
+            aiUserId={profile.aiUserId}
+            bindingJson={optionStringFromRow(profile.inferenceBackendJson) || undefined}
+            disabled={busy}
+          />
         )}
 
         {isMcp ? (

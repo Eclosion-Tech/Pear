@@ -614,6 +614,7 @@ pub(super) fn decode_ai_user_profile(v: &Value) -> Result<AiUserProfile, String>
         created_at: decode_timestamp(m.get("createdAt").ok_or("createdAt")?)?,
         updated_at: decode_timestamp(m.get("updatedAt").ok_or("updatedAt")?)?,
         system_prompt: opt_string_at(m, "systemPrompt")?,
+        inference_backend_json: opt_string_at(m, "inferenceBackendJson")?,
     })
 }
 

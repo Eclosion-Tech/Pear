@@ -50,27 +50,53 @@ impl KeyringStore {
     }
 }
 
+/// Run a keyring operation on a fresh OS thread, outside any tokio runtime.
+///
+/// On Linux the selected `async-secret-service` backend reaches the Secret
+/// Service via zbus, whose blocking facade lazily builds its own
+/// current-thread tokio runtime and calls `block_on` — which PANICS when the
+/// calling thread is already inside a runtime (and `connect_main` calls
+/// `store.load()` under the daemon's `rt.block_on`). A raw spawned thread
+/// carries categorically no runtime context, so the nested `block_on` is
+/// legal there — chosen over `spawn_blocking`, whose blocking allowance is a
+/// tokio implementation detail. macOS/Windows backends are natively
+/// synchronous and merely pay one thread spawn per call; the token is touched
+/// about twice per process.
+fn off_runtime<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, KeychainError> + Send + 'static,
+) -> Result<T, KeychainError> {
+    std::thread::spawn(f)
+        .join()
+        .map_err(|_| KeychainError("keychain thread panicked".to_string()))?
+}
+
 impl TokenStore for KeyringStore {
     fn store(&self, server_url: &str, token: &str) -> Result<(), KeychainError> {
-        Self::entry(server_url)?
-            .set_password(token)
-            .map_err(|e| KeychainError(e.to_string()))
+        let server_url = server_url.to_string();
+        let token = token.to_string();
+        off_runtime(move || {
+            Self::entry(&server_url)?
+                .set_password(&token)
+                .map_err(|e| KeychainError(e.to_string()))
+        })
     }
 
     fn load(&self, server_url: &str) -> Result<Option<String>, KeychainError> {
-        match Self::entry(server_url)?.get_password() {
+        let server_url = server_url.to_string();
+        off_runtime(move || match Self::entry(&server_url)?.get_password() {
             Ok(token) => Ok(Some(token)),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(e) => Err(KeychainError(e.to_string())),
-        }
+        })
     }
 
     fn delete(&self, server_url: &str) -> Result<(), KeychainError> {
-        match Self::entry(server_url)?.delete_credential() {
+        let server_url = server_url.to_string();
+        off_runtime(move || match Self::entry(&server_url)?.delete_credential() {
             Ok(()) => Ok(()),
             Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(KeychainError(e.to_string())),
-        }
+        })
     }
 }
 
@@ -108,6 +134,35 @@ impl TokenStore for InMemoryStore {
     fn delete(&self, server_url: &str) -> Result<(), KeychainError> {
         self.inner.lock().unwrap().remove(&keychain_key(server_url));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod off_runtime_tests {
+    use super::*;
+
+    /// The exact failure shape the Linux fix exists for: a keyring call made
+    /// from a thread that is already inside a tokio runtime. `off_runtime`
+    /// must make a nested current-thread `block_on` legal.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn off_runtime_permits_nested_block_on_inside_a_runtime() {
+        let value = off_runtime(|| {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .expect("nested runtime builds");
+            Ok(rt.block_on(async { 7 }))
+        })
+        .expect("nested block_on must be legal off-runtime");
+        assert_eq!(value, 7);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn off_runtime_maps_panics_to_keychain_errors() {
+        let result: Result<(), KeychainError> = off_runtime(|| panic!("backend exploded"));
+        assert_eq!(
+            result.unwrap_err(),
+            KeychainError("keychain thread panicked".to_string())
+        );
     }
 }
 

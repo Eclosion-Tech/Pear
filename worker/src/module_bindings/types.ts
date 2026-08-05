@@ -139,6 +139,7 @@ export const AiUserProfile = __t.object("AiUserProfile", {
   createdAt: __t.timestamp(),
   updatedAt: __t.timestamp(),
   systemPrompt: __t.option(__t.string()),
+  inferenceBackendJson: __t.option(__t.string()),
 });
 export type AiUserProfile = __Infer<typeof AiUserProfile>;
 
