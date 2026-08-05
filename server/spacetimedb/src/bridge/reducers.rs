@@ -664,6 +664,32 @@ pub fn enqueue_bridge_harness(
     Ok(())
 }
 
+/// Ack that the executing device picked a command up: Pending → Running.
+/// Called by the relay right after it dispatches the command frame (and by the
+/// embedded desktop bridge when it dequeues), as the device identity. Without
+/// this ack nothing ever set `Running`, so worker-side "stuck Pending"
+/// fast-fails were really "not finished yet" — any inference slower than the
+/// grace window was misreported as an offline device. Only Pending flips (a
+/// confirmed re-dispatch is Pending again, so it re-acks cleanly); any other
+/// status is a no-op, never an error — the ack is best-effort by design.
+#[reducer]
+pub fn mark_bridge_command_running(ctx: &ReducerContext, command_id: u64) -> Result<(), String> {
+    let cmd = ctx
+        .db
+        .bridge_command()
+        .id()
+        .find(command_id)
+        .ok_or_else(|| format!("Bridge command {command_id} not found"))?;
+    require_executing_device(ctx, &cmd)?;
+    if cmd.status == BridgeCommandStatus::Pending {
+        ctx.db.bridge_command().id().update(BridgeCommand {
+            status: BridgeCommandStatus::Running,
+            ..cmd
+        });
+    }
+    Ok(())
+}
+
 /// Confirm a command sitting in AwaitingConfirmation. Called by the Pear UI; the
 /// human confirmer is the sender and must own the device. Flipping it back to
 /// Pending (with `confirmed_at` set) re-dispatches it to the daemon, which skips

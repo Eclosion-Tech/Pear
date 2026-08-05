@@ -2581,7 +2581,10 @@ export async function executeTool(
           });
         }
 
-        const PENDING_GRACE_MS = Math.min(10_000, Math.max(500, Math.floor(timeoutMs / 3)));
+        // Local models can be slow to first byte even after pickup; the
+        // transports now ack Pending→Running, but tolerate a version-skew
+        // window where no ack arrives (older relay/module).
+        const PENDING_GRACE_MS = Math.min(30_000, Math.max(500, Math.floor(timeoutMs / 3)));
         const start = Date.now();
         let result: BridgeRes | undefined;
         let lastTag: string | undefined;

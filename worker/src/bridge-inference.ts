@@ -219,7 +219,13 @@ interface ConnForBridge {
 const WAIT_TIMEOUT_MS = 300_000;
 const DEVICE_BUDGET_SECONDS = 240;
 const ENQUEUE_VISIBLE_MS = 10_000;
-const PENDING_GRACE_MS = 10_000;
+// How long a row may sit Pending before we call the device unresponsive. The
+// transports ack pickup (Pending → Running via mark_bridge_command_running),
+// so this normally trips within one poll cycle of a truly dead device — but
+// it must still tolerate a version-skew window where no ack ever comes (older
+// relay/module) plus slow local-model pickup, hence 30s rather than 10s. The
+// real backstop is WAIT_TIMEOUT_MS.
+const PENDING_GRACE_MS = 30_000;
 
 export class BridgeInferenceProvider implements InferenceProvider {
   constructor(
@@ -294,7 +300,7 @@ export class BridgeInferenceProvider implements InferenceProvider {
       provider: this.binding.provider,
       model: model ?? "",
       payloadJson: JSON.stringify(body),
-      conversationId: BigInt(0),
+      conversationId: request.conversationId ?? BigInt(0),
       jobId: undefined,
       taskId: undefined,
       nonce,
@@ -599,7 +605,7 @@ export class BridgeHarnessProvider extends BridgeInferenceProvider implements In
       );
       const tag = row?.status?.tag;
       if (tag && tag !== "Pending") everLeftPending = true;
-      if (tag === "Pending" && !everLeftPending && Date.now() - start > 10_000) {
+      if (tag === "Pending" && !everLeftPending && Date.now() - start > PENDING_GRACE_MS) {
         throw new Error(
           `Bridge device ${deviceId} did not pick up the harness turn — it is likely offline ` +
             `or running an older pear-bridge without harness support.`,

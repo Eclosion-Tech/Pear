@@ -277,6 +277,16 @@ impl StdbCommandSource {
                 Some(_) => continue,           // already delivered at this level
             }
             self.delivered.insert(id, confirmed);
+            // Pickup ack (Pending → Running) — best-effort, so worker-side
+            // stuck-Pending fast-fails don't misfire on slow local inference.
+            // Older modules without the reducer just log the error.
+            if let Err(e) = self
+                .http
+                .call("mark_bridge_command_running", serde_json::json!([id]))
+                .await
+            {
+                eprintln!("[bridge] running-ack failed for cmd {id} (older module?): {e}");
+            }
             self.queue.push_back(IncomingCommand {
                 command_id: id,
                 device_id: as_u64(&row[c_dev]),
