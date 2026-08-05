@@ -998,7 +998,7 @@ async function handleConversationMessage(
           tools: tools.length > 0 ? tools : undefined,
           thinkingBudget: streamBudget.thinkingBudget,
           effort,
-          conversationId,
+          conversationId: conv.id,
         };
 
         let doneResponse: (StreamEvent & { type: "done" }) | null = null;
@@ -1154,7 +1154,7 @@ async function handleConversationMessage(
           system: systemBlocks,
           messages: llmMessages,
           tools: tools.length > 0 ? tools : undefined,
-          conversationId,
+          conversationId: conv.id,
         });
 
         addUsage(turnUsage, response.usage);
