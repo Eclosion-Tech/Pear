@@ -215,6 +215,34 @@ pub async fn process_incoming(
                 duration_ms: result.duration_ms,
             }
         }
+        Some("harness") => {
+            // Audit before executing; `command` is the enqueue summary
+            // (`harness:{provider}`). The prompt is not logged locally.
+            let _ = audit.append(NewAuditRecord {
+                ts: now_timestamp(),
+                device_id: cmd.device_id.to_string(),
+                session_id: cmd.session_id,
+                command_id: cmd.command_id,
+                server: exec.server_url.clone(),
+                requested_by_identity: cmd.requested_by.clone(),
+                conversation_id: cmd.conversation_id,
+                command: cmd.command.clone(),
+                cwd: None,
+                allowlist_result: "allowed".to_string(),
+                kind: Some("harness".to_string()),
+            });
+            let result = crate::harness::run_harness_json(
+                cmd.payload_json.as_deref(),
+                enforcer.allowed_dirs(),
+            )
+            .await;
+            Outcome::Completed {
+                exit_code: Some(if result.ok { 0 } else { 1 }),
+                stdout: result.to_json(),
+                stderr: String::new(),
+                duration_ms: result.duration_ms,
+            }
+        }
         // Unknown kinds are rejected explicitly (a newer server than daemon);
         // None / "bash" take the classic path.
         Some(other) if other != "bash" => Outcome::Rejected {

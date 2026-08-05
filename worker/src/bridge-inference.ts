@@ -39,13 +39,24 @@ import type {
   SystemPrompt,
 } from "./providers.js";
 import { getBridgeSql } from "./bridge-sql.js";
+import { createHash } from "node:crypto";
 
-/** Parsed `inference_backend_json`. */
+/**
+ * Parsed `inference_backend_json`. `mode: "bridge"` routes completions through
+ * one-shot device inference; `mode: "harness"` routes whole turns through a
+ * resumable device-side agent session (Claude Code v1 — ticket 14443).
+ */
 export interface BridgeBackendBinding {
-  mode: "bridge";
+  mode: "bridge" | "harness";
   device_id: number;
   provider: string;
   model?: string;
+  /** harness: working directory on the device (jail-checked daemon-side). */
+  cwd?: string;
+  /** harness: Claude Code permission mode ("default" | "acceptEdits" | "plan"). */
+  permission_mode?: string;
+  /** harness: optional Claude Code --allowedTools list. */
+  allowed_tools?: string[];
 }
 
 /** Parse + validate a binding; undefined for null/cloud-api/garbage. */
@@ -53,15 +64,23 @@ export function parseBridgeBackendBinding(raw: string | undefined): BridgeBacken
   if (!raw || !raw.trim()) return undefined;
   try {
     const v = JSON.parse(raw) as Partial<BridgeBackendBinding> & { mode?: string };
-    if (v.mode !== "bridge") return undefined;
+    if (v.mode !== "bridge" && v.mode !== "harness") return undefined;
     if (typeof v.device_id !== "number" || typeof v.provider !== "string" || !v.provider.trim()) {
       return undefined;
     }
     return {
-      mode: "bridge",
+      mode: v.mode,
       device_id: v.device_id,
       provider: v.provider.trim(),
       model: typeof v.model === "string" && v.model.trim() ? v.model.trim() : undefined,
+      cwd: typeof v.cwd === "string" && v.cwd.trim() ? v.cwd.trim() : undefined,
+      permission_mode:
+        typeof v.permission_mode === "string" && v.permission_mode.trim()
+          ? v.permission_mode.trim()
+          : undefined,
+      allowed_tools: Array.isArray(v.allowed_tools)
+        ? v.allowed_tools.filter((t): t is string => typeof t === "string" && !!t.trim())
+        : undefined,
     };
   } catch {
     return undefined;
@@ -204,9 +223,9 @@ const PENDING_GRACE_MS = 10_000;
 
 export class BridgeInferenceProvider implements InferenceProvider {
   constructor(
-    private readonly conn: ConnForBridge,
-    private readonly aiIdentityHex: string,
-    private readonly binding: BridgeBackendBinding,
+    protected readonly conn: ConnForBridge,
+    protected readonly aiIdentityHex: string,
+    protected readonly binding: BridgeBackendBinding,
   ) {}
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
@@ -333,7 +352,7 @@ export class BridgeInferenceProvider implements InferenceProvider {
     };
   }
 
-  private async awaitCommandRow(
+  protected async awaitCommandRow(
     deviceId: bigint,
     nonce: string,
   ): Promise<{ id: bigint | string; status?: { tag: string } }> {
@@ -350,7 +369,7 @@ export class BridgeInferenceProvider implements InferenceProvider {
     );
   }
 
-  private async awaitResult(
+  protected async awaitResult(
     deviceId: bigint,
     commandId: bigint | string,
   ): Promise<{ stdout: string; rejectionReason?: string | null }> {
@@ -378,7 +397,7 @@ export class BridgeInferenceProvider implements InferenceProvider {
     );
   }
 
-  private async readCommands(deviceId: bigint): Promise<
+  protected async readCommands(deviceId: bigint): Promise<
     Array<{ id: bigint | string; status?: { tag: string }; nonce?: string | null }>
   > {
     const sql = getBridgeSql(this.aiIdentityHex);
@@ -389,7 +408,7 @@ export class BridgeInferenceProvider implements InferenceProvider {
     return iter ? [...iter] : [];
   }
 
-  private async readResult(
+  protected async readResult(
     commandId: bigint | string,
   ): Promise<{ stdout: string; rejectionReason?: string | null } | undefined> {
     const sql = getBridgeSql(this.aiIdentityHex);
@@ -407,6 +426,191 @@ export class BridgeInferenceProvider implements InferenceProvider {
 function systemText(system: SystemPrompt): string {
   const flat = typeof system === "string" ? system : system.map((b) => b.text).join("\n\n");
   return flat.trim();
+}
+
+/**
+ * Deterministic per-(AI user, conversation) session UUID: sha256 of a stable
+ * key, formatted as a v4-shaped UUID (Claude Code requires a valid UUID for
+ * `--session-id`). Deterministic ⇒ no storage: every turn of the same
+ * conversation derives the same id, and the daemon resumes it.
+ */
+export function harnessSessionId(aiIdentityHex: string, conversationId: bigint): string {
+  const digest = createHash("sha256")
+    .update(`pear-harness:${aiIdentityHex.replace(/^0x/i, "").toLowerCase()}:${conversationId}`)
+    .digest("hex");
+  const h = digest.slice(0, 32).split("");
+  h[12] = "4"; // version nibble
+  h[16] = "8"; // variant nibble (10xx)
+  const s = h.join("");
+  return `${s.slice(0, 8)}-${s.slice(8, 12)}-${s.slice(12, 16)}-${s.slice(16, 20)}-${s.slice(20, 32)}`;
+}
+
+/** The latest human message text — the harness holds prior context itself. */
+export function latestUserMessage(messages: Message[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== "user") continue;
+    if (typeof m.content === "string") return m.content;
+    const text = m.content
+      .map((b) => {
+        if (b.type === "text") return b.text;
+        if (b.type === "tool_result") return "";
+        return "[image attachment — not forwarded over the bridge]";
+      })
+      .filter(Boolean)
+      .join("\n");
+    if (text) return text;
+  }
+  return "";
+}
+
+/**
+ * Harness runtime (`mode: "harness"`, ticket 14443): whole turns run as a
+ * resumable Claude Code session on the device, bound per conversation.
+ *
+ * The division of labor inverts v1 inference: the DEVICE holds the loop and
+ * the context (Claude Code session state), so this provider sends only the
+ * latest user message. Claude's LOCAL tools (bash/edit/read in the bound
+ * working tree, under its own permission mode) are live — that is the point.
+ * Pear tools are NOT offered through the harness yet; the MCP loop-back (the
+ * harness connecting to Pear as the same AI user) is the next 14443 phase,
+ * alongside transcript streaming and the approvals flow.
+ */
+export class BridgeHarnessProvider extends BridgeInferenceProvider implements InferenceProvider {
+  async chat(request: ChatRequest): Promise<ChatResponse> {
+    const deviceId = BigInt(this.binding.device_id);
+    await this.precheckDevice(deviceId);
+
+    const prompt = latestUserMessage(request.messages);
+    if (!prompt.trim()) {
+      throw new Error("Harness turn has no user message to forward.");
+    }
+    const sessionId = harnessSessionId(this.aiIdentityHex, request.conversationId ?? BigInt(0));
+
+    const nonce = globalThis.crypto.randomUUID();
+    await (this.conn.reducers as unknown as {
+      enqueueBridgeHarness(args: {
+        deviceId: bigint;
+        provider: string;
+        payloadJson: string;
+        conversationId: bigint;
+        jobId: undefined;
+        taskId: undefined;
+        nonce: string;
+      }): Promise<void> | void;
+    }).enqueueBridgeHarness({
+      deviceId,
+      provider: this.binding.provider,
+      payloadJson: JSON.stringify({
+        provider: this.binding.provider,
+        session_id: sessionId,
+        prompt,
+        ...(this.binding.cwd ? { cwd: this.binding.cwd } : {}),
+        ...(this.binding.permission_mode
+          ? { permission_mode: this.binding.permission_mode }
+          : {}),
+        ...(this.binding.allowed_tools && this.binding.allowed_tools.length > 0
+          ? { allowed_tools: this.binding.allowed_tools }
+          : {}),
+        timeout_seconds: 600,
+      }),
+      conversationId: request.conversationId ?? BigInt(0),
+      jobId: undefined,
+      taskId: undefined,
+      nonce,
+    });
+
+    const row = await this.awaitCommandRow(deviceId, nonce);
+    const result = await this.awaitHarnessResult(deviceId, row.id);
+
+    if (result.rejectionReason) {
+      throw new Error(`Bridge harness turn was rejected: ${result.rejectionReason}`);
+    }
+    let envelope:
+      | { ok?: boolean; output?: string; error?: string; resumed?: boolean; session_id?: string }
+      | undefined;
+    try {
+      envelope = JSON.parse(result.stdout) as typeof envelope;
+    } catch {
+      envelope = undefined;
+    }
+    if (!envelope || typeof envelope.ok !== "boolean") {
+      throw new Error(
+        "Bridge device returned an unreadable harness envelope (older pear-bridge build?)",
+      );
+    }
+    if (!envelope.ok) {
+      throw new Error(
+        `Harness turn failed on device ${deviceId} (${this.binding.provider}): ${envelope.error ?? "no detail"}`,
+      );
+    }
+
+    // A non-first turn that could NOT resume means device-side context was
+    // reset (pruned state, different machine) — surface that honestly instead
+    // of letting the model silently answer without its history.
+    const hadHistory = request.messages.length > 1;
+    const resetNote =
+      hadHistory && envelope.resumed === false
+        ? "[note: the device-side session could not be resumed — earlier conversation context may not have carried over]\n\n"
+        : "";
+    return {
+      content: [{ type: "text", text: `${resetNote}${envelope.output ?? ""}` }],
+      stopReason: "end_turn",
+    };
+  }
+
+  /** Device connectivity precheck shared with the inference path. */
+  protected async precheckDevice(deviceId: bigint): Promise<void> {
+    type DeviceSummary = { id: bigint; name: string; connected: boolean; revokedAt?: unknown };
+    const summaryIter =
+      (this.conn.db as { bridge_device_summary?: { iter: () => Iterable<DeviceSummary> } })
+        .bridge_device_summary?.iter?.() ??
+      (this.conn.db as { bridgeDeviceSummary?: { iter: () => Iterable<DeviceSummary> } })
+        .bridgeDeviceSummary?.iter?.();
+    if (!summaryIter) return;
+    const dev = [...summaryIter].find((d) => String(d.id) === String(deviceId));
+    if (!dev || dev.revokedAt != null) {
+      throw new Error(
+        `This AI user's harness runs on bridge device ${deviceId}, which is not paired/available. ` +
+          `Fix the binding or clear it to use a cloud API key.`,
+      );
+    }
+    if (!dev.connected) {
+      throw new Error(
+        `This AI user's harness runs on bridge device ${deviceId} (${dev.name}), which is offline. ` +
+          `Start pear-bridge on that machine, or clear the binding to use a cloud API key.`,
+      );
+    }
+  }
+
+  /** Harness turns can be long — wider wait than the inference default. */
+  private async awaitHarnessResult(
+    deviceId: bigint,
+    commandId: bigint | string,
+  ): Promise<{ stdout: string; rejectionReason?: string | null }> {
+    const HARNESS_WAIT_MS = 660_000; // device budget 600s + margin
+    const start = Date.now();
+    let everLeftPending = false;
+    while (Date.now() - start < HARNESS_WAIT_MS) {
+      const result = await this.readResult(commandId);
+      if (result) return result;
+      const row = (await this.readCommands(deviceId)).find(
+        (r) => String(r.id) === String(commandId),
+      );
+      const tag = row?.status?.tag;
+      if (tag && tag !== "Pending") everLeftPending = true;
+      if (tag === "Pending" && !everLeftPending && Date.now() - start > 10_000) {
+        throw new Error(
+          `Bridge device ${deviceId} did not pick up the harness turn — it is likely offline ` +
+            `or running an older pear-bridge without harness support.`,
+        );
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    throw new Error(
+      `Harness turn on device ${deviceId} produced no result within ${HARNESS_WAIT_MS / 1000}s.`,
+    );
+  }
 }
 
 function sleep(ms: number): Promise<void> {

@@ -20,6 +20,7 @@ pub mod allowlist;
 pub mod audit;
 pub mod config;
 pub mod daemon;
+pub mod harness;
 pub mod keychain;
 pub mod pair;
 pub mod providers;

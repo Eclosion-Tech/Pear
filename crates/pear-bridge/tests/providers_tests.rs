@@ -465,12 +465,12 @@ async fn process_incoming_rejects_unknown_kinds_and_keeps_bash_path() {
     let (enforcer, exec, mut audit, _) = engine("unknown-kind");
 
     let mut cmd = inference_cmd(8, serde_json::json!({}));
-    cmd.kind = Some("harness".to_string());
+    cmd.kind = Some("quantum".to_string());
     let outcome = process_incoming(&cmd, &enforcer, &exec, &mut audit).await;
     let Outcome::Rejected { reason } = outcome else {
         panic!("expected Rejected, got {outcome:?}");
     };
-    assert!(reason.contains("harness"));
+    assert!(reason.contains("quantum"));
 
     // kind=None still goes through the classic allowlist path (default config
     // has an empty allowlist + Reject policy → denied, proving the branch).

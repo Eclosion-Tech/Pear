@@ -252,19 +252,38 @@ fn cap_output(mut s: String) -> String {
     s
 }
 
+/// How a provider CLI run failed — lets the harness distinguish "this session
+/// id is unknown on this device" (retry as a new session) from real failures.
+#[derive(Debug)]
+pub enum ProviderExecError {
+    UnknownSession,
+    Other(String),
+}
+
+impl ProviderExecError {
+    pub fn into_message(self) -> String {
+        match self {
+            ProviderExecError::UnknownSession => "session not found on device".to_string(),
+            ProviderExecError::Other(m) => m,
+        }
+    }
+}
+
 /// Spawn a provider CLI with the prompt piped to stdin, capture stdout/stderr,
 /// enforce the timeout (the child is killed on expiry via `kill_on_drop`).
-/// Runs in the OS temp dir on purpose: inference must not pick up project
-/// context (CLAUDE.md / AGENTS.md) from wherever the daemon was launched.
-async fn run_cli(
+/// Inference callers pass the OS temp dir so one-shot runs can't pick up
+/// project context (CLAUDE.md / AGENTS.md); harness turns pass their
+/// jail-checked project directory — there the context is the point.
+pub(crate) async fn run_cli(
     bin: &str,
     args: &[String],
     stdin_body: &str,
     timeout: Duration,
+    cwd: &std::path::Path,
 ) -> Result<std::process::Output, String> {
     let mut child = Command::new(bin)
         .args(args)
-        .current_dir(std::env::temp_dir())
+        .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -331,7 +350,7 @@ async fn run_claude(
         args.push("--append-system-prompt".into());
         args.push(system.to_string());
     }
-    let output = run_cli(&bin, &args, prompt, timeout).await?;
+    let output = run_cli(&bin, &args, prompt, timeout, &std::env::temp_dir()).await?;
     if !output.status.success() {
         return Err(format!(
             "claude exited with {}: {}",
@@ -387,7 +406,7 @@ async fn run_codex(
         Some(system) => format!("{system}\n\n{prompt}"),
         None => prompt.to_string(),
     };
-    let output = run_cli(&bin, &args, &body, timeout).await?;
+    let output = run_cli(&bin, &args, &body, timeout, &std::env::temp_dir()).await?;
     if !output.status.success() {
         return Err(format!(
             "codex exited with {}: {}",

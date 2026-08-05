@@ -245,7 +245,22 @@ where
                     match msg {
                         Message::Text(text) => {
                             if let Some(cmd) = parse_inbound(&text) {
-                                let outcome = process_incoming(&cmd, enforcer, exec, audit).await;
+                                // Keep WS pings flowing WHILE the command runs:
+                                // harness/inference turns can take many minutes
+                                // and an idle socket gets cut by LB timeouts.
+                                // (Bash still blocks inside its synchronous PTY
+                                // call — no await points to ping at — which is
+                                // the documented spawn_blocking follow-up.)
+                                let work = process_incoming(&cmd, enforcer, exec, audit);
+                                tokio::pin!(work);
+                                let outcome = loop {
+                                    tokio::select! {
+                                        outcome = &mut work => break outcome,
+                                        _ = ping.tick() => {
+                                            let _ = write.send(Message::Ping(Vec::new())).await;
+                                        }
+                                    }
+                                };
                                 let json = result_json(cmd.command_id, &outcome)?;
                                 write
                                     .send(Message::Text(json))

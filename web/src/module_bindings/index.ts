@@ -97,6 +97,7 @@ import DisableAutomationReducer from "./disable_automation_reducer";
 import EmptyTrashReducer from "./empty_trash_reducer";
 import EnableAutomationReducer from "./enable_automation_reducer";
 import EnqueueBridgeCommandReducer from "./enqueue_bridge_command_reducer";
+import EnqueueBridgeHarnessReducer from "./enqueue_bridge_harness_reducer";
 import EnqueueBridgeInferenceReducer from "./enqueue_bridge_inference_reducer";
 import FailNotionImportJobReducer from "./fail_notion_import_job_reducer";
 import FailTaskReducer from "./fail_task_reducer";
@@ -1300,6 +1301,7 @@ const reducersSchema = __reducers(
   __reducerSchema("empty_trash", EmptyTrashReducer),
   __reducerSchema("enable_automation", EnableAutomationReducer),
   __reducerSchema("enqueue_bridge_command", EnqueueBridgeCommandReducer),
+  __reducerSchema("enqueue_bridge_harness", EnqueueBridgeHarnessReducer),
   __reducerSchema("enqueue_bridge_inference", EnqueueBridgeInferenceReducer),
   __reducerSchema("fail_notion_import_job", FailNotionImportJobReducer),
   __reducerSchema("fail_task", FailTaskReducer),

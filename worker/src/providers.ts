@@ -22,7 +22,11 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
 import { catalogFamilyFor, effortSupportFor, type CatalogFamily } from "./model-catalog.js";
-import { BridgeInferenceProvider, parseBridgeBackendBinding } from "./bridge-inference.js";
+import {
+  BridgeHarnessProvider,
+  BridgeInferenceProvider,
+  parseBridgeBackendBinding,
+} from "./bridge-inference.js";
 
 // ── Normalized types ────────────────────────────────────────────────────────────
 
@@ -88,6 +92,13 @@ export interface ChatRequest {
   system: SystemPrompt;
   messages: Message[];
   tools?: ToolDef[];
+  /**
+   * The Pear conversation this turn belongs to, when there is one. Cloud
+   * providers ignore it; bridge transports use it to key device-side state
+   * (harness sessions resume per conversation) and to stamp bridge commands
+   * for the audit/UI surfaces.
+   */
+  conversationId?: bigint;
   /**
    * Reasoning effort/intensity level (e.g. "low" | "medium" | "high" | …).
    * Mapped to the provider's native knob — Anthropic `output_config.effort`,
@@ -764,13 +775,17 @@ export function getProviderForAiUser(
   }
 
   // Bridge-device transport binding: completions route through a paired
-  // device's local providers (claude -p / codex / ollama) instead of a cloud
-  // key. Chat-only + non-streaming in v1 (see bridge-inference.ts); an offline
-  // device fails the turn explicitly — never a silent cloud fallback.
+  // device instead of a cloud key. mode "bridge" = one-shot inference
+  // (ollama bindings carry full Pear tool use via structured chat, 14557);
+  // mode "harness" = resumable device-side Claude Code sessions with LOCAL
+  // tools (14443). Offline device fails the turn explicitly — never a silent
+  // cloud fallback.
   const bridgeBinding = parseBridgeBackendBinding(config.inferenceBackendJson);
   if (bridgeBinding) {
+    const ProviderClass =
+      bridgeBinding.mode === "harness" ? BridgeHarnessProvider : BridgeInferenceProvider;
     const entry: ResolvedProvider = {
-      provider: new BridgeInferenceProvider(
+      provider: new ProviderClass(
         conn as unknown as ConstructorParameters<typeof BridgeInferenceProvider>[0],
         config.identity.toHexString(),
         bridgeBinding,

@@ -2,7 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  BridgeHarnessProvider,
   BridgeInferenceProvider,
+  harnessSessionId,
+  latestUserMessage,
   parseBridgeBackendBinding,
   renderTranscript,
   toOllamaMessages,
@@ -13,7 +16,15 @@ import type { Message } from "./providers.ts";
 test("parseBridgeBackendBinding accepts bridge mode and rejects everything else", () => {
   assert.deepEqual(
     parseBridgeBackendBinding('{"mode":"bridge","device_id":1,"provider":"claude-code","model":"m"}'),
-    { mode: "bridge", device_id: 1, provider: "claude-code", model: "m" },
+    {
+      mode: "bridge",
+      device_id: 1,
+      provider: "claude-code",
+      model: "m",
+      cwd: undefined,
+      permission_mode: undefined,
+      allowed_tools: undefined,
+    },
   );
   assert.equal(parseBridgeBackendBinding(undefined), undefined);
   assert.equal(parseBridgeBackendBinding(""), undefined);
@@ -334,6 +345,166 @@ test("bridge chat fails the turn explicitly when the device is offline", async (
       maxTokens: 10,
       system: "",
       messages: [{ role: "user", content: "q" }],
+    }),
+    /offline/,
+  );
+});
+
+// ── harness mode (14443) ─────────────────────────────────────────────────────
+
+test("parseBridgeBackendBinding accepts harness mode with cwd and permission_mode", () => {
+  assert.deepEqual(
+    parseBridgeBackendBinding(
+      '{"mode":"harness","device_id":1,"provider":"claude-code","cwd":"/Users/kara/proj","permission_mode":"acceptEdits","allowed_tools":["Bash","Edit"]}',
+    ),
+    {
+      mode: "harness",
+      device_id: 1,
+      provider: "claude-code",
+      model: undefined,
+      cwd: "/Users/kara/proj",
+      permission_mode: "acceptEdits",
+      allowed_tools: ["Bash", "Edit"],
+    },
+  );
+});
+
+test("harnessSessionId is deterministic, per-conversation, and UUID-shaped", () => {
+  const a = harnessSessionId("0xAI5", 42n);
+  assert.equal(a, harnessSessionId("ai5", 42n), "0x prefix and case must not matter");
+  assert.notEqual(a, harnessSessionId("ai5", 43n), "different conversation → different session");
+  assert.notEqual(a, harnessSessionId("ai6", 42n), "different AI user → different session");
+  assert.match(a, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/);
+});
+
+test("latestUserMessage takes the last human turn and skips tool results", () => {
+  const messages: Message[] = [
+    { role: "user", content: "first" },
+    { role: "assistant", content: [{ type: "text", text: "reply" }] },
+    { role: "user", content: "second question" },
+  ];
+  assert.equal(latestUserMessage(messages), "second question");
+});
+
+function makeHarnessConn(opts: {
+  connected?: boolean;
+  envelope: Record<string, unknown>;
+}) {
+  const commands: FakeCmd[] = [];
+  const results: FakeRes[] = [];
+  const enqueued: Array<Record<string, unknown>> = [];
+  let nextId = 1n;
+  const conn = {
+    db: {
+      bridge_device_summary: {
+        iter: () => [
+          {
+            id: 1n,
+            name: "KMBP",
+            platform: "darwin-arm64",
+            connected: opts.connected ?? true,
+            revokedAt: null,
+          },
+        ],
+      },
+      bridge_command: { iter: () => commands },
+      bridge_command_result: { iter: () => results },
+    },
+    reducers: {
+      enqueueBridgeHarness: (args: { nonce: string; payloadJson: string; conversationId: bigint }) => {
+        enqueued.push(args as unknown as Record<string, unknown>);
+        const cmd: FakeCmd = {
+          id: nextId++,
+          deviceId: 1n,
+          command: "harness:claude-code",
+          conversationId: args.conversationId,
+          status: { tag: "Pending" },
+          nonce: args.nonce,
+          payloadJson: args.payloadJson,
+        };
+        commands.push(cmd);
+        setTimeout(() => {
+          cmd.status = { tag: "Completed" };
+          results.push({
+            commandId: cmd.id,
+            exitCode: 0,
+            stdout: JSON.stringify(opts.envelope),
+            stderr: "",
+            durationMs: 100n,
+          });
+        }, 20);
+      },
+    },
+  };
+  return { conn, enqueued };
+}
+
+const HARNESS_BINDING = {
+  mode: "harness",
+  device_id: 1,
+  provider: "claude-code",
+  cwd: "/Users/kara/proj",
+  permission_mode: "acceptEdits",
+} as const;
+
+test("harness turn sends only the latest message with a stable session id", async () => {
+  const { conn, enqueued } = makeHarnessConn({
+    envelope: { ok: true, output: "done — edited 3 files", resumed: true, session_id: "x" },
+  });
+  const provider = new BridgeHarnessProvider(conn as never, "0xai5", { ...HARNESS_BINDING });
+  const response = await provider.chat({
+    model: "m",
+    maxTokens: 10,
+    system: "persona",
+    messages: [
+      { role: "user", content: "first ask" },
+      { role: "assistant", content: [{ type: "text", text: "did it" }] },
+      { role: "user", content: "now run the tests" },
+    ],
+    conversationId: 42n,
+  });
+  assert.deepEqual(response.content, [{ type: "text", text: "done — edited 3 files" }]);
+
+  const payload = JSON.parse((enqueued[0] as { payloadJson: string }).payloadJson);
+  assert.equal(payload.prompt, "now run the tests", "only the latest user message travels");
+  assert.equal(payload.session_id, harnessSessionId("0xai5", 42n));
+  assert.equal(payload.cwd, "/Users/kara/proj");
+  assert.equal(payload.permission_mode, "acceptEdits");
+  assert.equal((enqueued[0] as { conversationId: bigint }).conversationId, 42n);
+});
+
+test("harness turn surfaces a context reset instead of hiding it", async () => {
+  const { conn } = makeHarnessConn({
+    envelope: { ok: true, output: "answer", resumed: false, session_id: "x" },
+  });
+  const provider = new BridgeHarnessProvider(conn as never, "0xai5", { ...HARNESS_BINDING });
+  const response = await provider.chat({
+    model: "m",
+    maxTokens: 10,
+    system: "",
+    messages: [
+      { role: "user", content: "earlier" },
+      { role: "assistant", content: [{ type: "text", text: "ok" }] },
+      { role: "user", content: "later" },
+    ],
+    conversationId: 42n,
+  });
+  const text = response.content[0];
+  assert.ok(text.type === "text");
+  assert.match(text.text, /could not be resumed/);
+  assert.match(text.text, /answer/);
+});
+
+test("harness turn fails loud when the device is offline", async () => {
+  const { conn } = makeHarnessConn({ connected: false, envelope: { ok: true, output: "" } });
+  const provider = new BridgeHarnessProvider(conn as never, "0xai5", { ...HARNESS_BINDING });
+  await assert.rejects(
+    provider.chat({
+      model: "m",
+      maxTokens: 10,
+      system: "",
+      messages: [{ role: "user", content: "q" }],
+      conversationId: 1n,
     }),
     /offline/,
   );

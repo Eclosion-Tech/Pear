@@ -588,6 +588,82 @@ pub fn enqueue_bridge_inference(
     Ok(())
 }
 
+/// Enqueue a harness-session turn (`kind = "harness"`) for a paired device:
+/// the daemon runs a full agent harness (Claude Code v1; tools ENABLED under
+/// the harness's own permission mode) as a resumable per-conversation session
+/// (`payload_json` carries `session_id` + the user's message; see
+/// `pear-bridge/src/harness.rs`). Result rides `complete_bridge_command` with
+/// a JSON envelope in `stdout`, like inference.
+///
+/// Same substrate gates as bash/inference: live device, default-deny
+/// per-AI-user grant, connected session. Governance note: v1 harness turns do
+/// not use the AwaitingConfirmation flow — containment is the harness's own
+/// permission model plus the daemon-side working-directory jail check; the
+/// approvals phase (ticket 14443 §3) layers on later.
+#[reducer]
+pub fn enqueue_bridge_harness(
+    ctx: &ReducerContext,
+    device_id: u64,
+    provider: String,
+    payload_json: String,
+    conversation_id: u64,
+    job_id: Option<u64>,
+    task_id: Option<u64>,
+    // See `BridgeCommand::nonce`. Pass "" to skip read-back correlation.
+    nonce: String,
+) -> Result<(), String> {
+    let provider = provider.trim().to_string();
+    if provider.is_empty() {
+        return Err("Provider cannot be empty".to_string());
+    }
+    if provider.len() > 64 {
+        return Err("Provider name too long (max 64 chars)".to_string());
+    }
+    if payload_json.trim().is_empty() {
+        return Err("Harness payload cannot be empty".to_string());
+    }
+    if payload_json.len() > MAX_INFERENCE_PAYLOAD_BYTES {
+        return Err(format!(
+            "Harness payload too large ({} bytes, max {MAX_INFERENCE_PAYLOAD_BYTES})",
+            payload_json.len()
+        ));
+    }
+    let device = live_device(ctx, device_id)?;
+    require_bridge_grant(ctx, device_id)?;
+
+    let session = ctx
+        .db
+        .bridge_session()
+        .iter()
+        .filter(|s| s.device_id == device_id && s.disconnected_at.is_none())
+        .max_by_key(|s| s.connected_at)
+        .ok_or_else(|| format!("No connected bridge session for device {device_id}"))?;
+
+    let command_id = next_bridge_command_id(ctx);
+    ctx.db.bridge_command().insert(BridgeCommand {
+        id: command_id,
+        device_id,
+        session_id: session.id,
+        conversation_id,
+        job_id,
+        task_id,
+        requested_by: ctx.sender(),
+        command: format!("harness:{provider}"),
+        cwd: None,
+        enqueued_at: ctx.timestamp,
+        status: BridgeCommandStatus::Pending,
+        requires_confirmation: false,
+        confirmed_at: None,
+        confirmed_by: None,
+        device_identity: device.device_identity,
+        owner_identity: device.owner,
+        nonce: if nonce.is_empty() { None } else { Some(nonce) },
+        kind: Some("harness".to_string()),
+        payload_json: Some(payload_json),
+    });
+    Ok(())
+}
+
 /// Confirm a command sitting in AwaitingConfirmation. Called by the Pear UI; the
 /// human confirmer is the sender and must own the device. Flipping it back to
 /// Pending (with `confirmed_at` set) re-dispatches it to the daemon, which skips
