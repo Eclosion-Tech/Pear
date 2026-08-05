@@ -98,7 +98,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"echo: %s
     );
     std::env::set_var("PEAR_BRIDGE_CLAUDE_BIN", &bin);
 
-    let result = run_inference(&payload("claude-code", "hello world")).await;
+    let result = run_inference(&payload("claude-code", "hello world"), None).await;
     std::env::remove_var("PEAR_BRIDGE_CLAUDE_BIN");
 
     assert!(result.ok, "expected ok, got {:?}", result.error);
@@ -117,7 +117,7 @@ async fn claude_adapter_surfaces_is_error_envelopes_as_failures() {
     );
     std::env::set_var("PEAR_BRIDGE_CLAUDE_BIN", &bin);
 
-    let result = run_inference(&payload("claude-code", "hi")).await;
+    let result = run_inference(&payload("claude-code", "hi"), None).await;
     std::env::remove_var("PEAR_BRIDGE_CLAUDE_BIN");
 
     assert!(!result.ok);
@@ -131,7 +131,7 @@ async fn nonzero_exit_is_an_honest_failure_with_stderr_excerpt() {
     let bin = write_script(&dir, "claude", "echo 'not logged in' >&2; exit 1");
     std::env::set_var("PEAR_BRIDGE_CLAUDE_BIN", &bin);
 
-    let result = run_inference(&payload("claude-code", "hi")).await;
+    let result = run_inference(&payload("claude-code", "hi"), None).await;
     std::env::remove_var("PEAR_BRIDGE_CLAUDE_BIN");
 
     assert!(!result.ok);
@@ -153,7 +153,7 @@ async fn timeout_kills_the_child_and_reports_failure() {
     }))
     .unwrap();
     let started = std::time::Instant::now();
-    let result = run_inference(&p).await;
+    let result = run_inference(&p, None).await;
     std::env::remove_var("PEAR_BRIDGE_CLAUDE_BIN");
 
     assert!(!result.ok);
@@ -176,7 +176,7 @@ async fn codex_adapter_prepends_system_and_reads_stdout() {
         "system": "be terse",
     }))
     .unwrap();
-    let result = run_inference(&p).await;
+    let result = run_inference(&p, None).await;
     std::env::remove_var("PEAR_BRIDGE_CODEX_BIN");
 
     assert!(result.ok, "{:?}", result.error);
@@ -192,7 +192,7 @@ async fn ollama_adapter_posts_generate_and_requires_model() {
     std::env::set_var("PEAR_BRIDGE_OLLAMA_URL", &url);
 
     // Missing model → explicit error, no request made.
-    let no_model = run_inference(&payload("ollama", "hi")).await;
+    let no_model = run_inference(&payload("ollama", "hi"), None).await;
     assert!(!no_model.ok);
     assert!(no_model.error.unwrap().contains("requires an explicit model"));
 
@@ -202,7 +202,7 @@ async fn ollama_adapter_posts_generate_and_requires_model() {
         "prompt": "hi",
     }))
     .unwrap();
-    let result = run_inference(&p).await;
+    let result = run_inference(&p, None).await;
     std::env::remove_var("PEAR_BRIDGE_OLLAMA_URL");
 
     assert!(result.ok, "{:?}", result.error);
@@ -234,7 +234,7 @@ async fn ollama_chat_forwards_messages_and_tools_verbatim_and_maps_tool_calls() 
         }
     }))
     .unwrap();
-    let result = run_inference(&p).await;
+    let result = run_inference(&p, None).await;
     std::env::remove_var("PEAR_BRIDGE_OLLAMA_URL");
 
     assert!(result.ok, "{:?}", result.error);
@@ -278,7 +278,7 @@ async fn ollama_num_ctx_defaults_and_think_stays_absent_when_unconfigured() {
         "chat": {"messages": [{"role": "user", "content": "hi"}]}
     }))
     .unwrap();
-    let result = run_inference(&p).await;
+    let result = run_inference(&p, None).await;
     std::env::remove_var("PEAR_BRIDGE_OLLAMA_URL");
     assert!(result.ok, "{:?}", result.error);
 
@@ -307,7 +307,7 @@ async fn ollama_chat_without_tool_calls_returns_plain_content() {
         "chat": {"messages": [{"role": "user", "content": "hi"}]}
     }))
     .unwrap();
-    let result = run_inference(&p).await;
+    let result = run_inference(&p, None).await;
     std::env::remove_var("PEAR_BRIDGE_OLLAMA_URL");
 
     assert!(result.ok, "{:?}", result.error);
@@ -323,7 +323,7 @@ async fn structured_chat_is_rejected_for_claude_and_codex() {
             "chat": {"messages": []}
         }))
         .unwrap();
-        let result = run_inference(&p).await;
+        let result = run_inference(&p, None).await;
         assert!(!result.ok);
         assert!(
             result.error.as_deref().unwrap().contains("does not support structured chat"),
@@ -335,31 +335,87 @@ async fn structured_chat_is_rejected_for_claude_and_codex() {
 
 #[tokio::test]
 async fn payload_must_carry_exactly_one_of_prompt_or_chat() {
-    let neither = run_inference_json(Some(r#"{"provider":"ollama","model":"m"}"#)).await;
+    let neither = run_inference_json(Some(r#"{"provider":"ollama","model":"m"}"#), None).await;
     assert!(!neither.ok);
     assert!(neither.error.unwrap().contains("either \"prompt\" or \"chat\""));
 
-    let both = run_inference_json(Some(
-        r#"{"provider":"ollama","model":"m","prompt":"p","chat":{"messages":[]}}"#,
-    ))
+    let both = run_inference_json(
+        Some(r#"{"provider":"ollama","model":"m","prompt":"p","chat":{"messages":[]}}"#),
+        None,
+    )
     .await;
     assert!(!both.ok);
     assert!(both.error.unwrap().contains("not both"));
+}
+
+#[tokio::test]
+async fn ollama_streaming_emits_chunk_envelopes_and_assembles_the_full_result() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    // Three NDJSON lines: thinking delta, content delta, done with counts.
+    let (url, captured) = canned_http_capture(
+        "{\"message\":{\"role\":\"assistant\",\"thinking\":\"hmm\",\"content\":\"\"},\"done\":false}\n{\"message\":{\"role\":\"assistant\",\"content\":\"the answer\"},\"done\":false}\n{\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true,\"prompt_eval_count\":10,\"eval_count\":5}\n",
+        1,
+    );
+    std::env::set_var("PEAR_BRIDGE_OLLAMA_URL", &url);
+
+    let p: InferencePayload = serde_json::from_value(serde_json::json!({
+        "provider": "ollama",
+        "model": "llama3.1:8b",
+        "stream": true,
+        "chat": {"messages": [{"role": "user", "content": "q"}]}
+    }))
+    .unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let result = run_inference(&p, Some(tx)).await;
+    std::env::remove_var("PEAR_BRIDGE_OLLAMA_URL");
+
+    assert!(result.ok, "{:?}", result.error);
+    assert_eq!(result.output, "the answer");
+    assert_eq!(result.thinking.as_deref(), Some("hmm"));
+    let usage = result.usage.expect("usage from done line");
+    assert_eq!((usage.input_tokens, usage.output_tokens), (10, 5));
+
+    // Chunks: at least one think and one text envelope, seq strictly increasing.
+    let mut chunks = Vec::new();
+    while let Ok(c) = rx.try_recv() {
+        chunks.push(c);
+    }
+    assert!(!chunks.is_empty(), "streaming must emit chunks");
+    for w in chunks.windows(2) {
+        assert!(w[0].seq < w[1].seq, "seq must increase");
+    }
+    let bodies: Vec<serde_json::Value> = chunks
+        .iter()
+        .map(|c| serde_json::from_str(&c.content).unwrap())
+        .collect();
+    assert!(bodies.iter().any(|b| b["t"] == "think" && b["d"].as_str().unwrap().contains("hmm")));
+    let text: String = bodies
+        .iter()
+        .filter(|b| b["t"] == "text")
+        .map(|b| b["d"].as_str().unwrap())
+        .collect();
+    assert_eq!(text, "the answer", "concatenated text deltas must equal the full output");
+
+    // Request body asked ollama to stream.
+    let req = captured.lock().unwrap().join("");
+    let body_start = req.find("\r\n\r\n").unwrap() + 4;
+    let body: serde_json::Value = serde_json::from_str(&req[body_start..]).unwrap();
+    assert_eq!(body["stream"], true);
 }
 
 // ── payload / envelope plumbing ────────────────────────────────────────────
 
 #[tokio::test]
 async fn missing_or_malformed_payload_yields_honest_failure() {
-    let none = run_inference_json(None).await;
+    let none = run_inference_json(None, None).await;
     assert!(!none.ok);
     assert!(none.error.unwrap().contains("no payload_json"));
 
-    let bad = run_inference_json(Some("{not json")).await;
+    let bad = run_inference_json(Some("{not json"), None).await;
     assert!(!bad.ok);
     assert!(bad.error.unwrap().contains("invalid inference payload"));
 
-    let unknown = run_inference_json(Some(r#"{"provider":"gpt9","prompt":"x"}"#)).await;
+    let unknown = run_inference_json(Some(r#"{"provider":"gpt9","prompt":"x"}"#), None).await;
     assert!(!unknown.ok);
     assert!(unknown.error.unwrap().contains("unknown inference provider"));
 }
@@ -480,7 +536,7 @@ async fn process_incoming_dispatches_inference_and_audits_with_kind() {
         7,
         serde_json::json!({"provider": "claude-code", "prompt": "hi"}),
     );
-    let outcome = process_incoming(&cmd, &enforcer, &exec, &mut audit).await;
+    let outcome = process_incoming(&cmd, &enforcer, &exec, &mut audit, None).await;
     std::env::remove_var("PEAR_BRIDGE_CLAUDE_BIN");
 
     let Outcome::Completed { exit_code, stdout, .. } = outcome else {
@@ -505,7 +561,7 @@ async fn process_incoming_rejects_unknown_kinds_and_keeps_bash_path() {
 
     let mut cmd = inference_cmd(8, serde_json::json!({}));
     cmd.kind = Some("quantum".to_string());
-    let outcome = process_incoming(&cmd, &enforcer, &exec, &mut audit).await;
+    let outcome = process_incoming(&cmd, &enforcer, &exec, &mut audit, None).await;
     let Outcome::Rejected { reason } = outcome else {
         panic!("expected Rejected, got {outcome:?}");
     };
@@ -519,6 +575,6 @@ async fn process_incoming_rejects_unknown_kinds_and_keeps_bash_path() {
         command: "definitely-not-allowlisted".to_string(),
         ..inference_cmd(9, serde_json::json!({}))
     };
-    let outcome = process_incoming(&bash, &enforcer, &exec, &mut audit).await;
+    let outcome = process_incoming(&bash, &enforcer, &exec, &mut audit, None).await;
     assert!(matches!(outcome, Outcome::Rejected { .. }));
 }

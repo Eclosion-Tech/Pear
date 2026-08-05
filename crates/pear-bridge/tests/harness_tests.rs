@@ -177,7 +177,7 @@ async fn process_incoming_dispatches_harness_and_audits_with_kind() {
         kind: Some("harness".to_string()),
         payload_json: Some(payload(&dir, "do the thing")),
     };
-    let outcome = process_incoming(&cmd, &enforcer, &exec, &mut audit).await;
+    let outcome = process_incoming(&cmd, &enforcer, &exec, &mut audit, None).await;
     std::env::remove_var("PEAR_BRIDGE_CLAUDE_BIN");
 
     let Outcome::Completed { exit_code, stdout, .. } = outcome else {

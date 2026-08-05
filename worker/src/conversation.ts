@@ -1174,6 +1174,11 @@ async function handleConversationMessage(
         });
 
         addUsage(turnUsage, response.usage);
+        // Non-streaming providers (bridge-backed users) deliver thinking on
+        // the response, not as thinking_delta events — accumulate like the
+        // streaming path does so multi-hop tool loops keep every hop's
+        // reasoning.
+        if (response.thinking) thinkingText += response.thinking;
 
         const toolCalls = response.content.filter(
           (b): b is ToolUseBlock => b.type === "tool_use",

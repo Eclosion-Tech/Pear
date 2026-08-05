@@ -525,6 +525,16 @@ export const BridgeCommand = __t.object("BridgeCommand", {
 });
 export type BridgeCommand = __Infer<typeof BridgeCommand>;
 
+export const BridgeCommandChunk = __t.object("BridgeCommandChunk", {
+  id: __t.u64(),
+  commandId: __t.u64(),
+  seq: __t.u32(),
+  content: __t.string(),
+  requestedBy: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type BridgeCommandChunk = __Infer<typeof BridgeCommandChunk>;
+
 export const BridgeCommandResult = __t.object("BridgeCommandResult", {
   commandId: __t.u64(),
   exitCode: __t.option(__t.i32()),

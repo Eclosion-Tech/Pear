@@ -40,6 +40,7 @@ import AddAutomationConditionReducer from "./add_automation_condition_reducer";
 import AddConversationParticipantReducer from "./add_conversation_participant_reducer";
 import AddPropertyReducer from "./add_property_reducer";
 import AddTasksToJobReducer from "./add_tasks_to_job_reducer";
+import AppendBridgeCommandChunkReducer from "./append_bridge_command_chunk_reducer";
 import AppendPageDocReducer from "./append_page_doc_reducer";
 import AwaitBridgeCommandConfirmationReducer from "./await_bridge_command_confirmation_reducer";
 import CancelExtensionInstallReducer from "./cancel_extension_install_reducer";
@@ -261,6 +262,7 @@ import AutomationRuleRow from "./automation_rule_table";
 import AutomationRunLogRow from "./automation_run_log_table";
 import BlockAccessRuleRow from "./block_access_rule_table";
 import BridgeCommandRow from "./bridge_command_table";
+import BridgeCommandChunkRow from "./bridge_command_chunk_table";
 import BridgeCommandResultRow from "./bridge_command_result_table";
 import BridgeDeviceAllowlistRow from "./bridge_device_allowlist_table";
 import BridgeDeviceCapabilityRow from "./bridge_device_capability_table";
@@ -602,6 +604,20 @@ const tablesSchema = __schema({
       { name: 'bridge_command_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, BridgeCommandRow),
+  bridge_command_chunk: __table({
+    name: 'bridge_command_chunk',
+    indexes: [
+      { name: 'command_id', algorithm: 'btree', columns: [
+        'commandId',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'bridge_command_chunk_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, BridgeCommandChunkRow),
   bridge_command_result: __table({
     name: 'bridge_command_result',
     indexes: [
@@ -1245,6 +1261,7 @@ const reducersSchema = __reducers(
   __reducerSchema("add_conversation_participant", AddConversationParticipantReducer),
   __reducerSchema("add_property", AddPropertyReducer),
   __reducerSchema("add_tasks_to_job", AddTasksToJobReducer),
+  __reducerSchema("append_bridge_command_chunk", AppendBridgeCommandChunkReducer),
   __reducerSchema("append_page_doc", AppendPageDocReducer),
   __reducerSchema("await_bridge_command_confirmation", AwaitBridgeCommandConfirmationReducer),
   __reducerSchema("cancel_extension_install", CancelExtensionInstallReducer),

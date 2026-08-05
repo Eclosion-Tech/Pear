@@ -39,6 +39,12 @@ export interface BridgeCommandSqlRow {
   nonce: string | null;
 }
 
+/** A `bridge_command_chunk` row: one streaming delta for an in-flight command. */
+export interface BridgeChunkSqlRow {
+  seq: number;
+  content: string;
+}
+
 /** A `bridge_device_capability` row: one inference provider a device serves. */
 export interface BridgeCapabilitySqlRow {
   deviceId: string;
@@ -70,6 +76,11 @@ export interface BridgeSqlClient {
    * that only implement the two command reads keep working.
    */
   capabilitiesForDevice?(deviceId: bigint): Promise<BridgeCapabilitySqlRow[]>;
+  /**
+   * Streaming chunks for one in-flight command (`bridge_command_chunk`,
+   * RLS-scoped to this AI user), sorted by seq. Optional like capabilities.
+   */
+  chunksForCommand?(commandId: string | bigint): Promise<BridgeChunkSqlRow[]>;
 }
 
 // BridgeCommandStatus variant order in server/.../bridge/mod.rs. STDB's HTTP
@@ -220,6 +231,25 @@ export function createBridgeSqlClient(opts: BridgeSqlClientOptions): BridgeSqlCl
         status: { tag: decodeStatusTag(r.status) },
         nonce: toStringOrNull(r.nonce),
       }));
+    },
+    async chunksForCommand(commandId: string | bigint): Promise<BridgeChunkSqlRow[]> {
+      let rows: Record<string, unknown>[];
+      try {
+        rows = await sql(
+          `SELECT seq, content FROM bridge_command_chunk WHERE command_id = ${commandId.toString()}`,
+        );
+      } catch {
+        // Older module without the table — no streaming, caller falls back to
+        // waiting for the final result.
+        return [];
+      }
+      return rows
+        .map((r) => ({
+          seq: Number(toBigIntOr0(r.seq)),
+          content:
+            typeof r.content === "string" ? r.content : String(decodeOptionSome(r.content) ?? ""),
+        }))
+        .sort((a, b) => a.seq - b.seq);
     },
     async capabilitiesForDevice(deviceId: bigint): Promise<BridgeCapabilitySqlRow[]> {
       let rows: Record<string, unknown>[];

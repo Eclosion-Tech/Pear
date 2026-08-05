@@ -85,7 +85,23 @@ pub struct InferencePayload {
     /// it, so absent means model default.
     #[serde(default)]
     pub think: Option<bool>,
+    /// Stream incremental output (ollama structured-chat only). The daemon
+    /// emits chunk deltas through the transport while the model generates;
+    /// the final result envelope is unchanged.
+    #[serde(default)]
+    pub stream: Option<bool>,
 }
+
+/// One streaming delta emitted while a provider generates. `content` is the
+/// same JSON envelope the worker parses off `bridge_command_chunk.content`:
+/// `{"t":"text"|"think","d":"…"}`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChunkOut {
+    pub seq: u32,
+    pub content: String,
+}
+
+pub type ChunkSender = tokio::sync::mpsc::UnboundedSender<ChunkOut>;
 
 /// Structured chat for tool-calling inference. `messages` and `tools` are
 /// deliberately OPAQUE JSON: the daemon forwards them verbatim into ollama's
@@ -199,7 +215,10 @@ pub struct ProviderCapability {
 /// Entry point used by [`crate::daemon::process_incoming`]: parse the payload
 /// and run it, mapping every failure mode into an `ok:false` envelope (the
 /// transport always gets a well-formed result to report).
-pub async fn run_inference_json(payload_json: Option<&str>) -> InferenceResult {
+pub async fn run_inference_json(
+    payload_json: Option<&str>,
+    chunks: Option<ChunkSender>,
+) -> InferenceResult {
     let started = Instant::now();
     let raw = match payload_json {
         Some(r) if !r.trim().is_empty() => r,
@@ -223,11 +242,16 @@ pub async fn run_inference_json(payload_json: Option<&str>) -> InferenceResult {
             )
         }
     };
-    run_inference(&payload).await
+    run_inference(&payload, chunks).await
 }
 
-/// Run one inference request through the named provider.
-pub async fn run_inference(payload: &InferencePayload) -> InferenceResult {
+/// Run one inference request through the named provider. `chunks`, when
+/// provided and the payload asks to `stream`, receives incremental deltas
+/// while the model generates (ollama structured chat only).
+pub async fn run_inference(
+    payload: &InferencePayload,
+    chunks: Option<ChunkSender>,
+) -> InferenceResult {
     let started = Instant::now();
     let timeout = Duration::from_secs(
         payload
@@ -255,7 +279,7 @@ pub async fn run_inference(payload: &InferencePayload) -> InferenceResult {
     let run = match provider {
         PROVIDER_CLAUDE | "claude" => run_claude(payload, timeout).await,
         PROVIDER_CODEX => run_codex(payload, timeout).await,
-        PROVIDER_OLLAMA => run_ollama(payload, timeout).await,
+        PROVIDER_OLLAMA => run_ollama(payload, timeout, chunks).await,
         other => Err(format!(
             "unknown inference provider \"{other}\" (supported: {PROVIDER_CLAUDE}, {PROVIDER_CODEX}, {PROVIDER_OLLAMA})"
         )),
@@ -488,6 +512,7 @@ async fn run_codex(
 async fn run_ollama(
     payload: &InferencePayload,
     timeout: Duration,
+    chunks: Option<ChunkSender>,
 ) -> Result<AdapterOutput, String> {
     let model = payload
         .model
@@ -529,6 +554,15 @@ async fn run_ollama(
     // `think` for models without thinking support).
     if let Some(think) = payload.think {
         body["think"] = serde_json::Value::Bool(think);
+    }
+
+    // Streaming: NDJSON deltas flow into `chunks` while the model generates;
+    // the final AdapterOutput is identical to the non-streaming shape.
+    if payload.chat.is_some() && payload.stream == Some(true) {
+        if let Some(tx) = chunks {
+            body["stream"] = serde_json::Value::Bool(true);
+            return run_ollama_stream(&client, &base, endpoint, &body, timeout, tx).await;
+        }
     }
 
     let resp = client
@@ -612,6 +646,133 @@ async fn run_ollama(
                 ..Default::default()
             })
             .ok_or_else(|| "ollama response had no \"response\" field".to_string())
+    }
+}
+
+/// Streamed ollama chat: read the NDJSON response line by line, accumulate the
+/// full output/thinking/tool_calls (the result envelope stays identical to the
+/// non-streaming shape), and flush pending deltas into `tx` every ≥256 bytes
+/// or ≥400ms — chunked streaming, deliberately not per-token (each chunk
+/// becomes a bridge_command_chunk row).
+async fn run_ollama_stream(
+    client: &reqwest::Client,
+    base: &str,
+    endpoint: &str,
+    body: &serde_json::Value,
+    timeout: Duration,
+    tx: ChunkSender,
+) -> Result<AdapterOutput, String> {
+    use futures_util::StreamExt;
+    const FLUSH_BYTES: usize = 256;
+    const FLUSH_INTERVAL: Duration = Duration::from_millis(400);
+
+    let work = async {
+        let resp = client
+            .post(format!("{base}{endpoint}"))
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| format!("ollama request failed (is the ollama daemon running?): {e}"))?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("ollama returned {status}: {text}"));
+        }
+        let mut stream = resp.bytes_stream();
+        let mut buf: Vec<u8> = Vec::new();
+        let mut out = AdapterOutput::default();
+        let mut tool_calls: Vec<ToolCallOut> = Vec::new();
+        let mut seq: u32 = 0;
+        let mut pending_think = String::new();
+        let mut pending_text = String::new();
+        let mut last_flush = Instant::now();
+
+        while let Some(item) = stream.next().await {
+            let bytes = item.map_err(|e| format!("ollama stream error: {e}"))?;
+            buf.extend_from_slice(&bytes);
+            while let Some(pos) = buf.iter().position(|b| *b == b'\n') {
+                let line: Vec<u8> = buf.drain(..=pos).collect();
+                let line = String::from_utf8_lossy(&line);
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let v: serde_json::Value = match serde_json::from_str(line) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if let Some(msg) = v.get("message") {
+                    if let Some(t) = msg.get("thinking").and_then(|t| t.as_str()) {
+                        out.thinking.get_or_insert_with(String::new).push_str(t);
+                        pending_think.push_str(t);
+                    }
+                    if let Some(c) = msg.get("content").and_then(|c| c.as_str()) {
+                        out.output.push_str(c);
+                        pending_text.push_str(c);
+                    }
+                    if let Some(calls) = msg.get("tool_calls").and_then(|t| t.as_array()) {
+                        for c in calls {
+                            if let Some(f) = c.get("function") {
+                                if let Some(name) = f.get("name").and_then(|n| n.as_str()) {
+                                    tool_calls.push(ToolCallOut {
+                                        name: name.to_string(),
+                                        arguments: f
+                                            .get("arguments")
+                                            .cloned()
+                                            .unwrap_or(serde_json::Value::Null),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                if v.get("done").and_then(|d| d.as_bool()) == Some(true) {
+                    out.usage = match (
+                        v.get("prompt_eval_count").and_then(|c| c.as_u64()),
+                        v.get("eval_count").and_then(|c| c.as_u64()),
+                    ) {
+                        (Some(input_tokens), Some(output_tokens)) => Some(UsageOut {
+                            input_tokens,
+                            output_tokens,
+                        }),
+                        _ => None,
+                    };
+                }
+                if pending_think.len() + pending_text.len() >= FLUSH_BYTES
+                    || (last_flush.elapsed() >= FLUSH_INTERVAL
+                        && (!pending_think.is_empty() || !pending_text.is_empty()))
+                {
+                    flush_pending(&tx, &mut seq, &mut pending_think, &mut pending_text);
+                    last_flush = Instant::now();
+                }
+            }
+        }
+        flush_pending(&tx, &mut seq, &mut pending_think, &mut pending_text);
+        out.tool_calls = (!tool_calls.is_empty()).then_some(tool_calls);
+        Ok(out)
+    };
+    match tokio::time::timeout(timeout, work).await {
+        Ok(r) => r,
+        Err(_) => Err(format!(
+            "ollama stream timed out after {}s",
+            timeout.as_secs()
+        )),
+    }
+}
+
+/// Send accumulated thinking/text deltas as chunk envelopes; sends nothing for
+/// empty buffers. Send errors are ignored — a dropped receiver just means the
+/// transport stopped listening (session ending); the result still returns.
+fn flush_pending(tx: &ChunkSender, seq: &mut u32, think: &mut String, text: &mut String) {
+    if !think.is_empty() {
+        let content = serde_json::json!({"t": "think", "d": std::mem::take(think)}).to_string();
+        let _ = tx.send(ChunkOut { seq: *seq, content });
+        *seq += 1;
+    }
+    if !text.is_empty() {
+        let content = serde_json::json!({"t": "text", "d": std::mem::take(text)}).to_string();
+        let _ = tx.send(ChunkOut { seq: *seq, content });
+        *seq += 1;
     }
 }
 

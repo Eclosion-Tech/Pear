@@ -55,6 +55,12 @@ pub(crate) fn next_bridge_device_capability_id(ctx: &ReducerContext) -> u64 {
     })
 }
 
+pub(crate) fn next_bridge_command_chunk_id(ctx: &ReducerContext) -> u64 {
+    alloc_id(ctx, "bridge_command_chunk", || {
+        ctx.db.bridge_command_chunk().iter().map(|r| r.id).max().unwrap_or(0)
+    })
+}
+
 // ============================================================
 // Bridge — enums
 // ============================================================
@@ -277,6 +283,33 @@ pub struct BridgeCommandResult {
     /// originating AI user.
     #[default(Identity::ZERO)]
     pub requested_by: Identity,
+}
+
+/// Incremental output for a streaming command (`kind = "inference"` with
+/// `stream: true`): the device appends chunks while the model generates, the
+/// worker polls them via `/sql` and forwards them as stream deltas, and the
+/// terminal `complete_/reject_bridge_command` DELETES them — chunks are
+/// transient stream state, not part of the record (the full output lands in
+/// `BridgeCommandResult`). `content` is a small JSON envelope
+/// (`{"t":"text"|"think","d":"…"}`). Same visibility rule as results: only the
+/// requesting AI user reads its own stream.
+#[client_visibility_filter]
+const BRIDGE_COMMAND_CHUNK_FILTER: Filter =
+    Filter::Sql("SELECT * FROM bridge_command_chunk WHERE requested_by = :sender");
+
+#[table(accessor = bridge_command_chunk, public)]
+pub struct BridgeCommandChunk {
+    #[primary_key]
+    pub id: u64,
+    #[index(btree)]
+    pub command_id: u64,
+    /// Device-assigned monotonic sequence within the command.
+    pub seq: u32,
+    /// JSON delta envelope, capped at 64 KiB by the reducer.
+    pub content: String,
+    /// Copied from `BridgeCommand.requested_by`; backs the RLS filter.
+    pub requested_by: Identity,
+    pub created_at: Timestamp,
 }
 
 /// Per-device allowlist configuration. Authoritative source, editable

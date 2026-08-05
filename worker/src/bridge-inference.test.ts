@@ -352,6 +352,101 @@ test("bridge chat fails the turn explicitly when the device is offline", async (
   );
 });
 
+test("chatStream yields chunk deltas then done, and exists only for ollama bindings", async () => {
+  const { registerBridgeSql, unregisterBridgeSql } = await import("./bridge-sql.ts");
+  const commands: Array<{ id: bigint; deviceId: bigint; status: { tag: string }; nonce: string | null; command: string; conversationId: bigint }> = [];
+  const results = new Map<string, { commandId: bigint; stdout: string; stderr: string; durationMs: bigint }>();
+  const chunks: Array<{ seq: number; content: string }> = [];
+  let nextId = 1n;
+  const conn = {
+    db: {
+      bridge_device_summary: {
+        iter: () => [{ id: 1n, name: "KRPC", platform: "linux", connected: true, revokedAt: null }],
+      },
+    },
+    reducers: {
+      enqueueBridgeInference: (args: { nonce: string; payloadJson: string }) => {
+        const id = nextId++;
+        commands.push({ id, deviceId: 1n, status: { tag: "Running" }, nonce: args.nonce, command: "infer:ollama", conversationId: 7n });
+        const payload = JSON.parse(args.payloadJson);
+        if (payload.stream !== true) throw new Error("stream flag missing from payload");
+        // Simulate the device: two chunks then the final result.
+        setTimeout(() => {
+          chunks.push({ seq: 0, content: JSON.stringify({ t: "think", d: "pondering…" }) });
+          chunks.push({ seq: 1, content: JSON.stringify({ t: "text", d: "the answer" }) });
+        }, 20);
+        setTimeout(() => {
+          results.set(id.toString(), {
+            commandId: id,
+            stdout: JSON.stringify({ ok: true, output: "the answer", usage: { input_tokens: 9, output_tokens: 3 } }),
+            stderr: "",
+            durationMs: 50n,
+          });
+        }, 60);
+      },
+    },
+  };
+  registerBridgeSql("0xai9", {
+    commandsForDevice: async () =>
+      commands.map((c) => ({
+        id: c.id.toString(),
+        deviceId: c.deviceId.toString(),
+        command: c.command,
+        conversationId: c.conversationId.toString(),
+        status: c.status,
+        nonce: c.nonce,
+      })),
+    resultForCommand: async (id) => {
+      const r = results.get(String(id));
+      return r
+        ? { commandId: r.commandId.toString(), exitCode: 0, stdout: r.stdout, stderr: r.stderr, rejectionReason: null, durationMs: r.durationMs }
+        : undefined;
+    },
+    chunksForCommand: async () => [...chunks],
+  });
+
+  try {
+    const provider = new BridgeInferenceProvider(conn as never, "0xai9", {
+      mode: "bridge",
+      device_id: 1,
+      provider: "ollama",
+      model: "qwen3.5:latest",
+    });
+    assert.ok(provider.chatStream, "ollama binding must offer chatStream");
+
+    const events: Array<{ type: string; text?: string }> = [];
+    let done: { content: Array<{ type: string; text?: string }>; usage?: { inputTokens: number } } | undefined;
+    for await (const ev of provider.chatStream!({
+      model: "m",
+      maxTokens: 10,
+      system: "",
+      messages: [{ role: "user", content: "q" }],
+      conversationId: 7n,
+    })) {
+      if (ev.type === "done") done = ev.response as never;
+      else events.push(ev as never);
+    }
+    assert.deepEqual(
+      events.map((e) => e.type),
+      ["thinking_delta", "text_delta"],
+    );
+    assert.equal(events[0].text, "pondering…");
+    assert.equal(events[1].text, "the answer");
+    assert.ok(done, "must finish with done");
+    assert.equal(done!.usage?.inputTokens, 9);
+
+    // Non-ollama bindings must NOT stream (fall back to chat()).
+    const claudeBound = new BridgeInferenceProvider(conn as never, "0xai9", {
+      mode: "bridge",
+      device_id: 1,
+      provider: "claude-code",
+    });
+    assert.equal(claudeBound.chatStream, undefined);
+  } finally {
+    unregisterBridgeSql("0xai9");
+  }
+});
+
 // ── harness mode (14443) ─────────────────────────────────────────────────────
 
 test("parseBridgeBackendBinding accepts harness mode with cwd and permission_mode", () => {

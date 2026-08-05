@@ -337,6 +337,20 @@ pub struct StdbResultSink {
 }
 
 impl ResultSink for StdbResultSink {
+    async fn send_chunk(
+        &mut self,
+        command_id: u64,
+        seq: u32,
+        content: String,
+    ) -> Result<(), String> {
+        self.http
+            .call(
+                "append_bridge_command_chunk",
+                serde_json::json!([command_id, seq, content]),
+            )
+            .await
+    }
+
     async fn send_outcome(&mut self, command_id: u64, outcome: Outcome) -> Result<(), String> {
         match outcome {
             Outcome::Completed {

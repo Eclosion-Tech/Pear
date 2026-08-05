@@ -64,6 +64,7 @@
     "ai_extension_runtime": "Caller-scoped runtime view containing MCP endpoints and credentials. It is derived from installed extension configuration and must never be exported.",
     "ai_user_config": "Contains plaintext provider API keys and worker tokens. Never exported. Import restores stub configs from ai_user_profile rows (same behavior as v1); operators reconfigure keys post-restore.",
     "automation_primitive": "Seeded catalog of available primitives keyed by name (seed_automation_primitives_inner); module-defined, not user data.",
+    "bridge_command_chunk": "Transient streaming output for in-flight bridge commands; deleted by the terminal complete/reject reducers. The durable record is bridge_command_result.",
     "extension_runtime_health": "Transient worker handshake and tool-discovery status. It is re-created by AI workers after a restore.",
     "id_counter": "Module-managed id allocator. import_v2_commit deletes all counter rows so the next allocation re-seeds from post-import max(id) (see id_counters.rs).",
     "migration_state": "Module-managed migration bookkeeping; owned by the module version that publishes, never restored.",

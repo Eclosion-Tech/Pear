@@ -26,12 +26,14 @@ use spacetimedb::{reducer, Identity, ReducerContext, Table, Timestamp};
 
 use crate::ai::ai_user_config;
 use crate::bridge::{
-    bridge_command, bridge_command_result, bridge_device, bridge_device_allowlist,
-    bridge_device_capability, bridge_device_grant, bridge_device_summary, bridge_session,
+    bridge_command, bridge_command_chunk, bridge_command_result, bridge_device,
+    bridge_device_allowlist, bridge_device_capability, bridge_device_grant,
+    bridge_device_summary, bridge_session, next_bridge_command_chunk_id,
     next_bridge_command_id, next_bridge_device_capability_id, next_bridge_device_grant_id,
-    next_bridge_device_id, next_bridge_session_id, BridgeCommand, BridgeCommandResult,
-    BridgeCommandStatus, BridgeDevice, BridgeDeviceAllowlist, BridgeDeviceCapability,
-    BridgeDeviceGrant, BridgeDeviceSummary, BridgeSession, UnlistedCommandPolicy,
+    next_bridge_device_id, next_bridge_session_id, BridgeCommand, BridgeCommandChunk,
+    BridgeCommandResult, BridgeCommandStatus, BridgeDevice, BridgeDeviceAllowlist,
+    BridgeDeviceCapability, BridgeDeviceGrant, BridgeDeviceSummary, BridgeSession,
+    UnlistedCommandPolicy,
 };
 use crate::extensions::{tool_call_audit_log, ToolCallAuditLog};
 
@@ -664,6 +666,55 @@ pub fn enqueue_bridge_harness(
     Ok(())
 }
 
+/// Append one streaming output chunk for a command the calling device is
+/// executing. Same auth as complete/reject (`require_executing_device`).
+/// Chunks are transient — the terminal complete/reject reducer deletes them.
+#[reducer]
+pub fn append_bridge_command_chunk(
+    ctx: &ReducerContext,
+    command_id: u64,
+    seq: u32,
+    content: String,
+) -> Result<(), String> {
+    if content.is_empty() {
+        return Ok(());
+    }
+    if content.len() > 65_536 {
+        return Err("Chunk too large (max 64 KiB)".to_string());
+    }
+    let cmd = ctx
+        .db
+        .bridge_command()
+        .id()
+        .find(command_id)
+        .ok_or_else(|| format!("Bridge command {command_id} not found"))?;
+    require_executing_device(ctx, &cmd)?;
+    ctx.db.bridge_command_chunk().insert(BridgeCommandChunk {
+        id: next_bridge_command_chunk_id(ctx),
+        command_id,
+        seq,
+        content,
+        requested_by: cmd.requested_by,
+        created_at: ctx.timestamp,
+    });
+    Ok(())
+}
+
+/// Delete a command's transient stream chunks (called from the terminal
+/// complete/reject reducers).
+fn clear_bridge_command_chunks(ctx: &ReducerContext, command_id: u64) {
+    let ids: Vec<u64> = ctx
+        .db
+        .bridge_command_chunk()
+        .command_id()
+        .filter(command_id)
+        .map(|c| c.id)
+        .collect();
+    for id in ids {
+        ctx.db.bridge_command_chunk().id().delete(&id);
+    }
+}
+
 /// Ack that the executing device picked a command up: Pending → Running.
 /// Called by the relay right after it dispatches the command frame (and by the
 /// embedded desktop bridge when it dequeues), as the device identity. Without
@@ -778,6 +829,7 @@ pub fn deny_bridge_command(ctx: &ReducerContext, command_id: u64) -> Result<(), 
         status: BridgeCommandStatus::Rejected,
         ..cmd
     });
+    clear_bridge_command_chunks(ctx, command_id);
     Ok(())
 }
 
@@ -845,6 +897,8 @@ pub fn complete_bridge_command(
         output_hash,
     });
     ctx.db.bridge_command().id().update(BridgeCommand { status, ..cmd });
+    // Stream chunks are transient — the result is the durable record.
+    clear_bridge_command_chunks(ctx, command_id);
     Ok(())
 }
 

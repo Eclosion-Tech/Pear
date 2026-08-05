@@ -34,8 +34,10 @@
 import type {
   ChatRequest,
   ChatResponse,
+  ChatStreamRequest,
   InferenceProvider,
   Message,
+  StreamEvent,
   SystemPrompt,
 } from "./providers.js";
 import { getBridgeSql } from "./bridge-sql.js";
@@ -237,11 +239,23 @@ const ENQUEUE_VISIBLE_MS = 10_000;
 const PENDING_GRACE_MS = 30_000;
 
 export class BridgeInferenceProvider implements InferenceProvider {
+  /**
+   * Present ONLY for ollama bridge bindings: streamed turns via
+   * bridge_command_chunk rows (chunked, ~2-3 flushes/sec — see the daemon's
+   * run_ollama_stream). Left undefined otherwise so conversation.ts falls back
+   * to the non-streaming chat() path (claude/codex bindings, harness mode).
+   */
+  chatStream?: (request: ChatStreamRequest) => AsyncIterable<StreamEvent>;
+
   constructor(
     protected readonly conn: ConnForBridge,
     protected readonly aiIdentityHex: string,
     protected readonly binding: BridgeBackendBinding,
-  ) {}
+  ) {
+    if (binding.mode === "bridge" && binding.provider === "ollama") {
+      this.chatStream = (request) => this.streamTurn(request);
+    }
+  }
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
     const deviceId = BigInt(this.binding.device_id);
@@ -271,6 +285,48 @@ export class BridgeInferenceProvider implements InferenceProvider {
       }
     }
 
+    const nonce = await this.enqueueTurn(request, deviceId, model, false);
+
+    const row = await this.awaitCommandRow(deviceId, nonce);
+    const result = await this.awaitResult(deviceId, row.id);
+
+    if (result.rejectionReason) {
+      throw new Error(`Bridge inference was rejected: ${result.rejectionReason}`);
+    }
+    return this.parseResultEnvelope(result, deviceId, { includeThinking: true });
+  }
+
+  /** Connected/paired precheck — throws with an actionable message. */
+  protected async precheckDevice(deviceId: bigint): Promise<void> {
+    type DeviceSummary = { id: bigint; name: string; connected: boolean; revokedAt?: unknown };
+    const summaryIter =
+      (this.conn.db as { bridge_device_summary?: { iter: () => Iterable<DeviceSummary> } })
+        .bridge_device_summary?.iter?.() ??
+      (this.conn.db as { bridgeDeviceSummary?: { iter: () => Iterable<DeviceSummary> } })
+        .bridgeDeviceSummary?.iter?.();
+    if (!summaryIter) return;
+    const dev = [...summaryIter].find((d) => String(d.id) === String(deviceId));
+    if (!dev || dev.revokedAt != null) {
+      throw new Error(
+        `This AI user's inference backend is bridge device ${deviceId}, which is not paired/available. ` +
+          `Fix the binding or clear it to use a cloud API key.`,
+      );
+    }
+    if (!dev.connected) {
+      throw new Error(
+        `This AI user runs inference on bridge device ${deviceId} (${dev.name}), which is offline. ` +
+          `Start pear-bridge on that machine, or clear the binding to use a cloud API key.`,
+      );
+    }
+  }
+
+  /** Build + enqueue the inference payload; returns the correlation nonce. */
+  protected async enqueueTurn(
+    request: ChatRequest,
+    deviceId: bigint,
+    model: string | undefined,
+    stream: boolean,
+  ): Promise<string> {
     // Ollama bindings speak structured chat (tool calling); claude/codex stay
     // on the flattened transcript (chat-only until harness sessions, 14443).
     const structured = this.binding.provider === "ollama";
@@ -296,6 +352,7 @@ export class BridgeInferenceProvider implements InferenceProvider {
           timeout_seconds: DEVICE_BUDGET_SECONDS,
           ...(this.binding.num_ctx ? { num_ctx: this.binding.num_ctx } : {}),
           ...(this.binding.think !== undefined ? { think: this.binding.think } : {}),
+          ...(stream ? { stream: true } : {}),
         }
       : {
           provider: this.binding.provider,
@@ -318,13 +375,15 @@ export class BridgeInferenceProvider implements InferenceProvider {
       taskId: undefined,
       nonce,
     });
+    return nonce;
+  }
 
-    const row = await this.awaitCommandRow(deviceId, nonce);
-    const result = await this.awaitResult(deviceId, row.id);
-
-    if (result.rejectionReason) {
-      throw new Error(`Bridge inference was rejected: ${result.rejectionReason}`);
-    }
+  /** Map a result row's InferenceResult envelope onto a ChatResponse. */
+  protected parseResultEnvelope(
+    result: { stdout: string; rejectionReason?: string | null },
+    deviceId: bigint,
+    opts: { includeThinking: boolean },
+  ): ChatResponse {
     let envelope:
       | {
           ok?: boolean;
@@ -370,7 +429,9 @@ export class BridgeInferenceProvider implements InferenceProvider {
     return {
       content,
       stopReason: toolCalls.length > 0 ? "tool_use" : "end_turn",
-      ...(envelope.thinking ? { thinking: envelope.thinking } : {}),
+      // Streaming turns already delivered thinking as deltas — including it
+      // again on done would double-count.
+      ...(opts.includeThinking && envelope.thinking ? { thinking: envelope.thinking } : {}),
       // Real device-side token counts → turnUsage/update_message, so bridge
       // turns stop reading 0/0 in the usage telemetry.
       ...(typeof envelope.usage?.input_tokens === "number" &&
@@ -385,6 +446,69 @@ export class BridgeInferenceProvider implements InferenceProvider {
           }
         : {}),
     };
+  }
+
+  /**
+   * Streamed turn: enqueue with `stream:true`, forward chunk deltas as they
+   * land in bridge_command_chunk, and finish with the full result envelope.
+   */
+  private async *streamTurn(request: ChatStreamRequest): AsyncIterable<StreamEvent> {
+    const deviceId = BigInt(this.binding.device_id);
+    await this.precheckDevice(deviceId);
+    const model = this.binding.model ?? request.model;
+    const nonce = await this.enqueueTurn(request, deviceId, model, true);
+    const row = await this.awaitCommandRow(deviceId, nonce);
+
+    const sql = getBridgeSql(this.aiIdentityHex);
+    const readChunks = sql?.chunksForCommand?.bind(sql);
+    let lastSeq = -1;
+    const start = Date.now();
+    let everLeftPending = false;
+    while (Date.now() - start < WAIT_TIMEOUT_MS) {
+      if (readChunks) {
+        for (const chunk of await readChunks(row.id)) {
+          if (chunk.seq <= lastSeq) continue;
+          lastSeq = chunk.seq;
+          try {
+            const delta = JSON.parse(chunk.content) as { t?: string; d?: string };
+            if (delta.d) {
+              yield delta.t === "think"
+                ? { type: "thinking_delta", text: delta.d }
+                : { type: "text_delta", text: delta.d };
+            }
+          } catch {
+            /* malformed chunk — skip */
+          }
+        }
+      }
+      const result = await this.readResult(row.id);
+      if (result) {
+        if (result.rejectionReason) {
+          throw new Error(`Bridge inference was rejected: ${result.rejectionReason}`);
+        }
+        const response = this.parseResultEnvelope(result, deviceId, { includeThinking: false });
+        for (const block of response.content) {
+          if (block.type === "tool_use") yield { type: "tool_use_start", block };
+        }
+        yield { type: "done", response };
+        return;
+      }
+      const cmdRow = (await this.readCommands(deviceId)).find(
+        (r) => String(r.id) === String(row.id),
+      );
+      const tag = cmdRow?.status?.tag;
+      if (tag && tag !== "Pending") everLeftPending = true;
+      if (tag === "Pending" && !everLeftPending && Date.now() - start > PENDING_GRACE_MS) {
+        throw new Error(
+          `Bridge device ${deviceId} did not pick up the inference request — it is likely ` +
+            `offline or running an older pear-bridge without inference support.`,
+        );
+      }
+      await sleep(300);
+    }
+    throw new Error(
+      `Bridge inference on device ${deviceId} produced no result within ${WAIT_TIMEOUT_MS / 1000}s.`,
+    );
   }
 
   protected async awaitCommandRow(

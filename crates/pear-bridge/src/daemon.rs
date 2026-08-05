@@ -96,6 +96,16 @@ pub trait CommandSource {
 #[allow(async_fn_in_trait)]
 pub trait ResultSink {
     async fn send_outcome(&mut self, command_id: u64, outcome: Outcome) -> Result<(), String>;
+    /// Deliver one streaming chunk (`append_bridge_command_chunk` in prod).
+    /// Default no-op so bash-only sinks and test doubles need no changes.
+    async fn send_chunk(
+        &mut self,
+        _command_id: u64,
+        _seq: u32,
+        _content: String,
+    ) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// Handle one command: enforce → audit (before exec) → execute. Pure except for
@@ -186,6 +196,7 @@ pub async fn process_incoming(
     enforcer: &AllowlistEnforcer,
     exec: &ExecConfig,
     audit: &mut AuditLog,
+    chunks: Option<crate::providers::ChunkSender>,
 ) -> Outcome {
     match cmd.kind.as_deref() {
         Some("inference") => {
@@ -207,7 +218,7 @@ pub async fn process_incoming(
                 kind: Some("inference".to_string()),
             });
             let result =
-                crate::providers::run_inference_json(cmd.payload_json.as_deref()).await;
+                crate::providers::run_inference_json(cmd.payload_json.as_deref(), chunks).await;
             Outcome::Completed {
                 exit_code: Some(if result.ok { 0 } else { 1 }),
                 stdout: result.to_json(),
@@ -265,7 +276,29 @@ pub async fn run_loop<S: CommandSource, K: ResultSink>(
     audit: &mut AuditLog,
 ) -> Result<(), String> {
     while let Some(cmd) = source.next_command().await {
-        let outcome = process_incoming(&cmd, enforcer, exec, audit).await;
+        // Streaming chunks are forwarded to the sink WHILE the command runs
+        // (a streaming inference emits them mid-execution).
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<crate::providers::ChunkOut>();
+        let work = process_incoming(&cmd, enforcer, exec, audit, Some(tx));
+        tokio::pin!(work);
+        let outcome = loop {
+            tokio::select! {
+                outcome = &mut work => break outcome,
+                chunk = rx.recv() => {
+                    if let Some(chunk) = chunk {
+                        let _ = sink
+                            .send_chunk(cmd.command_id, chunk.seq, chunk.content)
+                            .await;
+                    }
+                }
+            }
+        };
+        // Drain anything emitted between the last poll and completion.
+        while let Ok(chunk) = rx.try_recv() {
+            let _ = sink
+                .send_chunk(cmd.command_id, chunk.seq, chunk.content)
+                .await;
+        }
         sink.send_outcome(cmd.command_id, outcome).await?;
     }
     Ok(())

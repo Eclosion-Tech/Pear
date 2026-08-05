@@ -127,6 +127,19 @@ pub fn capabilities_frame(caps: &[crate::providers::ProviderCapability]) -> Stri
     .unwrap_or_else(|_| r#"{"type":"capabilities","capabilities":[]}"#.to_string())
 }
 
+/// Serialize one streaming delta into a `chunk` frame:
+/// `{"type":"chunk","command_id":N,"seq":K,"content":"…"}`. The relay mirrors
+/// it into `append_bridge_command_chunk`; older relays ignore unknown frames.
+pub fn chunk_frame(command_id: u64, chunk: &crate::providers::ChunkOut) -> String {
+    serde_json::json!({
+        "type": "chunk",
+        "command_id": command_id,
+        "seq": chunk.seq,
+        "content": chunk.content,
+    })
+    .to_string()
+}
+
 /// Serialize an outcome into a `result` frame: `{"type":"result","command_id":N,
 /// "status":"...", …}` (the `Outcome` is flattened, tagged by `status`).
 fn result_json(command_id: u64, outcome: &Outcome) -> Result<String, String> {
@@ -251,16 +264,35 @@ where
                                 // (Bash still blocks inside its synchronous PTY
                                 // call — no await points to ping at — which is
                                 // the documented spawn_blocking follow-up.)
-                                let work = process_incoming(&cmd, enforcer, exec, audit);
+                                // Streaming inference emits chunk deltas through
+                                // this channel mid-run; they become `chunk`
+                                // frames the relay writes into
+                                // bridge_command_chunk.
+                                let (chunk_tx, mut chunk_rx) =
+                                    tokio::sync::mpsc::unbounded_channel::<crate::providers::ChunkOut>();
+                                let work =
+                                    process_incoming(&cmd, enforcer, exec, audit, Some(chunk_tx));
                                 tokio::pin!(work);
                                 let outcome = loop {
                                     tokio::select! {
                                         outcome = &mut work => break outcome,
+                                        chunk = chunk_rx.recv() => {
+                                            if let Some(chunk) = chunk {
+                                                let frame = chunk_frame(cmd.command_id, &chunk);
+                                                let _ = write.send(Message::Text(frame)).await;
+                                            }
+                                        }
                                         _ = ping.tick() => {
                                             let _ = write.send(Message::Ping(Vec::new())).await;
                                         }
                                     }
                                 };
+                                // Chunks emitted between the last poll and
+                                // completion still precede the result frame.
+                                while let Ok(chunk) = chunk_rx.try_recv() {
+                                    let frame = chunk_frame(cmd.command_id, &chunk);
+                                    let _ = write.send(Message::Text(frame)).await;
+                                }
                                 let json = result_json(cmd.command_id, &outcome)?;
                                 write
                                     .send(Message::Text(json))

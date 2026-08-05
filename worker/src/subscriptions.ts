@@ -44,6 +44,7 @@ const BRIDGE_TABLE_NAMES = [
   "bridge_device_grant",
   "bridge_device_allowlist",
   "bridge_device_capability",
+  "bridge_command_chunk",
 ];
 
 // Provider instances contain credential-bearing clients and are cached between
