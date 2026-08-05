@@ -285,7 +285,9 @@ fn resolve_cwd(requested: Option<&str>, allowed_dirs: &[PathBuf]) -> Result<Path
         );
     }
     let dir = match requested.filter(|c| !c.trim().is_empty()) {
-        Some(c) => PathBuf::from(c),
+        // Bindings written in the UI commonly say `~/Projects/...` — expand
+        // before canonicalizing (same reasoning as the allowlist entries).
+        Some(c) => crate::allowlist::expand_tilde(c),
         None => return Ok(allowed_dirs[0].clone()),
     };
     let canonical = dir

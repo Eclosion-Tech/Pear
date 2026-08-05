@@ -45,6 +45,7 @@ import {
 } from "./tools.js";
 import { CompositeToolExecutor } from "./composite-tool-executor.js";
 import { SystemPromptBuilder } from "./prompt-builder.js";
+import { parseBridgeBackendBinding } from "./bridge-inference.js";
 import {
   discoverInstructionPages,
   discoverAccessibleResources,
@@ -789,6 +790,25 @@ async function handleConversationMessage(
       }
     }
 
+    // Identity strings for the system prompt. The profile's provider/model
+    // describe the CLOUD config — when a bridge/harness binding is active the
+    // actual backend differs, and telling the model it is something else makes
+    // it role-play that identity (a bound qwen introduced itself as Claude).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ownCfg = (conn.db as any).ai_user_config?.id?.find(aiProfile.aiUserId) as
+      | { systemPrompt?: string; inferenceBackendJson?: string }
+      | undefined;
+    const backendBinding = parseBridgeBackendBinding(ownCfg?.inferenceBackendJson);
+    const promptProviderName = backendBinding
+      ? backendBinding.mode === "harness"
+        ? "Claude Code running on a paired device via Pear Bridge"
+        : `${backendBinding.provider} running on a paired device via Pear Bridge`
+      : aiProfile.providerName;
+    const promptModelName = backendBinding
+      ? (backendBinding.model ??
+        (backendBinding.mode === "harness" ? "claude-code session" : aiProfile.modelName))
+      : aiProfile.modelName;
+
     // Build WorkspaceContext (page-anchored conversations only).
     let workspaceCtx: WorkspaceContext | undefined;
     if (conv.pageId !== undefined) {
@@ -804,8 +824,8 @@ async function handleConversationMessage(
         breadcrumb,
         currentDate: todayIso8601(),
         aiDisplayName: aiProfile.displayName,
-        modelName: aiProfile.modelName,
-        providerName: aiProfile.providerName,
+        modelName: promptModelName,
+        providerName: promptProviderName,
         instructionPages,
         pageHistory,
       };
@@ -816,13 +836,9 @@ async function handleConversationMessage(
     const assistantParts: string[] = [];
     if (aiProfile.displayName) {
       assistantParts.push(
-        `Your display name is "${aiProfile.displayName}". You are powered by ${aiProfile.providerName} (${aiProfile.modelName}).`,
+        `Your display name is "${aiProfile.displayName}". You are powered by ${promptProviderName} (${promptModelName}).`,
       );
     }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const ownCfg = (conn.db as any).ai_user_config?.id?.find(aiProfile.aiUserId) as
-      | { systemPrompt?: string }
-      | undefined;
     if (ownCfg?.systemPrompt?.trim()) {
       assistantParts.push(ownCfg.systemPrompt.trim());
     }

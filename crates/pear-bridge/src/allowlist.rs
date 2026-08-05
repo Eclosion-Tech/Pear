@@ -197,7 +197,12 @@ impl AllowlistEnforcer {
 
         let mut allowed_dirs = Vec::new();
         for dir in &config.allowed_directories {
-            match std::fs::canonicalize(dir) {
+            // Server-side config commonly says `~/Projects/...`; Rust's
+            // canonicalize does NOT expand tilde, which used to silently drop
+            // the entry — shrinking the jail and leaving the device with no
+            // usable directories at all when every entry was tilde-prefixed.
+            let dir = expand_tilde(dir);
+            match std::fs::canonicalize(&dir) {
                 Ok(p) => allowed_dirs.push(p),
                 Err(e) => warnings.push(format!(
                     "allowed directory {dir:?} does not resolve, ignoring: {e}"
@@ -322,6 +327,24 @@ impl AllowlistEnforcer {
     fn is_leader_allowed(&self, leader: &str) -> bool {
         NAV_BUILTINS.contains(&leader) || self.allowed_commands.iter().any(|c| c == leader)
     }
+}
+
+/// Expand a leading `~` / `~/` to `$HOME`. Rust's `canonicalize` does not
+/// expand tilde, and server-side `allowed_directories` commonly say
+/// `~/Projects/...` — without this every such entry was silently dropped,
+/// shrinking the jail to nothing. Only the current user's home is supported;
+/// `~other` is left as-is and fails canonicalization with a clear warning.
+pub(crate) fn expand_tilde(dir: &str) -> PathBuf {
+    if dir == "~" {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home);
+        }
+    } else if let Some(rest) = dir.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return Path::new(&home).join(rest);
+        }
+    }
+    PathBuf::from(dir)
 }
 
 fn reject(reason: &str) -> Decision {
