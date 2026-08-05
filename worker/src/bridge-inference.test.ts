@@ -24,6 +24,8 @@ test("parseBridgeBackendBinding accepts bridge mode and rejects everything else"
       cwd: undefined,
       permission_mode: undefined,
       allowed_tools: undefined,
+      num_ctx: undefined,
+      think: undefined,
     },
   );
   assert.equal(parseBridgeBackendBinding(undefined), undefined);
@@ -365,6 +367,8 @@ test("parseBridgeBackendBinding accepts harness mode with cwd and permission_mod
       cwd: "/Users/kara/proj",
       permission_mode: "acceptEdits",
       allowed_tools: ["Bash", "Edit"],
+      num_ctx: undefined,
+      think: undefined,
     },
   );
 });

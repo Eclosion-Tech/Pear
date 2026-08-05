@@ -57,6 +57,10 @@ export interface BridgeBackendBinding {
   permission_mode?: string;
   /** harness: optional Claude Code --allowedTools list. */
   allowed_tools?: string[];
+  /** bridge+ollama: context window override (VRAM-bound per device). */
+  num_ctx?: number;
+  /** bridge+ollama: explicit thinking control for thinking-capable models. */
+  think?: boolean;
 }
 
 /** Parse + validate a binding; undefined for null/cloud-api/garbage. */
@@ -81,6 +85,11 @@ export function parseBridgeBackendBinding(raw: string | undefined): BridgeBacken
       allowed_tools: Array.isArray(v.allowed_tools)
         ? v.allowed_tools.filter((t): t is string => typeof t === "string" && !!t.trim())
         : undefined,
+      num_ctx:
+        typeof v.num_ctx === "number" && Number.isFinite(v.num_ctx) && v.num_ctx > 0
+          ? Math.floor(v.num_ctx)
+          : undefined,
+      think: typeof v.think === "boolean" ? v.think : undefined,
     };
   } catch {
     return undefined;
@@ -285,6 +294,8 @@ export class BridgeInferenceProvider implements InferenceProvider {
               : {}),
           },
           timeout_seconds: DEVICE_BUDGET_SECONDS,
+          ...(this.binding.num_ctx ? { num_ctx: this.binding.num_ctx } : {}),
+          ...(this.binding.think !== undefined ? { think: this.binding.think } : {}),
         }
       : {
           provider: this.binding.provider,
@@ -292,6 +303,8 @@ export class BridgeInferenceProvider implements InferenceProvider {
           prompt: renderTranscript(request.messages),
           ...(systemText(request.system) ? { system: systemText(request.system) } : {}),
           timeout_seconds: DEVICE_BUDGET_SECONDS,
+          ...(this.binding.num_ctx ? { num_ctx: this.binding.num_ctx } : {}),
+          ...(this.binding.think !== undefined ? { think: this.binding.think } : {}),
         };
 
     const nonce = globalThis.crypto.randomUUID();
@@ -317,6 +330,8 @@ export class BridgeInferenceProvider implements InferenceProvider {
           ok?: boolean;
           output?: string;
           error?: string;
+          thinking?: string;
+          usage?: { input_tokens?: number; output_tokens?: number };
           tool_calls?: Array<{ name?: string; arguments?: unknown }>;
         }
       | undefined;
@@ -355,6 +370,20 @@ export class BridgeInferenceProvider implements InferenceProvider {
     return {
       content,
       stopReason: toolCalls.length > 0 ? "tool_use" : "end_turn",
+      ...(envelope.thinking ? { thinking: envelope.thinking } : {}),
+      // Real device-side token counts → turnUsage/update_message, so bridge
+      // turns stop reading 0/0 in the usage telemetry.
+      ...(typeof envelope.usage?.input_tokens === "number" &&
+      typeof envelope.usage?.output_tokens === "number"
+        ? {
+            usage: {
+              inputTokens: envelope.usage.input_tokens,
+              outputTokens: envelope.usage.output_tokens,
+              cacheCreationInputTokens: 0,
+              cacheReadInputTokens: 0,
+            },
+          }
+        : {}),
     };
   }
 

@@ -28,6 +28,8 @@ interface ParsedBinding {
   model?: string;
   cwd?: string;
   permission_mode?: string;
+  num_ctx?: number;
+  think?: boolean;
 }
 
 function parseBinding(raw: string | undefined): ParsedBinding | undefined {
@@ -66,6 +68,10 @@ export function InferenceBackendSection({
   const [permissionMode, setPermissionMode] = useState<string>(
     saved?.permission_mode ?? "acceptEdits",
   );
+  const [numCtx, setNumCtx] = useState<string>(saved?.num_ctx?.toString() ?? "");
+  const [think, setThink] = useState<"default" | "on" | "off">(
+    saved?.think === true ? "on" : saved?.think === false ? "off" : "default",
+  );
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -78,6 +84,8 @@ export function InferenceBackendSection({
     setModel(next?.model ?? "");
     setCwd(next?.cwd ?? "");
     setPermissionMode(next?.permission_mode ?? "acceptEdits");
+    setNumCtx(next?.num_ctx?.toString() ?? "");
+    setThink(next?.think === true ? "on" : next?.think === false ? "off" : "default");
   }, [bindingJson, aiUserId]);
 
   const activeDevices = useMemo(
@@ -125,6 +133,12 @@ export function InferenceBackendSection({
               device_id: Number(deviceId),
               provider,
               ...(model.trim() ? { model: model.trim() } : {}),
+              ...(provider === "ollama" && numCtx.trim() && Number(numCtx) > 0
+                ? { num_ctx: Math.floor(Number(numCtx)) }
+                : {}),
+              ...(provider === "ollama" && think !== "default"
+                ? { think: think === "on" }
+                : {}),
             })
           : JSON.stringify({
               mode: "harness",
@@ -257,6 +271,29 @@ export function InferenceBackendSection({
                   }
                   className={selectCls}
                 />
+              )}
+              {provider === "ollama" && (
+                <div className="flex gap-2">
+                  <input
+                    aria-label="Context window (num_ctx)"
+                    value={numCtx}
+                    disabled={disabled || busy}
+                    onChange={(e) => setNumCtx(e.target.value.replace(/[^0-9]/g, ""))}
+                    placeholder="num_ctx (default 32768 — VRAM-bound; e.g. 65536)"
+                    className={`${selectCls} flex-1`}
+                  />
+                  <select
+                    aria-label="Thinking"
+                    value={think}
+                    disabled={disabled || busy}
+                    onChange={(e) => setThink(e.target.value as "default" | "on" | "off")}
+                    className={selectCls}
+                  >
+                    <option value="default">thinking: model default</option>
+                    <option value="on">thinking: on</option>
+                    <option value="off">thinking: off</option>
+                  </select>
+                </div>
               )}
               {selectedCap && selectedCap.provider !== "ollama" && (
                 <p className="text-xs text-neutral-500 dark:text-neutral-400">

@@ -215,7 +215,7 @@ async fn ollama_adapter_posts_generate_and_requires_model() {
 async fn ollama_chat_forwards_messages_and_tools_verbatim_and_maps_tool_calls() {
     let _guard = ENV_LOCK.lock().unwrap();
     let (url, captured) = canned_http_capture(
-        r#"{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"get_page","arguments":{"page_id":68}}}]},"done":true}"#,
+        r#"{"message":{"role":"assistant","content":"","thinking":"let me look","tool_calls":[{"function":{"name":"get_page","arguments":{"page_id":68}}}]},"done":true,"prompt_eval_count":43000,"eval_count":120}"#,
         1,
     );
     std::env::set_var("PEAR_BRIDGE_OLLAMA_URL", &url);
@@ -223,6 +223,8 @@ async fn ollama_chat_forwards_messages_and_tools_verbatim_and_maps_tool_calls() 
     let p: InferencePayload = serde_json::from_value(serde_json::json!({
         "provider": "ollama",
         "model": "llama3.1:8b",
+        "num_ctx": 65536,
+        "think": true,
         "chat": {
             "messages": [
                 {"role": "system", "content": "sys"},
@@ -243,6 +245,10 @@ async fn ollama_chat_forwards_messages_and_tools_verbatim_and_maps_tool_calls() 
             arguments: serde_json::json!({"page_id": 68}),
         }])
     );
+    assert_eq!(result.thinking.as_deref(), Some("let me look"));
+    let usage = result.usage.expect("usage mapped from eval counts");
+    assert_eq!(usage.input_tokens, 43000);
+    assert_eq!(usage.output_tokens, 120);
 
     let req = captured.lock().unwrap().join("");
     assert!(req.starts_with("POST /api/chat "), "endpoint: {}", req.lines().next().unwrap_or(""));
@@ -253,6 +259,37 @@ async fn ollama_chat_forwards_messages_and_tools_verbatim_and_maps_tool_calls() 
     assert_eq!(body["messages"][0]["role"], "system");
     assert_eq!(body["messages"][1]["content"], "open the pear page");
     assert_eq!(body["tools"][0]["function"]["name"], "get_page");
+    assert_eq!(body["options"]["num_ctx"], 65536, "binding num_ctx must reach ollama");
+    assert_eq!(body["think"], true, "explicit thinking control must be sent");
+}
+
+#[tokio::test]
+async fn ollama_num_ctx_defaults_and_think_stays_absent_when_unconfigured() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let (url, captured) = canned_http_capture(
+        r#"{"message":{"role":"assistant","content":"hi"},"done":true}"#,
+        1,
+    );
+    std::env::set_var("PEAR_BRIDGE_OLLAMA_URL", &url);
+
+    let p: InferencePayload = serde_json::from_value(serde_json::json!({
+        "provider": "ollama",
+        "model": "llama3.1:8b",
+        "chat": {"messages": [{"role": "user", "content": "hi"}]}
+    }))
+    .unwrap();
+    let result = run_inference(&p).await;
+    std::env::remove_var("PEAR_BRIDGE_OLLAMA_URL");
+    assert!(result.ok, "{:?}", result.error);
+
+    let req = captured.lock().unwrap().join("");
+    let body_start = req.find("\r\n\r\n").unwrap() + 4;
+    let body: serde_json::Value = serde_json::from_str(&req[body_start..]).unwrap();
+    assert_eq!(body["options"]["num_ctx"], 32768, "default num_ctx must apply");
+    assert!(
+        body.get("think").is_none(),
+        "think must be ABSENT when unconfigured — ollama errors on it for non-thinking models"
+    );
 }
 
 #[tokio::test]
@@ -335,6 +372,8 @@ fn inference_result_envelope_round_trips() {
         model: Some("m".into()),
         output: "out".into(),
         tool_calls: None,
+        thinking: None,
+        usage: None,
         duration_ms: 12,
         error: None,
     };

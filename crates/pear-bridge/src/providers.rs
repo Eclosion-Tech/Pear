@@ -74,6 +74,17 @@ pub struct InferencePayload {
     pub system: Option<String>,
     #[serde(default)]
     pub timeout_seconds: Option<u64>,
+    /// Ollama context window override. Ollama's default num_ctx SILENTLY
+    /// truncates long prompts (a full tool-carrying turn is tens of thousands
+    /// of tokens); precedence: this payload value (per-binding) >
+    /// `PEAR_BRIDGE_OLLAMA_NUM_CTX` (per-device, VRAM-bound) > 32768.
+    #[serde(default)]
+    pub num_ctx: Option<u64>,
+    /// Explicit thinking control for thinking-capable ollama models. Sent only
+    /// when present — ollama errors on `think` for models that don't support
+    /// it, so absent means model default.
+    #[serde(default)]
+    pub think: Option<bool>,
 }
 
 /// Structured chat for tool-calling inference. `messages` and `tools` are
@@ -108,9 +119,47 @@ pub struct InferenceResult {
     /// maps these back to tool_use blocks and continues its conversation loop.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCallOut>>,
+    /// Thinking text for thinking-capable models (ollama `message.thinking`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
+    /// Real token counts (ollama `prompt_eval_count`/`eval_count`) so the
+    /// worker's usage telemetry doesn't read 0/0 for bridge turns — without
+    /// this, nobody sees that a prompt was 43k tokens (or truncated).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<UsageOut>,
     pub duration_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UsageOut {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+/// What a provider adapter hands back to [`run_inference`].
+#[derive(Debug, Default)]
+struct AdapterOutput {
+    output: String,
+    tool_calls: Option<Vec<ToolCallOut>>,
+    thinking: Option<String>,
+    usage: Option<UsageOut>,
+}
+
+/// Default ollama context window when neither the payload nor the device env
+/// overrides it. Ollama's own default silently truncates long prompts.
+const DEFAULT_OLLAMA_NUM_CTX: u64 = 32_768;
+
+fn ollama_num_ctx(payload: &InferencePayload) -> u64 {
+    payload
+        .num_ctx
+        .or_else(|| {
+            std::env::var("PEAR_BRIDGE_OLLAMA_NUM_CTX")
+                .ok()
+                .and_then(|v| v.trim().parse().ok())
+        })
+        .unwrap_or(DEFAULT_OLLAMA_NUM_CTX)
 }
 
 impl InferenceResult {
@@ -127,6 +176,8 @@ impl InferenceResult {
             model,
             output: String::new(),
             tool_calls: None,
+            thinking: None,
+            usage: None,
             duration_ms: started.elapsed().as_millis() as u64,
             error: Some(error),
         }
@@ -210,12 +261,14 @@ pub async fn run_inference(payload: &InferencePayload) -> InferenceResult {
         )),
     };
     match run {
-        Ok((output, tool_calls)) => InferenceResult {
+        Ok(out) => InferenceResult {
             ok: true,
             provider: provider.to_string(),
             model: payload.model.clone(),
-            output: cap_output(output),
-            tool_calls,
+            output: cap_output(out.output),
+            tool_calls: out.tool_calls,
+            thinking: out.thinking,
+            usage: out.usage,
             duration_ms: started.elapsed().as_millis() as u64,
             error: None,
         },
@@ -329,7 +382,7 @@ fn stderr_excerpt(output: &std::process::Output) -> String {
 async fn run_claude(
     payload: &InferencePayload,
     timeout: Duration,
-) -> Result<(String, Option<Vec<ToolCallOut>>), String> {
+) -> Result<AdapterOutput, String> {
     if payload.chat.is_some() {
         return Err(no_structured_chat(PROVIDER_CLAUDE));
     }
@@ -369,12 +422,18 @@ async fn run_claude(
                     .unwrap_or("claude reported an error");
                 Err(format!("claude error: {msg}"))
             } else if let Some(result) = v.get("result").and_then(|r| r.as_str()) {
-                Ok((result.to_string(), None))
+                let usage = v.get("usage").and_then(|u| {
+                    Some(UsageOut {
+                        input_tokens: u.get("input_tokens")?.as_u64()?,
+                        output_tokens: u.get("output_tokens")?.as_u64()?,
+                    })
+                });
+                Ok(AdapterOutput { output: result.to_string(), usage, ..Default::default() })
             } else {
-                Ok((stdout, None))
+                Ok(AdapterOutput { output: stdout, ..Default::default() })
             }
         }
-        Err(_) => Ok((stdout, None)),
+        Err(_) => Ok(AdapterOutput { output: stdout, ..Default::default() }),
     }
 }
 
@@ -384,7 +443,7 @@ async fn run_claude(
 async fn run_codex(
     payload: &InferencePayload,
     timeout: Duration,
-) -> Result<(String, Option<Vec<ToolCallOut>>), String> {
+) -> Result<AdapterOutput, String> {
     if payload.chat.is_some() {
         return Err(no_structured_chat(PROVIDER_CODEX));
     }
@@ -414,7 +473,10 @@ async fn run_codex(
             stderr_excerpt(&output)
         ));
     }
-    Ok((String::from_utf8_lossy(&output.stdout).trim().to_string(), None))
+    Ok(AdapterOutput {
+        output: String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        ..Default::default()
+    })
 }
 
 /// Ollama via its local HTTP API — cleaner contract than wrapping the CLI, and
@@ -426,7 +488,7 @@ async fn run_codex(
 async fn run_ollama(
     payload: &InferencePayload,
     timeout: Duration,
-) -> Result<(String, Option<Vec<ToolCallOut>>), String> {
+) -> Result<AdapterOutput, String> {
     let model = payload
         .model
         .as_deref()
@@ -435,7 +497,7 @@ async fn run_ollama(
     let base = ollama_url();
     let client = reqwest::Client::new();
 
-    let (endpoint, body) = match &payload.chat {
+    let (endpoint, mut body) = match &payload.chat {
         Some(chat) => {
             let mut body = serde_json::json!({
                 "model": model,
@@ -460,6 +522,14 @@ async fn run_ollama(
             ("/api/generate", body)
         }
     };
+    // Ollama's default context window silently truncates long prompts — a
+    // tool-carrying turn is tens of thousands of tokens.
+    body["options"] = serde_json::json!({ "num_ctx": ollama_num_ctx(payload) });
+    // Explicit thinking control; only when configured (ollama errors on
+    // `think` for models without thinking support).
+    if let Some(think) = payload.think {
+        body["think"] = serde_json::Value::Bool(think);
+    }
 
     let resp = client
         .post(format!("{base}{endpoint}"))
@@ -478,6 +548,19 @@ async fn run_ollama(
     }
     let v: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("invalid ollama response JSON: {e}"))?;
+
+    // Real token counts (both endpoints report them at the top level) — feeds
+    // the worker's usage telemetry, which otherwise reads 0/0 for bridge turns.
+    let usage = match (
+        v.get("prompt_eval_count").and_then(|c| c.as_u64()),
+        v.get("eval_count").and_then(|c| c.as_u64()),
+    ) {
+        (Some(input_tokens), Some(output_tokens)) => Some(UsageOut {
+            input_tokens,
+            output_tokens,
+        }),
+        _ => None,
+    };
 
     if payload.chat.is_some() {
         // /api/chat: {"message":{"role":"assistant","content":"…","tool_calls":
@@ -509,11 +592,25 @@ async fn run_ollama(
                     .collect::<Vec<_>>()
             })
             .filter(|calls| !calls.is_empty());
-        Ok((content, tool_calls))
+        let thinking = message
+            .get("thinking")
+            .and_then(|t| t.as_str())
+            .filter(|t| !t.is_empty())
+            .map(|t| t.to_string());
+        Ok(AdapterOutput {
+            output: content,
+            tool_calls,
+            thinking,
+            usage,
+        })
     } else {
         v.get("response")
             .and_then(|r| r.as_str())
-            .map(|s| (s.to_string(), None))
+            .map(|s| AdapterOutput {
+                output: s.to_string(),
+                usage: usage.clone(),
+                ..Default::default()
+            })
             .ok_or_else(|| "ollama response had no \"response\" field".to_string())
     }
 }
