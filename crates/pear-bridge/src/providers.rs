@@ -56,17 +56,42 @@ fn ollama_url() -> String {
 
 /// The `payload_json` body of an inference command (written by the worker's
 /// `tool_infer` / bridge-inference provider, validated for size by the
-/// `enqueue_bridge_inference` reducer).
+/// `enqueue_bridge_inference` reducer). Exactly ONE of `prompt` (v1, plain
+/// one-shot) or `chat` (v2, structured chat with tool calling — ollama only)
+/// must be present. A `chat` payload against a pre-v2 daemon fails to parse
+/// (`prompt` was required) → an honest `ok:false` rather than a silently
+/// degraded flattened run that would break the tool loop mid-turn.
 #[derive(Clone, Debug, Deserialize)]
 pub struct InferencePayload {
     pub provider: String,
     #[serde(default)]
     pub model: Option<String>,
-    pub prompt: String,
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub chat: Option<ChatPayload>,
     #[serde(default)]
     pub system: Option<String>,
     #[serde(default)]
     pub timeout_seconds: Option<u64>,
+}
+
+/// Structured chat for tool-calling inference. `messages` and `tools` are
+/// deliberately OPAQUE JSON: the daemon forwards them verbatim into ollama's
+/// `/api/chat` body, so evolving message/tool shapes are a worker↔ollama
+/// contract that never requires a daemon rebuild.
+#[derive(Clone, Debug, Deserialize)]
+pub struct ChatPayload {
+    pub messages: serde_json::Value,
+    #[serde(default)]
+    pub tools: Option<serde_json::Value>,
+}
+
+/// One tool call the model requested (ollama `message.tool_calls[].function`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ToolCallOut {
+    pub name: String,
+    pub arguments: serde_json::Value,
 }
 
 /// The JSON envelope returned in the result frame's `stdout`. The worker parses
@@ -79,6 +104,10 @@ pub struct InferenceResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     pub output: String,
+    /// Tool calls the model requested (structured-chat runs only). The worker
+    /// maps these back to tool_use blocks and continues its conversation loop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCallOut>>,
     pub duration_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -97,6 +126,7 @@ impl InferenceResult {
             provider: provider.to_string(),
             model,
             output: String::new(),
+            tool_calls: None,
             duration_ms: started.elapsed().as_millis() as u64,
             error: Some(error),
         }
@@ -155,6 +185,22 @@ pub async fn run_inference(payload: &InferencePayload) -> InferenceResult {
             .clamp(1, MAX_TIMEOUT_SECS),
     );
     let provider = payload.provider.trim();
+    if payload.prompt.is_none() && payload.chat.is_none() {
+        return InferenceResult::failure(
+            provider,
+            payload.model.clone(),
+            started,
+            "inference payload needs either \"prompt\" or \"chat\"".to_string(),
+        );
+    }
+    if payload.prompt.is_some() && payload.chat.is_some() {
+        return InferenceResult::failure(
+            provider,
+            payload.model.clone(),
+            started,
+            "inference payload must carry exactly one of \"prompt\" or \"chat\", not both".to_string(),
+        );
+    }
     let run = match provider {
         PROVIDER_CLAUDE | "claude" => run_claude(payload, timeout).await,
         PROVIDER_CODEX => run_codex(payload, timeout).await,
@@ -164,16 +210,34 @@ pub async fn run_inference(payload: &InferencePayload) -> InferenceResult {
         )),
     };
     match run {
-        Ok(output) => InferenceResult {
+        Ok((output, tool_calls)) => InferenceResult {
             ok: true,
             provider: provider.to_string(),
             model: payload.model.clone(),
             output: cap_output(output),
+            tool_calls,
             duration_ms: started.elapsed().as_millis() as u64,
             error: None,
         },
         Err(e) => InferenceResult::failure(provider, payload.model.clone(), started, e),
     }
+}
+
+/// The message a claude/codex adapter returns when handed a structured-chat
+/// payload: those CLIs are agents, not completion endpoints — their tool story
+/// is device-side harness sessions (ticket 14443), not worker-side tool loops.
+fn no_structured_chat(provider: &str) -> String {
+    format!(
+        "provider \"{provider}\" does not support structured chat (tool calling) over the bridge — \
+         bind an ollama model for tool use, or use plain prompt inference"
+    )
+}
+
+fn require_prompt(payload: &InferencePayload) -> Result<&str, String> {
+    payload
+        .prompt
+        .as_deref()
+        .ok_or_else(|| "payload has no \"prompt\"".to_string())
 }
 
 fn cap_output(mut s: String) -> String {
@@ -243,7 +307,14 @@ fn stderr_excerpt(output: &std::process::Output) -> String {
 /// `claude -p --output-format json --tools ""` — pure tool-less one-shot
 /// inference against the user's Claude Code auth. The JSON envelope's `result`
 /// field is the answer; on parse failure the raw stdout is returned as-is.
-async fn run_claude(payload: &InferencePayload, timeout: Duration) -> Result<String, String> {
+async fn run_claude(
+    payload: &InferencePayload,
+    timeout: Duration,
+) -> Result<(String, Option<Vec<ToolCallOut>>), String> {
+    if payload.chat.is_some() {
+        return Err(no_structured_chat(PROVIDER_CLAUDE));
+    }
+    let prompt = require_prompt(payload)?;
     let bin = claude_bin();
     let mut args: Vec<String> = vec![
         "-p".into(),
@@ -260,7 +331,7 @@ async fn run_claude(payload: &InferencePayload, timeout: Duration) -> Result<Str
         args.push("--append-system-prompt".into());
         args.push(system.to_string());
     }
-    let output = run_cli(&bin, &args, &payload.prompt, timeout).await?;
+    let output = run_cli(&bin, &args, prompt, timeout).await?;
     if !output.status.success() {
         return Err(format!(
             "claude exited with {}: {}",
@@ -279,19 +350,26 @@ async fn run_claude(payload: &InferencePayload, timeout: Duration) -> Result<Str
                     .unwrap_or("claude reported an error");
                 Err(format!("claude error: {msg}"))
             } else if let Some(result) = v.get("result").and_then(|r| r.as_str()) {
-                Ok(result.to_string())
+                Ok((result.to_string(), None))
             } else {
-                Ok(stdout)
+                Ok((stdout, None))
             }
         }
-        Err(_) => Ok(stdout),
+        Err(_) => Ok((stdout, None)),
     }
 }
 
 /// `codex exec --ephemeral --skip-git-repo-check -` — prompt via stdin, final
 /// answer on stdout. Codex has no separate system flag for `exec`; a `system`
 /// block is prepended to the prompt.
-async fn run_codex(payload: &InferencePayload, timeout: Duration) -> Result<String, String> {
+async fn run_codex(
+    payload: &InferencePayload,
+    timeout: Duration,
+) -> Result<(String, Option<Vec<ToolCallOut>>), String> {
+    if payload.chat.is_some() {
+        return Err(no_structured_chat(PROVIDER_CODEX));
+    }
+    let prompt = require_prompt(payload)?;
     let bin = codex_bin();
     let mut args: Vec<String> = vec![
         "exec".into(),
@@ -306,8 +384,8 @@ async fn run_codex(payload: &InferencePayload, timeout: Duration) -> Result<Stri
     }
     args.push("-".into());
     let body = match payload.system.as_deref().filter(|s| !s.is_empty()) {
-        Some(system) => format!("{system}\n\n{}", payload.prompt),
-        None => payload.prompt.clone(),
+        Some(system) => format!("{system}\n\n{prompt}"),
+        None => prompt.to_string(),
     };
     let output = run_cli(&bin, &args, &body, timeout).await?;
     if !output.status.success() {
@@ -317,13 +395,19 @@ async fn run_codex(payload: &InferencePayload, timeout: Duration) -> Result<Stri
             stderr_excerpt(&output)
         ));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    Ok((String::from_utf8_lossy(&output.stdout).trim().to_string(), None))
 }
 
-/// Ollama via its local HTTP API (`/api/generate`, non-streaming) — cleaner
-/// contract than wrapping the CLI, and gives us the model list for free at
-/// detection time. Requires an explicit `model`.
-async fn run_ollama(payload: &InferencePayload, timeout: Duration) -> Result<String, String> {
+/// Ollama via its local HTTP API — cleaner contract than wrapping the CLI, and
+/// gives us the model list for free at detection time. Requires an explicit
+/// `model`. Two modes: v1 `prompt` → `/api/generate`; v2 `chat` (structured
+/// messages + tools, forwarded VERBATIM) → `/api/chat`, with any
+/// `message.tool_calls` mapped into the result envelope so the worker's
+/// conversation loop can keep orchestrating Pear tools.
+async fn run_ollama(
+    payload: &InferencePayload,
+    timeout: Duration,
+) -> Result<(String, Option<Vec<ToolCallOut>>), String> {
     let model = payload
         .model
         .as_deref()
@@ -331,16 +415,35 @@ async fn run_ollama(payload: &InferencePayload, timeout: Duration) -> Result<Str
         .ok_or("ollama requires an explicit model (see the device's capability row for the installed list)")?;
     let base = ollama_url();
     let client = reqwest::Client::new();
-    let mut body = serde_json::json!({
-        "model": model,
-        "prompt": payload.prompt,
-        "stream": false,
-    });
-    if let Some(system) = payload.system.as_deref().filter(|s| !s.is_empty()) {
-        body["system"] = serde_json::Value::String(system.to_string());
-    }
+
+    let (endpoint, body) = match &payload.chat {
+        Some(chat) => {
+            let mut body = serde_json::json!({
+                "model": model,
+                "messages": chat.messages,
+                "stream": false,
+            });
+            if let Some(tools) = &chat.tools {
+                body["tools"] = tools.clone();
+            }
+            ("/api/chat", body)
+        }
+        None => {
+            let prompt = require_prompt(payload)?;
+            let mut body = serde_json::json!({
+                "model": model,
+                "prompt": prompt,
+                "stream": false,
+            });
+            if let Some(system) = payload.system.as_deref().filter(|s| !s.is_empty()) {
+                body["system"] = serde_json::Value::String(system.to_string());
+            }
+            ("/api/generate", body)
+        }
+    };
+
     let resp = client
-        .post(format!("{base}/api/generate"))
+        .post(format!("{base}{endpoint}"))
         .json(&body)
         .timeout(timeout)
         .send()
@@ -356,10 +459,44 @@ async fn run_ollama(payload: &InferencePayload, timeout: Duration) -> Result<Str
     }
     let v: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("invalid ollama response JSON: {e}"))?;
-    v.get("response")
-        .and_then(|r| r.as_str())
-        .map(|s| s.to_string())
-        .ok_or_else(|| "ollama response had no \"response\" field".to_string())
+
+    if payload.chat.is_some() {
+        // /api/chat: {"message":{"role":"assistant","content":"…","tool_calls":
+        // [{"function":{"name":"…","arguments":{…}}}]},"done":true,…}
+        let message = v
+            .get("message")
+            .ok_or("ollama chat response had no \"message\" field")?;
+        let content = message
+            .get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or("")
+            .to_string();
+        let tool_calls = message
+            .get("tool_calls")
+            .and_then(|t| t.as_array())
+            .map(|calls| {
+                calls
+                    .iter()
+                    .filter_map(|c| {
+                        let f = c.get("function")?;
+                        Some(ToolCallOut {
+                            name: f.get("name")?.as_str()?.to_string(),
+                            arguments: f
+                                .get("arguments")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null),
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .filter(|calls| !calls.is_empty());
+        Ok((content, tool_calls))
+    } else {
+        v.get("response")
+            .and_then(|r| r.as_str())
+            .map(|s| (s.to_string(), None))
+            .ok_or_else(|| "ollama response had no \"response\" field".to_string())
+    }
 }
 
 /// Detect which providers this device can serve. Presence-based for the CLIs

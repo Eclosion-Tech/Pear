@@ -51,13 +51,27 @@ fn payload(provider: &str, prompt: &str) -> InferencePayload {
 
 /// Serve exactly `n` canned HTTP responses on an ephemeral port, then stop.
 fn canned_http(body: &'static str, n: usize) -> String {
+    canned_http_capture(body, n).0
+}
+
+/// Like [`canned_http`] but also captures each raw request (headers + body)
+/// so tests can assert the endpoint path and verbatim payload forwarding.
+fn canned_http_capture(
+    body: &'static str,
+    n: usize,
+) -> (String, std::sync::Arc<Mutex<Vec<String>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
+    let captured = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let cap = std::sync::Arc::clone(&captured);
     std::thread::spawn(move || {
         for _ in 0..n {
             let Ok((mut stream, _)) = listener.accept() else { return };
-            let mut buf = [0u8; 4096];
-            let _ = stream.read(&mut buf);
+            let mut buf = vec![0u8; 65536];
+            let read = stream.read(&mut buf).unwrap_or(0);
+            cap.lock()
+                .unwrap()
+                .push(String::from_utf8_lossy(&buf[..read]).into_owned());
             let resp = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
                 body.len(),
@@ -66,7 +80,7 @@ fn canned_http(body: &'static str, n: usize) -> String {
             let _ = stream.write_all(resp.as_bytes());
         }
     });
-    format!("http://{addr}")
+    (format!("http://{addr}"), captured)
 }
 
 // ── claude adapter ─────────────────────────────────────────────────────────
@@ -195,6 +209,107 @@ async fn ollama_adapter_posts_generate_and_requires_model() {
     assert_eq!(result.output, "the answer");
 }
 
+// ── structured chat (v2 tool calling) ──────────────────────────────────────
+
+#[tokio::test]
+async fn ollama_chat_forwards_messages_and_tools_verbatim_and_maps_tool_calls() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let (url, captured) = canned_http_capture(
+        r#"{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"get_page","arguments":{"page_id":68}}}]},"done":true}"#,
+        1,
+    );
+    std::env::set_var("PEAR_BRIDGE_OLLAMA_URL", &url);
+
+    let p: InferencePayload = serde_json::from_value(serde_json::json!({
+        "provider": "ollama",
+        "model": "llama3.1:8b",
+        "chat": {
+            "messages": [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "open the pear page"}
+            ],
+            "tools": [{"type": "function", "function": {"name": "get_page", "description": "d", "parameters": {"type": "object"}}}]
+        }
+    }))
+    .unwrap();
+    let result = run_inference(&p).await;
+    std::env::remove_var("PEAR_BRIDGE_OLLAMA_URL");
+
+    assert!(result.ok, "{:?}", result.error);
+    assert_eq!(
+        result.tool_calls,
+        Some(vec![pear_bridge::providers::ToolCallOut {
+            name: "get_page".into(),
+            arguments: serde_json::json!({"page_id": 68}),
+        }])
+    );
+
+    let req = captured.lock().unwrap().join("");
+    assert!(req.starts_with("POST /api/chat "), "endpoint: {}", req.lines().next().unwrap_or(""));
+    let body_start = req.find("\r\n\r\n").unwrap() + 4;
+    let body: serde_json::Value = serde_json::from_str(&req[body_start..]).unwrap();
+    assert_eq!(body["model"], "llama3.1:8b");
+    assert_eq!(body["stream"], false);
+    assert_eq!(body["messages"][0]["role"], "system");
+    assert_eq!(body["messages"][1]["content"], "open the pear page");
+    assert_eq!(body["tools"][0]["function"]["name"], "get_page");
+}
+
+#[tokio::test]
+async fn ollama_chat_without_tool_calls_returns_plain_content() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let url = canned_http(
+        r#"{"message":{"role":"assistant","content":"just words"},"done":true}"#,
+        1,
+    );
+    std::env::set_var("PEAR_BRIDGE_OLLAMA_URL", &url);
+
+    let p: InferencePayload = serde_json::from_value(serde_json::json!({
+        "provider": "ollama",
+        "model": "llama3.1:8b",
+        "chat": {"messages": [{"role": "user", "content": "hi"}]}
+    }))
+    .unwrap();
+    let result = run_inference(&p).await;
+    std::env::remove_var("PEAR_BRIDGE_OLLAMA_URL");
+
+    assert!(result.ok, "{:?}", result.error);
+    assert_eq!(result.output, "just words");
+    assert_eq!(result.tool_calls, None);
+}
+
+#[tokio::test]
+async fn structured_chat_is_rejected_for_claude_and_codex() {
+    for provider in ["claude-code", "codex"] {
+        let p: InferencePayload = serde_json::from_value(serde_json::json!({
+            "provider": provider,
+            "chat": {"messages": []}
+        }))
+        .unwrap();
+        let result = run_inference(&p).await;
+        assert!(!result.ok);
+        assert!(
+            result.error.as_deref().unwrap().contains("does not support structured chat"),
+            "{provider}: {:?}",
+            result.error
+        );
+    }
+}
+
+#[tokio::test]
+async fn payload_must_carry_exactly_one_of_prompt_or_chat() {
+    let neither = run_inference_json(Some(r#"{"provider":"ollama","model":"m"}"#)).await;
+    assert!(!neither.ok);
+    assert!(neither.error.unwrap().contains("either \"prompt\" or \"chat\""));
+
+    let both = run_inference_json(Some(
+        r#"{"provider":"ollama","model":"m","prompt":"p","chat":{"messages":[]}}"#,
+    ))
+    .await;
+    assert!(!both.ok);
+    assert!(both.error.unwrap().contains("not both"));
+}
+
 // ── payload / envelope plumbing ────────────────────────────────────────────
 
 #[tokio::test]
@@ -219,6 +334,7 @@ fn inference_result_envelope_round_trips() {
         provider: "claude-code".into(),
         model: Some("m".into()),
         output: "out".into(),
+        tool_calls: None,
         duration_ms: 12,
         error: None,
     };

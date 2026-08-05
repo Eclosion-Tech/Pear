@@ -5,6 +5,7 @@ import {
   BridgeInferenceProvider,
   parseBridgeBackendBinding,
   renderTranscript,
+  toOllamaMessages,
 } from "./bridge-inference.ts";
 import { getProviderForAiUser, invalidateProviderCache } from "./providers.ts";
 import type { Message } from "./providers.ts";
@@ -119,6 +120,33 @@ type FakeRes = {
 };
 
 const BINDING = '{"mode":"bridge","device_id":1,"provider":"claude-code","model":"local-default"}';
+const OLLAMA_BINDING = { mode: "bridge", device_id: 1, provider: "ollama", model: "llama3.1:8b" } as const;
+
+test("toOllamaMessages translates tool_use/tool_result and keeps the id→name map", () => {
+  const messages: Message[] = [
+    { role: "user", content: "open the pear page" },
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "on it" },
+        { type: "tool_use", id: "bridge_abc", name: "get_page", input: { page_id: 68 } },
+      ],
+    },
+    {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "bridge_abc", content: "# Pear\n..." }],
+    },
+  ];
+  const out = toOllamaMessages("sys", messages);
+  assert.deepEqual(out[0], { role: "system", content: "sys" });
+  assert.deepEqual(out[1], { role: "user", content: "open the pear page" });
+  assert.deepEqual(out[2], {
+    role: "assistant",
+    content: "on it",
+    tool_calls: [{ function: { name: "get_page", arguments: { page_id: 68 } } }],
+  });
+  assert.deepEqual(out[3], { role: "tool", content: "# Pear\n...", tool_name: "get_page" });
+});
 
 test("getProviderForAiUser resolves a bridge binding without an API key", () => {
   const { conn } = makeConn({ binding: BINDING });
@@ -200,6 +228,96 @@ test("bridge chat sends the binding model + flattened system in the payload", as
   const payload = JSON.parse(seenPayload ?? "{}");
   assert.equal(payload.model, "local-default");
   assert.equal(payload.system, "part one\n\npart two");
+  assert.match(payload.prompt, /Human: q/);
+});
+
+test("ollama binding sends structured chat with tools and maps tool_calls back", async () => {
+  let seenPayload: string | undefined;
+  const { conn } = makeConn({
+    binding: JSON.stringify(OLLAMA_BINDING),
+    driveResult: (commands, results) => {
+      const cmd = commands[commands.length - 1];
+      seenPayload = cmd.payloadJson;
+      setTimeout(() => {
+        cmd.status = { tag: "Completed" };
+        results.push({
+          commandId: cmd.id,
+          exitCode: 0,
+          stdout: JSON.stringify({
+            ok: true,
+            provider: "ollama",
+            output: "",
+            tool_calls: [{ name: "get_page", arguments: '{"page_id":68}' }],
+            duration_ms: 90,
+          }),
+          stderr: "",
+          durationMs: 90n,
+        });
+      }, 10);
+    },
+  });
+  const provider = new BridgeInferenceProvider(conn as never, "0xai5", { ...OLLAMA_BINDING });
+  const response = await provider.chat({
+    model: "catalog-model",
+    maxTokens: 512,
+    system: "sys",
+    messages: [{ role: "user", content: "open the pear page" }],
+    tools: [
+      { name: "get_page", description: "read a page", input_schema: { type: "object" } },
+    ],
+  });
+
+  // Request side: structured chat, no flattened prompt.
+  const payload = JSON.parse(seenPayload ?? "{}");
+  assert.equal(payload.prompt, undefined, "structured mode must not send a prompt");
+  assert.equal(payload.model, "llama3.1:8b");
+  assert.equal(payload.chat.messages[0].role, "system");
+  assert.equal(payload.chat.messages[1].content, "open the pear page");
+  assert.equal(payload.chat.tools[0].function.name, "get_page");
+
+  // Response side: tool_use block with parsed (double-encoded) arguments.
+  assert.equal(response.stopReason, "tool_use");
+  const toolUse = response.content.find((b) => b.type === "tool_use");
+  assert.ok(toolUse && toolUse.type === "tool_use");
+  assert.equal(toolUse.name, "get_page");
+  assert.deepEqual(toolUse.input, { page_id: 68 });
+  assert.match(toolUse.id, /^bridge_/);
+});
+
+test("claude binding still sends the flattened v1 prompt payload", async () => {
+  let seenPayload: string | undefined;
+  const { conn } = makeConn({
+    binding: BINDING,
+    driveResult: (commands, results) => {
+      const cmd = commands[commands.length - 1];
+      seenPayload = cmd.payloadJson;
+      setTimeout(() => {
+        cmd.status = { tag: "Completed" };
+        results.push({
+          commandId: cmd.id,
+          exitCode: 0,
+          stdout: JSON.stringify({ ok: true, output: "x" }),
+          stderr: "",
+          durationMs: 1n,
+        });
+      }, 10);
+    },
+  });
+  const provider = new BridgeInferenceProvider(conn as never, "0xai5", {
+    mode: "bridge",
+    device_id: 1,
+    provider: "claude-code",
+    model: "local-default",
+  });
+  await provider.chat({
+    model: "m",
+    maxTokens: 10,
+    system: "sys",
+    messages: [{ role: "user", content: "q" }],
+    tools: [{ name: "get_page", description: "d", input_schema: {} }],
+  });
+  const payload = JSON.parse(seenPayload ?? "{}");
+  assert.equal(payload.chat, undefined, "claude bindings must stay on the v1 prompt path");
   assert.match(payload.prompt, /Human: q/);
 });
 

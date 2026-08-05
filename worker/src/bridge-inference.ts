@@ -9,16 +9,24 @@
  * `BridgeDeviceGrant` at the enqueue reducer — binding an AI user to a device
  * it was never granted fails per-turn with a clear error.
  *
- * V1 limits, by design:
- * * **No tool use.** The device runs tool-less one-shot inference
- *   (`claude -p --tools ""`), so a bridge-backed AI user is conversational
- *   only — it cannot call Pear tools while bound. The request's tool list is
- *   ignored.
+ * Tool use (v2, ticket 14557): **ollama bindings get full Pear tool use.**
+ * The worker stays the orchestrator — this provider sends structured chat
+ * (`chat.messages` + `chat.tools`, ollama `/api/chat` wire shapes) through the
+ * bridge, and maps returned `tool_calls` to tool_use blocks so conversation.ts
+ * executes tools cloud-side exactly as with a cloud provider. claude-code /
+ * codex bindings remain chat-only (flattened transcript) — those CLIs are
+ * agents, not completion endpoints; their tool story is harness sessions
+ * (ticket 14443).
+ *
+ * Still true by design:
  * * **No streaming.** `chatStream` is deliberately absent; conversation.ts
  *   falls back to the non-streaming path.
  * * **No silent fallback.** Device offline / provider failure → the turn
  *   errors with the reason. Falling back to a cloud key behind the user's
  *   back would defeat the point of the binding (see ticket 14551).
+ * * **Fail loud on skew.** A structured-chat payload against a pre-v2 daemon
+ *   fails payload parsing device-side → honest error, never a silently
+ *   flattened run that breaks the tool loop mid-turn.
  */
 
 // Types-only import: providers.ts imports this module at runtime, so a
@@ -58,6 +66,91 @@ export function parseBridgeBackendBinding(raw: string | undefined): BridgeBacken
   } catch {
     return undefined;
   }
+}
+
+/** Ollama-style chat message (worker↔ollama contract; opaque to the daemon). */
+export interface OllamaChatMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+  tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }>;
+  tool_name?: string;
+}
+
+/**
+ * Translate the normalized request into ollama `/api/chat` messages. Walks in
+ * order, keeping a tool_use id → name map so tool results (which reference the
+ * id) can carry ollama's `tool_name`. Images degrade to a bracketed note.
+ */
+export function toOllamaMessages(system: string, messages: Message[]): OllamaChatMessage[] {
+  const out: OllamaChatMessage[] = [];
+  if (system) out.push({ role: "system", content: system });
+  const toolNameById = new Map<string, string>();
+  for (const m of messages) {
+    if (m.role === "assistant") {
+      const text = m.content
+        .filter((b): b is Extract<typeof b, { type: "text" }> => b.type === "text")
+        .map((b) => b.text)
+        .join("\n");
+      const toolCalls = m.content
+        .filter((b): b is Extract<typeof b, { type: "tool_use" }> => b.type === "tool_use")
+        .map((b) => {
+          toolNameById.set(b.id, b.name);
+          return { function: { name: b.name, arguments: b.input } };
+        });
+      out.push({
+        role: "assistant",
+        content: text,
+        ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+      });
+      continue;
+    }
+    if (typeof m.content === "string") {
+      out.push({ role: "user", content: m.content });
+      continue;
+    }
+    const blocks = m.content;
+    const toolResults = blocks.filter(
+      (b): b is Extract<(typeof blocks)[number], { type: "tool_result" }> =>
+        b.type === "tool_result",
+    );
+    if (toolResults.length > 0) {
+      for (const r of toolResults) {
+        out.push({
+          role: "tool",
+          content: r.content,
+          ...(toolNameById.has(r.tool_use_id)
+            ? { tool_name: toolNameById.get(r.tool_use_id) }
+            : {}),
+        });
+      }
+      continue;
+    }
+    const text = blocks
+      .map((b) =>
+        b.type === "text" ? b.text : "[image attachment — not forwarded over the bridge]",
+      )
+      .join("\n");
+    out.push({ role: "user", content: text });
+  }
+  return out;
+}
+
+/** Parse a tool call's arguments defensively (some models double-encode). */
+function toolArguments(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+  return {};
 }
 
 /** Render the chat transcript as a single prompt for one-shot inference. */
@@ -144,18 +237,44 @@ export class BridgeInferenceProvider implements InferenceProvider {
       }
     }
 
+    // Ollama bindings speak structured chat (tool calling); claude/codex stay
+    // on the flattened transcript (chat-only until harness sessions, 14443).
+    const structured = this.binding.provider === "ollama";
+    const body = structured
+      ? {
+          provider: this.binding.provider,
+          ...(model ? { model } : {}),
+          chat: {
+            messages: toOllamaMessages(systemText(request.system), request.messages),
+            ...(request.tools && request.tools.length > 0
+              ? {
+                  tools: request.tools.map((t) => ({
+                    type: "function",
+                    function: {
+                      name: t.name,
+                      description: t.description,
+                      parameters: t.input_schema,
+                    },
+                  })),
+                }
+              : {}),
+          },
+          timeout_seconds: DEVICE_BUDGET_SECONDS,
+        }
+      : {
+          provider: this.binding.provider,
+          ...(model ? { model } : {}),
+          prompt: renderTranscript(request.messages),
+          ...(systemText(request.system) ? { system: systemText(request.system) } : {}),
+          timeout_seconds: DEVICE_BUDGET_SECONDS,
+        };
+
     const nonce = globalThis.crypto.randomUUID();
     await this.conn.reducers.enqueueBridgeInference({
       deviceId,
       provider: this.binding.provider,
       model: model ?? "",
-      payloadJson: JSON.stringify({
-        provider: this.binding.provider,
-        ...(model ? { model } : {}),
-        prompt: renderTranscript(request.messages),
-        ...(systemText(request.system) ? { system: systemText(request.system) } : {}),
-        timeout_seconds: DEVICE_BUDGET_SECONDS,
-      }),
+      payloadJson: JSON.stringify(body),
       conversationId: BigInt(0),
       jobId: undefined,
       taskId: undefined,
@@ -169,10 +288,15 @@ export class BridgeInferenceProvider implements InferenceProvider {
       throw new Error(`Bridge inference was rejected: ${result.rejectionReason}`);
     }
     let envelope:
-      | { ok?: boolean; output?: string; error?: string }
+      | {
+          ok?: boolean;
+          output?: string;
+          error?: string;
+          tool_calls?: Array<{ name?: string; arguments?: unknown }>;
+        }
       | undefined;
     try {
-      envelope = JSON.parse(result.stdout) as { ok?: boolean; output?: string; error?: string };
+      envelope = JSON.parse(result.stdout) as typeof envelope;
     } catch {
       envelope = undefined;
     }
@@ -186,9 +310,26 @@ export class BridgeInferenceProvider implements InferenceProvider {
         `Bridge inference failed on device ${deviceId} (${this.binding.provider}): ${envelope.error ?? "no detail"}`,
       );
     }
+
+    const content: ChatResponse["content"] = [];
+    if (envelope.output) content.push({ type: "text", text: envelope.output });
+    const toolCalls = (envelope.tool_calls ?? []).filter(
+      (c): c is { name: string; arguments?: unknown } => typeof c.name === "string" && !!c.name,
+    );
+    for (const call of toolCalls) {
+      content.push({
+        type: "tool_use",
+        // Ollama doesn't mint call ids — generate them; toOllamaMessages maps
+        // them back to names when the tool results return next iteration.
+        id: `bridge_${globalThis.crypto.randomUUID()}`,
+        name: call.name,
+        input: toolArguments(call.arguments),
+      });
+    }
+    if (content.length === 0) content.push({ type: "text", text: "" });
     return {
-      content: [{ type: "text", text: envelope.output ?? "" }],
-      stopReason: "end_turn",
+      content,
+      stopReason: toolCalls.length > 0 ? "tool_use" : "end_turn",
     };
   }
 
