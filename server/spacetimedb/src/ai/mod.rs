@@ -586,14 +586,52 @@ pub fn set_ai_user_inference_backend(
         .id()
         .find(ai_user_id)
         .ok_or("AI user config not found")?;
+    // Captured before the update consumes `config` — used to restore the
+    // profile's display names when the binding is cleared.
+    let cloud_provider_name = provider_profile_name(&config.provider, config.endpoint.as_deref());
+    let cloud_model = config.model.clone();
     ctx.db.ai_user_config().id().update(AiUserConfig {
         inference_backend_json: inference_backend_json.clone(),
         updated_at: ctx.timestamp,
         ..config
     });
     if let Some(profile) = ctx.db.ai_user_profile().ai_user_id().find(ai_user_id) {
+        // The profile's provider/model are what the chat header and mention UI
+        // display — they must follow the ACTIVE backend, not the dormant cloud
+        // config (a bound-to-ollama user must not read "OpenRouter · kimi").
+        // External MCP profiles keep their `external-mcp-client` model marker:
+        // isExternalMcpProfile (web) keys off it.
+        let is_external_mcp = profile.model_name == "external-mcp-client";
+        let (provider_name, model_name) = if is_external_mcp {
+            (profile.provider_name.clone(), profile.model_name.clone())
+        } else if let Some(raw) = inference_backend_json.as_deref() {
+            match serde_json::from_str::<Value>(raw) {
+                Ok(b) => {
+                    let mode = b.get("mode").and_then(|m| m.as_str()).unwrap_or("");
+                    let dev_provider = b.get("provider").and_then(|p| p.as_str()).unwrap_or("device");
+                    let model = b.get("model").and_then(|m| m.as_str());
+                    if mode == "harness" {
+                        (
+                            "Pear Bridge (harness)".to_string(),
+                            model.unwrap_or("claude-code").to_string(),
+                        )
+                    } else {
+                        (
+                            format!("Pear Bridge ({dev_provider})"),
+                            model.map(|m| m.to_string()).unwrap_or_else(|| cloud_model.clone()),
+                        )
+                    }
+                }
+                // Unparseable binding: leave the display unchanged.
+                Err(_) => (profile.provider_name.clone(), profile.model_name.clone()),
+            }
+        } else {
+            (cloud_provider_name.to_string(), cloud_model.clone())
+        };
         ctx.db.ai_user_profile().ai_user_id().update(AiUserProfile {
             inference_backend_json,
+            provider_name,
+            model_name,
             updated_at: ctx.timestamp,
             ..profile
         });

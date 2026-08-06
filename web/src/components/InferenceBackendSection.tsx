@@ -48,10 +48,18 @@ export function InferenceBackendSection({
   aiUserId,
   bindingJson,
   disabled,
+  externalClient,
+  onModeChange,
 }: {
   aiUserId: bigint;
   bindingJson: string | undefined;
   disabled?: boolean;
+  /** External MCP identity: no cloud provider exists, so the unbound state is
+   * "external only" (the AI never answers chat) rather than "Cloud API". */
+  externalClient?: boolean;
+  /** Notified whenever the selected mode changes (drafts included), so the
+   * parent can show/hide the cloud provider section. */
+  onModeChange?: (mode: "cloud" | "bridge" | "harness") => void;
 }) {
   const [devices] = useTable(tables.bridge_device_summary);
   const [capabilities] = useTable(tables.bridge_device_capability);
@@ -75,6 +83,11 @@ export function InferenceBackendSection({
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    onModeChange?.(mode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
 
   useEffect(() => {
     const next = parseBinding(bindingJson);
@@ -152,10 +165,12 @@ export function InferenceBackendSection({
       await setBackend({ aiUserId, inferenceBackendJson: binding });
       setMsg(
         mode === "cloud"
-          ? "Cleared — this AI user uses its cloud API provider."
+          ? externalClient
+            ? "Cleared — this AI user is external-only again (it will not answer chat)."
+            : "Cleared — this AI user uses its cloud API provider."
           : mode === "bridge"
             ? "Saved — completions now run on the bridge device."
-            : "Saved — turns now run as a Claude Code session on the device.",
+            : "Saved — turns now run as a Claude Code session on the device (the worker picks it up within a minute).",
       );
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -179,16 +194,28 @@ export function InferenceBackendSection({
         Inference backend
       </span>
       <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5 mb-1.5 max-w-lg">
-        Where this AI user&apos;s turns run. <strong>Cloud API</strong> uses the provider and key
-        above. <strong>Bridge device</strong> runs inference on a paired machine (ollama models
-        keep full Pear tool use; claude-code/codex are chat-only). <strong>Harness session</strong>{" "}
-        runs whole turns as a resumable Claude Code session with its local tools in a bound
-        directory — Pear tools are off during harness turns. An offline device fails the turn
-        visibly; there is no silent fallback.
+        {externalClient ? (
+          <>
+            Where this AI user&apos;s chat turns run. External MCP identities have no cloud
+            provider — <strong>without a binding this user never answers chat messages</strong>{" "}
+            (it only acts when its external client connects). Bind a{" "}
+            <strong>Bridge device</strong> or <strong>Harness session</strong> to give it a
+            runtime: harness runs whole turns as a resumable Claude Code session on the device.
+          </>
+        ) : (
+          <>
+            Where this AI user&apos;s turns run. <strong>Cloud API</strong> uses the provider and
+            key above. <strong>Bridge device</strong> runs inference on a paired machine (ollama
+            models keep full Pear tool use; claude-code/codex are chat-only).{" "}
+            <strong>Harness session</strong> runs whole turns as a resumable Claude Code session
+            with its local tools in a bound directory — Pear tools are off during harness turns.
+            An offline device fails the turn visibly; there is no silent fallback.
+          </>
+        )}
       </p>
       <div className="flex gap-2 mb-2">
         <button type="button" disabled={disabled || busy} className={chipCls(mode === "cloud")} onClick={() => setMode("cloud")}>
-          Cloud API
+          {externalClient ? "External only" : "Cloud API"}
         </button>
         <button type="button" disabled={disabled || busy} className={chipCls(mode === "bridge")} onClick={() => setMode("bridge")}>
           Bridge device

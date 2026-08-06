@@ -353,6 +353,23 @@ function AiUserRowEditor({
   const [open, setOpen] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const mergeAiUsers = useMergeAiUsers();
+  // Cloud provider/model/key only apply when the backend is Cloud API — the
+  // section below hides otherwise (follows the binding DRAFT via onModeChange).
+  const savedBackendMode: "cloud" | "bridge" | "harness" = (() => {
+    try {
+      const b = JSON.parse(optionStringFromRow(profile.inferenceBackendJson) || "null") as {
+        mode?: string;
+      } | null;
+      return b?.mode === "bridge" ? "bridge" : b?.mode === "harness" ? "harness" : "cloud";
+    } catch {
+      return "cloud";
+    }
+  })();
+  const [backendMode, setBackendMode] = useState<"cloud" | "bridge" | "harness">(savedBackendMode);
+  useEffect(() => {
+    setBackendMode(savedBackendMode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedBackendMode, profile.aiUserId]);
   const [mergeTargetId, setMergeTargetId] = useState<string>("");
   const [mergeBusy, setMergeBusy] = useState(false);
   const [confirmingMerge, setConfirmingMerge] = useState(false);
@@ -680,13 +697,13 @@ function AiUserRowEditor({
         </div>
         )}
 
-        {!isMcp && (
-          <InferenceBackendSection
-            aiUserId={profile.aiUserId}
-            bindingJson={optionStringFromRow(profile.inferenceBackendJson) || undefined}
-            disabled={busy}
-          />
-        )}
+        <InferenceBackendSection
+          aiUserId={profile.aiUserId}
+          bindingJson={optionStringFromRow(profile.inferenceBackendJson) || undefined}
+          disabled={busy}
+          externalClient={isMcp}
+          onModeChange={setBackendMode}
+        />
 
         {isMcp ? (
           <div className="rounded-md border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900/40 px-3 py-2.5">
@@ -700,7 +717,7 @@ function AiUserRowEditor({
               budgets.
             </p>
           </div>
-        ) : (
+        ) : backendMode === "cloud" ? (
         <div>
           <span className="block text-sm font-medium text-neutral-800 dark:text-neutral-200">
             Model &amp; provider
@@ -817,7 +834,7 @@ function AiUserRowEditor({
             ) : null}
           </div>
         </div>
-        )}
+        ) : null}
 
         <div className="flex flex-wrap items-center gap-3">
           <button
