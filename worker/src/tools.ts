@@ -172,11 +172,13 @@ const UI_TOOLS: Anthropic.Messages.Tool[] = [
   {
     name: "render_ui",
     description:
-      "Render a small READ-ONLY interface inline in your chat reply — a titled panel with " +
-      "formatted text and optional simple controls. Use when a visual layout communicates better " +
-      "than prose: a summary card, a checklist, a form mock-up, a labeled result. The rendered UI " +
-      "is display-only — buttons and inputs are shown but do NOT act yet, so don't promise they " +
-      "work. It binds to no workspace data (not a database/table view). You can also write a normal " +
+      "Render a small interface inline in your chat reply — a titled panel with formatted text " +
+      "and optional controls. Use when a visual layout communicates better than prose: a summary " +
+      "card, checklist, or narrow command form. The tree is structurally read-only. A Button may " +
+      "invoke an existing enabled Manual automation; the server authorizes the caller, applies " +
+      "its declared input allowlist, uses the caller's page authority, and audits the run. Never " +
+      "claim success before the rendered status confirms it. It is not a database/table view. " +
+      "You can also write a normal " +
       "text reply alongside it. Content: an optional title (heading), a markdown body (#/## " +
       "headings, paragraphs, - bullets, 1. numbered, - [ ] checklists; inline **bold**/*italic* ok), " +
       "and optional controls (Button, Input). You may call it more than once in a " +
@@ -197,7 +199,9 @@ const UI_TOOLS: Anthropic.Messages.Tool[] = [
         controls: {
           type: "array",
           description:
-            "Optional display-only controls, rendered in order after the body.",
+            "Optional controls, rendered in order after the body. Inputs need a stable name. " +
+            "Buttons need the ID of an existing Manual automation plus explicit input mappings; " +
+            "use '$form.<name>' to read an Input, or a scalar literal for a fixed value.",
           items: {
             type: "object" as const,
             properties: {
@@ -206,6 +210,27 @@ const UI_TOOLS: Anthropic.Messages.Tool[] = [
               placeholder: {
                 type: "string",
                 description: "Input placeholder (Input only).",
+              },
+              name: {
+                type: "string",
+                description: "Stable form field name (Input only).",
+              },
+              required: {
+                type: "boolean",
+                description: "Require a non-empty value when a Button references this Input.",
+              },
+              automation_id: {
+                type: "number",
+                description: "Existing enabled Manual automation ID (Button only).",
+              },
+              input: {
+                type: "object",
+                description:
+                  "Button payload mapping. Values are scalar literals or '$form.<name>' references.",
+              },
+              confirm: {
+                type: "string",
+                description: "Optional confirmation prompt shown before invocation (Button only).",
               },
             },
             required: ["kind"],
@@ -678,19 +703,21 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
       "Create a disabled dry-run automation draft from structured fields. " +
       "Automations should be drafted, validated, and dry-run before being enabled. " +
       "For non-scheduled triggers use schedule_kind='None' and schedule_config='{}'. " +
-      "For scheduled routines use trigger_kind='Scheduled' plus schedule_kind Interval, OneShot, or Cron.",
+      "For scheduled routines use trigger_kind='Scheduled' plus schedule_kind Interval, OneShot, or Cron. " +
+      "For an explicit generated-UI command use trigger_kind='Manual', schedule_kind='None', and " +
+      "declare invoker_policy plus allowed_input_fields/required_input_fields in trigger_config.",
     input_schema: {
       type: "object" as const,
       properties: {
         name: { type: "string" },
         trigger_kind: {
           type: "string",
-          enum: ["PageCreated", "PageUpdated", "PageDeleted", "PropertyChanged", "Scheduled"],
+          enum: ["PageCreated", "PageUpdated", "PageDeleted", "PropertyChanged", "Scheduled", "Manual"],
         },
         trigger_config: {
           type: "string",
           description:
-            "JSON object. Examples: '{\"parent_id\":12}', '{\"property_definition_id\":42}', or '{}' for scheduled.",
+            "JSON object. Examples: '{\"parent_id\":12}', '{\"property_definition_id\":42}', or for Manual: '{\"invoker_policy\":\"workspace\",\"allowed_input_fields\":[\"ask_id\",\"decision\"],\"required_input_fields\":[\"ask_id\"]}'.",
         },
         schedule_kind: {
           type: "string",
@@ -724,7 +751,9 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
   {
     name: "add_automation_action",
     description:
-      "Add an ordered action to an automation draft. v0 actions run as dry-run logs only; live side effects are intentionally disabled.",
+      "Add an ordered action to an automation draft. CreatePage, UpdateProperty, and OrchaJob " +
+      "execute in-module after a human approves Live mode; HttpRequest and SendEmail remain " +
+      "DryRun-only. UpdateProperty may read the new value from a trigger payload field with value_field.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -1745,9 +1774,9 @@ export async function executeTool(
     }
     switch (toolName) {
       case "render_ui": {
-        // Emits a read-only component_tree_v1 onto the current assistant
-        // message (custom-view runtime, M1b-lite). Only meaningful in a chat
-        // turn, where the message id is known.
+        // Emits a structurally read-only component_tree_v1 onto the current
+        // assistant message. Generated controls can only cross the boundary by
+        // invoking an existing server-authorized Manual automation.
         if (!toolContext.messageId) {
           return JSON.stringify({
             ok: false,

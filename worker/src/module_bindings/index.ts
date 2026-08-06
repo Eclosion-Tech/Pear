@@ -117,6 +117,7 @@ import ImportV2CommitReducer from "./import_v_2_commit_reducer";
 import InsertComponentReducer from "./insert_component_reducer";
 import InstallExtensionReducer from "./install_extension_reducer";
 import InvalidateAiEvaluationsForRowReducer from "./invalidate_ai_evaluations_for_row_reducer";
+import InvokeAutomationReducer from "./invoke_automation_reducer";
 import LogApiCallReducer from "./log_api_call_reducer";
 import LoginReducer from "./login_reducer";
 import LogoutReducer from "./logout_reducer";
@@ -1339,6 +1340,7 @@ const reducersSchema = __reducers(
   __reducerSchema("insert_component", InsertComponentReducer),
   __reducerSchema("install_extension", InstallExtensionReducer),
   __reducerSchema("invalidate_ai_evaluations_for_row", InvalidateAiEvaluationsForRowReducer),
+  __reducerSchema("invoke_automation", InvokeAutomationReducer),
   __reducerSchema("log_api_call", LogApiCallReducer),
   __reducerSchema("login", LoginReducer),
   __reducerSchema("logout", LogoutReducer),

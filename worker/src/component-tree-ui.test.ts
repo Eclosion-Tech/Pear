@@ -50,8 +50,20 @@ test("builds a component_tree_v1 tree: Container root + title + body + controls"
     title: "Weekly Summary",
     markdown: "First paragraph.\n\n- one\n- two",
     controls: [
-      { kind: "Button", label: "Refresh" },
-      { kind: "Input", label: "Note", placeholder: "type…" },
+      {
+        kind: "Button",
+        label: "Accept",
+        automation_id: 14567,
+        input: { ask_id: "$form.ask_id", decision: "accepted" },
+        confirm: "Accept this ask?",
+      },
+      {
+        kind: "Input",
+        name: "ask_id",
+        label: "Ask ID",
+        placeholder: "type…",
+        required: true,
+      },
     ],
   };
   const wire = JSON.parse(buildComponentTreeV1Blob(spec)) as Wire;
@@ -87,13 +99,23 @@ test("builds a component_tree_v1 tree: Container root + title + body + controls"
 
   // Controls: props set, no Yjs.
   const button = children.find((n) => n.component_type === "Button")!;
-  assert.equal(JSON.parse(button.props).label, "Refresh");
+  assert.deepEqual(JSON.parse(button.props), {
+    label: "Accept",
+    action: {
+      type: "trigger_automation",
+      automationId: 14567,
+      input: { ask_id: "$form.ask_id", decision: "accepted" },
+      confirmation: "Accept this ask?",
+    },
+  });
   assert.equal(button.yjs_b64, null);
   const inputProps = JSON.parse(
     children.find((n) => n.component_type === "Input")!.props,
   );
-  assert.equal(inputProps.label, "Note");
+  assert.equal(inputProps.name, "ask_id");
+  assert.equal(inputProps.label, "Ask ID");
   assert.equal(inputProps.placeholder, "type…");
+  assert.equal(inputProps.required, true);
 });
 
 test("append accumulates panels under one root (multiple render_ui in a turn)", () => {

@@ -10,6 +10,7 @@ import { MembersSettings } from "@/src/components/MembersSettings";
 import { WorkspaceConnectionsPanel } from "@/src/components/WorkspaceConnectionsPanel";
 import { NotionImportPanel } from "@/src/components/NotionImportPanel";
 import { StorageUsagePanel } from "@/src/components/StorageUsagePanel";
+import { AutomationsSettings } from "@/src/components/AutomationsSettings";
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -62,6 +63,8 @@ export default function SettingsPage() {
         <AiUsersSettings />
 
         <AgentPolicySettings />
+
+        <AutomationsSettings />
 
         <section className="mb-10">
           <ExtensionsSettings />

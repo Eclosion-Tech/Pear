@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { BlockRendererProps } from "@eclosion-tech/pulp";
 import { useDatabaseSchema, usePropertyDefinitions } from "@/src/hooks/useDatabase";
 import { useFormContext } from "../FormContext";
+import { useGeneratedUiInteraction } from "../GeneratedUiInteractionContext";
 
 /**
  * Built-in `Input` — form-leaf bound to a property definition.
@@ -13,6 +14,7 @@ import { useFormContext } from "../FormContext";
  */
 type InputProps = {
   propertyDefinitionId?: number | bigint;
+  name?: string;
   label?: string;
   placeholder?: string;
   required?: boolean;
@@ -21,6 +23,7 @@ type InputProps = {
 export function InputRenderer({ node }: BlockRendererProps) {
   const props = useMemo<InputProps>(() => safeParse(node.props), [node.props]);
   const form = useFormContext();
+  const generatedUi = useGeneratedUiInteraction();
   const propId = normalizeId(props.propertyDefinitionId);
 
   const { schema } = useDatabaseSchema(form?.databaseId ?? 0n);
@@ -28,6 +31,8 @@ export function InputRenderer({ node }: BlockRendererProps) {
   const def = propId != null ? defs.find((d) => d.id === propId) : undefined;
 
   const [value, setValue] = useState("");
+  const valueRef = useRef(value);
+  valueRef.current = value;
 
   useEffect(() => {
     if (!form || propId == null) return;
@@ -37,7 +42,18 @@ export function InputRenderer({ node }: BlockRendererProps) {
     });
   }, [form, propId, value]);
 
-  const editable = form != null && propId != null;
+  useEffect(() => {
+    if (form || !generatedUi || !props.name?.trim()) return;
+    return generatedUi.registerField(
+      props.name.trim(),
+      () => valueRef.current,
+      props.required ?? false,
+    );
+  }, [form, generatedUi, props.name, props.required]);
+
+  const databaseEditable = form != null && propId != null;
+  const generatedEditable = form == null && generatedUi != null && Boolean(props.name?.trim());
+  const editable = databaseEditable || generatedEditable;
 
   return (
     <label className="my-2 flex flex-col gap-1">
@@ -63,7 +79,7 @@ export function InputRenderer({ node }: BlockRendererProps) {
         title={
           editable
             ? undefined
-            : "Place this Input inside a Form block to enable editing"
+            : "This input is display-only because it has no form field binding"
         }
       />
     </label>

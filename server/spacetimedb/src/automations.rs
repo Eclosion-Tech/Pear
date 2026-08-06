@@ -4,8 +4,10 @@
 //! v1: the in-module actions (`CreatePage`, `UpdateProperty`, `OrchaJob`)
 //! execute for real when a rule is in `Live` mode; `HttpRequest` / `SendEmail`
 //! stay dry-run until an off-module worker executor exists (reducers cannot do
-//! I/O). Live actions run with the rule's `run_as` authority, checked against
-//! page ACLs per action. Governance: anyone — including AI users — may author
+//! I/O). Live actions run with the rule's `run_as` authority, except Manual
+//! invocations, which use the invoking principal so a button cannot borrow the
+//! rule author's access. Authority is checked against page ACLs per action.
+//! Governance: anyone — including AI users — may author
 //! and dry-run rules, but only a human (creator or admin) may flip a rule
 //! Live, and any structural edit to a Live rule demotes it back to DryRun so
 //! changes need fresh human approval.
@@ -19,7 +21,8 @@ use spacetimedb::{
 };
 
 use crate::access_control::helpers::{can_write_page, require_creator_or_admin};
-use crate::ai::ai_user_config;
+use crate::ai::{ai_user_config, ai_user_profile};
+use crate::auth::{sender_is_admin, user};
 use crate::cron::{cron_matches, minute_bucket, parse_cron_fields, parse_timezone};
 use crate::id_counters::alloc_id;
 use crate::orcha::{ai_user_at_hard_cap, create_job};
@@ -33,6 +36,14 @@ use crate::pages::{create_component_tree_page_inner, page, ActorType, PageType};
 /// only this deep; deeper events stay Pending instead of recursing unbounded
 /// within one transaction. `process_pending_automation_events` drains them.
 const MAX_INLINE_EXEC_DEPTH: u32 = 4;
+const MAX_MANUAL_INPUT_BYTES: usize = 16 * 1024;
+const MAX_IDEMPOTENCY_KEY_BYTES: usize = 128;
+const MANUAL_RESERVED_FIELDS: [&str; 4] = [
+    "event_type",
+    "automation_id",
+    "invoked_by",
+    "idempotency_key",
+];
 
 thread_local! {
     static INLINE_EXEC_DEPTH: Cell<u32> = const { Cell::new(0) };
@@ -45,6 +56,7 @@ pub enum AutomationTriggerKind {
     PageDeleted,
     PropertyChanged,
     Scheduled,
+    Manual,
 }
 
 #[derive(SpacetimeType, Clone, Debug, PartialEq)]
@@ -185,6 +197,13 @@ pub struct AutomationEventQueue {
     pub error: Option<String>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    /// Present for explicit Manual invocations. The executor uses this
+    /// principal for Live page ACL checks instead of borrowing `rule.run_as`.
+    #[default(None::<Identity>)]
+    pub invoked_by: Option<Identity>,
+    /// Caller-provided retry key, scoped to `(automation_id, invoked_by)`.
+    #[default(None::<String>)]
+    pub idempotency_key: Option<String>,
 }
 
 #[table(accessor = automation_run_log, public, index(accessor = by_queue, btree(columns = [queue_id])))]
@@ -333,6 +352,13 @@ pub(crate) fn seed_automation_primitives_inner(ctx: &ReducerContext) {
             r#"{"type":"object","properties":{"interval_seconds":{"type":"integer"},"run_at_micros":{"type":"integer"},"expression":{"type":"string"}}}"#,
         ),
         (
+            "trigger.manual",
+            AutomationPrimitiveKind::Trigger,
+            "Manual",
+            "Runs only when an allowed workspace principal explicitly invokes it. The server stamps the invoker and idempotency key into the event payload.",
+            r#"{"type":"object","properties":{"invoker_policy":{"type":"string","enum":["creator_or_admin","workspace","identities"]},"allowed_invoker_identities":{"type":"array","items":{"type":"string"}},"allowed_input_fields":{"type":"array","items":{"type":"string"}},"required_input_fields":{"type":"array","items":{"type":"string"}}}}"#,
+        ),
+        (
             "action.http_request",
             AutomationPrimitiveKind::Action,
             "HTTP request",
@@ -357,8 +383,8 @@ pub(crate) fn seed_automation_primitives_inner(ctx: &ReducerContext) {
             "action.update_property",
             AutomationPrimitiveKind::Action,
             "Update property",
-            "Sets a property value on a row (target from config.page_id or the payload field named by page_id_field, default \"page_id\"). Executes for real when the rule is Live.",
-            r#"{"type":"object","properties":{"property_definition_id":{"type":"integer"},"value":{},"page_id":{"type":"integer"},"page_id_field":{"type":"string"}}}"#,
+            "Sets a property value on a row (target from config.page_id or the payload field named by page_id_field; value from config.value or the payload field named by value_field). Executes for real when the rule is Live.",
+            r#"{"type":"object","properties":{"property_definition_id":{"type":"integer"},"value":{},"value_field":{"type":"string"},"page_id":{"type":"integer"},"page_id_field":{"type":"string"}}}"#,
         ),
         (
             "action.orcha_job",
@@ -667,6 +693,91 @@ pub fn disable_automation(ctx: &ReducerContext, automation_id: u64) -> Result<()
     Ok(())
 }
 
+/// Explicitly invoke an enabled Manual automation.
+///
+/// The input is intentionally a flat JSON object: conditions and action
+/// payload bindings can address its fields without a second expression
+/// language. Invocation metadata is server-stamped and cannot be spoofed.
+#[reducer]
+pub fn invoke_automation(
+    ctx: &ReducerContext,
+    automation_id: u64,
+    input_json: String,
+    idempotency_key: String,
+) -> Result<(), String> {
+    let rule = ctx
+        .db
+        .automation_rule()
+        .id()
+        .find(automation_id)
+        .ok_or("Automation rule not found")?;
+    if !rule.enabled {
+        return Err("Automation is disabled".to_string());
+    }
+    if rule.trigger_kind != AutomationTriggerKind::Manual {
+        return Err("Only Manual automations can be invoked explicitly".to_string());
+    }
+    if rule_is_expired(ctx, &rule) {
+        disable_automation_inner(ctx, rule);
+        return Err("Automation has expired or reached its invocation limit".to_string());
+    }
+    validate_idempotency_key(&idempotency_key)?;
+    if input_json.len() > MAX_MANUAL_INPUT_BYTES {
+        return Err(format!(
+            "Manual automation input exceeds {MAX_MANUAL_INPUT_BYTES} bytes"
+        ));
+    }
+
+    let trigger_config = parse_json_object(&rule.trigger_config, "trigger_config")?;
+    validate_manual_trigger_config(&trigger_config)?;
+    let sender = ctx.sender();
+    let is_creator_or_admin = sender == rule.created_by || sender_is_admin(ctx);
+    let is_known_principal = is_known_workspace_principal(ctx, sender);
+    if !manual_invoker_allowed(
+        &trigger_config,
+        &sender.to_hex().to_string(),
+        is_creator_or_admin,
+        is_known_principal,
+    )? {
+        return Err("Caller is not allowed to invoke this automation".to_string());
+    }
+
+    let input = parse_json_object(&input_json, "input_json")?;
+    validate_manual_input(&trigger_config, &input)?;
+
+    // Reducers are serialized and transactional, so this lookup + insert is
+    // an atomic idempotency boundary without a second table or unique index.
+    let duplicate = ctx
+        .db
+        .automation_event_queue()
+        .by_rule()
+        .filter(&automation_id)
+        .any(|event| {
+            event.invoked_by == Some(sender)
+                && event.idempotency_key.as_deref() == Some(idempotency_key.as_str())
+        });
+    if duplicate {
+        return Ok(());
+    }
+
+    let payload = build_manual_payload(&input, automation_id, sender, &idempotency_key)?;
+    let queue_id = insert_event(
+        ctx,
+        &rule,
+        AutomationTriggerKind::Manual,
+        payload.to_string(),
+        Some(sender),
+        Some(idempotency_key),
+    );
+    try_process_inline(
+        ctx,
+        queue_id,
+        inline_claim_label(&rule.mode, "manual-invocation"),
+    )?;
+    bump_manual_rule(ctx, automation_id);
+    Ok(())
+}
+
 #[reducer]
 pub fn delete_automation(ctx: &ReducerContext, automation_id: u64) -> Result<(), String> {
     let rule = require_rule_owner(ctx, automation_id, "delete automation")?;
@@ -866,7 +977,14 @@ fn enqueue_matching_automations(
         .collect();
 
     for rule in rules {
-        let queue_id = insert_event(ctx, &rule, trigger_kind.clone(), payload.to_string());
+        let queue_id = insert_event(
+            ctx,
+            &rule,
+            trigger_kind.clone(),
+            payload.to_string(),
+            None,
+            None,
+        );
         try_process_inline(ctx, queue_id, inline_claim_label(&rule.mode, "inline"))?;
     }
     Ok(())
@@ -912,6 +1030,8 @@ fn enqueue_scheduled_event(
         rule,
         AutomationTriggerKind::Scheduled,
         payload.to_string(),
+        None,
+        None,
     );
     try_process_inline(ctx, queue_id, inline_claim_label(&rule.mode, source))?;
     Ok(())
@@ -922,6 +1042,8 @@ fn insert_event(
     rule: &AutomationRule,
     trigger_kind: AutomationTriggerKind,
     trigger_payload: String,
+    invoked_by: Option<Identity>,
+    idempotency_key: Option<String>,
 ) -> u64 {
     let row = ctx
         .db
@@ -937,6 +1059,8 @@ fn insert_event(
             error: None,
             created_at: ctx.timestamp,
             updated_at: ctx.timestamp,
+            invoked_by,
+            idempotency_key,
         });
     row.id
 }
@@ -966,6 +1090,7 @@ fn process_automation_event_inner(
         .find(event.automation_id)
         .ok_or("Automation rule not found")?;
     let payload = parse_json_object(&event.trigger_payload, "trigger_payload")?;
+    let effective_run_as = event.invoked_by.unwrap_or(rule.run_as);
 
     ctx.db
         .automation_event_queue()
@@ -1035,11 +1160,12 @@ fn process_automation_event_inner(
         return Ok(());
     }
 
-    // Live execution: actions run in order with the rule's run_as authority.
+    // Live execution: event triggers use rule.run_as; Manual triggers use the
+    // recorded invoker so generated controls cannot borrow the author's ACLs.
     // An action failure logs and marks the event Failed but returns Ok — an
     // Err here would roll back the triggering transaction (and the logs).
     for action in actions {
-        match execute_live_action(ctx, &rule, &action, queue_id, &payload) {
+        match execute_live_action(ctx, &rule, effective_run_as, &action, queue_id, &payload) {
             Ok(result) => insert_run_log(
                 ctx,
                 queue_id,
@@ -1073,19 +1199,27 @@ fn process_automation_event_inner(
 fn execute_live_action(
     ctx: &ReducerContext,
     rule: &AutomationRule,
+    effective_run_as: Identity,
     action: &AutomationAction,
     queue_id: u64,
     payload: &Value,
 ) -> Result<Value, String> {
     let config = parse_json_object(&action.config, "action config")?;
     match action.action_kind {
-        AutomationActionKind::CreatePage => execute_create_page(ctx, rule, &config, payload),
+        AutomationActionKind::CreatePage => {
+            execute_create_page(ctx, rule, effective_run_as, &config, payload)
+        }
         AutomationActionKind::UpdateProperty => {
-            execute_update_property(ctx, rule, &config, payload)
+            execute_update_property(ctx, rule, effective_run_as, &config, payload)
         }
-        AutomationActionKind::OrchaJob => {
-            execute_orcha_job(ctx, rule, action.id, queue_id, &config, payload)
-        }
+        AutomationActionKind::OrchaJob => execute_orcha_job(
+            ctx,
+            effective_run_as,
+            action.id,
+            queue_id,
+            &config,
+            payload,
+        ),
         AutomationActionKind::HttpRequest | AutomationActionKind::SendEmail => Err(
             "action requires the worker executor and cannot run in-module; keep the rule in DryRun"
                 .to_string(),
@@ -1096,6 +1230,7 @@ fn execute_live_action(
 fn execute_create_page(
     ctx: &ReducerContext,
     rule: &AutomationRule,
+    effective_run_as: Identity,
     config: &Value,
     payload: &Value,
 ) -> Result<Value, String> {
@@ -1118,9 +1253,9 @@ fn execute_create_page(
         if parent.deleted_at.is_some() {
             return Err(format!("parent page {pid} is deleted"));
         }
-        if !can_write_page(ctx, pid, rule.run_as) {
+        if !can_write_page(ctx, pid, effective_run_as) {
             return Err(format!(
-                "run_as principal lacks write access on parent page {pid}"
+                "execution principal lacks write access on parent page {pid}"
             ));
         }
     }
@@ -1137,6 +1272,7 @@ fn execute_create_page(
 fn execute_update_property(
     ctx: &ReducerContext,
     rule: &AutomationRule,
+    effective_run_as: Identity,
     config: &Value,
     payload: &Value,
 ) -> Result<Value, String> {
@@ -1161,9 +1297,9 @@ fn execute_update_property(
         .id()
         .find(page_id)
         .ok_or(format!("page {page_id} not found"))?;
-    if !can_write_page(ctx, page_id, rule.run_as) {
+    if !can_write_page(ctx, page_id, effective_run_as) {
         return Err(format!(
-            "run_as principal lacks write access on page {page_id}"
+            "execution principal lacks write access on page {page_id}"
         ));
     }
     let def = ctx
@@ -1174,9 +1310,7 @@ fn execute_update_property(
         .ok_or(format!(
             "property definition {property_definition_id} not found"
         ))?;
-    let raw = config
-        .get("value")
-        .ok_or("action config.value is required")?;
+    let raw = resolve_property_action_value(config, payload)?;
     let value = coerce_property_value(&def.property_type, raw)?;
     set_property_value_inner(
         ctx,
@@ -1193,7 +1327,7 @@ fn execute_update_property(
 
 fn execute_orcha_job(
     ctx: &ReducerContext,
-    rule: &AutomationRule,
+    effective_run_as: Identity,
     action_id: u64,
     queue_id: u64,
     config: &Value,
@@ -1238,7 +1372,7 @@ fn execute_orcha_job(
     }]);
     create_job(
         ctx,
-        rule.run_as.to_hex().to_string(),
+        effective_run_as.to_hex().to_string(),
         prompt,
         page_id,
         ai_user_id,
@@ -1248,6 +1382,24 @@ fn execute_orcha_job(
         task_graph.to_string(),
     )?;
     Ok(json!({ "nonce": nonce, "page_id": page_id }))
+}
+
+fn resolve_property_action_value<'a>(
+    config: &'a Value,
+    payload: &'a Value,
+) -> Result<&'a Value, String> {
+    if let Some(field) = config.get("value_field").and_then(Value::as_str) {
+        let field = field.trim();
+        if field.is_empty() {
+            return Err("action config.value_field cannot be empty".to_string());
+        }
+        return payload.get(field).ok_or_else(|| {
+            format!("trigger payload has no '{field}' field to use as the property value")
+        });
+    }
+    config
+        .get("value")
+        .ok_or("action config.value or value_field is required".to_string())
 }
 
 /// Coerce a JSON action-config value into the typed `PropertyValue` matching
@@ -1348,6 +1500,182 @@ fn sender_is_ai_user(ctx: &ReducerContext) -> bool {
         .is_some()
 }
 
+fn is_known_workspace_principal(ctx: &ReducerContext, identity: Identity) -> bool {
+    ctx.db
+        .user()
+        .identity()
+        .find(identity)
+        .is_some_and(|u| u.is_authenticated)
+        || ctx
+            .db
+            .ai_user_profile()
+            .identity()
+            .find(identity)
+            .is_some()
+}
+
+fn validate_idempotency_key(key: &str) -> Result<(), String> {
+    if key.is_empty() || key.len() > MAX_IDEMPOTENCY_KEY_BYTES {
+        return Err(format!(
+            "idempotency_key must be 1-{MAX_IDEMPOTENCY_KEY_BYTES} characters"
+        ));
+    }
+    if !key
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b':' | b'-'))
+    {
+        return Err(
+            "idempotency_key may contain only letters, numbers, '.', '_', ':', and '-'".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn config_string_array(config: &Value, key: &str) -> Result<Option<Vec<String>>, String> {
+    let Some(value) = config.get(key) else {
+        return Ok(None);
+    };
+    let values = value
+        .as_array()
+        .ok_or_else(|| format!("trigger_config.{key} must be an array of strings"))?;
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| format!("trigger_config.{key} entries must be non-empty strings"))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+fn validate_manual_trigger_config(config: &Value) -> Result<(), String> {
+    let policy = config
+        .get("invoker_policy")
+        .and_then(Value::as_str)
+        .unwrap_or("creator_or_admin");
+    if !matches!(policy, "creator_or_admin" | "workspace" | "identities") {
+        return Err(
+            "trigger_config.invoker_policy must be creator_or_admin, workspace, or identities"
+                .to_string(),
+        );
+    }
+
+    let identities = config_string_array(config, "allowed_invoker_identities")?;
+    if policy == "identities" && identities.as_ref().is_none_or(Vec::is_empty) {
+        return Err(
+            "identities policy requires trigger_config.allowed_invoker_identities".to_string(),
+        );
+    }
+    if let Some(identities) = identities {
+        for identity in identities {
+            let decoded = hex::decode(&identity).map_err(|_| {
+                "allowed_invoker_identities entries must be 64-character hex identities".to_string()
+            })?;
+            if decoded.len() != 32 {
+                return Err(
+                    "allowed_invoker_identities entries must be 64-character hex identities"
+                        .to_string(),
+                );
+            }
+        }
+    }
+
+    let allowed = config_string_array(config, "allowed_input_fields")?;
+    let required = config_string_array(config, "required_input_fields")?.unwrap_or_default();
+    for field in allowed.iter().flatten().chain(required.iter()) {
+        if MANUAL_RESERVED_FIELDS.contains(&field.as_str()) {
+            return Err(format!(
+                "'{field}' is reserved and cannot be declared as a Manual input field"
+            ));
+        }
+        if field.len() > 128 {
+            return Err("Manual input field names cannot exceed 128 bytes".to_string());
+        }
+    }
+    if let Some(allowed) = allowed {
+        for field in required {
+            if !allowed.contains(&field) {
+                return Err(format!(
+                    "required input field '{field}' is missing from allowed_input_fields"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn manual_invoker_allowed(
+    config: &Value,
+    sender_hex: &str,
+    is_creator_or_admin: bool,
+    is_known_principal: bool,
+) -> Result<bool, String> {
+    let policy = config
+        .get("invoker_policy")
+        .and_then(Value::as_str)
+        .unwrap_or("creator_or_admin");
+    match policy {
+        "creator_or_admin" => Ok(is_creator_or_admin),
+        "workspace" => Ok(is_creator_or_admin || is_known_principal),
+        "identities" => Ok(is_creator_or_admin
+            || config_string_array(config, "allowed_invoker_identities")?
+                .unwrap_or_default()
+                .iter()
+                .any(|identity| identity.eq_ignore_ascii_case(sender_hex))),
+        _ => Err("Unknown Manual invoker policy".to_string()),
+    }
+}
+
+fn validate_manual_input(config: &Value, input: &Value) -> Result<(), String> {
+    let input = input
+        .as_object()
+        .ok_or("input_json must be a JSON object")?;
+    for reserved in MANUAL_RESERVED_FIELDS {
+        if input.contains_key(reserved) {
+            return Err(format!(
+                "Manual input cannot set server-reserved field '{reserved}'"
+            ));
+        }
+    }
+    if let Some(allowed) = config_string_array(config, "allowed_input_fields")? {
+        for field in input.keys() {
+            if !allowed.contains(field) {
+                return Err(format!("Manual input field '{field}' is not allowed"));
+            }
+        }
+    }
+    for required in config_string_array(config, "required_input_fields")?.unwrap_or_default() {
+        if !input.contains_key(&required) {
+            return Err(format!("Manual input field '{required}' is required"));
+        }
+    }
+    Ok(())
+}
+
+fn build_manual_payload(
+    input: &Value,
+    automation_id: u64,
+    invoked_by: Identity,
+    idempotency_key: &str,
+) -> Result<Value, String> {
+    let mut payload = input
+        .as_object()
+        .cloned()
+        .ok_or("input_json must be a JSON object")?;
+    payload.insert("event_type".to_string(), json!("manual"));
+    payload.insert("automation_id".to_string(), json!(automation_id));
+    payload.insert(
+        "invoked_by".to_string(),
+        json!(invoked_by.to_hex().to_string()),
+    );
+    payload.insert("idempotency_key".to_string(), json!(idempotency_key));
+    Ok(Value::Object(payload))
+}
+
 /// Any structural edit to a Live rule demotes it to DryRun — a changed graph
 /// needs fresh human approval via `set_automation_mode`.
 fn demote_live_rule_on_edit(ctx: &ReducerContext, automation_id: u64) {
@@ -1424,11 +1752,12 @@ fn validate_rule(ctx: &ReducerContext, rule: &AutomationRule) -> Result<(), Stri
     if rule.canonical_description.trim().is_empty() {
         return Err("Automation must include a canonical human-readable description".to_string());
     }
-    parse_json_object(&rule.trigger_config, "trigger_config")?;
+    let trigger_config = parse_json_object(&rule.trigger_config, "trigger_config")?;
     parse_json_object(&rule.schedule_config, "schedule_config")?;
 
     match rule.trigger_kind {
         AutomationTriggerKind::Scheduled => validate_schedule(rule)?,
+        AutomationTriggerKind::Manual => validate_manual_trigger_config(&trigger_config)?,
         _ => {
             if rule.schedule_kind != AutomationScheduleKind::None {
                 return Err("Only Scheduled triggers may use schedule_kind".to_string());
@@ -1602,6 +1931,22 @@ fn bump_scheduled_rule(ctx: &ReducerContext, rule: AutomationRule) {
     ctx.db.automation_rule().id().update(AutomationRule {
         last_run_at: Some(ctx.timestamp),
         next_run_at,
+        tick_count,
+        updated_at: ctx.timestamp,
+        ..rule
+    });
+}
+
+fn bump_manual_rule(ctx: &ReducerContext, automation_id: u64) {
+    let Some(rule) = ctx.db.automation_rule().id().find(automation_id) else {
+        return;
+    };
+    let tick_count = rule.tick_count + 1;
+    let max_reached = rule.max_ticks.is_some_and(|max| tick_count >= max);
+    ctx.db.automation_rule().id().update(AutomationRule {
+        enabled: rule.enabled && !max_reached,
+        last_run_at: Some(ctx.timestamp),
+        next_run_at: None,
         tick_count,
         updated_at: ctx.timestamp,
         ..rule
@@ -1825,4 +2170,84 @@ mod tests {
         assert!(coerce_property_value(&PropertyType::Ai, &json!("x")).is_err());
     }
 
+    #[test]
+    fn manual_trigger_config_validates_policy_and_fields() {
+        let identity = "11".repeat(32);
+        let config = json!({
+            "invoker_policy": "identities",
+            "allowed_invoker_identities": [identity],
+            "allowed_input_fields": ["ask_id", "status"],
+            "required_input_fields": ["ask_id"],
+        });
+        assert!(validate_manual_trigger_config(&config).is_ok());
+        assert!(manual_invoker_allowed(&config, &"11".repeat(32), false, false).unwrap());
+        assert!(!manual_invoker_allowed(&config, &"22".repeat(32), false, true).unwrap());
+        assert!(manual_invoker_allowed(&config, &"22".repeat(32), true, false).unwrap());
+
+        assert!(validate_manual_trigger_config(&json!({
+            "invoker_policy": "identities",
+            "allowed_invoker_identities": [],
+        }))
+        .is_err());
+        assert!(validate_manual_trigger_config(&json!({
+            "allowed_input_fields": ["invoked_by"],
+        }))
+        .is_err());
+        assert!(validate_manual_trigger_config(&json!({
+            "allowed_input_fields": ["status"],
+            "required_input_fields": ["ask_id"],
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn manual_input_is_allowlisted_and_server_metadata_is_stamped() {
+        let config = json!({
+            "invoker_policy": "workspace",
+            "allowed_input_fields": ["ask_id", "decision"],
+            "required_input_fields": ["ask_id"],
+        });
+        let input = json!({"ask_id": 42, "decision": "accept"});
+        assert!(validate_manual_input(&config, &input).is_ok());
+        assert!(validate_manual_input(&config, &json!({"decision": "accept"})).is_err());
+        assert!(validate_manual_input(&config, &json!({"ask_id": 42, "extra": true})).is_err());
+        assert!(validate_manual_input(&json!({}), &json!({"event_type": "spoof"})).is_err());
+
+        let identity = Identity::from_byte_array([7; 32]);
+        let payload = build_manual_payload(&input, 9, identity, "message:button:1").unwrap();
+        assert_eq!(payload.get("event_type"), Some(&json!("manual")));
+        assert_eq!(payload.get("automation_id"), Some(&json!(9)));
+        assert_eq!(
+            payload.get("invoked_by"),
+            Some(&json!(identity.to_hex().to_string()))
+        );
+        assert_eq!(payload.get("idempotency_key"), Some(&json!("message:button:1")));
+    }
+
+    #[test]
+    fn manual_idempotency_keys_are_bounded_and_transport_safe() {
+        assert!(validate_idempotency_key("message-12:button_4.retry").is_ok());
+        assert!(validate_idempotency_key("").is_err());
+        assert!(validate_idempotency_key("has spaces").is_err());
+        assert!(validate_idempotency_key(&"x".repeat(MAX_IDEMPOTENCY_KEY_BYTES + 1)).is_err());
+    }
+
+    #[test]
+    fn update_property_can_take_value_from_trigger_payload() {
+        let config = json!({"value_field": "decision", "value": "ignored"});
+        let payload = json!({"decision": "accepted"});
+        assert_eq!(
+            resolve_property_action_value(&config, &payload).unwrap(),
+            &json!("accepted")
+        );
+        assert!(resolve_property_action_value(
+            &json!({"value_field": "missing"}),
+            &payload
+        )
+        .is_err());
+        assert_eq!(
+            resolve_property_action_value(&json!({"value": true}), &payload).unwrap(),
+            &json!(true)
+        );
+    }
 }

@@ -626,11 +626,11 @@ const AiMessageContent = memo(function AiMessageContent({
         </>
       )}
 
-      {/* Inline generative UI — a read-only component tree the assistant
-          emitted (custom-view runtime ADR D7). Render-only: no interactive
-          return-path yet. */}
+      {/* Inline generative UI. Its component tree remains structurally
+          read-only; generated controls may invoke server-authorized Manual
+          automations through the narrow interaction context. */}
       {msg.componentTreeJson && (
-        <StaticComponentTree json={msg.componentTreeJson} />
+        <StaticComponentTree json={msg.componentTreeJson} messageId={msg.id} />
       )}
 
       {/* Thinking indicator (no thinking text yet) */}

@@ -2,8 +2,8 @@
  * Build a `component_tree_v1` blob for the `render_ui` chat tool (custom-view
  * runtime ADR, M1b-lite).
  *
- * The model describes a small read-only interface (title + markdown body +
- * optional controls); we assemble the same JSON shape `serialize_component_tree`
+ * The model describes a small interface (title + markdown body + optional
+ * controls); we assemble the same JSON shape `serialize_component_tree`
  * produces on the server, so the web client renders it via `<StaticComponentTree>`
  * / pulp `<BlockView>`. Text nodes carry Yjs bytes (base64) exactly like real
  * `ComponentYjsState`, reusing the worker's existing encoders.
@@ -14,9 +14,10 @@
  * silently drop all but the last panel.
  *
  * Deliberately narrow: a Container root with flat children, the text vocabulary
- * `markdownToComponentBlocks` already supports, plus Button / Input rendered
- * read-only. No dataSource, no nesting beyond the root, no interactivity — those
- * are later milestones.
+ * `markdownToComponentBlocks` already supports, plus generated Input fields and
+ * Buttons that can invoke an existing Manual automation. The tree remains
+ * structurally read-only; the server authorizes and audits every invocation.
+ * No dataSource or nesting beyond the root.
  */
 
 import {
@@ -25,8 +26,20 @@ import {
 } from "./rich-text-encode.js";
 
 export type UiControl =
-  | { kind: "Button"; label?: string }
-  | { kind: "Input"; label?: string; placeholder?: string };
+  | {
+      kind: "Button";
+      label?: string;
+      automation_id?: number;
+      input?: Record<string, string | number | boolean | null>;
+      confirm?: string;
+    }
+  | {
+      kind: "Input";
+      name?: string;
+      label?: string;
+      placeholder?: string;
+      required?: boolean;
+    };
 
 export type RenderUiSpec = {
   title?: string;
@@ -110,11 +123,27 @@ function buildPanelChildren(
   }
   for (const c of spec.controls ?? []) {
     if (c.kind === "Button") {
-      pushControl("Button", { label: c.label ?? "Button" });
+      pushControl("Button", {
+        label: c.label ?? "Button",
+        ...(typeof c.automation_id === "number" &&
+          Number.isSafeInteger(c.automation_id) &&
+          c.automation_id > 0
+          ? {
+              action: {
+                type: "trigger_automation",
+                automationId: c.automation_id,
+                input: c.input ?? {},
+                ...(c.confirm != null ? { confirmation: c.confirm } : {}),
+              },
+            }
+          : {}),
+      });
     } else if (c.kind === "Input") {
       pushControl("Input", {
+        ...(c.name != null ? { name: c.name } : {}),
         ...(c.label != null ? { label: c.label } : {}),
         ...(c.placeholder != null ? { placeholder: c.placeholder } : {}),
+        ...(c.required != null ? { required: c.required } : {}),
       });
     }
   }

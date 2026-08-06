@@ -378,6 +378,8 @@ export const AutomationEventQueue = __t.object("AutomationEventQueue", {
   error: __t.option(__t.string()),
   createdAt: __t.timestamp(),
   updatedAt: __t.timestamp(),
+  invokedBy: __t.option(__t.identity()),
+  idempotencyKey: __t.option(__t.string()),
 });
 export type AutomationEventQueue = __Infer<typeof AutomationEventQueue>;
 
@@ -482,6 +484,7 @@ export const AutomationTriggerKind = __t.enum("AutomationTriggerKind", {
   PageDeleted: __t.unit(),
   PropertyChanged: __t.unit(),
   Scheduled: __t.unit(),
+  Manual: __t.unit(),
 });
 export type AutomationTriggerKind = __Infer<typeof AutomationTriggerKind>;
 

@@ -1105,6 +1105,7 @@ fn decode_automation_trigger_kind(v: &Value) -> Result<AutomationTriggerKind, St
             ("PageDeleted", AutomationTriggerKind::PageDeleted),
             ("PropertyChanged", AutomationTriggerKind::PropertyChanged),
             ("Scheduled", AutomationTriggerKind::Scheduled),
+            ("Manual", AutomationTriggerKind::Manual),
         ],
         "AutomationTriggerKind",
     )
@@ -1253,6 +1254,8 @@ fn decode_automation_event_queue(v: &Value) -> Result<AutomationEventQueue, Stri
         error: opt_string_at(m, "error")?,
         created_at: decode_timestamp(m.get("createdAt").ok_or("createdAt")?)?,
         updated_at: decode_timestamp(m.get("updatedAt").ok_or("updatedAt")?)?,
+        invoked_by: opt_identity_at(m, "invokedBy")?,
+        idempotency_key: opt_string_at(m, "idempotencyKey")?,
     })
 }
 

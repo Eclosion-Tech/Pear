@@ -11,14 +11,18 @@ use crate::ai::memory::{
     ai_user_memory, collect_live_subtree_page_ids, grant_ai_memory_creator_read,
     grant_ai_memory_page_access,
 };
-use crate::types::Permission;
 use crate::automations::seed_automation_primitives_inner;
 use crate::harness::{harness_template, HarnessTemplate};
 use crate::module_install::ensure_publisher_identity_recorded;
 use crate::pages::components::seed_builtin_component_types;
-use crate::pages::components::{migrate_container_style_v1, migrate_heading_yjs_registry_v1};
+use crate::pages::components::{
+    migrate_container_style_v1, migrate_heading_yjs_registry_v1,
+    migrate_interactive_control_registry_v1,
+};
 use crate::pages::{page, Page};
 use crate::sensors::seed_sensor_registry_inner;
+use crate::types::Permission;
+
 /// Records which one-shot data migrations have already run on this database.
 ///
 /// CONTRACT: whoever publishes this WASM should call `run_pending_migrations`
@@ -208,6 +212,24 @@ pub fn run_pending_migrations(ctx: &ReducerContext) -> Result<(), String> {
         migrate_container_style_v1(ctx);
         Ok::<(), String>(())
     });
+    // Interactive generated UI: add the Manual trigger primitive and publish
+    // the current UpdateProperty schema (including payload-backed values).
+    run_step!(
+        ctx,
+        "automation_primitive_manual_trigger_v1",
+        |ctx: &ReducerContext| {
+            seed_automation_primitives_inner(ctx);
+            Ok::<(), String>(())
+        }
+    );
+    run_step!(
+        ctx,
+        "component_interactive_controls_v1",
+        |ctx: &ReducerContext| {
+            migrate_interactive_control_registry_v1(ctx);
+            Ok::<(), String>(())
+        }
+    );
     Ok(())
 }
 

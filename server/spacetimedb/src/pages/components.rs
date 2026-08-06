@@ -348,11 +348,15 @@ mod prop_schemas {
   "type": "object",
   "properties": {
     "propertyDefinitionId": { "type": "integer" },
+    "name": { "type": "string" },
     "label": { "type": "string" },
     "placeholder": { "type": "string" },
     "required": { "type": "boolean" }
   },
-  "required": ["propertyDefinitionId"]
+  "anyOf": [
+    { "required": ["propertyDefinitionId"] },
+    { "required": ["name"] }
+  ]
 }"#;
 
     pub const BUTTON: &str = r#"{
@@ -373,7 +377,17 @@ mod prop_schemas {
             "delete_row",
             "write_property"
           ]
-        }
+        },
+        "pageId": { "type": ["integer", "string"] },
+        "url": { "type": "string" },
+        "automationId": { "type": ["integer", "string"] },
+        "input": {
+          "type": "object",
+          "additionalProperties": {
+            "type": ["string", "number", "boolean", "null"]
+          }
+        },
+        "confirmation": { "type": "string" }
       },
       "required": ["type"]
     }
@@ -668,7 +682,7 @@ fn builtin_specs() -> Vec<BuiltinSpec> {
         BuiltinSpec {
             component_type: "Input",
             display_name: "Input",
-            description: "Form-leaf input with typed propertyRef binding.",
+            description: "Input bound either to a database property inside Form or to a local named field for an interactive generated view.",
             prop_schema: prop_schemas::INPUT,
             capabilities: vec![ReadsProperty, WritesProperty],
             has_yjs_state: false,
@@ -902,6 +916,35 @@ pub(crate) fn migrate_container_style_v1(ctx: &ReducerContext) {
 
     def.prop_schema = prop_schemas::CONTAINER.to_string();
     ctx.db.component_type_definition().id().update(def);
+}
+
+/// Publish the Manual-automation return path on the built-in Input and Button
+/// schemas. Renderers are the enforcement boundary, but the registry must tell
+/// agents and workspace-template authors the exact props they may emit.
+pub(crate) fn migrate_interactive_control_registry_v1(ctx: &ReducerContext) {
+    seed_builtin_component_types(ctx);
+
+    if let Some(mut input) = ctx
+        .db
+        .component_type_definition()
+        .component_type()
+        .find("Input".to_string())
+    {
+        input.description = "Input bound either to a database property inside Form or to a local named field for an interactive generated view."
+            .to_string();
+        input.prop_schema = prop_schemas::INPUT.to_string();
+        ctx.db.component_type_definition().id().update(input);
+    }
+
+    if let Some(mut button) = ctx
+        .db
+        .component_type_definition()
+        .component_type()
+        .find("Button".to_string())
+    {
+        button.prop_schema = prop_schemas::BUTTON.to_string();
+        ctx.db.component_type_definition().id().update(button);
+    }
 }
 
 // ============================================================

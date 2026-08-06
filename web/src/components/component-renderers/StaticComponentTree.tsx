@@ -10,6 +10,7 @@ import {
 import { tables } from "@/src/module_bindings";
 import { registerPearBuiltinRenderers } from "./built-in";
 import { parseComponentTreeBlob } from "@/src/lib/componentTreeBlob";
+import { GeneratedUiInteractionProvider } from "./GeneratedUiInteractionContext";
 
 // The renderer registry is a module-level singleton; both calls are
 // idempotent. Registering here (not only in PearComponentTreeRenderer) lets a
@@ -25,11 +26,17 @@ registerPearBuiltinRenderers();
  * chrome, leaf editors static. `component_type_definition` supplies `defs`
  * (renderers rely on `acceptsChildren` / `propSchema`).
  *
- * Interactivity is render-only per the custom-view runtime ADR (D7): buttons /
- * inputs display but don't act; the interactive return-path is gated on the
- * capability model (a later milestone).
+ * The tree itself remains structurally read-only. A narrow interaction context
+ * lets generated Input/Button leaves invoke an allowlisted Manual automation;
+ * the server remains authoritative for identity, policy, ACLs, and audit rows.
  */
-export function StaticComponentTree({ json }: { json: string }) {
+export function StaticComponentTree({
+  json,
+  messageId,
+}: {
+  json: string;
+  messageId: bigint;
+}) {
   const [defRows] = useTable(tables.component_type_definition);
 
   const defs = useMemo(() => {
@@ -52,8 +59,10 @@ export function StaticComponentTree({ json }: { json: string }) {
   }
 
   return (
-    <div className="pear-static-component-tree my-2">
-      <BlockView tree={parsed.tree} />
-    </div>
+    <GeneratedUiInteractionProvider messageId={messageId}>
+      <div className="pear-static-component-tree my-2">
+        <BlockView tree={parsed.tree} />
+      </div>
+    </GeneratedUiInteractionProvider>
   );
 }

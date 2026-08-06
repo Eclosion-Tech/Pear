@@ -4,6 +4,10 @@ import { useMemo } from "react";
 import { useRouter } from "next/navigation";
 import type { BlockRendererProps } from "@eclosion-tech/pulp";
 import { useFormContext } from "../FormContext";
+import {
+  useGeneratedUiInteraction,
+  type GeneratedAutomationAction,
+} from "../GeneratedUiInteractionContext";
 
 /**
  * Built-in `Button` — action trigger with sprint-4 wiring for common types.
@@ -15,6 +19,9 @@ type ButtonProps = {
     type?: string;
     pageId?: string | number;
     url?: string;
+    automationId?: string | number;
+    input?: Record<string, unknown>;
+    confirmation?: string;
   };
 };
 
@@ -33,6 +40,7 @@ export function ButtonRenderer({ node }: BlockRendererProps) {
   const props = useMemo<ButtonProps>(() => safeParse(node.props), [node.props]);
   const router = useRouter();
   const form = useFormContext();
+  const generatedUi = useGeneratedUiInteraction();
   const variant = props.variant ?? "secondary";
   const cls = VARIANT_CLASS[variant];
   const actionType = props.action?.type;
@@ -40,9 +48,15 @@ export function ButtonRenderer({ node }: BlockRendererProps) {
   const wired =
     actionType === "submit_form" ||
     actionType === "navigate" ||
-    actionType === "open_url";
+    actionType === "open_url" ||
+    (actionType === "trigger_automation" && generatedUi != null);
+  const invocationStatus = generatedUi?.statusFor(node.id) ?? {
+    busy: false,
+    tone: "idle" as const,
+    message: null,
+  };
 
-  function handleClick() {
+  async function handleClick() {
     switch (actionType) {
       case "submit_form":
         form?.requestSubmit();
@@ -59,28 +73,51 @@ export function ButtonRenderer({ node }: BlockRendererProps) {
         window.open(url, "_blank", "noopener,noreferrer");
         break;
       }
+      case "trigger_automation": {
+        if (!generatedUi) return;
+        const confirmation = props.action?.confirmation;
+        if (confirmation && !window.confirm(confirmation)) return;
+        await generatedUi.invoke(node.id, props.action as GeneratedAutomationAction);
+        break;
+      }
       default:
         break;
     }
   }
 
   return (
-    <button
-      type="button"
-      disabled={!wired}
-      onClick={handleClick}
-      title={
-        wired
-          ? undefined
-          : `Action "${actionType ?? "(unset)"}" not wired in sprint 4`
-      }
-      className={`my-1 inline-flex items-center justify-center rounded-md
-                  border px-4 py-1.5 text-sm font-medium
-                  transition-colors disabled:cursor-not-allowed disabled:opacity-80
-                  ${cls}`}
-    >
-      {props.label ?? "Button"}
-    </button>
+    <div className="my-1 flex flex-col items-start gap-1">
+      <button
+        type="button"
+        disabled={!wired || invocationStatus.busy}
+        onClick={() => void handleClick()}
+        title={
+          wired
+            ? undefined
+            : `Action "${actionType ?? "(unset)"}" is not available in this surface`
+        }
+        className={`inline-flex items-center justify-center rounded-md
+                    border px-4 py-1.5 text-sm font-medium
+                    transition-colors disabled:cursor-not-allowed disabled:opacity-80
+                    ${cls}`}
+      >
+        {invocationStatus.busy ? "Working…" : (props.label ?? "Button")}
+      </button>
+      {invocationStatus.message && (
+        <span
+          role={invocationStatus.tone === "error" ? "alert" : "status"}
+          className={`text-xs ${
+            invocationStatus.tone === "error"
+              ? "text-red-600 dark:text-red-400"
+              : invocationStatus.tone === "success"
+                ? "text-green-700 dark:text-green-400"
+                : "text-neutral-500 dark:text-neutral-400"
+          }`}
+        >
+          {invocationStatus.message}
+        </span>
+      )}
+    </div>
   );
 }
 

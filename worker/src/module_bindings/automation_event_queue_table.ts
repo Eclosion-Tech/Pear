@@ -30,4 +30,6 @@ export default __t.row({
   error: __t.option(__t.string()),
   createdAt: __t.timestamp().name("created_at"),
   updatedAt: __t.timestamp().name("updated_at"),
+  invokedBy: __t.option(__t.identity()).name("invoked_by"),
+  idempotencyKey: __t.option(__t.string()).name("idempotency_key"),
 });
