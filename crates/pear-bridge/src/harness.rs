@@ -26,7 +26,7 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
-use crate::providers::{run_cli, ProviderExecError};
+use crate::providers::{flush_pending, run_cli, ChunkSender, ProviderExecError};
 
 /// Default / maximum wall-clock budget for one harness turn. Agent turns are
 /// long — they may run builds and tests.
@@ -60,6 +60,11 @@ pub struct HarnessPayload {
     pub allowed_tools: Option<Vec<String>>,
     #[serde(default)]
     pub timeout_seconds: Option<u64>,
+    /// Stream the turn's transcript as chunk deltas (claude stream-json →
+    /// `{"t":"text"|"think","d":…}` envelopes). Absent on older workers →
+    /// batch mode, unchanged envelope.
+    #[serde(default)]
+    pub stream: Option<bool>,
 }
 
 /// The JSON envelope returned in the result frame's `stdout`.
@@ -103,6 +108,7 @@ impl HarnessResult {
 pub async fn run_harness_json(
     payload_json: Option<&str>,
     allowed_dirs: &[PathBuf],
+    chunks: Option<ChunkSender>,
 ) -> HarnessResult {
     let started = Instant::now();
     let raw = match payload_json {
@@ -122,10 +128,14 @@ pub async fn run_harness_json(
             return HarnessResult::failure("", "", started, format!("invalid harness payload: {e}"))
         }
     };
-    run_harness(&payload, allowed_dirs).await
+    run_harness(&payload, allowed_dirs, chunks).await
 }
 
-pub async fn run_harness(payload: &HarnessPayload, allowed_dirs: &[PathBuf]) -> HarnessResult {
+pub async fn run_harness(
+    payload: &HarnessPayload,
+    allowed_dirs: &[PathBuf],
+    chunks: Option<ChunkSender>,
+) -> HarnessResult {
     let started = Instant::now();
     let provider = payload.provider.trim();
     let sid = payload.session_id.trim();
@@ -174,13 +184,17 @@ pub async fn run_harness(payload: &HarnessPayload, allowed_dirs: &[PathBuf]) -> 
             .clamp(1, MAX_TIMEOUT_SECS),
     );
 
+    let streaming = payload.stream == Some(true) && chunks.is_some();
     // Attempt 1: resume the existing session under this id.
-    match run_claude_turn(payload, sid, mode, &cwd, timeout, true).await {
+    match run_claude_turn(payload, sid, mode, &cwd, timeout, true, streaming, chunks.clone()).await
+    {
         Ok(output) => finish(provider, sid, started, output, true),
         Err(ProviderExecError::UnknownSession) => {
             // Fresh device / pruned session state → start the session under
             // the SAME id so future turns resume it.
-            match run_claude_turn(payload, sid, mode, &cwd, timeout, false).await {
+            match run_claude_turn(payload, sid, mode, &cwd, timeout, false, streaming, chunks)
+                .await
+            {
                 Ok(output) => finish(provider, sid, started, output, false),
                 Err(e) => HarnessResult::failure(provider, sid, started, e.into_message()),
             }
@@ -215,6 +229,7 @@ fn finish(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_claude_turn(
     payload: &HarnessPayload,
     sid: &str,
@@ -222,9 +237,20 @@ async fn run_claude_turn(
     cwd: &Path,
     timeout: std::time::Duration,
     resume: bool,
+    streaming: bool,
+    chunks: Option<ChunkSender>,
 ) -> Result<String, ProviderExecError> {
     let bin = claude_bin();
-    let mut args: Vec<String> = vec!["-p".into(), "--output-format".into(), "json".into()];
+    let mut args: Vec<String> = vec!["-p".into(), "--output-format".into()];
+    if streaming {
+        // stream-json requires --verbose in print mode; partial messages give
+        // real text/thinking deltas rather than whole-message events.
+        args.push("stream-json".into());
+        args.push("--verbose".into());
+        args.push("--include-partial-messages".into());
+    } else {
+        args.push("json".into());
+    }
     if resume {
         args.push("--resume".into());
     } else {
@@ -236,6 +262,13 @@ async fn run_claude_turn(
     if let Some(tools) = payload.allowed_tools.as_ref().filter(|t| !t.is_empty()) {
         args.push("--allowedTools".into());
         args.push(tools.join(","));
+    }
+
+    if streaming {
+        if let Some(tx) = chunks {
+            return run_claude_turn_streaming(&bin, &args, &payload.prompt, timeout, cwd, resume, tx)
+                .await;
+        }
     }
 
     let output = run_cli(&bin, &args, &payload.prompt, timeout, cwd)
@@ -271,6 +304,144 @@ async fn run_claude_turn(
             }
         }
         Err(_) => Ok(stdout),
+    }
+}
+
+/// Streamed harness turn: spawn claude with `--output-format stream-json
+/// --include-partial-messages`, forward text/thinking deltas and tool-activity
+/// notes as chunk envelopes while the agent works, and return the final result
+/// text. Event parsing is deliberately defensive — stream-json shapes vary
+/// across claude versions; anything unrecognized is skipped, and if no
+/// terminal `result` event arrives the accumulated text deltas stand in.
+async fn run_claude_turn_streaming(
+    bin: &str,
+    args: &[String],
+    prompt: &str,
+    timeout: std::time::Duration,
+    cwd: &Path,
+    resume: bool,
+    tx: ChunkSender,
+) -> Result<String, ProviderExecError> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let mut child = tokio::process::Command::new(bin)
+        .args(args)
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| ProviderExecError::Other(format!("failed to launch {bin}: {e}")))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(prompt.as_bytes())
+            .await
+            .map_err(|e| ProviderExecError::Other(format!("failed to write prompt: {e}")))?;
+    }
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| ProviderExecError::Other("no stdout handle".to_string()))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| ProviderExecError::Other("no stderr handle".to_string()))?;
+
+    let work = async {
+        let mut lines = BufReader::new(stdout).lines();
+        let mut result_text: Option<String> = None;
+        let mut is_error = false;
+        let mut accumulated = String::new();
+        let mut seq: u32 = 0;
+        let mut pending_think = String::new();
+        let mut pending_text = String::new();
+        let mut last_flush = Instant::now();
+
+        while let Ok(Some(line)) = lines.next_line().await {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            match v.get("type").and_then(|t| t.as_str()) {
+                // Partial-message deltas: real streaming text/thinking.
+                Some("stream_event") => {
+                    if let Some(delta) = v.pointer("/event/delta") {
+                        if let Some(t) = delta.get("text").and_then(|t| t.as_str()) {
+                            accumulated.push_str(t);
+                            pending_text.push_str(t);
+                        } else if let Some(t) = delta.get("thinking").and_then(|t| t.as_str()) {
+                            pending_think.push_str(t);
+                        }
+                    }
+                }
+                // Whole assistant messages: surface tool activity as thinking
+                // notes (text was already streamed via deltas above).
+                Some("assistant") => {
+                    if let Some(blocks) = v.pointer("/message/content").and_then(|c| c.as_array())
+                    {
+                        for block in blocks {
+                            if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                                if let Some(name) = block.get("name").and_then(|n| n.as_str()) {
+                                    pending_think.push_str(&format!("[tool: {name}]\n"));
+                                }
+                            }
+                        }
+                    }
+                }
+                Some("result") => {
+                    is_error = v.get("is_error").and_then(|b| b.as_bool()) == Some(true);
+                    result_text = v
+                        .get("result")
+                        .and_then(|r| r.as_str())
+                        .map(|s| s.to_string());
+                }
+                _ => {}
+            }
+            if pending_think.len() + pending_text.len() >= 256
+                || (last_flush.elapsed() >= std::time::Duration::from_millis(400)
+                    && (!pending_think.is_empty() || !pending_text.is_empty()))
+            {
+                flush_pending(&tx, &mut seq, &mut pending_think, &mut pending_text);
+                last_flush = Instant::now();
+            }
+        }
+        flush_pending(&tx, &mut seq, &mut pending_think, &mut pending_text);
+
+        let status = child
+            .wait()
+            .await
+            .map_err(|e| ProviderExecError::Other(format!("wait failed: {e}")))?;
+        let mut err_buf = String::new();
+        let _ = tokio::io::AsyncReadExt::read_to_string(&mut stderr, &mut err_buf).await;
+        if !status.success() {
+            let combined = format!("{err_buf}\n{accumulated}").to_lowercase();
+            if resume && combined.contains("no conversation found") {
+                return Err(ProviderExecError::UnknownSession);
+            }
+            let excerpt: String = err_buf.trim().chars().take(500).collect();
+            return Err(ProviderExecError::Other(format!(
+                "claude exited with {status}: {excerpt}"
+            )));
+        }
+        if is_error {
+            return Err(ProviderExecError::Other(format!(
+                "claude error: {}",
+                result_text.as_deref().unwrap_or("unknown")
+            )));
+        }
+        Ok(result_text.unwrap_or(accumulated))
+    };
+    match tokio::time::timeout(timeout, work).await {
+        Ok(r) => r,
+        Err(_) => Err(ProviderExecError::Other(format!(
+            "claude harness turn timed out after {}s and was killed",
+            timeout.as_secs()
+        ))),
     }
 }
 

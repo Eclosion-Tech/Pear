@@ -28,6 +28,7 @@ import {
 } from "@/src/hooks/useAiUsers";
 import { useWorkerLiveness } from "@/src/hooks/useOrcha";
 import { InferenceBackendSection } from "@/src/components/InferenceBackendSection";
+import { useMergeAiUsers } from "@/src/hooks/useAiUsers";
 import {
   hostCreateAiUser,
   hostDeleteAiUser,
@@ -327,6 +328,7 @@ function AiUserRowEditor({
   onToggleMemory,
   onDelete,
   deleteBusy,
+  mergeTargets,
 }: {
   profile: AiUserProfileRow;
   hasMemory: boolean;
@@ -335,6 +337,7 @@ function AiUserRowEditor({
   onToggleMemory: () => void;
   onDelete: () => void;
   deleteBusy: boolean;
+  mergeTargets: Array<{ aiUserId: bigint; displayName: string }>;
 }) {
   const router = useRouter();
   const patchProfile = usePatchAiUserProfileSettings();
@@ -349,6 +352,10 @@ function AiUserRowEditor({
     PRESET_BY_PROVIDER_NAME[profile.providerName] ?? "OpenAiCompatible";
   const [open, setOpen] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const mergeAiUsers = useMergeAiUsers();
+  const [mergeTargetId, setMergeTargetId] = useState<string>("");
+  const [mergeBusy, setMergeBusy] = useState(false);
+  const [confirmingMerge, setConfirmingMerge] = useState(false);
   const [displayName, setDisplayName] = useState(profile.displayName);
   const [preset, setPreset] = useState<ProviderPresetKey>(savedPreset);
   const [model, setModel] = useState(profile.modelName);
@@ -862,6 +869,72 @@ function AiUserRowEditor({
           )}
         </div>
 
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-neutral-500 dark:text-neutral-400">
+            Merge into another AI user (memory + device grants carry over; this user is removed):
+          </span>
+          <select
+            aria-label="Merge target"
+            value={mergeTargetId}
+            disabled={mergeBusy}
+            onChange={(e) => {
+              setMergeTargetId(e.target.value);
+              setConfirmingMerge(false);
+            }}
+            className="rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 px-2 py-1 text-xs text-neutral-900 dark:text-white disabled:opacity-50"
+          >
+            <option value="">Select target…</option>
+            {mergeTargets.map((t) => (
+              <option key={t.aiUserId.toString()} value={t.aiUserId.toString()}>
+                {t.displayName}
+              </option>
+            ))}
+          </select>
+          {confirmingMerge && mergeTargetId ? (
+            <>
+              <button
+                type="button"
+                disabled={mergeBusy}
+                onClick={() => {
+                  setMergeBusy(true);
+                  setLocalErr(null);
+                  void mergeAiUsers({
+                    sourceAiUserId: profile.aiUserId,
+                    targetAiUserId: BigInt(mergeTargetId),
+                  })
+                    .catch((e: unknown) =>
+                      setLocalErr(e instanceof Error ? e.message : String(e)),
+                    )
+                    .finally(() => {
+                      setMergeBusy(false);
+                      setConfirmingMerge(false);
+                    });
+                }}
+                className="px-2 py-1 rounded text-xs font-medium text-amber-700 bg-amber-50 dark:bg-amber-900/20 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 disabled:opacity-50"
+              >
+                {mergeBusy ? "Merging…" : "Confirm merge"}
+              </button>
+              <button
+                type="button"
+                disabled={mergeBusy}
+                onClick={() => setConfirmingMerge(false)}
+                className="px-2 py-1 rounded text-xs text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              disabled={mergeBusy || !mergeTargetId}
+              onClick={() => setConfirmingMerge(true)}
+              className="px-2 py-1 rounded text-xs border border-neutral-300 dark:border-neutral-600 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-50"
+            >
+              Merge…
+            </button>
+          )}
+        </div>
+
         {localErr ? (
           <p className="text-sm text-red-600 dark:text-red-400" role="alert">
             {localErr}
@@ -1358,6 +1431,9 @@ export function AiUsersSettings() {
                   onToggleMemory={() => void onToggleMemory(p.aiUserId, !memoryRowFor(p.aiUserId))}
                   onDelete={() => void onDelete(p.aiUserId)}
                   deleteBusy={deletingId === p.aiUserId}
+                  mergeTargets={profiles
+                    .filter((t) => t.aiUserId !== p.aiUserId)
+                    .map((t) => ({ aiUserId: t.aiUserId, displayName: t.displayName }))}
                 />
               ))}
             </ul>

@@ -763,7 +763,7 @@ async fn run_ollama_stream(
 /// Send accumulated thinking/text deltas as chunk envelopes; sends nothing for
 /// empty buffers. Send errors are ignored — a dropped receiver just means the
 /// transport stopped listening (session ending); the result still returns.
-fn flush_pending(tx: &ChunkSender, seq: &mut u32, think: &mut String, text: &mut String) {
+pub(crate) fn flush_pending(tx: &ChunkSender, seq: &mut u32, think: &mut String, text: &mut String) {
     if !think.is_empty() {
         let content = serde_json::json!({"t": "think", "d": std::mem::take(think)}).to_string();
         let _ = tx.send(ChunkOut { seq: *seq, content });

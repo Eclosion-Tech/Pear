@@ -636,10 +636,29 @@ export function latestUserMessage(messages: Message[]): string {
  * alongside transcript streaming and the approvals flow.
  */
 export class BridgeHarnessProvider extends BridgeInferenceProvider implements InferenceProvider {
+  constructor(conn: never, aiIdentityHex: string, binding: BridgeBackendBinding) {
+    super(conn, aiIdentityHex, binding);
+    // Harness turns stream their transcript via chunk rows (claude
+    // stream-json device-side). Older daemons ignore the stream flag and the
+    // turn degrades to a single final message.
+    this.chatStream = (request) => this.harnessStreamTurn(request);
+  }
+
   async chat(request: ChatRequest): Promise<ChatResponse> {
     const deviceId = BigInt(this.binding.device_id);
     await this.precheckDevice(deviceId);
+    const nonce = await this.enqueueHarnessTurn(request, deviceId, false);
+    const row = await this.awaitCommandRow(deviceId, nonce);
+    const result = await this.awaitHarnessResult(deviceId, row.id);
+    return this.parseHarnessResult(result, deviceId, request, { includeOutput: true });
+  }
 
+  /** Build + enqueue the harness payload; returns the correlation nonce. */
+  private async enqueueHarnessTurn(
+    request: ChatRequest,
+    deviceId: bigint,
+    stream: boolean,
+  ): Promise<string> {
     const prompt = latestUserMessage(request.messages);
     if (!prompt.trim()) {
       throw new Error("Harness turn has no user message to forward.");
@@ -672,16 +691,23 @@ export class BridgeHarnessProvider extends BridgeInferenceProvider implements In
           ? { allowed_tools: this.binding.allowed_tools }
           : {}),
         timeout_seconds: 600,
+        ...(stream ? { stream: true } : {}),
       }),
       conversationId: request.conversationId ?? BigInt(0),
       jobId: undefined,
       taskId: undefined,
       nonce,
     });
+    return nonce;
+  }
 
-    const row = await this.awaitCommandRow(deviceId, nonce);
-    const result = await this.awaitHarnessResult(deviceId, row.id);
-
+  /** Parse a harness result envelope; throws honest errors on failure. */
+  private parseHarnessResult(
+    result: { stdout: string; rejectionReason?: string | null },
+    deviceId: bigint,
+    request: ChatRequest,
+    opts: { includeOutput: boolean },
+  ): ChatResponse {
     if (result.rejectionReason) {
       throw new Error(`Bridge harness turn was rejected: ${result.rejectionReason}`);
     }
@@ -713,9 +739,79 @@ export class BridgeHarnessProvider extends BridgeInferenceProvider implements In
         ? "[note: the device-side session could not be resumed — earlier conversation context may not have carried over]\n\n"
         : "";
     return {
-      content: [{ type: "text", text: `${resetNote}${envelope.output ?? ""}` }],
+      content: [
+        {
+          type: "text",
+          text: opts.includeOutput ? `${resetNote}${envelope.output ?? ""}` : resetNote,
+        },
+      ],
       stopReason: "end_turn",
     };
+  }
+
+  /**
+   * Streamed harness turn: transcript deltas (text + thinking + tool notes)
+   * arrive as chunk rows while claude works; done carries the final envelope.
+   * The done response omits the streamed output (deltas already delivered it)
+   * but keeps the context-reset note when resume failed.
+   */
+  private async *harnessStreamTurn(request: ChatStreamRequest): AsyncIterable<StreamEvent> {
+    const deviceId = BigInt(this.binding.device_id);
+    await this.precheckDevice(deviceId);
+    const nonce = await this.enqueueHarnessTurn(request, deviceId, true);
+    const row = await this.awaitCommandRow(deviceId, nonce);
+
+    const sql = getBridgeSql(this.aiIdentityHex);
+    const readChunks = sql?.chunksForCommand?.bind(sql);
+    const HARNESS_WAIT_MS = 660_000;
+    let lastSeq = -1;
+    let sawDelta = false;
+    const start = Date.now();
+    let everLeftPending = false;
+    while (Date.now() - start < HARNESS_WAIT_MS) {
+      if (readChunks) {
+        for (const chunk of await readChunks(row.id)) {
+          if (chunk.seq <= lastSeq) continue;
+          lastSeq = chunk.seq;
+          try {
+            const delta = JSON.parse(chunk.content) as { t?: string; d?: string };
+            if (delta.d) {
+              sawDelta = true;
+              yield delta.t === "think"
+                ? { type: "thinking_delta", text: delta.d }
+                : { type: "text_delta", text: delta.d };
+            }
+          } catch {
+            /* malformed chunk — skip */
+          }
+        }
+      }
+      const result = await this.readResult(row.id);
+      if (result) {
+        // When nothing streamed (older daemon, or claude emitted no deltas),
+        // the final output must still reach the user — include it in done.
+        const response = this.parseHarnessResult(result, deviceId, request, {
+          includeOutput: !sawDelta,
+        });
+        yield { type: "done", response };
+        return;
+      }
+      const cmdRow = (await this.readCommands(deviceId)).find(
+        (r) => String(r.id) === String(row.id),
+      );
+      const tag = cmdRow?.status?.tag;
+      if (tag && tag !== "Pending") everLeftPending = true;
+      if (tag === "Pending" && !everLeftPending && Date.now() - start > 30_000) {
+        throw new Error(
+          `Bridge device ${deviceId} did not pick up the harness turn — it is likely offline ` +
+            `or running an older pear-bridge without harness support.`,
+        );
+      }
+      await sleep(300);
+    }
+    throw new Error(
+      `Harness turn on device ${deviceId} produced no result within ${HARNESS_WAIT_MS / 1000}s.`,
+    );
   }
 
   /** Device connectivity precheck shared with the inference path. */

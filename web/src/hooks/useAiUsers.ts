@@ -103,6 +103,10 @@ export function useSetAiUserInferenceBackend() {
   return useReducer(reducers.setAiUserInferenceBackend);
 }
 
+export function useMergeAiUsers() {
+  return useReducer(reducers.mergeAiUsers);
+}
+
 export function useDeleteAiUser() {
   return useReducer(reducers.deleteAiUser);
 }

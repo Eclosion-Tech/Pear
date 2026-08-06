@@ -253,3 +253,116 @@ pub fn disable_ai_user_memory(ctx: &ReducerContext, ai_user_id: u64) -> Result<(
     ctx.db.ai_user_memory().id().delete(mem.id);
     Ok(())
 }
+
+/// Merge one AI user into another, then delete the source. Built for
+/// condensing duplicate external-MCP identities (each historical OAuth
+/// onboarding could mint a fresh "MCP: …" user) down to the active one:
+///
+/// * **Memory carries over.** If the target has no memory subtree, the
+///   source's is re-keyed to the target wholesale. If both have one, the
+///   source's root page is nested under the target's root as a
+///   "Merged memory — <name>" folder — nothing is deleted, the target can
+///   consolidate at leisure. Either way the target identity is granted access
+///   to the carried-over pages (their old rules referenced the source
+///   identity, which is about to disappear).
+/// * **Bridge grants transfer** (idempotently) so the surviving user keeps
+///   device access.
+/// * Historical conversation messages keep their original sender identity —
+///   they render like any other deleted user's messages.
+///
+/// Gated on creator-or-admin for BOTH users.
+#[reducer]
+pub fn merge_ai_users(
+    ctx: &ReducerContext,
+    source_ai_user_id: u64,
+    target_ai_user_id: u64,
+) -> Result<(), String> {
+    if source_ai_user_id == target_ai_user_id {
+        return Err("Cannot merge an AI user into itself".to_string());
+    }
+    let source = ctx
+        .db
+        .ai_user_config()
+        .id()
+        .find(source_ai_user_id)
+        .ok_or("Source AI user not found")?;
+    let target = ctx
+        .db
+        .ai_user_config()
+        .id()
+        .find(target_ai_user_id)
+        .ok_or("Target AI user not found")?;
+    require_creator_or_admin(ctx, source.created_by, "merge AI users")?;
+    require_creator_or_admin(ctx, target.created_by, "merge AI users")?;
+
+    let source_name = ctx
+        .db
+        .ai_user_profile()
+        .ai_user_id()
+        .find(source_ai_user_id)
+        .map(|p| p.display_name)
+        .unwrap_or_else(|| format!("AI user {source_ai_user_id}"));
+
+    // ── Memory ────────────────────────────────────────────────────────────
+    if let Some(src_mem) = ctx.db.ai_user_memory().ai_user_id().find(source_ai_user_id) {
+        match ctx.db.ai_user_memory().ai_user_id().find(target_ai_user_id) {
+            None => {
+                let root_page_id = src_mem.root_page_id;
+                ctx.db.ai_user_memory().id().update(AiUserMemory {
+                    ai_user_id: target_ai_user_id,
+                    ..src_mem
+                });
+                grant_ai_memory_page_access(ctx, root_page_id, target.identity);
+            }
+            Some(tgt_mem) => {
+                if let Some(root) = ctx.db.page().id().find(src_mem.root_page_id) {
+                    ctx.db.page().id().update(Page {
+                        parent_id: Some(tgt_mem.root_page_id),
+                        title: format!("Merged memory — {source_name}"),
+                        sort_order: next_sort_order(ctx, Some(tgt_mem.root_page_id)),
+                        ..root
+                    });
+                }
+                grant_ai_memory_page_access(ctx, src_mem.root_page_id, target.identity);
+                ctx.db.ai_user_memory().id().delete(&src_mem.id);
+            }
+        }
+    }
+
+    // ── Bridge device grants ──────────────────────────────────────────────
+    use crate::bridge::{
+        bridge_device_grant, next_bridge_device_grant_id, BridgeDeviceGrant,
+    };
+    let source_grants: Vec<BridgeDeviceGrant> = ctx
+        .db
+        .bridge_device_grant()
+        .iter()
+        .filter(|g| g.ai_user_identity == source.identity)
+        .collect();
+    for grant in source_grants {
+        let target_has = ctx
+            .db
+            .bridge_device_grant()
+            .device_id()
+            .filter(grant.device_id)
+            .any(|g| g.ai_user_identity == target.identity);
+        if !target_has {
+            ctx.db.bridge_device_grant().insert(BridgeDeviceGrant {
+                id: next_bridge_device_grant_id(ctx),
+                device_id: grant.device_id,
+                ai_user_identity: target.identity,
+                granted_by: grant.granted_by,
+                granted_at: ctx.timestamp,
+            });
+        }
+        ctx.db.bridge_device_grant().id().delete(&grant.id);
+    }
+
+    // ── Delete the source user (config + profile) ─────────────────────────
+    ctx.db.ai_user_config().id().delete(source_ai_user_id);
+    ctx.db.ai_user_profile().ai_user_id().delete(source_ai_user_id);
+    log::info!(
+        "AI user {source_ai_user_id} ({source_name}) merged into {target_ai_user_id}"
+    );
+    Ok(())
+}

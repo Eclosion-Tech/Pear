@@ -245,6 +245,7 @@ pub async fn process_incoming(
             let result = crate::harness::run_harness_json(
                 cmd.payload_json.as_deref(),
                 enforcer.allowed_dirs(),
+                chunks,
             )
             .await;
             Outcome::Completed {

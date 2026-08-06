@@ -123,6 +123,7 @@ import LogoutReducer from "./logout_reducer";
 import MarkAiMemoryConsolidatedReducer from "./mark_ai_memory_consolidated_reducer";
 import MarkBridgeCommandRunningReducer from "./mark_bridge_command_running_reducer";
 import MarkConversationReadReducer from "./mark_conversation_read_reducer";
+import MergeAiUsersReducer from "./merge_ai_users_reducer";
 import MigratePageToComponentTreeReducer from "./migrate_page_to_component_tree_reducer";
 import MoveComponentReducer from "./move_component_reducer";
 import MovePageReducer from "./move_page_reducer";
@@ -1344,6 +1345,7 @@ const reducersSchema = __reducers(
   __reducerSchema("mark_ai_memory_consolidated", MarkAiMemoryConsolidatedReducer),
   __reducerSchema("mark_bridge_command_running", MarkBridgeCommandRunningReducer),
   __reducerSchema("mark_conversation_read", MarkConversationReadReducer),
+  __reducerSchema("merge_ai_users", MergeAiUsersReducer),
   __reducerSchema("migrate_page_to_component_tree", MigratePageToComponentTreeReducer),
   __reducerSchema("move_component", MoveComponentReducer),
   __reducerSchema("move_page", MovePageReducer),

@@ -64,12 +64,12 @@ async fn first_turn_starts_session_then_second_turn_resumes_it() {
     std::env::set_var("PEAR_BRIDGE_CLAUDE_BIN", &bin);
 
     let allowed = vec![dir.clone()];
-    let first = run_harness_json(Some(&payload(&dir, "hello")), &allowed).await;
+    let first = run_harness_json(Some(&payload(&dir, "hello")), &allowed, None).await;
     assert!(first.ok, "{:?}", first.error);
     assert!(!first.resumed, "first turn must report a fresh session");
     assert_eq!(first.output, "fresh turn: hello");
 
-    let second = run_harness_json(Some(&payload(&dir, "and again")), &allowed).await;
+    let second = run_harness_json(Some(&payload(&dir, "and again")), &allowed, None).await;
     std::env::remove_var("PEAR_BRIDGE_CLAUDE_BIN");
     assert!(second.ok, "{:?}", second.error);
     assert!(second.resumed, "second turn must resume");
@@ -100,11 +100,11 @@ async fn cwd_is_jailed_to_allowed_directories() {
         "cwd": outside.to_string_lossy(),
     })
     .to_string();
-    let result = run_harness_json(Some(&body), &allowed).await;
+    let result = run_harness_json(Some(&body), &allowed, None).await;
     assert!(!result.ok);
     assert!(result.error.as_deref().unwrap().contains("outside this device's allowed_directories"));
 
-    let none = run_harness_json(Some(&payload(&dir, "hi")), &[]).await;
+    let none = run_harness_json(Some(&payload(&dir, "hi")), &[], None).await;
     assert!(!none.ok);
     assert!(none.error.as_deref().unwrap().contains("no allowed_directories"));
 }
@@ -121,7 +121,7 @@ async fn refuses_bypass_permissions_bad_uuids_and_unknown_providers() {
         "permission_mode": "bypassPermissions",
     })
     .to_string();
-    let r = run_harness_json(Some(&bypass), &allowed).await;
+    let r = run_harness_json(Some(&bypass), &allowed, None).await;
     assert!(!r.ok);
     assert!(r.error.as_deref().unwrap().contains("bypassPermissions"));
 
@@ -131,7 +131,7 @@ async fn refuses_bypass_permissions_bad_uuids_and_unknown_providers() {
         "prompt": "hi",
     })
     .to_string();
-    let r = run_harness_json(Some(&bad_sid), &allowed).await;
+    let r = run_harness_json(Some(&bad_sid), &allowed, None).await;
     assert!(!r.ok);
     assert!(r.error.as_deref().unwrap().contains("UUID"));
 
@@ -141,7 +141,7 @@ async fn refuses_bypass_permissions_bad_uuids_and_unknown_providers() {
         "prompt": "hi",
     })
     .to_string();
-    let r = run_harness_json(Some(&codex), &allowed).await;
+    let r = run_harness_json(Some(&codex), &allowed, None).await;
     assert!(!r.ok);
     assert!(r.error.as_deref().unwrap().contains("not supported yet"));
 }
