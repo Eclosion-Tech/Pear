@@ -10,9 +10,9 @@ import {
 
 /**
  * Renders a marker in the editor's right gutter aligned to each block that has
- * a block-anchored conversation (a ContextThread created by an @mention on that
- * block — see `Conversation.block_anchor`). Clicking a marker opens a card
- * listing that block's threads, where each can be opened or resolved.
+ * a block-anchored conversation (see `Conversation.block_anchor`). Clicking a
+ * marker opens a card listing that block's threads, where each can be opened or
+ * resolved; hovering an unthreaded block offers a quiet create affordance.
  *
  * Positioning is measured from the live DOM: pulp's `BlockChrome` gives each
  * block element `id="block-<ComponentNode.id>"`, which matches the
@@ -51,10 +51,12 @@ export function BlockThreadGutter({
   containerRef,
   pageId,
   onOpenThread,
+  onCreateThread,
 }: {
   containerRef: React.RefObject<HTMLElement | null>;
   pageId: bigint;
   onOpenThread: (conversationId: bigint) => void;
+  onCreateThread: (blockId: bigint) => void;
 }) {
   const [conversations] = useTable(tables.conversation);
   const [aiProfiles] = useTable(tables.ai_user_profile);
@@ -116,6 +118,31 @@ export function BlockThreadGutter({
   const [detached, setDetached] = useState<BlockThreads[]>([]);
   const [openAnchor, setOpenAnchor] = useState<string | null>(null);
   const [showResolved, setShowResolved] = useState<Set<string>>(new Set());
+  const [hoveredBlock, setHoveredBlock] = useState<{ anchor: string; top: number } | null>(null);
+  const hoverClearTimerRef = useRef<number | null>(null);
+
+  const cancelHoverClear = useCallback(() => {
+    if (hoverClearTimerRef.current == null) return;
+    window.clearTimeout(hoverClearTimerRef.current);
+    hoverClearTimerRef.current = null;
+  }, []);
+
+  const scheduleHoverClear = useCallback(() => {
+    cancelHoverClear();
+    hoverClearTimerRef.current = window.setTimeout(() => {
+      hoverClearTimerRef.current = null;
+      setHoveredBlock(null);
+    }, 120);
+  }, [cancelHoverClear]);
+
+  useEffect(
+    () => () => {
+      if (hoverClearTimerRef.current != null) {
+        window.clearTimeout(hoverClearTimerRef.current);
+      }
+    },
+    [],
+  );
 
   const measure = useCallback(() => {
     const container = containerRef.current;
@@ -193,6 +220,50 @@ export function BlockThreadGutter({
     };
   }, [containerRef, measure, byBlock.size]);
 
+  // One delegated listener covers every live block, including pages with no
+  // existing threads. It only measures the block currently under the pointer,
+  // leaving the observer-based positioning for real thread pills unchanged.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    function onPointerMove(e: PointerEvent) {
+      const target = e.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest("[data-add-thread-pill]")) return;
+      cancelHoverClear();
+
+      const block = target.closest<HTMLElement>("[data-block-chrome][id^='block-']");
+      if (!block || !container?.contains(block)) {
+        setHoveredBlock(null);
+        return;
+      }
+
+      const anchor = block.id.slice("block-".length);
+      if (!anchor || byBlock.has(anchor)) {
+        setHoveredBlock(null);
+        return;
+      }
+
+      const containerTop = container.getBoundingClientRect().top;
+      const top = block.getBoundingClientRect().top - containerTop + container.scrollTop;
+      setHoveredBlock((previous) =>
+        previous?.anchor === anchor && previous.top === top ? previous : { anchor, top },
+      );
+    }
+
+    function onPointerLeave() {
+      scheduleHoverClear();
+    }
+
+    container.addEventListener("pointermove", onPointerMove);
+    container.addEventListener("pointerleave", onPointerLeave);
+    return () => {
+      container.removeEventListener("pointermove", onPointerMove);
+      container.removeEventListener("pointerleave", onPointerLeave);
+    };
+  }, [byBlock, cancelHoverClear, containerRef, scheduleHoverClear]);
+
   // Dismiss the card on outside click / Escape.
   const cardRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -213,7 +284,10 @@ export function BlockThreadGutter({
     };
   }, [openAnchor]);
 
-  if (positions.length === 0 && detached.length === 0) return null;
+  const addThreadTarget =
+    hoveredBlock && !byBlock.has(hoveredBlock.anchor) ? hoveredBlock : null;
+
+  if (positions.length === 0 && detached.length === 0 && !addThreadTarget) return null;
 
   const detachedActive = detached.reduce((n, t) => n + t.active.length, 0);
   const detachedResolved = detached.reduce((n, t) => n + t.resolved.length, 0);
@@ -223,6 +297,43 @@ export function BlockThreadGutter({
     // Overlay spans the container; only the controls capture pointer events so
     // the editor underneath stays fully interactive.
     <div className="pointer-events-none absolute inset-0 z-10">
+      {addThreadTarget && (
+        <div
+          style={{ top: addThreadTarget.top }}
+          className="absolute -right-7"
+          data-add-thread-pill
+          onPointerEnter={cancelHoverClear}
+          onPointerLeave={scheduleHoverClear}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              cancelHoverClear();
+              onCreateThread(BigInt(addThreadTarget.anchor));
+              setHoveredBlock(null);
+            }}
+            className="pointer-events-auto flex h-5 w-5 items-center justify-center rounded-full bg-white/90 text-neutral-400 shadow-sm ring-1 ring-neutral-300/70 transition-colors hover:bg-violet-50 hover:text-violet-600 hover:ring-violet-300 dark:bg-neutral-900/90 dark:text-neutral-500 dark:ring-neutral-700 dark:hover:bg-violet-950/70 dark:hover:text-violet-300 dark:hover:ring-violet-700"
+            title="Add comment thread"
+            aria-label="Add comment thread"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="11"
+              height="11"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              <line x1="12" y1="7" x2="12" y2="13" />
+              <line x1="9" y1="10" x2="15" y2="10" />
+            </svg>
+          </button>
+        </div>
+      )}
       {detached.length > 0 && (
         <div style={{ top: 0 }} className="absolute -right-7">
           <button
@@ -379,6 +490,31 @@ export function BlockThreadGutter({
                     </button>
                   </div>
                 ))}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    onCreateThread(BigInt(anchor));
+                    setOpenAnchor(null);
+                  }}
+                  className="mt-1 flex w-full items-center gap-1 rounded border-t border-neutral-100 px-1.5 py-1.5 text-left text-[10px] font-medium text-neutral-400 transition-colors hover:bg-neutral-50 hover:text-violet-600 dark:border-neutral-800 dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-violet-300"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="10"
+                    height="10"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                  </svg>
+                  New thread
+                </button>
 
                 {resolved.length > 0 && active.length > 0 && (
                   <button

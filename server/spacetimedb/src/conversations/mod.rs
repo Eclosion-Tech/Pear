@@ -9,10 +9,11 @@ use spacetimedb::{
 
 use crate::access_control::helpers::require_page_write;
 use crate::ai::ai_user_profile;
+use crate::auth::user;
 use crate::id_counters::alloc_id;
 use crate::pages::page;
 
-/// Resolve `@display-name` spans in `content` to AI-user identities.
+/// Resolve `@name` spans in `content` to AI-user and human identities.
 ///
 /// Server-side on purpose. Addressing drives AI-to-AI wake gating (and, later,
 /// notifications), so there must be exactly one implementation — a client and a
@@ -28,14 +29,40 @@ pub(crate) fn resolve_mentions_in_content(
     ctx: &ReducerContext,
     content: &str,
 ) -> Vec<Identity> {
-    let profiles: Vec<(String, Identity)> = ctx
+    let ai_profiles: Vec<(String, Identity)> = ctx
         .db
         .ai_user_profile()
         .iter()
-        .filter(|p| !p.display_name.trim().is_empty())
         .map(|p| (p.display_name.clone(), p.identity))
         .collect();
-    match_mentions(content, profiles)
+    let human_users: Vec<(String, Identity)> = ctx
+        .db
+        .user()
+        .iter()
+        .map(|u| (u.name.clone(), u.identity))
+        .collect();
+    match_mentions(content, merge_mention_candidates(ai_profiles, human_users))
+}
+
+/// Merge the two mention namespaces while making the collision rule explicit:
+/// an AI display name wins over a case-insensitively identical human name.
+fn merge_mention_candidates(
+    ai_profiles: Vec<(String, Identity)>,
+    human_users: Vec<(String, Identity)>,
+) -> Vec<(String, Identity)> {
+    let mut candidates: Vec<(String, Identity)> = ai_profiles
+        .into_iter()
+        .filter(|(name, _)| !name.trim().is_empty())
+        .collect();
+    let ai_match_names: Vec<String> = candidates
+        .iter()
+        .map(|(name, _)| name.to_lowercase())
+        .collect();
+
+    candidates.extend(human_users.into_iter().filter(|(name, _)| {
+        !name.trim().is_empty() && !ai_match_names.contains(&name.to_lowercase())
+    }));
+    candidates
 }
 
 /// The matcher itself, split from table access so it is unit-testable without a
@@ -48,6 +75,7 @@ pub(crate) fn match_mentions(
 
     let mut profiles: Vec<(String, Identity)> = profiles
         .into_iter()
+        .filter(|(name, _)| !name.trim().is_empty())
         .map(|(name, id)| (name.to_lowercase(), id))
         .collect();
     profiles.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
@@ -99,6 +127,7 @@ pub(crate) fn match_mentions(
 /// 4. The first/oldest active AI participant supplied by the caller.
 pub(crate) fn choose_human_response_targets(
     explicit_mentions: &[Identity],
+    ai_identities: &[Identity],
     active_ai_participants: &[Identity],
     previous_ai_sender: Option<Identity>,
     previous_response_targets: Option<&[Identity]>,
@@ -114,10 +143,17 @@ pub(crate) fn choose_human_response_targets(
         out
     };
 
-    // A real mention is an explicit routing instruction. Fail closed when the
-    // named AI is not in this thread instead of waking unrelated participants.
-    if !explicit_mentions.is_empty() {
-        return filtered_unique(explicit_mentions);
+    // Only AI mentions are routing instructions. Human mentions are durable
+    // annotation data, but must not suppress the normal AI fallback. Fail
+    // closed when a named AI is not in this thread instead of waking unrelated
+    // participants.
+    let explicit_ai_mentions: Vec<Identity> = explicit_mentions
+        .iter()
+        .filter(|identity| ai_identities.contains(identity))
+        .copied()
+        .collect();
+    if !explicit_ai_mentions.is_empty() {
+        return filtered_unique(&explicit_ai_mentions);
     }
 
     if let Some(identity) = previous_ai_sender {
@@ -157,6 +193,12 @@ fn human_response_targets(
     conversation_id: u64,
     explicit_mentions: &[Identity],
 ) -> Vec<Identity> {
+    let ai_identities: Vec<Identity> = ctx
+        .db
+        .ai_user_profile()
+        .iter()
+        .map(|profile| profile.identity)
+        .collect();
     let mut active_ai_rows: Vec<_> = ctx
         .db
         .conversation_participant()
@@ -164,7 +206,7 @@ fn human_response_targets(
         .filter(&conversation_id)
         .filter(|participant| {
             participant.left_at.is_none()
-                && is_ai_user(ctx, participant.identity)
+                && ai_identities.contains(&participant.identity)
         })
         .collect();
     active_ai_rows.sort_by_key(|participant| {
@@ -201,7 +243,7 @@ fn human_response_targets(
     let mut previous_response_targets = None;
     if let Some(previous) = &previous {
         if let MessageSender::User(identity) = previous.sender {
-            if is_ai_user(ctx, identity) {
+            if ai_identities.contains(&identity) {
                 previous_ai_sender = Some(identity);
             } else {
                 previous_response_targets = previous.response_targets.as_deref();
@@ -211,6 +253,7 @@ fn human_response_targets(
 
     choose_human_response_targets(
         explicit_mentions,
+        &ai_identities,
         &active_ai_participants,
         previous_ai_sender,
         previous_response_targets,
@@ -683,6 +726,21 @@ pub struct MessageFeedback {
 // Conversation Reducers
 // ============================================================
 
+fn validate_participant_identities(
+    participant_identities: &[Identity],
+    mut identity_exists: impl FnMut(Identity) -> bool,
+) -> Result<(), String> {
+    for identity in participant_identities {
+        if *identity == Identity::ZERO {
+            return Err("participant_identities must not contain the zero Identity".to_string());
+        }
+        if !identity_exists(*identity) {
+            return Err("participant_identities contains an unknown identity".to_string());
+        }
+    }
+    Ok(())
+}
+
 /// Start a new conversation. Today this is called when a human @mentions an
 /// AI user in page content (`page_id = Some(...)`, `participant_identities`
 /// contains the AI user's Identity), but the same shape supports future
@@ -712,11 +770,15 @@ pub fn create_conversation(
         return Err("block_anchor requires a page_id".to_string());
     }
 
-    for ident in &participant_identities {
-        if *ident == Identity::ZERO {
-            return Err("participant_identities must not contain the zero Identity".to_string());
-        }
-    }
+    validate_participant_identities(&participant_identities, |identity| {
+        ctx.db.user().identity().find(identity).is_some()
+            || ctx
+                .db
+                .ai_user_profile()
+                .identity()
+                .find(identity)
+                .is_some()
+    })?;
 
     let conv = ctx.db.conversation().insert(Conversation {
         id: next_conversation_id(ctx),
@@ -866,6 +928,26 @@ pub fn send_message(
     Ok(())
 }
 
+fn validate_addressed_mentions(
+    mentions: &[Identity],
+    mut is_ai: impl FnMut(Identity) -> bool,
+    mut is_human: impl FnMut(Identity) -> bool,
+    mut is_participant: impl FnMut(Identity) -> bool,
+) -> Result<(), String> {
+    for mention in mentions {
+        // Human mentions are additive annotation data. They do not wake an AI,
+        // and newly resolving one must not make a formerly valid addressed send
+        // fail merely because that person is not a thread participant.
+        if !is_participant(*mention) && (is_ai(*mention) || !is_human(*mention)) {
+            return Err(
+                "Cannot address an identity that is not a participant in this conversation"
+                    .to_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Send a message that explicitly addresses other participants.
 ///
 /// A separate reducer from `send_message` for the same reason
@@ -910,16 +992,14 @@ pub fn send_addressed_message(
         }
     }
 
-    // Addressing a non-participant would be a message nobody can act on: the
-    // addressee never sees the conversation, so the mention is a silent no-op.
-    for m in &mentions {
-        if !is_conversation_participant(ctx, conversation_id, *m) {
-            return Err(
-                "Cannot address an identity that is not a participant in this conversation"
-                    .to_string(),
-            );
-        }
-    }
+    // An addressed AI must be able to act on the message. Human mentions are
+    // stored for notification/display parity but are not AI addressing.
+    validate_addressed_mentions(
+        &mentions,
+        |identity| is_ai_user(ctx, identity),
+        |identity| ctx.db.user().identity().find(identity).is_some(),
+        |identity| is_conversation_participant(ctx, conversation_id, identity),
+    )?;
     let response_targets = if is_ai_user(ctx, ctx.sender()) {
         None
     } else {
@@ -1592,7 +1672,10 @@ pub fn clear_message_feedback(ctx: &ReducerContext, message_id: u64) -> Result<(
 
 #[cfg(test)]
 mod mention_tests {
-    use super::{choose_human_response_targets, match_mentions};
+    use super::{
+        choose_human_response_targets, match_mentions, merge_mention_candidates,
+        validate_addressed_mentions, validate_participant_identities,
+    };
     use spacetimedb::Identity;
 
     fn id(byte: u8) -> Identity {
@@ -1606,6 +1689,33 @@ mod mention_tests {
     #[test]
     fn resolves_a_simple_mention() {
         assert_eq!(match_mentions("hey @Kira take a look", profiles()), vec![id(1)]);
+    }
+
+    #[test]
+    fn resolves_a_human_name() {
+        let candidates = merge_mention_candidates(profiles(), vec![("Maya".to_string(), id(7))]);
+        assert_eq!(match_mentions("thanks @Maya", candidates), vec![id(7)]);
+    }
+
+    #[test]
+    fn resolves_a_multi_word_human_name() {
+        let candidates = merge_mention_candidates(
+            profiles(),
+            vec![("Ada Lovelace".to_string(), id(8))],
+        );
+        assert_eq!(
+            match_mentions("@Ada Lovelace, can you review?", candidates),
+            vec![id(8)]
+        );
+    }
+
+    #[test]
+    fn ai_display_name_wins_a_human_name_collision() {
+        let candidates = merge_mention_candidates(
+            vec![("Kira".to_string(), id(1))],
+            vec![("kIrA".to_string(), id(7))],
+        );
+        assert_eq!(match_mentions("@KIRA please review", candidates), vec![id(1)]);
     }
 
     #[test]
@@ -1655,15 +1765,14 @@ mod mention_tests {
 
     #[test]
     fn empty_display_names_are_ignored() {
-        let p = vec![("".to_string(), id(9)), ("Kira".to_string(), id(1))];
-        assert_eq!(match_mentions("@Kira", p), vec![id(1)]);
+        assert!(match_mentions("@ anyone", vec![("  ".to_string(), id(9))]).is_empty());
     }
 
     #[test]
     fn explicit_mentions_are_the_exact_response_targets() {
         let active = vec![id(1), id(2)];
         assert_eq!(
-            choose_human_response_targets(&[id(2)], &active, Some(id(1)), None),
+            choose_human_response_targets(&[id(2)], &active, &active, Some(id(1)), None),
             vec![id(2)]
         );
     }
@@ -1671,14 +1780,27 @@ mod mention_tests {
     #[test]
     fn a_mention_of_an_absent_ai_fails_closed() {
         let active = vec![id(1), id(2)];
-        assert!(choose_human_response_targets(&[id(9)], &active, Some(id(1)), None).is_empty());
+        let known_ai = vec![id(1), id(2), id(9)];
+        assert!(
+            choose_human_response_targets(&[id(9)], &known_ai, &active, Some(id(1)), None)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_human_mention_does_not_alter_response_targets() {
+        let active = vec![id(1), id(2)];
+        assert_eq!(
+            choose_human_response_targets(&[id(7)], &active, &active, Some(id(2)), None),
+            vec![id(2)]
+        );
     }
 
     #[test]
     fn an_unaddressed_reply_continues_with_the_previous_ai_speaker() {
         let active = vec![id(1), id(2)];
         assert_eq!(
-            choose_human_response_targets(&[], &active, Some(id(2)), None),
+            choose_human_response_targets(&[], &active, &active, Some(id(2)), None),
             vec![id(2)]
         );
     }
@@ -1687,7 +1809,7 @@ mod mention_tests {
     fn rapid_human_messages_inherit_the_pending_assignment() {
         let active = vec![id(1), id(2)];
         assert_eq!(
-            choose_human_response_targets(&[], &active, None, Some(&[id(2)])),
+            choose_human_response_targets(&[], &active, &active, None, Some(&[id(2)])),
             vec![id(2)]
         );
     }
@@ -1696,8 +1818,41 @@ mod mention_tests {
     fn a_new_group_turn_falls_back_to_the_original_ai() {
         let active = vec![id(1), id(2)];
         assert_eq!(
-            choose_human_response_targets(&[], &active, None, None),
+            choose_human_response_targets(&[], &active, &active, None, None),
             vec![id(1)]
         );
+    }
+
+    #[test]
+    fn a_nonparticipant_human_mention_is_additive() {
+        assert!(validate_addressed_mentions(
+            &[id(7)],
+            |identity| identity == id(1),
+            |identity| identity == id(7),
+            |_| false,
+        )
+        .is_ok());
+        assert!(validate_addressed_mentions(
+            &[id(1)],
+            |identity| identity == id(1),
+            |identity| identity == id(7),
+            |_| false,
+        )
+        .is_err());
+        assert!(validate_addressed_mentions(
+            &[id(9)],
+            |identity| identity == id(1),
+            |identity| identity == id(7),
+            |_| false,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn unknown_conversation_participant_is_rejected() {
+        let known = [id(1), id(2)];
+        let err = validate_participant_identities(&[id(9)], |identity| known.contains(&identity))
+            .expect_err("unknown identity should be rejected");
+        assert_eq!(err, "participant_identities contains an unknown identity");
     }
 }

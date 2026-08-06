@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { useSpacetimeDB } from "spacetimedb/react";
 import Markdown, { type Components } from "react-markdown";
@@ -49,6 +50,11 @@ import {
   type PageDragPayload,
 } from "@/src/lib/chatAttachments";
 import { usePearWorkspaceSlug } from "@/src/lib/blobUpload";
+import { optionStringFromRow } from "@/src/lib/spacetime";
+import {
+  findActiveMentionQuery,
+  insertMention,
+} from "@/src/lib/mentionQuery";
 import { useUsers } from "@/src/hooks/useUser";
 import {
   useAiUserProfiles,
@@ -969,6 +975,156 @@ function MenuModelItem({
   );
 }
 
+type MentionCandidate = {
+  kind: "ai" | "human";
+  key: string;
+  name: string;
+  avatarUrl?: string;
+};
+
+/** Portal-rendered, composer-controlled list of matching mention targets. */
+function AiMentionMenu({
+  anchorRef,
+  aiCandidates,
+  peopleCandidates,
+  activeIndex,
+  onHover,
+  onSelect,
+  onClose,
+}: {
+  anchorRef: React.RefObject<HTMLTextAreaElement | null>;
+  aiCandidates: readonly MentionCandidate[];
+  peopleCandidates: readonly MentionCandidate[];
+  activeIndex: number;
+  onHover: (index: number) => void;
+  onSelect: (candidate: MentionCandidate) => void;
+  onClose: () => void;
+}) {
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const [position, setPosition] = useState({ top: -9999, left: -9999 });
+
+  const positionMenu = useCallback(() => {
+    const anchor = anchorRef.current;
+    const menu = menuRef.current;
+    if (!anchor || !menu) return;
+    const rect = anchor.getBoundingClientRect();
+    const width = 260;
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+    const above = rect.top - menu.offsetHeight - 4;
+    setPosition({
+      top: above >= 8 ? above : rect.bottom + 4,
+      left,
+    });
+  }, [anchorRef]);
+
+  useLayoutEffect(() => {
+    positionMenu();
+  }, [positionMenu, aiCandidates.length, peopleCandidates.length]);
+
+  useEffect(() => {
+    function onPointerDown(e: PointerEvent) {
+      const target = e.target as Node;
+      if (menuRef.current?.contains(target) || anchorRef.current?.contains(target)) return;
+      onClose();
+    }
+    function onScroll(e: Event) {
+      const target = e.target;
+      if (target instanceof Node && menuRef.current?.contains(target)) return;
+      onClose();
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", positionMenu);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", positionMenu);
+    };
+  }, [anchorRef, onClose, positionMenu]);
+
+  useEffect(() => {
+    const item = listRef.current?.querySelector<HTMLElement>(
+      `[data-mention-index="${activeIndex}"]`,
+    );
+    item?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex]);
+
+  if (typeof document === "undefined") return null;
+
+  const renderCandidate = (candidate: MentionCandidate, index: number) => (
+    <button
+      key={candidate.key}
+      type="button"
+      role="option"
+      data-mention-index={index}
+      aria-selected={index === activeIndex}
+      onMouseEnter={() => onHover(index)}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => onSelect(candidate)}
+      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors ${
+        index === activeIndex
+          ? "bg-neutral-100 dark:bg-neutral-800"
+          : "hover:bg-neutral-50 dark:hover:bg-neutral-800/60"
+      }`}
+    >
+      {candidate.avatarUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={candidate.avatarUrl}
+          alt=""
+          className="h-7 w-7 shrink-0 rounded-full object-cover"
+        />
+      ) : (
+        <span
+          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+            candidate.kind === "ai"
+              ? "bg-gradient-to-br from-violet-400 to-indigo-500 text-white"
+              : "bg-neutral-300 text-neutral-700 dark:bg-neutral-600 dark:text-neutral-200"
+          }`}
+        >
+          {candidate.name[0]?.toUpperCase() ?? "?"}
+        </span>
+      )}
+      <span className="truncate text-sm text-neutral-900 dark:text-neutral-100">
+        {candidate.name}
+      </span>
+    </button>
+  );
+
+  return createPortal(
+    <div
+      ref={menuRef}
+      style={{ top: position.top, left: position.left }}
+      className="fixed z-50 w-[260px] overflow-hidden rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-900"
+      role="dialog"
+      aria-label="Mention a workspace member"
+    >
+      <div ref={listRef} className="max-h-[280px] overflow-y-auto py-1" role="listbox">
+        {aiCandidates.length > 0 && (
+          <>
+            <p className="px-3 pb-1 pt-1 text-[11px] font-medium uppercase text-neutral-500 dark:text-neutral-400">
+              AI users
+            </p>
+            {aiCandidates.map((candidate, index) => renderCandidate(candidate, index))}
+          </>
+        )}
+        {peopleCandidates.length > 0 && (
+          <>
+            <p className="px-3 pb-1 pt-2 text-[11px] font-medium uppercase text-neutral-500 dark:text-neutral-400">
+              People
+            </p>
+            {peopleCandidates.map((candidate, index) =>
+              renderCandidate(candidate, aiCandidates.length + index),
+            )}
+          </>
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function ConversationThread({
   conversation,
   messages,
@@ -1026,12 +1182,17 @@ function ConversationThread({
   const createConversation = useCreateConversation();
   const router = useRouter();
   const { identity } = useSpacetimeDB();
+  const { users: allHumanUsers } = useUsers();
   const [input, setInput] = useState("");
+  const [caretIndex, setCaretIndex] = useState(0);
+  const [mentionActiveIndex, setMentionActiveIndex] = useState(0);
+  const [dismissedMentionKey, setDismissedMentionKey] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [pending, setPending] = useState<PendingAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const workspaceSlug = usePearWorkspaceSlug();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Windowed transcript (ticket 14386): only ~a viewport of messages mounts.
   // Heights vary (markdown, tool cards, attachments) so rows are measured;
   // tanstack's ResizeObserver re-measures the streaming message as it grows,
@@ -1143,6 +1304,67 @@ function ConversationThread({
   const uploading = pending.some((a) => a.kind === "image" && a.status === "uploading");
   const readySpecs = toAttachmentSpecs(pending);
   const canSend = (!!input.trim() || readySpecs.length > 0) && !sending && !uploading && isActive;
+  const activeMention = useMemo(
+    () => findActiveMentionQuery(input, caretIndex),
+    [input, caretIndex],
+  );
+  const mentionCandidateGroups = useMemo(() => {
+    if (!activeMention) {
+      return {
+        ai: [] as MentionCandidate[],
+        people: [] as MentionCandidate[],
+        all: [] as MentionCandidate[],
+      };
+    }
+    const query = activeMention.query.toLocaleLowerCase();
+    const ai: MentionCandidate[] = allAiProfiles
+      .filter((profile) => profile.displayName.toLocaleLowerCase().includes(query))
+      .map((profile) => ({
+        kind: "ai",
+        key: `ai:${profile.identity.toHexString()}`,
+        name: profile.displayName,
+        avatarUrl: optionStringFromRow(profile.avatarUrl) || undefined,
+      }));
+    const people: MentionCandidate[] = allHumanUsers
+      .filter(
+        (user) =>
+          user.name.trim().length > 0 &&
+          user.name.toLocaleLowerCase().includes(query),
+      )
+      .map((user) => ({
+        kind: "human",
+        key: `human:${user.identity.toHexString()}`,
+        name: user.name,
+      }));
+    return { ai, people, all: [...ai, ...people] };
+  }, [activeMention, allAiProfiles, allHumanUsers]);
+  const mentionCandidates = mentionCandidateGroups.all;
+  const mentionKey = activeMention
+    ? `${activeMention.start}:${activeMention.end}:${caretIndex}:${activeMention.query}`
+    : null;
+  const mentionMenuOpen =
+    mentionKey != null &&
+    mentionKey !== dismissedMentionKey &&
+    mentionCandidates.length > 0;
+
+  useEffect(() => {
+    setMentionActiveIndex(0);
+  }, [mentionKey]);
+
+  const selectMention = useCallback(
+    (candidate: MentionCandidate) => {
+      if (!activeMention) return;
+      const inserted = insertMention(input, activeMention, candidate.name);
+      setInput(inserted.value);
+      setCaretIndex(inserted.caretIndex);
+      setDismissedMentionKey(null);
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        textareaRef.current?.setSelectionRange(inserted.caretIndex, inserted.caretIndex);
+      });
+    },
+    [activeMention, input],
+  );
 
   function removePending(id: string) {
     setPending((prev) => {
@@ -1273,6 +1495,7 @@ function ConversationThread({
         });
       }
       setInput("");
+      setCaretIndex(0);
       setPending((prev) => {
         for (const a of prev) {
           if (a.kind === "image") URL.revokeObjectURL(a.previewUrl);
@@ -1456,14 +1679,60 @@ function ConversationThread({
         >
           <ComposerAttachments pending={pending} onRemove={removePending} />
           <div className="flex gap-2">
+            {mentionMenuOpen && (
+              <AiMentionMenu
+                anchorRef={textareaRef}
+                aiCandidates={mentionCandidateGroups.ai}
+                peopleCandidates={mentionCandidateGroups.people}
+                activeIndex={mentionActiveIndex}
+                onHover={setMentionActiveIndex}
+                onSelect={selectMention}
+                onClose={() => setDismissedMentionKey(mentionKey)}
+              />
+            )}
             <textarea
+              ref={textareaRef}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                setInput(e.currentTarget.value);
+                setCaretIndex(e.currentTarget.selectionStart ?? e.currentTarget.value.length);
+                setDismissedMentionKey(null);
+              }}
+              onSelect={(e) =>
+                setCaretIndex(e.currentTarget.selectionStart ?? e.currentTarget.value.length)
+              }
               onPaste={handlePaste}
               placeholder={`Message ${aiName}…`}
               rows={2}
               className="flex-1 text-sm bg-neutral-50 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded-lg px-3 py-2 text-neutral-800 dark:text-neutral-200 placeholder:text-neutral-400 resize-none outline-none focus:ring-1 focus:ring-neutral-400 dark:focus:ring-neutral-600 transition-shadow"
               onKeyDown={(e) => {
+                if (mentionMenuOpen) {
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setMentionActiveIndex((index) =>
+                      (index + 1) % mentionCandidates.length,
+                    );
+                    return;
+                  }
+                  if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setMentionActiveIndex((index) =>
+                      (index - 1 + mentionCandidates.length) % mentionCandidates.length,
+                    );
+                    return;
+                  }
+                  if (e.key === "Enter" || e.key === "Tab") {
+                    e.preventDefault();
+                    const candidate = mentionCandidates[mentionActiveIndex];
+                    if (candidate) selectMention(candidate);
+                    return;
+                  }
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setDismissedMentionKey(mentionKey);
+                    return;
+                  }
+                }
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   void handleSend();

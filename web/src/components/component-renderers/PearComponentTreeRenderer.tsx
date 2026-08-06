@@ -36,7 +36,10 @@ import { useSyncChildPageLinks } from "@/src/hooks/useSyncChildPageLinks";
 import { useWorkspace } from "@/src/providers/WorkspaceProvider";
 import { AudioAttachmentContext } from "@/src/components/AudioAttachmentContext";
 import { useCreateAttachment } from "@/src/hooks/usePages";
-import { useCreateConversation } from "@/src/hooks/useConversations";
+import {
+  useConversations,
+  useCreateConversation,
+} from "@/src/hooks/useConversations";
 import { useSpacetimeDB } from "spacetimedb/react";
 import { registerPearBuiltinRenderers } from "./built-in";
 import { PEAR_SLASH_ITEMS, slashItemsForDefs } from "./pearSlashItems";
@@ -104,6 +107,13 @@ export function ComponentTreeRenderer({
   const { idbNamespace } = useWorkspace();
   const { identity } = useSpacetimeDB();
   const createConversation = useCreateConversation();
+  const { conversations } = useConversations();
+  const conversationsRef = useRef(conversations);
+  conversationsRef.current = conversations;
+  const pendingBlockThreadRef = useRef<{
+    blockAnchor: bigint;
+    existingIds: Set<string>;
+  } | null>(null);
   useHighlightNodeFromUrl(surfaceId);
   const insertComponent = useInsertComponent();
   const deleteComponent = useDeleteComponent();
@@ -306,16 +316,49 @@ export function ComponentTreeRenderer({
     deletePageLink,
   });
 
+  useEffect(() => {
+    const pending = pendingBlockThreadRef.current;
+    if (!pending || !identity || !onOpenThread) return;
+    const meHex = identity.toHexString();
+    const fresh = conversations
+      .filter(
+        (conversation) =>
+          !pending.existingIds.has(String(conversation.id)) &&
+          conversation.initiatedBy.toHexString() === meHex &&
+          conversation.pageId === surfaceId &&
+          conversation.kind.tag === "ContextThread" &&
+          conversation.blockAnchor === pending.blockAnchor,
+      )
+      .sort((a, b) => Number(b.id - a.id))[0];
+    if (!fresh) return;
+    pendingBlockThreadRef.current = null;
+    onOpenThread(fresh.id);
+  }, [conversations, identity, onOpenThread, surfaceId]);
+
   const handleCommentBlock = useCallback(
     (nodeId: bigint) => {
       if (!identity) return;
-      createConversation({
+      const pending = onOpenThread
+        ? {
+            blockAnchor: nodeId,
+            existingIds: new Set(
+              conversationsRef.current.map((conversation) => String(conversation.id)),
+            ),
+          }
+        : null;
+      pendingBlockThreadRef.current = pending;
+      void createConversation({
         pageId: surfaceId,
         participantIdentities: [identity],
         blockAnchor: nodeId,
+      }).catch((error) => {
+        if (pendingBlockThreadRef.current === pending) {
+          pendingBlockThreadRef.current = null;
+        }
+        console.error("[PearComponentTreeRenderer] Failed to create block thread", error);
       });
     },
-    [createConversation, identity, surfaceId],
+    [createConversation, identity, onOpenThread, surfaceId],
   );
 
   // Supplies rows to `Repeater` nodes (custom-view runtime, ADR D1). Stable
@@ -356,6 +399,7 @@ export function ComponentTreeRenderer({
                   containerRef={editorContainerRef}
                   pageId={surfaceId}
                   onOpenThread={onOpenThread}
+                  onCreateThread={handleCommentBlock}
                 />
               )}
             </div>
