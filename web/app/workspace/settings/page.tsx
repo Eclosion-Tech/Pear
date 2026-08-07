@@ -11,6 +11,7 @@ import { WorkspaceConnectionsPanel } from "@/src/components/WorkspaceConnections
 import { NotionImportPanel } from "@/src/components/NotionImportPanel";
 import { StorageUsagePanel } from "@/src/components/StorageUsagePanel";
 import { AutomationsSettings } from "@/src/components/AutomationsSettings";
+import { WorkspaceHealthSettings } from "@/src/components/WorkspaceHealthSettings";
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -61,6 +62,8 @@ export default function SettingsPage() {
         <MembersSettings />
 
         <AiUsersSettings />
+
+        <WorkspaceHealthSettings />
 
         <AgentPolicySettings />
 

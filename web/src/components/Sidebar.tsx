@@ -13,18 +13,6 @@ import {
   useUpdatePageIcon,
 } from "@/src/hooks/usePages";
 import { useCurrentUser } from "@/src/hooks/useUser";
-import { useSpacetimeDB } from "spacetimedb/react";
-import {
-  useInboxConversations,
-  useConversationMessages,
-  useConversationParticipants,
-  isVisibleConversationMessage,
-  type ConversationRow,
-  type ConversationMessageRow,
-} from "@/src/hooks/useConversations";
-import { useAiUserProfiles } from "@/src/hooks/useAiUsers";
-import { useTable, useReducer } from "spacetimedb/react";
-import { tables, reducers } from "@/src/module_bindings";
 import { SettingsPopover } from "@/src/components/SettingsPopover";
 import { ContextMenu, type ContextMenuItem } from "@/src/components/ContextMenu";
 import { QuickSwitcher } from "@/src/components/QuickSwitcher";
@@ -58,220 +46,6 @@ function ThemeToggle() {
       className="text-neutral-400 dark:text-neutral-600 hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors text-sm"
     >
       {resolvedTheme === "dark" ? "☀︎" : "☾"}
-    </button>
-  );
-}
-
-// ─── Inbox view (Phase A: sidebar Page/Inbox toggle) ─────────────────────────
-//
-// Mirrors the Page tree visually but lists conversations the current human
-// participates in (joined via `conversation_participant`). Routes the click
-// to the conversation's host page with a `?conversation=ID` query param so
-// `AiPanel` opens the thread directly.
-
-function InboxView() {
-  const router = useRouter();
-  const { identity } = useSpacetimeDB();
-  const conversations = useInboxConversations(identity);
-  const messages = useConversationMessages();
-  const participants = useConversationParticipants();
-  const { profiles: aiProfiles } = useAiUserProfiles();
-
-  // One pass over the message/participant tables for the whole inbox. The
-  // previous shape — every InboxRow scanning + sorting the entire message
-  // table twice via its own hooks — was O(conversations × messages log
-  // messages) per render, re-triggered ~3×/sec during any AI streaming turn.
-  const inboxData = useMemo(() => {
-    const meHex = identity?.toHexString();
-    const lastByConv = new Map<bigint, ConversationMessageRow>();
-    const watermarkByConv = new Map<bigint, bigint>();
-    const participantHexesByConv = new Map<bigint, Set<string>>();
-
-    for (const p of participants) {
-      const hex = p.identity.toHexString();
-      let set = participantHexesByConv.get(p.conversationId);
-      if (!set) {
-        set = new Set();
-        participantHexesByConv.set(p.conversationId, set);
-      }
-      set.add(hex);
-      if (meHex && hex === meHex) {
-        watermarkByConv.set(p.conversationId, p.lastViewedMessageId ?? 0n);
-      }
-    }
-
-    const unreadByConv = new Map<bigint, number>();
-    for (const m of messages) {
-      if (!isVisibleConversationMessage(m)) continue;
-      const prev = lastByConv.get(m.conversationId);
-      if (
-        !prev ||
-        m.createdAt.microsSinceUnixEpoch > prev.createdAt.microsSinceUnixEpoch
-      ) {
-        lastByConv.set(m.conversationId, m);
-      }
-      if (meHex) {
-        const watermark = watermarkByConv.get(m.conversationId) ?? 0n;
-        if (m.id > watermark) {
-          unreadByConv.set(
-            m.conversationId,
-            (unreadByConv.get(m.conversationId) ?? 0) + 1,
-          );
-        }
-      }
-    }
-    return { lastByConv, unreadByConv, participantHexesByConv };
-  }, [messages, participants, identity]);
-
-  if (!identity) {
-    return (
-      <div className="px-2 py-2 text-xs text-neutral-400 dark:text-neutral-500 italic">
-        Connecting…
-      </div>
-    );
-  }
-  if (conversations.length === 0) {
-    return (
-      <div className="px-2 py-2 text-xs text-neutral-400 dark:text-neutral-500 italic">
-        No conversations — mention an AI user with @ to start one
-      </div>
-    );
-  }
-  return (
-    <div>
-      {conversations.map((conv) => {
-        const hexes = inboxData.participantHexesByConv.get(conv.id);
-        const aiUser = hexes
-          ? aiProfiles.find((p) => hexes.has(p.identity.toHexString()))
-          : undefined;
-        return (
-          <InboxRow
-            key={String(conv.id)}
-            conversation={conv}
-            aiUserName={aiUser?.displayName}
-            last={inboxData.lastByConv.get(conv.id)}
-            unread={inboxData.unreadByConv.get(conv.id) ?? 0}
-            onClick={() =>
-              router.push(`/workspace/${conv.pageId}?conversation=${conv.id}`)
-            }
-          />
-        );
-      })}
-      <StructuralFindingsList />
-    </div>
-  );
-}
-
-// Structural sensor findings (orphan detector, relational integrity, etc.).
-// Surfaced in the Inbox so workspace integrity issues live alongside
-// conversation activity. Empty state is a no-op so the section disappears
-// when nothing is wrong.
-function StructuralFindingsList() {
-  const [findings] = useTable(tables.structural_sensor_finding);
-  const resolve = useReducer(reducers.resolveStructuralFinding);
-  const open = findings
-    .filter((f) => !f.resolvedAt)
-    .sort((a, b) =>
-      Number(
-        b.lastSeenAt.microsSinceUnixEpoch - a.lastSeenAt.microsSinceUnixEpoch,
-      ),
-    );
-  if (open.length === 0) return null;
-  const sevColor = (sev: string) => {
-    switch (sev) {
-      case "error":
-        return "bg-rose-500";
-      case "warn":
-        return "bg-amber-500";
-      default:
-        return "bg-sky-500";
-    }
-  };
-  return (
-    <div className="mt-3 border-t border-neutral-200 dark:border-neutral-800 pt-2">
-      <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-neutral-400 dark:text-neutral-500">
-        Workspace findings ({open.length})
-      </div>
-      {open.slice(0, 25).map((f) => (
-        <div
-          key={String(f.id)}
-          className="group flex items-start gap-2 px-2 py-1.5 text-left text-xs text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900"
-        >
-          <span
-            className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${sevColor(f.severity)}`}
-            title={`${f.sensorKind} · ${f.severity}`}
-          />
-          <span className="flex-1 min-w-0">
-            <span className="block truncate font-medium">{f.message}</span>
-            <span className="block text-[10px] text-neutral-400 dark:text-neutral-500">
-              {f.sensorKind} · {f.code}
-            </span>
-          </span>
-          <button
-            onClick={() => void resolve({ findingId: f.id })}
-            className="opacity-0 group-hover:opacity-100 text-[10px] px-1.5 py-0.5 rounded text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200"
-            title="Mark as resolved"
-          >
-            ✓
-          </button>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function InboxRow({
-  conversation,
-  aiUserName,
-  last,
-  unread,
-  onClick,
-}: {
-  conversation: ConversationRow;
-  aiUserName: string | undefined;
-  last: ConversationMessageRow | undefined;
-  unread: number;
-  onClick: () => void;
-}) {
-  const isActive = conversation.status.tag === "Active";
-  const kindLabel =
-    conversation.kind.tag === "Dm" ? "DM"
-    : conversation.kind.tag === "AiDm" ? "AI DM"
-    : conversation.kind.tag === "GroupDm" ? "Group DM"
-    : conversation.kind.tag === "SharedThread" ? "Shared"
-    : null;
-
-  return (
-    <button
-      onClick={onClick}
-      className="w-full flex items-start gap-2 px-2 py-1.5 text-left rounded text-sm text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-900 hover:text-neutral-900 dark:hover:text-white transition-colors"
-    >
-      <span className="mr-1 text-xs">💬</span>
-      <span className="flex-1 min-w-0">
-        <span className="flex items-center gap-1.5">
-          <span className="truncate text-xs font-medium">
-            {aiUserName ?? "Conversation"}
-          </span>
-          {kindLabel && (
-            <span className="text-[9px] font-semibold uppercase px-1 py-px rounded bg-neutral-200 dark:bg-neutral-700 text-neutral-500 dark:text-neutral-400 shrink-0">
-              {kindLabel}
-            </span>
-          )}
-          {isActive && (
-            <span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />
-          )}
-        </span>
-        {last && (
-          <span className="block truncate text-[11px] text-neutral-400 dark:text-neutral-500 mt-0.5">
-            {last.content}
-          </span>
-        )}
-      </span>
-      {unread > 0 && (
-        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-500 text-white shrink-0">
-          {unread}
-        </span>
-      )}
     </button>
   );
 }
@@ -589,11 +363,6 @@ export function Sidebar() {
 
   // Quick switcher
   const [switcherOpen, setSwitcherOpen] = useState(false);
-
-  // Phase A: Page mode shows the page tree; Inbox mode shows conversations
-  // the current human participates in. Local state for now — wire to
-  // `user_preference` when persisting.
-  const [sidebarMode, setSidebarMode] = useState<"pages" | "inbox">("pages");
 
   // Global ⌘K / Ctrl+K listener
   useEffect(() => {
@@ -920,35 +689,9 @@ export function Sidebar() {
         </select>
       </div>
 
-      {/* Page / Inbox toggle */}
-      <div className="px-2 pt-2 flex gap-1">
-        <button
-          onClick={() => setSidebarMode("pages")}
-          className={`flex-1 px-2 py-1 rounded text-xs font-medium transition-colors ${
-            sidebarMode === "pages"
-              ? "bg-neutral-200 dark:bg-neutral-800 text-neutral-900 dark:text-white"
-              : "text-neutral-500 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-900"
-          }`}
-        >
-          Pages
-        </button>
-        <button
-          onClick={() => setSidebarMode("inbox")}
-          className={`flex-1 px-2 py-1 rounded text-xs font-medium transition-colors ${
-            sidebarMode === "inbox"
-              ? "bg-neutral-200 dark:bg-neutral-800 text-neutral-900 dark:text-white"
-              : "text-neutral-500 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-900"
-          }`}
-        >
-          Inbox
-        </button>
-      </div>
-
-      {/* Page tree or Inbox */}
+      {/* Page tree */}
       <nav className="flex-1 overflow-y-auto px-2 py-2">
-        {sidebarMode === "inbox" ? (
-          <InboxView />
-        ) : repeaterSidebar ? (
+        {repeaterSidebar ? (
           // M3 flag — off by default. Renders the same page tree through the
           // repeater runtime so the two paths can be compared on one clock.
           // Navigate-only; see `sidebarFlag.ts` for why.

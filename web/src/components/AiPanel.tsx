@@ -1763,7 +1763,6 @@ function ConversationThread({
                 activePageId={activePageId}
                 messages={messages}
                 aiName={aiName}
-                onNewConversation={(id) => { /* navigated externally via onBack + inbox */ void id; }}
               />
               <button
                 onClick={() => closeConversation({ conversationId: conversation.id })}
@@ -1792,13 +1791,11 @@ function HandoffPanel({
   activePageId,
   messages,
   aiName,
-  onNewConversation,
 }: {
   conversation: ConversationRow;
   activePageId?: bigint;
   messages: ConversationMessageRow[];
   aiName: string;
-  onNewConversation: (id: bigint) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<HandoffMode | null>(null);
