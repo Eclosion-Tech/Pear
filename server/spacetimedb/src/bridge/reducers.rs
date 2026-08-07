@@ -26,14 +26,14 @@ use spacetimedb::{reducer, Identity, ReducerContext, Table, Timestamp};
 
 use crate::ai::ai_user_config;
 use crate::bridge::{
-    bridge_command, bridge_command_chunk, bridge_command_result, bridge_device,
+    bridge_approval, bridge_command, bridge_command_chunk, bridge_command_result, bridge_device,
     bridge_device_allowlist, bridge_device_capability, bridge_device_grant,
-    bridge_device_summary, bridge_session, next_bridge_command_chunk_id,
+    bridge_device_summary, bridge_session, next_bridge_approval_id, next_bridge_command_chunk_id,
     next_bridge_command_id, next_bridge_device_capability_id, next_bridge_device_grant_id,
-    next_bridge_device_id, next_bridge_session_id, BridgeCommand, BridgeCommandChunk,
-    BridgeCommandResult, BridgeCommandStatus, BridgeDevice, BridgeDeviceAllowlist,
-    BridgeDeviceCapability, BridgeDeviceGrant, BridgeDeviceSummary, BridgeSession,
-    UnlistedCommandPolicy,
+    next_bridge_device_id, next_bridge_session_id, BridgeApproval, BridgeApprovalStatus,
+    BridgeCommand, BridgeCommandChunk, BridgeCommandResult, BridgeCommandStatus, BridgeDevice,
+    BridgeDeviceAllowlist, BridgeDeviceCapability, BridgeDeviceGrant, BridgeDeviceSummary,
+    BridgeSession, UnlistedCommandPolicy,
 };
 use crate::extensions::{tool_call_audit_log, ToolCallAuditLog};
 
@@ -700,6 +700,193 @@ pub fn append_bridge_command_chunk(
     Ok(())
 }
 
+// ============================================================
+// Bridge — ACP mid-turn approvals (ticket 14602)
+// ============================================================
+
+/// Cap on the serialized ACP options array. Options are a handful of short
+/// labels; anything larger is a malformed or hostile adapter payload and is
+/// refused rather than truncated — truncating would corrupt the JSON the UI
+/// renders its buttons from.
+const MAX_APPROVAL_OPTIONS_BYTES: usize = 16 * 1024;
+/// Cap on the diff preview. Unlike options this IS truncated: a large diff is
+/// legitimate, and losing the tail of a preview is better than losing the
+/// prompt (which would leave the agent blocked until it timed out).
+const MAX_APPROVAL_DIFFS_BYTES: usize = 64 * 1024;
+
+/// Record a permission request an ACP harness agent raised mid-turn.
+///
+/// Relay/device-only, gated exactly like `complete_bridge_command`: the caller
+/// must be the executing device. An AI user must never be able to reach this —
+/// a prompt-injected agent could otherwise fabricate approval prompts in its
+/// owner's UI and social-engineer a click.
+///
+/// Idempotent on `(command_id, request_id)`: the relay may retry, and a second
+/// prompt for the same request would be a duplicate the human cannot tell apart.
+#[reducer]
+pub fn record_bridge_approval_request(
+    ctx: &ReducerContext,
+    command_id: u64,
+    request_id: String,
+    tool_call_id: Option<String>,
+    title: Option<String>,
+    kind: Option<String>,
+    options_json: String,
+    diffs_json: Option<String>,
+) -> Result<(), String> {
+    if request_id.trim().is_empty() {
+        return Err("Approval request_id must not be empty".to_string());
+    }
+    if options_json.len() > MAX_APPROVAL_OPTIONS_BYTES {
+        return Err("Approval options payload too large (max 16 KiB)".to_string());
+    }
+    let cmd = ctx
+        .db
+        .bridge_command()
+        .id()
+        .find(command_id)
+        .ok_or_else(|| format!("Bridge command {command_id} not found"))?;
+    require_executing_device(ctx, &cmd)?;
+    if cmd.kind.as_deref() != Some("harness") {
+        return Err("Approvals are only valid for harness commands".to_string());
+    }
+
+    if ctx
+        .db
+        .bridge_approval()
+        .command_id()
+        .filter(command_id)
+        .any(|row| row.request_id == request_id)
+    {
+        return Ok(());
+    }
+
+    let diffs_json = diffs_json.map(|mut diffs| {
+        if diffs.len() > MAX_APPROVAL_DIFFS_BYTES {
+            let mut cut = MAX_APPROVAL_DIFFS_BYTES;
+            while !diffs.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            diffs.truncate(cut);
+        }
+        diffs
+    });
+
+    ctx.db.bridge_approval().insert(BridgeApproval {
+        id: next_bridge_approval_id(ctx),
+        command_id,
+        request_id,
+        device_id: cmd.device_id,
+        owner_identity: cmd.owner_identity,
+        requested_by: cmd.requested_by,
+        conversation_id: cmd.conversation_id,
+        title,
+        kind,
+        tool_call_id,
+        options_json,
+        diffs_json,
+        status: BridgeApprovalStatus::Pending,
+        decided_option_id: None,
+        decided_by: None,
+        decided_at: None,
+        created_at: ctx.timestamp,
+    });
+    Ok(())
+}
+
+/// Answer a pending approval. Human-only, gated on device ownership exactly
+/// like `confirm_bridge_command`.
+///
+/// Deliberately takes no "remember"/persist flag. ACP's `allow_always` is a
+/// SESSION-scoped mode escalation on the Claude adapter, not a durable grant;
+/// anything device-persistent must keep going through `set_bridge_allowlist`,
+/// where it is visible and revocable. Merging the two would silently turn a
+/// one-session click into a standing permission.
+///
+/// `option_id` is passed through verbatim. The daemon re-validates it against
+/// the options the agent actually offered and denies anything unrecognized, so
+/// this reducer does not re-parse `options_json` — the enforcement point is the
+/// device, not the server.
+#[reducer]
+pub fn resolve_bridge_approval(
+    ctx: &ReducerContext,
+    approval_id: u64,
+    option_id: String,
+) -> Result<(), String> {
+    if option_id.trim().is_empty() {
+        return Err("Approval option_id must not be empty".to_string());
+    }
+    let approval = ctx
+        .db
+        .bridge_approval()
+        .id()
+        .find(approval_id)
+        .ok_or_else(|| format!("Bridge approval {approval_id} not found"))?;
+    if approval.status != BridgeApprovalStatus::Pending {
+        return Err("This approval has already been answered or has expired".to_string());
+    }
+    let device = live_device(ctx, approval.device_id)?;
+    require_owner(ctx, &device)?;
+
+    ctx.db.bridge_approval().id().update(BridgeApproval {
+        status: BridgeApprovalStatus::Decided,
+        decided_option_id: Some(option_id),
+        decided_by: Some(ctx.sender()),
+        decided_at: Some(ctx.timestamp),
+        ..approval
+    });
+    Ok(())
+}
+
+/// Mark an approval the daemon has stopped waiting on, so the UI stops
+/// offering buttons that can no longer be honored. Device-gated like the
+/// recording side: the daemon owns the timeout, and its deny is already
+/// authoritative by the time this lands.
+#[reducer]
+pub fn expire_bridge_approval(ctx: &ReducerContext, approval_id: u64) -> Result<(), String> {
+    let approval = ctx
+        .db
+        .bridge_approval()
+        .id()
+        .find(approval_id)
+        .ok_or_else(|| format!("Bridge approval {approval_id} not found"))?;
+    // A human answer that landed first wins: the daemon may have raced its own
+    // timeout against a decision already on the wire.
+    if approval.status != BridgeApprovalStatus::Pending {
+        return Ok(());
+    }
+    let cmd = ctx
+        .db
+        .bridge_command()
+        .id()
+        .find(approval.command_id)
+        .ok_or_else(|| format!("Bridge command {} not found", approval.command_id))?;
+    require_executing_device(ctx, &cmd)?;
+
+    ctx.db.bridge_approval().id().update(BridgeApproval {
+        status: BridgeApprovalStatus::Expired,
+        ..approval
+    });
+    Ok(())
+}
+
+/// Delete a command's approval rows (called from the terminal complete/reject
+/// reducers). Like chunks, these are transient turn state: once the turn is
+/// over an unanswered prompt is meaningless, and a stale Pending row would keep
+/// showing buttons in the UI forever.
+fn clear_bridge_approvals(ctx: &ReducerContext, command_id: u64) {
+    let ids: Vec<u64> = ctx
+        .db
+        .bridge_approval()
+        .command_id()
+        .filter(command_id)
+        .map(|row| row.id)
+        .collect();
+    for id in ids {
+        ctx.db.bridge_approval().id().delete(&id);
+    }
+}
+
 /// Delete a command's transient stream chunks (called from the terminal
 /// complete/reject reducers).
 fn clear_bridge_command_chunks(ctx: &ReducerContext, command_id: u64) {
@@ -830,6 +1017,7 @@ pub fn deny_bridge_command(ctx: &ReducerContext, command_id: u64) -> Result<(), 
         ..cmd
     });
     clear_bridge_command_chunks(ctx, command_id);
+    clear_bridge_approvals(ctx, command_id);
     Ok(())
 }
 
@@ -899,6 +1087,9 @@ pub fn complete_bridge_command(
     ctx.db.bridge_command().id().update(BridgeCommand { status, ..cmd });
     // Stream chunks are transient — the result is the durable record.
     clear_bridge_command_chunks(ctx, command_id);
+    // An approval nobody answered before the turn ended can never be honored;
+    // leaving it Pending would show live buttons for a finished turn.
+    clear_bridge_approvals(ctx, command_id);
     Ok(())
 }
 
