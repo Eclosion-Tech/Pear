@@ -1,25 +1,24 @@
-//! Harness sessions (`kind = "harness"`, ticket 14443): full agent turns
-//! through a resumable Claude Code session bound to a Pear conversation.
+//! Harness sessions (`kind = "harness"`, tickets 14443/14602): full agent
+//! turns through a resumable coding-agent session bound to a conversation.
 //!
 //! Unlike inference (`providers.rs`), the harness runs with **tools enabled**
 //! in a real project directory — that is the point: local bash/edit/read
-//! against the bound working tree, with Claude Code's own session state
-//! carrying context between turns (`--resume <session-id>`).
+//! against the bound working tree. The legacy path uses Claude Code's CLI
+//! session state; the opt-in ACP path drives Claude or Codex over JSON-RPC.
 //!
 //! Containment model (v1, documented honestly):
 //! * the working directory MUST resolve inside the device's
 //!   `allowed_directories` (same jail semantics as bash commands);
-//! * inside the session, Claude Code's own permission system governs tools —
-//!   `permission_mode` defaults to `acceptEdits` and `bypassPermissions` is
-//!   REFUSED here (that would disable the only in-session gate);
+//! * the configured adapter mode governs tools — `permission_mode` defaults
+//!   to `acceptEdits`; `bypassPermissions` and codex `agent-full-access` are
+//!   REFUSED. Codex does not reliably surface approval requests, so the cwd
+//!   jail remains the daemon-side guarantee;
 //! * no OS sandbox — the harness needs its auth, the network, and the project
 //!   tree. The AwaitingConfirmation approvals phase layers on later (14443 §3).
 //!
 //! Session identity: the worker derives a stable UUID per (AI user,
-//! conversation) and always sends it. The daemon first tries `--resume <id>`;
-//! if Claude reports the session unknown (fresh device, pruned state), it
-//! falls back to `--session-id <id>` to START the session under that same id,
-//! and reports `resumed: false` so the caller knows continuity was reset.
+//! conversation) and always sends it. The legacy path passes it to Claude;
+//! ACP agents mint their own IDs, so the ACP module keeps a daemon-local map.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -45,6 +44,10 @@ fn claude_bin() -> String {
 #[derive(Clone, Debug, Deserialize)]
 pub struct HarnessPayload {
     pub provider: String,
+    /// Opt into the ACP subprocess path. Absent/false preserves the legacy
+    /// Claude CLI path; `PEAR_BRIDGE_ACP=1` overrides this for local testing.
+    #[serde(default)]
+    pub acp: Option<bool>,
     /// Stable per-conversation session UUID (worker-derived).
     pub session_id: String,
     /// The user's latest message — Claude Code holds the prior turns itself.
@@ -139,8 +142,19 @@ pub async fn run_harness(
     let started = Instant::now();
     let provider = payload.provider.trim();
     let sid = payload.session_id.trim();
+    let acp_active =
+        payload.acp == Some(true) || std::env::var("PEAR_BRIDGE_ACP").as_deref() == Ok("1");
 
-    if provider != "claude-code" && provider != "claude" {
+    if acp_active {
+        if !crate::acp::supports_provider(provider) {
+            return HarnessResult::failure(
+                provider,
+                sid,
+                started,
+                format!("harness provider \"{provider}\" is not supported over ACP"),
+            );
+        }
+    } else if provider != "claude-code" && provider != "claude" {
         return HarnessResult::failure(
             provider,
             sid,
@@ -149,29 +163,37 @@ pub async fn run_harness(
         );
     }
     if !looks_like_uuid(sid) {
-        return HarnessResult::failure(
-            provider,
-            sid,
-            started,
-            "session_id must be a UUID (Claude Code --session-id requirement)".to_string(),
-        );
+        let error = if acp_active {
+            "session_id must be a UUID"
+        } else {
+            "session_id must be a UUID (Claude Code --session-id requirement)"
+        };
+        return HarnessResult::failure(provider, sid, started, error.to_string());
     }
     if payload.prompt.trim().is_empty() {
         return HarnessResult::failure(provider, sid, started, "prompt is empty".to_string());
     }
     let mode = payload.permission_mode.as_deref().unwrap_or("acceptEdits");
-    if !PERMISSION_MODES.contains(&mode) {
-        return HarnessResult::failure(
-            provider,
-            sid,
-            started,
-            format!(
-                "permission_mode \"{mode}\" is not allowed over the bridge (allowed: {}) — \
-                 bypassPermissions would disable the harness's only in-session gate",
-                PERMISSION_MODES.join(", ")
-            ),
-        );
-    }
+    let acp_mode = if acp_active {
+        match crate::acp::permission_mode(provider, mode) {
+            Ok(mode) => Some(mode),
+            Err(error) => return HarnessResult::failure(provider, sid, started, error),
+        }
+    } else {
+        if !PERMISSION_MODES.contains(&mode) {
+            return HarnessResult::failure(
+                provider,
+                sid,
+                started,
+                format!(
+                    "permission_mode \"{mode}\" is not allowed over the bridge (allowed: {}) — \
+                     bypassPermissions would disable the harness's only in-session gate",
+                    PERMISSION_MODES.join(", ")
+                ),
+            );
+        }
+        None
+    };
     let cwd = match resolve_cwd(payload.cwd.as_deref(), allowed_dirs) {
         Ok(dir) => dir,
         Err(e) => return HarnessResult::failure(provider, sid, started, e),
@@ -185,6 +207,36 @@ pub async fn run_harness(
     );
 
     let streaming = payload.stream == Some(true) && chunks.is_some();
+    if acp_active {
+        if payload
+            .allowed_tools
+            .as_ref()
+            .is_some_and(|tools| !tools.is_empty())
+        {
+            return HarnessResult::failure(
+                provider,
+                sid,
+                started,
+                "allowed_tools is not supported by the ACP harness path".to_string(),
+            );
+        }
+        let extra_env = std::collections::BTreeMap::new();
+        let request = crate::acp::TurnRequest {
+            provider,
+            worker_session_id: sid,
+            prompt: &payload.prompt,
+            cwd: &cwd,
+            mode: acp_mode.as_deref(),
+            timeout,
+            chunks: streaming.then_some(chunks).flatten(),
+            extra_env: &extra_env,
+        };
+        return match crate::acp::run_turn(request).await {
+            Ok(outcome) => finish(provider, sid, started, outcome.output, outcome.resumed),
+            Err(error) => HarnessResult::failure(provider, sid, started, error),
+        };
+    }
+
     // Attempt 1: resume the existing session under this id.
     match run_claude_turn(payload, sid, mode, &cwd, timeout, true, streaming, chunks.clone()).await
     {

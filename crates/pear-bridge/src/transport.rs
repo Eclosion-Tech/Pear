@@ -3,10 +3,16 @@
 //! Under the relay-translates design (`PEAR_BRIDGE.md` § The relay, option B),
 //! the daemon speaks **no SpacetimeDB**: the relay is the STDB client (it holds
 //! the per-device token, subscribes to `bridge_command`, and forwards), and the
-//! daemon just exchanges two message shapes over the WS:
+//! daemon exchanges these message shapes over the WS:
 //!
 //!   relay → daemon: `{"type":"command", <IncomingCommand fields>}`
+//!   relay → daemon: `{"type":"approval_decision","command_id":N,
+//!     "request_id":"...","outcome":"selected"|"cancelled","option_id":"..."?}`
 //!   daemon → relay: `{"type":"result", "command_id":N, "status":"...", …}`
+//!   daemon → relay: `{"type":"approval_request","command_id":N,
+//!     "request_id":"...","tool_call_id":"..."?,"title":"..."?,"kind":"..."?,
+//!     "options":[{"optionId":"...","name":"...","kind":"..."}],
+//!     "diffs":[{"path":"...","oldText":"..."?,"newText":"..."?}]?}`
 //!
 //! This keeps the daemon a small, standalone OSS binary with zero STDB schema or
 //! SDK coupling. [`WsCommandSource`] / [`WsResultSink`] adapt the WS to the
@@ -14,6 +20,7 @@
 //! drives execution unchanged. The wire shapes are mirrored on the relay side
 //! (`lifecycle/src/bridge_relay.rs`); keep the two in sync.
 
+use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
@@ -23,7 +30,8 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::allowlist::{AllowlistConfig, AllowlistEnforcer, UnlistedPolicy};
 use crate::audit::AuditLog;
 use crate::daemon::{
-    process_incoming, CommandSource, ExecConfig, IncomingCommand, Outcome, ResultSink,
+    process_incoming, ApprovalDecision, ApprovalPort, ApprovalRequest, CommandSource, ExecConfig,
+    IncomingCommand, Outcome, ResultSink,
 };
 use crate::pty::PtyLimits;
 
@@ -90,21 +98,25 @@ pub fn parse_allowlist_frame(text: &str) -> Option<(AllowlistConfig, PtyLimits)>
     Some((config, limits))
 }
 
-/// Inbound frame from the relay. Internally tagged by `type`; the `command`
-/// variant flattens an [`IncomingCommand`].
+/// Inbound frame from the relay. Wire values such as `outcome` remain open
+/// strings; the ACP permission boundary validates them before granting access.
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Inbound {
     Command(IncomingCommand),
+    ApprovalDecision {
+        command_id: u64,
+        request_id: String,
+        outcome: String,
+        #[serde(default)]
+        option_id: Option<String>,
+    },
 }
 
-/// Parse an inbound text frame into a command, or `None` if it isn't a
-/// well-formed `command` frame (control/unknown frames are ignored).
-fn parse_inbound(text: &str) -> Option<IncomingCommand> {
-    match serde_json::from_str::<Inbound>(text) {
-        Ok(Inbound::Command(cmd)) => Some(cmd),
-        Err(_) => None,
-    }
+/// Parse a known inbound text frame. Malformed and unknown frames remain
+/// ignored for forward compatibility with older/newer relays.
+fn parse_inbound(text: &str) -> Option<Inbound> {
+    serde_json::from_str(text).ok()
 }
 
 /// Serialize the device's detected inference providers into a `capabilities`
@@ -140,6 +152,36 @@ pub fn chunk_frame(command_id: u64, chunk: &crate::providers::ChunkOut) -> Strin
     .to_string()
 }
 
+fn approval_request_json(command_id: u64, request: &ApprovalRequest) -> Result<String, String> {
+    #[derive(serde::Serialize)]
+    struct ApprovalRequestFrame<'a> {
+        #[serde(rename = "type")]
+        ty: &'a str,
+        command_id: u64,
+        request_id: &'a str,
+        #[serde(flatten)]
+        payload: &'a crate::daemon::ApprovalFramePayload,
+    }
+    serde_json::to_string(&ApprovalRequestFrame {
+        ty: "approval_request",
+        command_id,
+        request_id: &request.request_id,
+        payload: &request.frame_payload,
+    })
+    .map_err(|error| format!("failed to serialize approval_request frame: {error}"))
+}
+
+fn dispatch_approval_decision(
+    pending: &mut HashMap<String, tokio::sync::oneshot::Sender<ApprovalDecision>>,
+    request_id: String,
+    outcome: String,
+    option_id: Option<String>,
+) {
+    if let Some(responder) = pending.remove(&request_id) {
+        let _ = responder.send(ApprovalDecision { outcome, option_id });
+    }
+}
+
 /// Serialize an outcome into a `result` frame: `{"type":"result","command_id":N,
 /// "status":"...", …}` (the `Outcome` is flattened, tagged by `status`).
 fn result_json(command_id: u64, outcome: &Outcome) -> Result<String, String> {
@@ -172,7 +214,7 @@ where
         while let Some(item) = self.stream.next().await {
             match item {
                 Ok(Message::Text(text)) => {
-                    if let Some(cmd) = parse_inbound(&text) {
+                    if let Some(Inbound::Command(cmd)) = parse_inbound(&text) {
                         return Some(cmd);
                     }
                     // Non-command / malformed text — skip and keep reading.
@@ -240,6 +282,54 @@ pub async fn run_session<W, E>(
 where
     W: Stream<Item = Result<Message, E>> + Sink<Message, Error = E> + Unpin,
 {
+    let mut processor = DaemonProcessor {
+        enforcer,
+        exec,
+        audit,
+    };
+    run_session_with_processor(ws, &mut processor).await
+}
+
+#[allow(async_fn_in_trait)]
+trait SessionProcessor {
+    async fn process(
+        &mut self,
+        command: &IncomingCommand,
+        chunks: Option<crate::providers::ChunkSender>,
+        approvals: Option<ApprovalPort>,
+    ) -> Outcome;
+}
+
+struct DaemonProcessor<'a> {
+    enforcer: &'a AllowlistEnforcer,
+    exec: &'a ExecConfig,
+    audit: &'a mut AuditLog,
+}
+
+impl SessionProcessor for DaemonProcessor<'_> {
+    async fn process(
+        &mut self,
+        command: &IncomingCommand,
+        chunks: Option<crate::providers::ChunkSender>,
+        approvals: Option<ApprovalPort>,
+    ) -> Outcome {
+        process_incoming(
+            command,
+            self.enforcer,
+            self.exec,
+            self.audit,
+            chunks,
+            approvals,
+        )
+        .await
+    }
+}
+
+async fn run_session_with_processor<W, E, P>(ws: W, processor: &mut P) -> Result<(), String>
+where
+    W: Stream<Item = Result<Message, E>> + Sink<Message, Error = E> + Unpin,
+    P: SessionProcessor,
+{
     let (mut write, mut read) = ws.split();
 
     let mut ping = tokio::time::interval(PING_INTERVAL);
@@ -249,93 +339,162 @@ where
     ping.tick().await;
 
     let mut last_activity = tokio::time::Instant::now();
+    let mut queued_commands = VecDeque::new();
+    let mut pending_approvals: HashMap<String, tokio::sync::oneshot::Sender<ApprovalDecision>> =
+        HashMap::new();
 
     loop {
-        tokio::select! {
-            item = read.next() => match item {
-                Some(Ok(msg)) => {
-                    last_activity = tokio::time::Instant::now();
-                    match msg {
-                        Message::Text(text) => {
-                            if let Some(cmd) = parse_inbound(&text) {
-                                // Keep WS pings flowing WHILE the command runs:
-                                // harness/inference turns can take many minutes
-                                // and an idle socket gets cut by LB timeouts.
-                                // (Bash still blocks inside its synchronous PTY
-                                // call — no await points to ping at — which is
-                                // the documented spawn_blocking follow-up.)
-                                // Streaming inference emits chunk deltas through
-                                // this channel mid-run; they become `chunk`
-                                // frames the relay writes into
-                                // bridge_command_chunk.
-                                let (chunk_tx, mut chunk_rx) =
-                                    tokio::sync::mpsc::unbounded_channel::<crate::providers::ChunkOut>();
-                                let work =
-                                    process_incoming(&cmd, enforcer, exec, audit, Some(chunk_tx));
-                                tokio::pin!(work);
-                                let outcome = loop {
-                                    tokio::select! {
-                                        outcome = &mut work => break outcome,
-                                        chunk = chunk_rx.recv() => {
-                                            if let Some(chunk) = chunk {
-                                                let frame = chunk_frame(cmd.command_id, &chunk);
-                                                let _ = write.send(Message::Text(frame)).await;
-                                            }
-                                        }
-                                        _ = ping.tick() => {
-                                            let _ = write.send(Message::Ping(Vec::new())).await;
-                                        }
-                                    }
-                                };
-                                // Chunks emitted between the last poll and
-                                // completion still precede the result frame.
-                                while let Ok(chunk) = chunk_rx.try_recv() {
-                                    let frame = chunk_frame(cmd.command_id, &chunk);
-                                    let _ = write.send(Message::Text(frame)).await;
-                                }
-                                let json = result_json(cmd.command_id, &outcome)?;
-                                write
-                                    .send(Message::Text(json))
-                                    .await
-                                    .map_err(|_| "failed to send result frame to relay".to_string())?;
-                                // Executing can take a while; count the finished
-                                // work as activity so the idle deadline isn't
-                                // measured from before the command started.
-                                last_activity = tokio::time::Instant::now();
+        pending_approvals.retain(|_, responder| !responder.is_closed());
+
+        let command = if let Some(command) = queued_commands.pop_front() {
+            command
+        } else {
+            loop {
+                tokio::select! {
+                    item = read.next() => match item {
+                        Some(Ok(msg)) => {
+                            last_activity = tokio::time::Instant::now();
+                            match msg {
+                                Message::Text(text) => match parse_inbound(&text) {
+                                    Some(Inbound::Command(command)) => break command,
+                                    Some(Inbound::ApprovalDecision {
+                                        command_id: _command_id,
+                                        request_id,
+                                        outcome,
+                                        option_id,
+                                    }) => dispatch_approval_decision(
+                                        &mut pending_approvals,
+                                        request_id,
+                                        outcome,
+                                        option_id,
+                                    ),
+                                    None => {}
+                                },
+                                Message::Close(_) => return Ok(()),
+                                // Ping/Pong/Binary handling is unchanged; any
+                                // received frame is still proof of liveness.
+                                _ => {}
                             }
-                            // Non-command text — ignore, keep the session alive.
                         }
-                        // Clean server close → end session; caller reconnects.
-                        Message::Close(_) => return Ok(()),
-                        // Ping/Pong/Binary aren't part of the protocol; tungstenite
-                        // auto-Pongs incoming Pings. Receiving anything is liveness.
-                        _ => {}
+                        Some(Err(_)) => return Err("relay stream error".to_string()),
+                        None => return Ok(()),
+                    },
+                    _ = ping.tick() => {
+                        if last_activity.elapsed() >= IDLE_TIMEOUT {
+                            return Err(format!(
+                                "relay idle for {}s with no frames — treating connection as dead",
+                                last_activity.elapsed().as_secs()
+                            ));
+                        }
+                        write
+                            .send(Message::Ping(Vec::new()))
+                            .await
+                            .map_err(|_| "failed to send keepalive ping to relay".to_string())?;
                     }
                 }
-                // Transport error → end with an error so the caller logs + backs off.
-                Some(Err(_)) => return Err("relay stream error".to_string()),
-                // Stream ended → clean close.
-                None => return Ok(()),
-            },
-            _ = ping.tick() => {
-                if last_activity.elapsed() >= IDLE_TIMEOUT {
-                    return Err(format!(
-                        "relay idle for {}s with no frames — treating connection as dead",
-                        last_activity.elapsed().as_secs()
-                    ));
-                }
-                write
-                    .send(Message::Ping(Vec::new()))
-                    .await
-                    .map_err(|_| "failed to send keepalive ping to relay".to_string())?;
             }
+        };
+
+        // Keep reading while async work is in flight: ACP permission requests
+        // block inside the active JSON-RPC turn until their matching decision
+        // arrives. Commands eagerly read during that wait remain serialized by
+        // this queue and are never run concurrently.
+        let (chunk_tx, mut chunk_rx) =
+            tokio::sync::mpsc::unbounded_channel::<crate::providers::ChunkOut>();
+        let (approval_tx, mut approval_rx) =
+            tokio::sync::mpsc::unbounded_channel::<ApprovalRequest>();
+        let approval_port = ApprovalPort::new(command.command_id, approval_tx);
+        let work = processor.process(&command, Some(chunk_tx), Some(approval_port));
+        tokio::pin!(work);
+        let outcome = loop {
+            tokio::select! {
+                outcome = &mut work => break outcome,
+                Some(chunk) = chunk_rx.recv() => {
+                    let frame = chunk_frame(command.command_id, &chunk);
+                    write
+                        .send(Message::Text(frame))
+                        .await
+                        .map_err(|_| "failed to send chunk frame to relay".to_string())?;
+                }
+                Some(request) = approval_rx.recv() => {
+                    let frame = approval_request_json(command.command_id, &request)?;
+                    write
+                        .send(Message::Text(frame))
+                        .await
+                        .map_err(|_| "failed to send approval_request frame to relay".to_string())?;
+                    if pending_approvals.contains_key(&request.request_id) {
+                        return Err(format!(
+                            "duplicate ACP approval request id: {}",
+                            request.request_id
+                        ));
+                    }
+                    pending_approvals.insert(request.request_id, request.responder);
+                }
+                item = read.next() => match item {
+                    Some(Ok(msg)) => {
+                        match msg {
+                            Message::Text(text) => match parse_inbound(&text) {
+                                Some(Inbound::ApprovalDecision {
+                                    command_id: _command_id,
+                                    request_id,
+                                    outcome,
+                                    option_id,
+                                }) => dispatch_approval_decision(
+                                    &mut pending_approvals,
+                                    request_id,
+                                    outcome,
+                                    option_id,
+                                ),
+                                Some(Inbound::Command(command)) => {
+                                    queued_commands.push_back(command);
+                                }
+                                None => {}
+                            },
+                            Message::Close(_) => return Ok(()),
+                            _ => {}
+                        }
+                    }
+                    Some(Err(_)) => return Err("relay stream error".to_string()),
+                    None => return Ok(()),
+                },
+                _ = ping.tick() => {
+                    write
+                        .send(Message::Ping(Vec::new()))
+                        .await
+                        .map_err(|_| "failed to send keepalive ping to relay".to_string())?;
+                }
+            }
+        };
+
+        // Chunks emitted between the last poll and completion still precede
+        // the result frame. Closed approval receivers are pruned so a timed-out
+        // request cannot leak registry state for the lifetime of the socket.
+        while let Ok(chunk) = chunk_rx.try_recv() {
+            let frame = chunk_frame(command.command_id, &chunk);
+            write
+                .send(Message::Text(frame))
+                .await
+                .map_err(|_| "failed to send chunk frame to relay".to_string())?;
         }
+        pending_approvals.retain(|_, responder| !responder.is_closed());
+        let json = result_json(command.command_id, &outcome)?;
+        write
+            .send(Message::Text(json))
+            .await
+            .map_err(|_| "failed to send result frame to relay".to_string())?;
+        // Executing can take a while; the next idle deadline starts when the
+        // command finishes, never from before it began.
+        last_activity = tokio::time::Instant::now();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::{ApprovalDiff, ApprovalFramePayload, ApprovalOption};
+    use tokio::io::DuplexStream;
+    use tokio_tungstenite::tungstenite::protocol::Role;
+    use tokio_tungstenite::WebSocketStream;
 
     fn sample_command_json(id: u64) -> String {
         format!(
@@ -343,9 +502,37 @@ mod tests {
         )
     }
 
+    fn sample_approval_payload() -> ApprovalFramePayload {
+        ApprovalFramePayload {
+            tool_call_id: Some("tool-1".to_string()),
+            title: Some("Edit settings".to_string()),
+            kind: Some("edit".to_string()),
+            options: vec![
+                ApprovalOption {
+                    option_id: "allow".to_string(),
+                    name: "Allow once".to_string(),
+                    kind: "allow_once".to_string(),
+                },
+                ApprovalOption {
+                    option_id: "reject".to_string(),
+                    name: "Reject".to_string(),
+                    kind: "reject_once".to_string(),
+                },
+            ],
+            diffs: Some(vec![ApprovalDiff {
+                path: "src/lib.rs".to_string(),
+                old_text: Some("old".to_string()),
+                new_text: Some("new".to_string()),
+            }]),
+        }
+    }
+
     #[test]
     fn parses_a_command_frame() {
-        let cmd = parse_inbound(&sample_command_json(42)).expect("should parse");
+        let Inbound::Command(cmd) = parse_inbound(&sample_command_json(42)).expect("should parse")
+        else {
+            panic!("expected command frame");
+        };
         assert_eq!(cmd.command_id, 42);
         assert_eq!(cmd.device_id, 1);
         assert_eq!(cmd.command, "git status");
@@ -380,6 +567,85 @@ mod tests {
         assert!(parse_inbound(r#"{"type":"pong"}"#).is_none());
         assert!(parse_inbound("not json").is_none());
         assert!(parse_inbound(r#"{"type":"command"}"#).is_none()); // missing fields
+    }
+
+    #[test]
+    fn approval_frames_round_trip_with_documented_keys() {
+        let (responder, _decision) = tokio::sync::oneshot::channel();
+        let request = ApprovalRequest {
+            request_id: "7-1".to_string(),
+            frame_payload: sample_approval_payload(),
+            responder,
+        };
+        let frame: serde_json::Value =
+            serde_json::from_str(&approval_request_json(7, &request).unwrap()).unwrap();
+        assert_eq!(frame["type"], "approval_request");
+        assert_eq!(frame["command_id"], 7);
+        assert_eq!(frame["request_id"], "7-1");
+        assert_eq!(frame["tool_call_id"], "tool-1");
+        assert_eq!(frame["title"], "Edit settings");
+        assert_eq!(frame["kind"], "edit");
+        assert_eq!(frame["options"][0]["optionId"], "allow");
+        assert_eq!(frame["options"][0]["name"], "Allow once");
+        assert_eq!(frame["options"][0]["kind"], "allow_once");
+        assert_eq!(frame["diffs"][0]["path"], "src/lib.rs");
+        assert_eq!(frame["diffs"][0]["oldText"], "old");
+        assert_eq!(frame["diffs"][0]["newText"], "new");
+
+        let decision = parse_inbound(
+            r#"{"type":"approval_decision","command_id":7,"request_id":"7-1","outcome":"selected","option_id":"allow"}"#,
+        )
+        .expect("approval decision should parse");
+        let Inbound::ApprovalDecision {
+            command_id,
+            request_id,
+            outcome,
+            option_id,
+        } = decision
+        else {
+            panic!("expected approval decision");
+        };
+        assert_eq!(command_id, 7);
+        assert_eq!(request_id, "7-1");
+        assert_eq!(outcome, "selected");
+        assert_eq!(option_id.as_deref(), Some("allow"));
+    }
+
+    #[tokio::test]
+    async fn approval_registry_completes_once_and_ignores_unknown_or_duplicate_decisions() {
+        let mut pending = HashMap::new();
+        let (responder, decision) = tokio::sync::oneshot::channel();
+        pending.insert("7-1".to_string(), responder);
+
+        dispatch_approval_decision(
+            &mut pending,
+            "missing".to_string(),
+            "cancelled".to_string(),
+            None,
+        );
+        assert_eq!(pending.len(), 1);
+        dispatch_approval_decision(
+            &mut pending,
+            "7-1".to_string(),
+            "selected".to_string(),
+            Some("allow".to_string()),
+        );
+        assert_eq!(
+            decision.await.unwrap(),
+            ApprovalDecision {
+                outcome: "selected".to_string(),
+                option_id: Some("allow".to_string()),
+            }
+        );
+        assert!(pending.is_empty());
+
+        dispatch_approval_decision(
+            &mut pending,
+            "7-1".to_string(),
+            "selected".to_string(),
+            Some("allow".to_string()),
+        );
+        assert!(pending.is_empty());
     }
 
     #[test]
@@ -438,6 +704,138 @@ mod tests {
         assert_eq!(source.next_command().await.unwrap().command_id, 1);
         assert_eq!(source.next_command().await.unwrap().command_id, 2);
         assert!(source.next_command().await.is_none()); // Close ends it
+    }
+
+    struct BlockingApprovalProcessor {
+        events: Vec<String>,
+    }
+
+    impl SessionProcessor for BlockingApprovalProcessor {
+        async fn process(
+            &mut self,
+            command: &IncomingCommand,
+            _chunks: Option<crate::providers::ChunkSender>,
+            approvals: Option<ApprovalPort>,
+        ) -> Outcome {
+            self.events.push(format!("start-{}", command.command_id));
+            let stdout = if command.command_id == 1 {
+                let decision = approvals
+                    .expect("relay session must supply approvals")
+                    .request(sample_approval_payload())
+                    .expect("approval request send failed")
+                    .await
+                    .expect("approval responder dropped");
+                format!("{}:{:?}", decision.outcome, decision.option_id)
+            } else {
+                "second".to_string()
+            };
+            self.events.push(format!("end-{}", command.command_id));
+            Outcome::Completed {
+                exit_code: Some(0),
+                stdout,
+                stderr: String::new(),
+                duration_ms: 0,
+            }
+        }
+    }
+
+    async fn websocket_pair() -> (WebSocketStream<DuplexStream>, WebSocketStream<DuplexStream>) {
+        let (daemon_io, relay_io) = tokio::io::duplex(16 * 1024);
+        let daemon = WebSocketStream::from_raw_socket(daemon_io, Role::Server, None).await;
+        let relay = WebSocketStream::from_raw_socket(relay_io, Role::Client, None).await;
+        (daemon, relay)
+    }
+
+    async fn next_text_frame(ws: &mut WebSocketStream<DuplexStream>) -> serde_json::Value {
+        loop {
+            match ws.next().await.expect("websocket ended").unwrap() {
+                Message::Text(text) => return serde_json::from_str(&text).unwrap(),
+                Message::Ping(payload) => ws.send(Message::Pong(payload)).await.unwrap(),
+                other => panic!("unexpected websocket frame: {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn run_session_delivers_approval_decision_while_work_is_in_flight() {
+        let (daemon_ws, mut relay_ws) = websocket_pair().await;
+        let mut processor = BlockingApprovalProcessor { events: Vec::new() };
+        let relay = async {
+            relay_ws
+                .send(Message::Text(sample_command_json(1)))
+                .await
+                .unwrap();
+            let request = next_text_frame(&mut relay_ws).await;
+            assert_eq!(request["type"], "approval_request");
+            relay_ws
+                .send(Message::Text(
+                    serde_json::json!({
+                        "type": "approval_decision",
+                        "command_id": 1,
+                        "request_id": request["request_id"],
+                        "outcome": "selected",
+                        "option_id": "allow",
+                    })
+                    .to_string(),
+                ))
+                .await
+                .unwrap();
+            let result = next_text_frame(&mut relay_ws).await;
+            assert_eq!(result["type"], "result");
+            assert_eq!(result["command_id"], 1);
+            assert_eq!(result["stdout"], "selected:Some(\"allow\")");
+            relay_ws.close(None).await.unwrap();
+        };
+
+        let (session, ()) =
+            tokio::join!(run_session_with_processor(daemon_ws, &mut processor), relay);
+        session.unwrap();
+        assert_eq!(processor.events, ["start-1", "end-1"]);
+    }
+
+    #[tokio::test]
+    async fn command_arriving_mid_work_is_queued_until_current_command_finishes() {
+        let (daemon_ws, mut relay_ws) = websocket_pair().await;
+        let mut processor = BlockingApprovalProcessor { events: Vec::new() };
+        let relay = async {
+            relay_ws
+                .send(Message::Text(sample_command_json(1)))
+                .await
+                .unwrap();
+            let request = next_text_frame(&mut relay_ws).await;
+            assert_eq!(request["type"], "approval_request");
+
+            // This command is deliberately sent before the first command's
+            // decision; eager reading must preserve it without concurrent work.
+            relay_ws
+                .send(Message::Text(sample_command_json(2)))
+                .await
+                .unwrap();
+            relay_ws
+                .send(Message::Text(
+                    serde_json::json!({
+                        "type": "approval_decision",
+                        "command_id": 1,
+                        "request_id": request["request_id"],
+                        "outcome": "selected",
+                        "option_id": "allow",
+                    })
+                    .to_string(),
+                ))
+                .await
+                .unwrap();
+
+            let first = next_text_frame(&mut relay_ws).await;
+            let second = next_text_frame(&mut relay_ws).await;
+            assert_eq!(first["command_id"], 1);
+            assert_eq!(second["command_id"], 2);
+            relay_ws.close(None).await.unwrap();
+        };
+
+        let (session, ()) =
+            tokio::join!(run_session_with_processor(daemon_ws, &mut processor), relay);
+        session.unwrap();
+        assert_eq!(processor.events, ["start-1", "end-1", "start-2", "end-2"]);
     }
 
     /// A WebSocket double that never yields an inbound frame (a silently

@@ -20,6 +20,7 @@ name = "pear-bridge"
 path = "src/main.rs"
 
 [dependencies]
+agent-client-protocol = "2.0.0"
 regex = "1"
 portable-pty = "0.8"
 serde = { version = "1", features = ["derive"] }
