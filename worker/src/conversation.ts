@@ -1097,7 +1097,13 @@ async function handleConversationMessage(
           const textBlock = doneResponse.response.content.find(
             (b) => b.type === "text",
           );
-          if (textBlock?.type === "text") {
+          // An empty final block never replaces what streamed. Providers that
+          // repeat the whole answer in `done` (the cloud APIs) still win — that
+          // text is authoritative and assigning it also dedupes. But a streamed
+          // harness turn delivers its body as deltas and returns an empty block,
+          // so assigning unconditionally discarded the answer the user had just
+          // watched arrive and left the turn looking like it produced nothing.
+          if (textBlock?.type === "text" && textBlock.text) {
             responseText = textBlock.text;
           }
           if (stopReason === "max_tokens") truncated = true;

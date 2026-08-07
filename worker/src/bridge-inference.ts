@@ -793,6 +793,18 @@ export class BridgeHarnessProvider extends BridgeInferenceProvider implements In
         const response = this.parseHarnessResult(result, deviceId, request, {
           includeOutput: !sawDelta,
         });
+        if (sawDelta) {
+          // Everything the caller keeps for a streamed turn arrived as deltas,
+          // so anything still riding in `done` — the could-not-resume note —
+          // would be dropped or, worse, replace the streamed answer. Send it as
+          // a final delta and hand `done` an empty block.
+          for (const block of response.content) {
+            if (block.type === "text" && block.text) {
+              yield { type: "text_delta", text: `\n\n${block.text.trim()}` };
+            }
+          }
+          response.content = [{ type: "text", text: "" }];
+        }
         yield { type: "done", response };
         return;
       }
