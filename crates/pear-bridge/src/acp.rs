@@ -144,14 +144,47 @@ pub(crate) async fn run_turn(request: TurnRequest<'_>) -> Result<TurnOutcome, St
     )
     .await;
 
+    let activity = process.connection.translator.activity();
+    let stderr_tail = process.stderr_tail();
+
     // Kill before dropping RpcConnection so stdin remains open for the entire
     // child lifetime. `kill_on_drop` is the fallback for cancellation/panics.
     let shutdown_result = process.shutdown().await;
-    match (protocol_result, shutdown_result) {
+    let result = match (protocol_result, shutdown_result) {
         (Ok(outcome), Ok(())) => Ok(outcome),
         (Ok(_), Err(error)) => Err(error),
         (Err(error), _) => Err(error),
+    };
+
+    match result {
+        Err(error) => Err(with_stderr(error, &stderr_tail)),
+        // A turn can legitimately end with no assistant text — every tool call
+        // denied, for instance — and the worker renders that as "no response
+        // generated" with nothing anywhere explaining why. Say what happened on
+        // the device, since this envelope is the only record of the turn.
+        Ok(outcome) if outcome.output.trim().is_empty() => {
+            eprintln!(
+                "pear-bridge: ACP turn produced no assistant text ({activity}){}",
+                if stderr_tail.is_empty() {
+                    String::new()
+                } else {
+                    format!("; agent stderr tail:\n{stderr_tail}")
+                }
+            );
+            Ok(outcome)
+        }
+        Ok(outcome) => Ok(outcome),
     }
+}
+
+/// Attach the adapter's own diagnostics to a failure. Without this an adapter
+/// that dies on startup (missing runtime, bad auth, unreadable cwd) surfaces
+/// only as a protocol-level symptom with no cause attached.
+fn with_stderr(error: String, stderr_tail: &str) -> String {
+    if stderr_tail.is_empty() {
+        return error;
+    }
+    format!("{error}; agent stderr tail:\n{stderr_tail}")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -307,7 +340,50 @@ fn validate_extra_env(env: &BTreeMap<String, String>) -> Result<(), String> {
 /// after EOF instead of exiting.
 struct AgentProcess {
     child: Child,
+    stderr_tail: StderrTail,
     connection: RpcConnection,
+}
+
+/// Bounded, continuously drained tail of the adapter's stderr.
+///
+/// Draining is not optional: an undrained pipe fills and blocks the child
+/// mid-turn. Keeping only a tail bounds memory against an adapter that logs
+/// steadily for the whole turn.
+#[derive(Clone)]
+struct StderrTail(std::sync::Arc<std::sync::Mutex<String>>);
+
+impl StderrTail {
+    const MAX_BYTES: usize = 8 * 1024;
+
+    fn drain(stderr: tokio::process::ChildStderr) -> Self {
+        let buffer = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let sink = std::sync::Arc::clone(&buffer);
+        // The reader owns only the pipe and the buffer, so it cannot outlive
+        // anything meaningful; it ends when the child closes stderr or is killed.
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let Ok(mut held) = sink.lock() else { return };
+                held.push_str(&line);
+                held.push('\n');
+                if held.len() > Self::MAX_BYTES {
+                    let cut = held.len() - Self::MAX_BYTES;
+                    let cut = (cut..held.len())
+                        .find(|i| held.is_char_boundary(*i))
+                        .unwrap_or(held.len());
+                    held.replace_range(..cut, "");
+                }
+            }
+        });
+        Self(buffer)
+    }
+
+    fn snapshot(&self) -> String {
+        self.0
+            .lock()
+            .map(|held| held.trim_end().to_string())
+            .unwrap_or_default()
+    }
 }
 
 impl AgentProcess {
@@ -325,9 +401,12 @@ impl AgentProcess {
             .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            // Drain-free and bounded: adapter diagnostics cannot block the
-            // JSON-RPC pump or become part of the worker-visible envelope.
-            .stderr(Stdio::null())
+            // Captured, not discarded: when an adapter fails it explains itself
+            // here and nowhere else, and a turn that dies with no explanation is
+            // undiagnosable from the server side. Drained continuously into a
+            // bounded tail so a chatty adapter can neither fill the pipe (which
+            // would block the child) nor grow memory without limit.
+            .stderr(Stdio::piped())
             .kill_on_drop(true);
         let mut child = command.spawn().map_err(|error| {
             format!(
@@ -343,10 +422,21 @@ impl AgentProcess {
             .stdout
             .take()
             .ok_or_else(|| "failed to open ACP agent stdout".to_string())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "failed to open ACP agent stderr".to_string())?;
+        let stderr_tail = StderrTail::drain(stderr);
         Ok(Self {
             child,
+            stderr_tail,
             connection: RpcConnection::new(input, output, approvals),
         })
+    }
+
+    /// The adapter's most recent diagnostics, for attaching to an error.
+    fn stderr_tail(&self) -> String {
+        self.stderr_tail.snapshot()
     }
 
     async fn shutdown(&mut self) -> Result<(), String> {
@@ -859,6 +949,11 @@ struct UpdateTranslator {
     output: String,
     seq: u32,
     chunks: Option<ChunkSender>,
+    /// Counted so a turn that ends with no assistant text can still say what it
+    /// spent its time doing. A turn made entirely of denied tool calls is
+    /// otherwise indistinguishable from an agent that simply said nothing.
+    permission_decisions: BTreeMap<String, u32>,
+    tool_call_count: u32,
 }
 
 impl UpdateTranslator {
@@ -867,6 +962,26 @@ impl UpdateTranslator {
         self.output.clear();
         self.seq = 0;
         self.chunks = None;
+        self.permission_decisions.clear();
+        self.tool_call_count = 0;
+    }
+
+    /// One-line summary of what the turn actually did, for the case where it
+    /// produced no assistant text.
+    fn activity(&self) -> String {
+        let mut parts = vec![format!("{} tool call(s)", self.tool_call_count)];
+        if self.permission_decisions.is_empty() {
+            parts.push("no permission requests".to_string());
+        } else {
+            let mut decisions: Vec<String> = self
+                .permission_decisions
+                .iter()
+                .map(|(decision, count)| format!("{count} {decision}"))
+                .collect();
+            decisions.sort();
+            parts.push(format!("permission requests: {}", decisions.join(", ")));
+        }
+        parts.join("; ")
     }
 
     fn begin_turn(&mut self, chunks: Option<ChunkSender>) {
@@ -934,8 +1049,16 @@ impl UpdateTranslator {
         let Some(envelope) = envelope else {
             return Ok(());
         };
-        if let ChunkEnvelope::Text { d } = &envelope {
-            self.output.push_str(d);
+        match &envelope {
+            ChunkEnvelope::Text { d } => self.output.push_str(d),
+            ChunkEnvelope::Tool { .. } => self.tool_call_count += 1,
+            ChunkEnvelope::Permission { perm } => {
+                *self
+                    .permission_decisions
+                    .entry(perm.decision.clone())
+                    .or_default() += 1;
+            }
+            ChunkEnvelope::Think { .. } | ChunkEnvelope::Plan { .. } => {}
         }
         if let Some(tx) = &self.chunks {
             let content = serde_json::to_string(&envelope)
