@@ -919,7 +919,14 @@ impl UpdateTranslator {
             | "config_option_update"
             | "session_info_update"
             | "usage_update" => Ok(None),
-            other => Err(format!("unsupported ACP session update: {other}")),
+            // An update type this build does not know is NOT fatal. ACP is a
+            // moving protocol and adapters add notification types between
+            // releases; killing a running agent mid-turn over a notification we
+            // merely do not render would make every adapter upgrade a breaking
+            // change. This matches the transport's standing rule for unknown
+            // frames. Malformed instances of KNOWN types still fail loud above —
+            // those are contract violations, not version skew.
+            _ => Ok(None),
         }
     }
 
@@ -1314,6 +1321,22 @@ mod tests {
         let fixture: Value = serde_json::from_str(line).unwrap();
         let message = &fixture["msg"];
         translator.translate_message(message).unwrap().unwrap()
+    }
+
+    /// A newer adapter emitting a notification type this build has never heard
+    /// of must not kill the turn — the agent is mid-work and the update is
+    /// merely something we do not render.
+    #[test]
+    fn unknown_session_update_types_are_ignored_not_fatal() {
+        let mut translator = UpdateTranslator::default();
+        let line = r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"some_future_update_type","payload":{"anything":true}}}}"#;
+        let message: Value = serde_json::from_str(line).unwrap();
+        assert_eq!(translator.translate_message(&message).unwrap(), None);
+
+        // A malformed instance of a KNOWN type is still a contract violation.
+        let malformed = r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk"}}}"#;
+        let message: Value = serde_json::from_str(malformed).unwrap();
+        assert!(translator.translate_message(&message).is_err());
     }
 
     #[test]
