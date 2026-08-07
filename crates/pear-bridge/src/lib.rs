@@ -16,6 +16,7 @@
 //! store, keychain-only). The `main.rs` binary wires these together; the full
 //! relay frame-dispatch loop and service registration land alongside it.
 
+pub mod acp;
 pub mod allowlist;
 pub mod audit;
 pub mod config;

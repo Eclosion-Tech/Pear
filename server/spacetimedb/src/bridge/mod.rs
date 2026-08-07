@@ -55,6 +55,12 @@ pub(crate) fn next_bridge_device_capability_id(ctx: &ReducerContext) -> u64 {
     })
 }
 
+pub(crate) fn next_bridge_approval_id(ctx: &ReducerContext) -> u64 {
+    alloc_id(ctx, "bridge_approval", || {
+        ctx.db.bridge_approval().iter().map(|r| r.id).max().unwrap_or(0)
+    })
+}
+
 pub(crate) fn next_bridge_command_chunk_id(ctx: &ReducerContext) -> u64 {
     alloc_id(ctx, "bridge_command_chunk", || {
         ctx.db.bridge_command_chunk().iter().map(|r| r.id).max().unwrap_or(0)
@@ -310,6 +316,76 @@ pub struct BridgeCommandChunk {
     /// Copied from `BridgeCommand.requested_by`; backs the RLS filter.
     pub requested_by: Identity,
     pub created_at: Timestamp,
+}
+
+/// A permission request raised by an ACP harness agent **mid-turn** (ticket
+/// 14602). Unlike `require_confirmation_for` bash commands — where the command
+/// ends, a human confirms, and the server re-dispatches it — an ACP agent
+/// blocks inside its JSON-RPC turn waiting for an answer, so the turn stays
+/// alive and the decision travels back down the device's open socket. Rows are
+/// therefore short-lived: the daemon stops waiting after its own timeout and
+/// denies, and `expire_bridge_approval` marks the row so the UI stops offering
+/// buttons that can no longer be honored.
+///
+/// This table is a RECORD and a UI surface, never the enforcement point: the
+/// daemon re-validates every decision against the options the agent actually
+/// offered and denies anything it does not recognize.
+///
+/// Only the device **owner** (the human who paired it) reads these — the AI
+/// user does not need them, and the daemon receives decisions as relay frames
+/// rather than by subscribing. That keeps this to a SINGLE visibility filter,
+/// deliberately: `bridge_command` carries three OR-unioned filters and its
+/// AI-user view does not receive incremental updates (see the header of
+/// `worker/src/bridge-sql.ts`), which is exactly the failure an approval prompt
+/// cannot tolerate — it must appear the moment the agent asks.
+#[client_visibility_filter]
+const BRIDGE_APPROVAL_FILTER: Filter =
+    Filter::Sql("SELECT * FROM bridge_approval WHERE owner_identity = :sender");
+
+#[table(accessor = bridge_approval, public)]
+pub struct BridgeApproval {
+    #[primary_key]
+    pub id: u64,
+    #[index(btree)]
+    pub command_id: u64,
+    /// Daemon-generated, unique within the command. Together with `command_id`
+    /// this is the idempotency key: a relay retry must not raise a second
+    /// prompt for the same request.
+    pub request_id: String,
+    #[index(btree)]
+    pub device_id: u64,
+    /// Copied from `BridgeCommand.owner_identity`; backs the RLS filter.
+    pub owner_identity: Identity,
+    /// The AI user whose turn raised this, for display.
+    pub requested_by: Identity,
+    /// Anchors the prompt to the conversation the turn belongs to.
+    pub conversation_id: u64,
+    /// Display fields lifted from the ACP tool call.
+    pub title: Option<String>,
+    pub kind: Option<String>,
+    pub tool_call_id: Option<String>,
+    /// The ACP `options` array verbatim. Opaque JSON, like `payload_json`:
+    /// option ids/kinds are an adapter↔daemon contract, and the daemon is the
+    /// party that validates a decision against it.
+    pub options_json: String,
+    /// Optional structured diff for preview; truncated by the reducer.
+    pub diffs_json: Option<String>,
+    pub status: BridgeApprovalStatus,
+    pub decided_option_id: Option<String>,
+    pub decided_by: Option<Identity>,
+    pub decided_at: Option<Timestamp>,
+    pub created_at: Timestamp,
+}
+
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum BridgeApprovalStatus {
+    /// Raised by the agent; waiting for the owner to answer.
+    Pending,
+    /// A human answered; `decided_option_id` carries their choice.
+    Decided,
+    /// The daemon stopped waiting (its timeout elapsed) before anyone
+    /// answered. Terminal — `resolve_bridge_approval` refuses these.
+    Expired,
 }
 
 /// Per-device allowlist configuration. Authoritative source, editable

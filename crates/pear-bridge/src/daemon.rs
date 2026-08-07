@@ -23,9 +23,12 @@
 //! does not affect this engine. See the run-loop discussion in the design doc.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use tokio::sync::{mpsc, oneshot};
 
 use crate::allowlist::{AllowlistEnforcer, Decision};
 use crate::audit::{AuditLog, NewAuditRecord};
@@ -83,6 +86,96 @@ pub struct ExecConfig {
     pub shell: String,
     pub limits: PtyLimits,
     pub server_url: String,
+}
+
+/// Relay-facing details of one ACP permission request. Strings stay open at
+/// this boundary so a newer adapter can add option/tool kinds without making
+/// an older bridge reject the whole request.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct ApprovalFramePayload {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    pub options: Vec<ApprovalOption>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diffs: Option<Vec<ApprovalDiff>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ApprovalOption {
+    pub option_id: String,
+    pub name: String,
+    pub kind: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ApprovalDiff {
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_text: Option<String>,
+}
+
+/// A relay decision delivered to the ACP request that is holding the current
+/// turn open. Outcome values deliberately remain strings at the wire boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ApprovalDecision {
+    pub outcome: String,
+    pub option_id: Option<String>,
+}
+
+/// One request sent from ACP code to the transport-owned pending registry.
+pub(crate) struct ApprovalRequest {
+    pub request_id: String,
+    pub frame_payload: ApprovalFramePayload,
+    pub responder: oneshot::Sender<ApprovalDecision>,
+}
+
+/// Optional mid-turn approval port. Request IDs are daemon-generated and
+/// unique within a command without adding a UUID dependency.
+#[derive(Clone)]
+pub struct ApprovalPort {
+    command_id: u64,
+    next_request_id: Arc<AtomicU64>,
+    sender: mpsc::UnboundedSender<ApprovalRequest>,
+}
+
+impl ApprovalPort {
+    pub(crate) fn new(command_id: u64, sender: mpsc::UnboundedSender<ApprovalRequest>) -> Self {
+        Self {
+            command_id,
+            next_request_id: Arc::new(AtomicU64::new(1)),
+            sender,
+        }
+    }
+
+    pub(crate) fn request(
+        &self,
+        frame_payload: ApprovalFramePayload,
+    ) -> Result<oneshot::Receiver<ApprovalDecision>, String> {
+        let serial = self
+            .next_request_id
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .map_err(|_| "ACP approval request id overflow".to_string())?;
+        let request_id = format!("{}-{serial}", self.command_id);
+        let (responder, decision) = oneshot::channel();
+        self.sender
+            .send(ApprovalRequest {
+                request_id,
+                frame_payload,
+                responder,
+            })
+            .map_err(|_| "ACP approval channel is closed".to_string())?;
+        Ok(decision)
+    }
 }
 
 /// Source of inbound commands (the proxied SpacetimeDB subscription in prod).
@@ -197,6 +290,7 @@ pub async fn process_incoming(
     exec: &ExecConfig,
     audit: &mut AuditLog,
     chunks: Option<crate::providers::ChunkSender>,
+    approvals: Option<ApprovalPort>,
 ) -> Outcome {
     match cmd.kind.as_deref() {
         Some("inference") => {
@@ -242,10 +336,17 @@ pub async fn process_incoming(
                 allowlist_result: "allowed".to_string(),
                 kind: Some("harness".to_string()),
             });
-            let result = crate::harness::run_harness_json(
-                cmd.payload_json.as_deref(),
-                enforcer.allowed_dirs(),
-                chunks,
+            // The Phase 1 harness API is also used directly by the desktop and
+            // tests. Scope the relay-only port across that existing seam so
+            // direct callers retain deny-by-default behavior without acquiring
+            // a transport dependency.
+            let result = crate::acp::with_approval_port(
+                approvals,
+                crate::harness::run_harness_json(
+                    cmd.payload_json.as_deref(),
+                    enforcer.allowed_dirs(),
+                    chunks,
+                ),
             )
             .await;
             Outcome::Completed {
@@ -280,7 +381,7 @@ pub async fn run_loop<S: CommandSource, K: ResultSink>(
         // Streaming chunks are forwarded to the sink WHILE the command runs
         // (a streaming inference emits them mid-execution).
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<crate::providers::ChunkOut>();
-        let work = process_incoming(&cmd, enforcer, exec, audit, Some(tx));
+        let work = process_incoming(&cmd, enforcer, exec, audit, Some(tx), None);
         tokio::pin!(work);
         let outcome = loop {
             tokio::select! {

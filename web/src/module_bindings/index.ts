@@ -100,6 +100,7 @@ import EnableAutomationReducer from "./enable_automation_reducer";
 import EnqueueBridgeCommandReducer from "./enqueue_bridge_command_reducer";
 import EnqueueBridgeHarnessReducer from "./enqueue_bridge_harness_reducer";
 import EnqueueBridgeInferenceReducer from "./enqueue_bridge_inference_reducer";
+import ExpireBridgeApprovalReducer from "./expire_bridge_approval_reducer";
 import FailNotionImportJobReducer from "./fail_notion_import_job_reducer";
 import FailTaskReducer from "./fail_task_reducer";
 import FindOrCreateAiDmReducer from "./find_or_create_ai_dm_reducer";
@@ -137,6 +138,7 @@ import ProvisionAiUserMemoryReducer from "./provision_ai_user_memory_reducer";
 import PublishExtensionReducer from "./publish_extension_reducer";
 import PurgePageReducer from "./purge_page_reducer";
 import RecordAiEvaluationReducer from "./record_ai_evaluation_reducer";
+import RecordBridgeApprovalRequestReducer from "./record_bridge_approval_request_reducer";
 import RecordCompactionReducer from "./record_compaction_reducer";
 import RecordReviewAnnotationReducer from "./record_review_annotation_reducer";
 import RecordToolCallAuditReducer from "./record_tool_call_audit_reducer";
@@ -156,6 +158,7 @@ import ReplacePageDocReducer from "./replace_page_doc_reducer";
 import ReportBridgeDeviceCapabilityReducer from "./report_bridge_device_capability_reducer";
 import ReportExtensionRuntimeHealthReducer from "./report_extension_runtime_health_reducer";
 import RequestPageAccessReducer from "./request_page_access_reducer";
+import ResolveBridgeApprovalReducer from "./resolve_bridge_approval_reducer";
 import ResolvePageAccessRequestReducer from "./resolve_page_access_request_reducer";
 import ResolveStructuralFindingReducer from "./resolve_structural_finding_reducer";
 import RestoreComponentReducer from "./restore_component_reducer";
@@ -263,6 +266,7 @@ import AutomationPrimitiveRow from "./automation_primitive_table";
 import AutomationRuleRow from "./automation_rule_table";
 import AutomationRunLogRow from "./automation_run_log_table";
 import BlockAccessRuleRow from "./block_access_rule_table";
+import BridgeApprovalRow from "./bridge_approval_table";
 import BridgeCommandRow from "./bridge_command_table";
 import BridgeCommandChunkRow from "./bridge_command_chunk_table";
 import BridgeCommandResultRow from "./bridge_command_result_table";
@@ -589,6 +593,23 @@ const tablesSchema = __schema({
       { name: 'block_access_rule_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, BlockAccessRuleRow),
+  bridge_approval: __table({
+    name: 'bridge_approval',
+    indexes: [
+      { name: 'command_id', algorithm: 'btree', columns: [
+        'commandId',
+      ] },
+      { name: 'device_id', algorithm: 'btree', columns: [
+        'deviceId',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'bridge_approval_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, BridgeApprovalRow),
   bridge_command: __table({
     name: 'bridge_command',
     indexes: [
@@ -1323,6 +1344,7 @@ const reducersSchema = __reducers(
   __reducerSchema("enqueue_bridge_command", EnqueueBridgeCommandReducer),
   __reducerSchema("enqueue_bridge_harness", EnqueueBridgeHarnessReducer),
   __reducerSchema("enqueue_bridge_inference", EnqueueBridgeInferenceReducer),
+  __reducerSchema("expire_bridge_approval", ExpireBridgeApprovalReducer),
   __reducerSchema("fail_notion_import_job", FailNotionImportJobReducer),
   __reducerSchema("fail_task", FailTaskReducer),
   __reducerSchema("find_or_create_ai_dm", FindOrCreateAiDmReducer),
@@ -1360,6 +1382,7 @@ const reducersSchema = __reducers(
   __reducerSchema("publish_extension", PublishExtensionReducer),
   __reducerSchema("purge_page", PurgePageReducer),
   __reducerSchema("record_ai_evaluation", RecordAiEvaluationReducer),
+  __reducerSchema("record_bridge_approval_request", RecordBridgeApprovalRequestReducer),
   __reducerSchema("record_compaction", RecordCompactionReducer),
   __reducerSchema("record_review_annotation", RecordReviewAnnotationReducer),
   __reducerSchema("record_tool_call_audit", RecordToolCallAuditReducer),
@@ -1379,6 +1402,7 @@ const reducersSchema = __reducers(
   __reducerSchema("report_bridge_device_capability", ReportBridgeDeviceCapabilityReducer),
   __reducerSchema("report_extension_runtime_health", ReportExtensionRuntimeHealthReducer),
   __reducerSchema("request_page_access", RequestPageAccessReducer),
+  __reducerSchema("resolve_bridge_approval", ResolveBridgeApprovalReducer),
   __reducerSchema("resolve_page_access_request", ResolvePageAccessRequestReducer),
   __reducerSchema("resolve_structural_finding", ResolveStructuralFindingReducer),
   __reducerSchema("restore_component", RestoreComponentReducer),

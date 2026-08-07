@@ -12,7 +12,11 @@ import {
   useOrchaTasksForJob,
   type OrchaJobRow,
 } from "@/src/hooks/useOrcha";
-import type { BridgeCommand, MessageFeedback } from "@/src/module_bindings/types";
+import type {
+  BridgeApproval,
+  BridgeCommand,
+  MessageFeedback,
+} from "@/src/module_bindings/types";
 import {
   useConversations,
   useConversationMessages,
@@ -62,6 +66,7 @@ import {
   type AiUserProfileRow,
 } from "@/src/hooks/useAiUsers";
 import { ContextBar } from "@/src/components/ContextBar";
+import { BridgeApprovalCard } from "@/src/components/BridgeApprovalCard";
 import { StaticComponentTree } from "@/src/components/component-renderers/StaticComponentTree";
 import { useTable, useReducer } from "spacetimedb/react";
 import { tables, reducers } from "@/src/module_bindings";
@@ -1156,6 +1161,16 @@ function ConversationThread({
     () => allBridgeCommands.filter((c) => c.conversationId === conversation.id),
     [allBridgeCommands, conversation.id],
   );
+  const [allBridgeApprovals] = useTable(tables.bridge_approval);
+  const conversationBridgeApprovals = useMemo<BridgeApproval[]>(
+    () =>
+      allBridgeApprovals
+        .filter((approval) => approval.conversationId === conversation.id)
+        .sort((a, b) =>
+          Number(a.createdAt.microsSinceUnixEpoch - b.createdAt.microsSinceUnixEpoch),
+        ),
+    [allBridgeApprovals, conversation.id],
+  );
   const { jobs: orchaJobs } = useOrchaJobs();
   const jobsById = useMemo(
     () => new Map(orchaJobs.map((j) => [j.id, j])),
@@ -1260,6 +1275,9 @@ function ConversationThread({
     return undefined;
   }, [messages, aiIdentityHexes]);
   const inFlightAiMsgId = inFlightAiMsg?.id;
+  const bridgeApprovalRenderKey = conversationBridgeApprovals
+    .map((approval) => `${approval.id}:${approval.status.tag}`)
+    .join(",");
 
   // Follow new output only when the reader is already at the bottom. Scrolling
   // someone back down while they are reading earlier messages — which a
@@ -1292,7 +1310,14 @@ function ConversationThread({
       top: scrollRef.current.scrollHeight,
       behavior: isAiActive ? "auto" : "smooth",
     });
-  }, [messages.length, isAiActive, lastMessage?.content, lastMessage?.thinking, lastMessage?.status?.tag]);
+  }, [
+    messages.length,
+    isAiActive,
+    lastMessage?.content,
+    lastMessage?.thinking,
+    lastMessage?.status?.tag,
+    bridgeApprovalRenderKey,
+  ]);
 
   // Opening a thread should always start at the newest message, regardless of
   // where the previous thread was scrolled to.
@@ -1645,6 +1670,13 @@ function ConversationThread({
         })}
         {msgPadBottom > 0 && (
           <div aria-hidden="true" style={{ height: msgPadBottom }} />
+        )}
+        {conversationBridgeApprovals.length > 0 && (
+          <div className="space-y-2 pt-3" aria-live="polite">
+            {conversationBridgeApprovals.map((approval) => (
+              <BridgeApprovalCard key={String(approval.id)} approval={approval} />
+            ))}
+          </div>
         )}
       </div>
 

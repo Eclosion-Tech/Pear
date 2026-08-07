@@ -536,7 +536,7 @@ async fn process_incoming_dispatches_inference_and_audits_with_kind() {
         7,
         serde_json::json!({"provider": "claude-code", "prompt": "hi"}),
     );
-    let outcome = process_incoming(&cmd, &enforcer, &exec, &mut audit, None).await;
+    let outcome = process_incoming(&cmd, &enforcer, &exec, &mut audit, None, None).await;
     std::env::remove_var("PEAR_BRIDGE_CLAUDE_BIN");
 
     let Outcome::Completed { exit_code, stdout, .. } = outcome else {
@@ -561,7 +561,7 @@ async fn process_incoming_rejects_unknown_kinds_and_keeps_bash_path() {
 
     let mut cmd = inference_cmd(8, serde_json::json!({}));
     cmd.kind = Some("quantum".to_string());
-    let outcome = process_incoming(&cmd, &enforcer, &exec, &mut audit, None).await;
+    let outcome = process_incoming(&cmd, &enforcer, &exec, &mut audit, None, None).await;
     let Outcome::Rejected { reason } = outcome else {
         panic!("expected Rejected, got {outcome:?}");
     };
@@ -575,6 +575,6 @@ async fn process_incoming_rejects_unknown_kinds_and_keeps_bash_path() {
         command: "definitely-not-allowlisted".to_string(),
         ..inference_cmd(9, serde_json::json!({}))
     };
-    let outcome = process_incoming(&bash, &enforcer, &exec, &mut audit, None).await;
+    let outcome = process_incoming(&bash, &enforcer, &exec, &mut audit, None, None).await;
     assert!(matches!(outcome, Outcome::Rejected { .. }));
 }
