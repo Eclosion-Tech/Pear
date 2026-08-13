@@ -1,18 +1,16 @@
 /**
  * MCP server core — binds the tool registry onto an SDK `Server` instance.
  *
- * Transport-agnostic: hosts create the transport and connect it —
- *   • worker stdio  → StdioServerTransport
- *   • worker http   → StreamableHTTPServerTransport (Node req/res)
- *   • CF gateway    → WebStandardStreamableHTTPServerTransport (Request/Response)
+ * Transport-agnostic: hosts wrap the factory in an SDK v2 serving entry,
+ * which speaks protocol revision 2026-07-28 (per-request `_meta` envelope,
+ * `server/discover`) AND the legacy `initialize`-handshake revisions —
+ *   • worker stdio  → serveStdio(() => createPearMcpServer(...))
+ *   • worker http   → toNodeHandler(createMcpHandler(...))  (Node req/res)
+ *   • CF gateway    → createMcpHandler(...).fetch           (Request/Response)
  * One server instance serves one McpContext (one AI-user token).
  */
 
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { Server } from "@modelcontextprotocol/server";
 import type { McpContext, McpToolEntry } from "./types";
 import { buildToolRegistry } from "./tools";
 
@@ -41,7 +39,7 @@ export function createPearMcpServer(
 
   const server = new Server(SERVER_INFO, { capabilities: { tools: {} } });
 
-  server.setRequestHandler(ListToolsRequestSchema, () => ({
+  server.setRequestHandler("tools/list", () => ({
     tools: registry.map((t) => ({
       name: t.name,
       description: t.description,
@@ -49,7 +47,7 @@ export function createPearMcpServer(
     })),
   }));
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler("tools/call", async (request) => {
     const { name, arguments: args } = request.params;
     const entry = byName.get(name);
     if (!entry) {

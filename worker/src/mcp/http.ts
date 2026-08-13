@@ -1,6 +1,11 @@
 /**
  * Pear MCP server — streamable HTTP transport entrypoint (OSS self-host).
  *
+ * Serves both protocol eras from one endpoint via the SDK's
+ * `createMcpHandler`: 2026-07-28 stateless requests (per-request `_meta`
+ * envelope, `server/discover`) and legacy `initialize`-handshake revisions
+ * through the stateless fallback.
+ *
  * The bearer token IS the AI user's worker token. Stateless: every tool call
  * runs over SpacetimeDB's HTTP `/sql` + `/call` endpoints with the caller's
  * token (shared core in `web/src/lib/mcp`), so there is no per-token
@@ -18,7 +23,8 @@
 
 import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { createMcpHandler, type AuthInfo } from "@modelcontextprotocol/server";
+import { toNodeHandler } from "@modelcontextprotocol/node";
 import {
   createPearMcpServer,
   resolveAiUser,
@@ -65,6 +71,20 @@ async function resolveCached(
   return aiUserId;
 }
 
+// ── MCP handler ───────────────────────────────────────────────────────────────
+
+/** Per-request state handed from `handle` to the factory via `req.auth`. */
+interface PearMcpAuthExtra extends Record<string, unknown> {
+  transport: HttpStdbTransport;
+  aiUserId: bigint;
+}
+
+const mcpHandler = createMcpHandler(({ authInfo }) => {
+  const extra = authInfo?.extra as PearMcpAuthExtra;
+  return createPearMcpServer({ transport: extra.transport, aiUserId: extra.aiUserId });
+});
+const nodeMcpHandler = toNodeHandler(mcpHandler);
+
 // ── HTTP server ───────────────────────────────────────────────────────────────
 
 function bearerToken(req: IncomingMessage): string | null {
@@ -110,6 +130,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return;
   }
 
+  // DNS-rebinding protection. The v2 handler validates no Host header (that
+  // was the v1 transport's enableDnsRebindingProtection), so the allowlist
+  // is enforced here, in front of it.
+  if (allowedHosts.length > 0 && !allowedHosts.includes(req.headers.host ?? "")) {
+    sendJson(res, 403, { error: "Forbidden: Host header is not in the allowlist" });
+    return;
+  }
+
   const token = bearerToken(req);
   if (!token) {
     sendJson(res, 401, {
@@ -136,20 +164,15 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return;
   }
 
-  const server = createPearMcpServer({ transport, aiUserId });
-  const mcpTransport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-    enableJsonResponse: true,
-    ...(allowedHosts.length > 0
-      ? { enableDnsRebindingProtection: true, allowedHosts }
-      : {}),
-  });
-  res.on("close", () => {
-    void mcpTransport.close();
-    void server.close();
-  });
-  await server.connect(mcpTransport);
-  await mcpTransport.handleRequest(req, res);
+  // toNodeHandler forwards req.auth as the handler's pass-through authInfo;
+  // extra carries what the module-level factory needs for this request.
+  (req as IncomingMessage & { auth?: AuthInfo }).auth = {
+    token,
+    clientId: `ai-user:${aiUserId}`,
+    scopes: [],
+    extra: { transport, aiUserId } satisfies PearMcpAuthExtra,
+  };
+  await nodeMcpHandler(req, res);
 }
 
 httpServer.listen(PORT, HOST, () => {

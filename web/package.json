@@ -20,7 +20,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@eclosion-tech/pulp": "workspace:*",
     "@eclosion-tech/snapshot-core": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/server": "^2.0.0",
     "@stoplight/elements": "^9.0.19",
     "@tanstack/react-virtual": "^3.14.8",
     "@tauri-apps/api": "^2.9.0",

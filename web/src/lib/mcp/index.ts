@@ -17,4 +17,4 @@ export { HttpStdbTransport, type StdbTransport } from "../api-endpoint";
 // Re-exported so external consumers (the CF gateway) resolve the SDK from
 // THIS package's node_modules — one bundled copy, no version skew with the
 // Server instances createPearMcpServer builds.
-export { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+export { createMcpHandler, type AuthInfo } from "@modelcontextprotocol/server";

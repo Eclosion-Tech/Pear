@@ -16,13 +16,15 @@
     "typecheck:names": "sh -c 'out=$(npx tsc --noEmit --pretty false 2>&1 | grep \"^src/\" | grep -v \"^src/module_bindings\" | grep -E \"TS2304|TS18004|TS2552\" || true); if [ -n \"$out\" ]; then echo \"$out\"; echo \"undefined-identifier errors found (see above)\"; exit 1; fi'"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
     "@aws-sdk/client-s3": "^3.1009.0",
     "@eclosion-tech/pulp": "workspace:*",
+    "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/server": "^2.0.0",
     "@notionhq/client": "^5.20.0",
     "just-bash": "^3.1.0",
     "openai": "^6.33.0",

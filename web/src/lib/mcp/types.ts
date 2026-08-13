@@ -9,6 +9,7 @@
  * token, so reducer writes are attributed and RLS-scoped to that AI user.
  */
 
+import type { Tool } from "@modelcontextprotocol/server";
 import type { StdbTransport } from "../api-endpoint";
 
 export type { StdbTransport };
@@ -26,8 +27,8 @@ export interface McpContext {
 export interface McpToolEntry {
   name: string;
   description: string;
-  /** JSON Schema for the tool input. */
-  inputSchema: Record<string, unknown>;
+  /** JSON Schema for the tool input (the MCP `Tool.inputSchema` shape). */
+  inputSchema: Tool["inputSchema"];
   /** Returns a JSON string; `{"ok":false,...}` marks a tool-level error. */
   execute: (ctx: McpContext, input: Record<string, unknown>) => Promise<string>;
 }

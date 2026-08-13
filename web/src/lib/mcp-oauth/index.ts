@@ -1,6 +1,10 @@
 /**
- * MCP OAuth 2.1 authorization-server core (MCP 2025-11-25 spec) — shared by
- * the pear-cloud api gateway today and mountable from OSS Next routes later.
+ * MCP OAuth 2.1 authorization-server core (MCP 2026-07-28 authorization
+ * spec; unchanged in substance from 2025-11-25 for this server surface —
+ * 2026-07-28 additionally prefers CIMD over DCR, and we serve both) — shared
+ * by the pear-cloud api gateway today and mountable from OSS Next routes
+ * later. Not yet implemented from 2026-07-28: RFC 9207 `iss` on
+ * authorization responses (needs the consent plane to know the issuer).
  * Framework-agnostic, WebCrypto-only. See the agent-auth spec (Pear task
  * page 245) for the architecture.
  */

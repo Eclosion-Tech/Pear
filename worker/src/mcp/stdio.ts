@@ -2,6 +2,9 @@
  * Pear MCP server — stdio transport entrypoint.
  *
  * Spawned directly by MCP hosts (Claude Code, Claude Desktop, Cursor, …).
+ * `serveStdio` pins the connection to whichever protocol era the client
+ * opens with — a 2026-07-28 `server/discover` / enveloped request, or a
+ * legacy `initialize` handshake — and serves it from the same factory.
  * Stateless: tools run over SpacetimeDB's HTTP `/sql` + `/call` endpoints
  * via the shared core in `web/src/lib/mcp` — no WebSocket subscription.
  *
@@ -15,7 +18,7 @@
 // module evaluates (stdout is the protocol channel). See stdio-prelude.ts.
 import "./stdio-prelude.js";
 
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import {
   createPearMcpServer,
   resolveAiUser,
@@ -45,8 +48,7 @@ async function main(): Promise<void> {
   // Resolves the AI user AND authenticates the token in one RLS-scoped read.
   const aiUserId = await resolveAiUser(transport);
 
-  const server = createPearMcpServer({ transport, aiUserId });
-  await server.connect(new StdioServerTransport());
+  serveStdio(() => createPearMcpServer({ transport, aiUserId }));
   console.error(
     `[mcp] pear MCP server ready on stdio (workspace: ${dbName}, ai user: ${aiUserId})`,
   );
