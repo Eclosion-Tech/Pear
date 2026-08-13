@@ -82,6 +82,12 @@ const PARITY_TOOL_NAMES = new Set([
   "delete_property",
   "get_schema_id",
   "list_properties",
+  // Non-destructive column edits. Without these the only way either surface
+  // could fix a mistyped or misnamed column was delete + re-add, which drops
+  // every value in it.
+  "rename_property",
+  "update_property_config",
+  "update_property_type",
   "update_page_content",
   "update_page_title",
   "search_pages",

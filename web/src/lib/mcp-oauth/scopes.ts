@@ -51,6 +51,9 @@ const SCOPE_TOOLS: Record<McpOauthScope, readonly string[]> = {
   [SCOPE_PAGES_WRITE]: [
     "create_page",
     "add_property",
+    "rename_property",
+    "update_property_config",
+    "update_property_type",
     "delete_property",
     "update_page_content",
     "update_page_title",

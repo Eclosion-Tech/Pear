@@ -46,6 +46,23 @@ function toHex(bytes: Uint8Array): string {
 
 const NOW_MICROS = 1_783_105_049_000_000;
 
+/** `PropertyType` variant names in Rust declaration order (pages/schemas.rs). */
+const PROPERTY_TYPE_VARIANTS = [
+  "text",
+  "number",
+  "date",
+  "select",
+  "multiSelect",
+  "relation",
+  "checkbox",
+  "url",
+  "person",
+  "ai",
+  "formula",
+  "rollup",
+  "file",
+];
+
 class FakeStdb implements StdbTransport {
   pages: FakePage[] = [];
   nodes: FakeNode[] = [];
@@ -80,9 +97,15 @@ class FakeStdb implements StdbTransport {
   aiUserMemory: Array<{ aiUserId: number; rootPageId: number }> = [];
   snapshots: Array<{ id: number; pageId: number }> = [];
   schemas: Array<{ id: number; pageId: number; parentSchemaId?: number | null }> = [];
-  /** property_type is the PropertyType variant INDEX (Text=0 … Rollup=11). */
-  propDefs: Array<{ id: number; schemaId: number; name: string; type: number; order: number }> =
-    [];
+  /** property_type is the PropertyType variant INDEX (Text=0 … Rollup=11, File=12). */
+  propDefs: Array<{
+    id: number;
+    schemaId: number;
+    name: string;
+    type: number;
+    order: number;
+    config?: string;
+  }> = [];
   /** value is the wire-shaped PropertyValue sum `[variantIndex, payload]`. */
   propValues: Array<{ pageId: number; propDefId: number; value: [number, unknown] }> = [];
   counters = new Map<string, number>([
@@ -211,6 +234,7 @@ class FakeStdb implements StdbTransport {
           schema_id: p.schemaId,
           name: p.name,
           property_type: [p.type, []],
+          config: p.config ?? "{}",
           order: p.order,
         })) as Row[];
     }
@@ -572,7 +596,7 @@ class FakeStdb implements StdbTransport {
         return;
       }
       case "add_property": {
-        const [schemaId, name, propertyType] = args as [
+        const [schemaId, name, propertyType, config] = args as [
           number,
           string,
           Record<string, []>,
@@ -588,18 +612,7 @@ class FakeStdb implements StdbTransport {
         ) {
           fail(`Property "${name}" already exists`);
         }
-        const variants = [
-          "text",
-          "number",
-          "date",
-          "select",
-          "multiSelect",
-          "relation",
-          "checkbox",
-          "url",
-          "person",
-        ];
-        const type = variants.indexOf(Object.keys(propertyType)[0]);
+        const type = PROPERTY_TYPE_VARIANTS.indexOf(Object.keys(propertyType)[0]);
         if (type < 0) fail("Unknown PropertyType variant");
         const id = this.alloc("property_definition");
         const order =
@@ -609,7 +622,14 @@ class FakeStdb implements StdbTransport {
               .filter((prop) => prop.schemaId === Number(schemaId))
               .map((prop) => prop.order),
           ) + 1;
-        this.propDefs.push({ id, schemaId: Number(schemaId), name: String(name), type, order });
+        this.propDefs.push({
+          id,
+          schemaId: Number(schemaId),
+          name: String(name),
+          type,
+          order,
+          config: String(config ?? "{}"),
+        });
         return;
       }
       case "delete_property": {
@@ -617,6 +637,39 @@ class FakeStdb implements StdbTransport {
         const index = this.propDefs.findIndex((prop) => prop.id === propertyDefinitionId);
         if (index < 0) fail("PropertyDefinition not found");
         this.propDefs.splice(index, 1);
+        return;
+      }
+      case "rename_property": {
+        const [propertyDefinitionId, name] = args as [number, string];
+        const prop = this.propDefs.find((p) => p.id === Number(propertyDefinitionId));
+        if (!prop) fail("PropertyDefinition not found");
+        // Mirrors find_shadowing_conflict: a name may not collide within the
+        // schema's inheritance chain. The fake's schemas are single-link, so
+        // that reduces to "not already on this schema".
+        if (
+          String(name) !== prop!.name &&
+          this.propDefs.some((p) => p.schemaId === prop!.schemaId && p.name === String(name))
+        ) {
+          fail(`Property "${name}" already exists on a related schema in this inheritance chain`);
+        }
+        prop!.name = String(name);
+        return;
+      }
+      case "update_property_config": {
+        const [propertyDefinitionId, config] = args as [number, string];
+        const prop = this.propDefs.find((p) => p.id === Number(propertyDefinitionId));
+        if (!prop) fail("PropertyDefinition not found");
+        prop!.config = String(config);
+        return;
+      }
+      case "update_property_type": {
+        const [propertyDefinitionId, propertyType] = args as [number, Record<string, []>];
+        const prop = this.propDefs.find((p) => p.id === Number(propertyDefinitionId));
+        if (!prop) fail("PropertyDefinition not found");
+        const next = PROPERTY_TYPE_VARIANTS.indexOf(Object.keys(propertyType)[0]);
+        if (next < 0) fail("Unknown PropertyType variant");
+        prop!.type = next;
+        prop!.config = "{}"; // the reducer resets config on a type change
         return;
       }
       default:
@@ -1220,6 +1273,7 @@ describe("registry", () => {
       "read_memory",
       "read_thread",
       "remember",
+      "rename_property",
       "reopen_thread",
       "resolve_thread",
       "restore_page",
@@ -1231,6 +1285,8 @@ describe("registry", () => {
       "update_component_props",
       "update_page_content",
       "update_page_title",
+      "update_property_config",
+      "update_property_type",
     ]);
   });
 
@@ -1456,7 +1512,7 @@ describe("pages", () => {
         property_definition_id: 501,
         name: "Status",
         property_type: "Select",
-        config: "{}",
+        config: '{"options":["Todo","In Progress","Done"]}',
         order: 1000,
       },
       {
@@ -1488,6 +1544,163 @@ describe("pages", () => {
       property_definition_id: 999,
     });
     expect(missing).toEqual({ ok: false, error: "Property definition not found" });
+  });
+
+  test("rename_property renames in place, keeping type and row values", async () => {
+    const fake = tasksFake();
+    const renamed = await run(fake, "rename_property", {
+      property_definition_id: 501,
+      name: "Stage",
+    });
+    expect(renamed).toEqual({
+      ok: true,
+      property_definition_id: 501,
+      previous_name: "Status",
+      name: "Stage",
+    });
+
+    // The point of renaming over delete+re-add: the column keeps its data.
+    const rows = (await run(fake, "query_database", { page_id: 800 })).rows as Array<
+      Record<string, unknown>
+    >;
+    expect(rows[0]).toMatchObject({ page_id: 810, Stage: "Done" });
+    expect(rows[0]).not.toHaveProperty("Status");
+  });
+
+  test("rename_property rejects blanks, unknown ids and name collisions", async () => {
+    const fake = tasksFake();
+    expect(await run(fake, "rename_property", { property_definition_id: 501, name: "  " })).toEqual(
+      { ok: false, error: "Property name is required" },
+    );
+    expect(await run(fake, "rename_property", { property_definition_id: 999, name: "X" })).toEqual({
+      ok: false,
+      error: "Property definition not found",
+    });
+    const collision = await run(fake, "rename_property", {
+      property_definition_id: 501,
+      name: "Due",
+    });
+    expect(collision.ok).toBe(false);
+    expect(String(collision.error)).toMatch(/already exists/);
+    // A rejected rename leaves the column untouched.
+    expect(fake.propDefs.find((p) => p.id === 501)?.name).toBe("Status");
+  });
+
+  test("update_property_config replaces Select options and reports what it overwrote", async () => {
+    const fake = tasksFake();
+    const updated = await run(fake, "update_property_config", {
+      property_definition_id: 501,
+      config: '{"options":["Todo","In Progress","Done","Blocked"]}',
+    });
+    expect(updated).toEqual({
+      ok: true,
+      property_definition_id: 501,
+      name: "Status",
+      property_type: "Select",
+      previous_config: '{"options":["Todo","In Progress","Done"]}',
+      config: '{"options":["Todo","In Progress","Done","Blocked"]}',
+    });
+
+    const listed = (await run(fake, "list_properties", { schema_id: 50 })).properties as Array<
+      Record<string, unknown>
+    >;
+    expect(listed[0].config).toBe('{"options":["Todo","In Progress","Done","Blocked"]}');
+    // Type and values survive a config edit.
+    expect(listed[0].property_type).toBe("Select");
+    const rows = (await run(fake, "query_database", { page_id: 800 })).rows as Array<
+      Record<string, unknown>
+    >;
+    expect(rows[1]).toMatchObject({ page_id: 811, Status: "In Progress" });
+  });
+
+  test("update_property_config rejects non-object JSON without calling the reducer", async () => {
+    const fake = tasksFake();
+    expect(
+      await run(fake, "update_property_config", { property_definition_id: 501, config: "{oops" }),
+    ).toEqual({ ok: false, error: "config must be a valid JSON string" });
+    const array = await run(fake, "update_property_config", {
+      property_definition_id: 501,
+      config: '["Todo","Done"]',
+    });
+    expect(array.ok).toBe(false);
+    expect(String(array.error)).toMatch(/must be a JSON object/);
+    expect(fake.calls).not.toContain("update_property_config");
+    expect(fake.propDefs.find((p) => p.id === 501)?.config).toBe(
+      '{"options":["Todo","In Progress","Done"]}',
+    );
+  });
+
+  test("update_property_type retypes, resets config, and says values were not converted", async () => {
+    const fake = tasksFake();
+    const retyped = await run(fake, "update_property_type", {
+      property_definition_id: 501,
+      property_type: "Text",
+    });
+    expect(retyped).toMatchObject({
+      ok: true,
+      property_definition_id: 501,
+      name: "Status",
+      previous_property_type: "Select",
+      property_type: "Text",
+      config_reset: '{"options":["Todo","In Progress","Done"]}',
+    });
+    expect(String(retyped.note)).toMatch(/NOT converted/);
+
+    const listed = (await run(fake, "list_properties", { schema_id: 50 })).properties as Array<
+      Record<string, unknown>
+    >;
+    expect(listed[0]).toMatchObject({ property_type: "Text", config: "{}" });
+  });
+
+  test("update_property_type is a no-op for the current type and rejects computed types", async () => {
+    const fake = tasksFake();
+    const same = await run(fake, "update_property_type", {
+      property_definition_id: 501,
+      property_type: "Select",
+    });
+    expect(same).toEqual({
+      ok: true,
+      property_definition_id: 501,
+      name: "Status",
+      property_type: "Select",
+      unchanged: true,
+    });
+    expect(fake.calls).not.toContain("update_property_type");
+    // Config survives the no-op — a repeat call must not wipe the options.
+    expect(fake.propDefs.find((p) => p.id === 501)?.config).toBe(
+      '{"options":["Todo","In Progress","Done"]}',
+    );
+
+    const computed = await run(fake, "update_property_type", {
+      property_definition_id: 501,
+      property_type: "Formula",
+    });
+    expect(computed.ok).toBe(false);
+    expect(String(computed.error)).toMatch(/Unsupported property_type "Formula"/);
+  });
+
+  test("list_properties decodes computed and File types at their real enum index", async () => {
+    // Regression: the decode table listed File at index 9 (which is Ai), so an
+    // Ai column read back as "File" and Formula/Rollup/File as Unknown.
+    const fake = tasksFake();
+    fake.propDefs.push(
+      { id: 504, schemaId: 50, name: "Summary", type: 9, order: 4000 }, // Ai
+      { id: 505, schemaId: 50, name: "Days", type: 10, order: 5000 }, // Formula
+      { id: 506, schemaId: 50, name: "Total", type: 11, order: 6000 }, // Rollup
+      { id: 507, schemaId: 50, name: "Specs", type: 12, order: 7000 }, // File
+    );
+    const listed = (await run(fake, "list_properties", { schema_id: 50 })).properties as Array<
+      Record<string, unknown>
+    >;
+    expect(listed.map((p) => p.property_type)).toEqual([
+      "Select",
+      "Relation",
+      "Date",
+      "Ai",
+      "Formula",
+      "Rollup",
+      "File",
+    ]);
   });
 
   test("update_page_content writes BlockNote for legacy pages", async () => {
@@ -1556,7 +1769,9 @@ function tasksFake(): FakeStdb {
   fake.seedPage({ id: 800, title: "Tasks", pageType: "Database", contentFormat: "BlockNote" });
   fake.schemas.push({ id: 50, pageId: 800 });
   fake.propDefs.push(
-    { id: 501, schemaId: 50, name: "Status", type: 3, order: 1000 }, // Select
+    // Select, carrying its choices in config — the shape update_property_config edits.
+    { id: 501, schemaId: 50, name: "Status", type: 3, order: 1000,
+      config: '{"options":["Todo","In Progress","Done"]}' },
     { id: 502, schemaId: 50, name: "Project", type: 5, order: 2000 }, // Relation
     { id: 503, schemaId: 50, name: "Due", type: 2, order: 3000 }, // Date
   );

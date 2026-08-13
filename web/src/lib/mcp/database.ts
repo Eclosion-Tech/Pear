@@ -32,6 +32,7 @@ const PROPERTY_TYPE_TAGS = [
   "AI",
   "FORMULA",
   "ROLLUP",
+  "FILE",
 ] as const;
 
 /** Canonical (Rust-cased) property type names, by decodeEnumVariant tag. */
@@ -48,6 +49,7 @@ const PROPERTY_TYPE_CANONICAL: Record<string, string> = {
   AI: "Ai",
   FORMULA: "Formula",
   ROLLUP: "Rollup",
+  FILE: "File",
 };
 
 /** PropertyValue variant order (schemas.rs) for decoding `[idx, payload]`. */
@@ -62,6 +64,7 @@ const PROPERTY_VALUE_TAGS = [
   "Url",
   "Person",
   "Ai",
+  "File",
 ] as const;
 
 export interface ColumnDef {

@@ -198,6 +198,9 @@ describe("scopes", () => {
     expect(readWrite("create_page")).toBe(true);
     expect(readWrite("add_property")).toBe(true);
     expect(readWrite("delete_property")).toBe(true);
+    expect(readWrite("rename_property")).toBe(true);
+    expect(readWrite("update_property_config")).toBe(true);
+    expect(readWrite("update_property_type")).toBe(true);
     expect(readWrite("query_database")).toBe(true);
     expect(readWrite("set_row_properties")).toBe(true);
     expect(readWrite("restore_page")).toBe(true);

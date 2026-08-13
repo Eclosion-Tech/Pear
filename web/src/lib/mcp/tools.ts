@@ -37,6 +37,9 @@ import {
   deleteProperty,
   getSchemaId,
   listProperties,
+  renameProperty,
+  updatePropertyConfig,
+  updatePropertyType,
 } from "./database-schema";
 import { writePageContent } from "./write-content";
 import {
@@ -808,11 +811,105 @@ const deletePropertyTool: McpToolEntry = {
     deleteProperty(ctx.transport, Number(input.property_definition_id)),
 };
 
+const renamePropertyTool: McpToolEntry = {
+  name: "rename_property",
+  description:
+    "Rename one Database property (column) in place, keeping its type, config and all " +
+    "existing row values. Call list_properties first to get the property_definition_id. " +
+    "Fails if another schema in the same inheritance chain already has that column name.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      property_definition_id: {
+        type: "number",
+        description: "The exact property definition id to rename.",
+      },
+      name: { type: "string", description: "The new column name." },
+    },
+    required: ["property_definition_id", "name"],
+  },
+  execute: (ctx, input) =>
+    renameProperty(ctx.transport, Number(input.property_definition_id), String(input.name ?? "")),
+};
+
+const updatePropertyConfigTool: McpToolEntry = {
+  name: "update_property_config",
+  description:
+    "Replace the config JSON of one Database property (column) — this is how you edit the " +
+    'choices on a Select/MultiSelect column: \'{"options":["A","B"]}\'. Config is replaced ' +
+    "wholesale, not merged, so pass the FULL option list; call list_properties first to read " +
+    "the current config. Removing an option that rows still use leaves those cells holding the " +
+    "old value. Column type and row values are otherwise untouched.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      property_definition_id: {
+        type: "number",
+        description: "The exact property definition id to reconfigure.",
+      },
+      config: {
+        type: "string",
+        description:
+          'JSON object string. For Select/MultiSelect: \'{"options":["Option1","Option2"]}\'.',
+      },
+    },
+    required: ["property_definition_id", "config"],
+  },
+  execute: (ctx, input) =>
+    updatePropertyConfig(
+      ctx.transport,
+      Number(input.property_definition_id),
+      String(input.config ?? ""),
+    ),
+};
+
+const updatePropertyTypeTool: McpToolEntry = {
+  name: "update_property_type",
+  description:
+    "Change the type of one Database property (column). DESTRUCTIVE to that column's data: " +
+    "config is reset to {} (a Select loses its options) and existing cell values are NOT " +
+    "converted — they keep their old type until each row is rewritten with set_row_properties. " +
+    "Prefer this over delete_property + add_property only when you intend to re-set the values; " +
+    "to rename a column use rename_property, to edit Select options use update_property_config.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      property_definition_id: {
+        type: "number",
+        description: "The exact property definition id to retype.",
+      },
+      property_type: {
+        type: "string",
+        enum: [
+          "Text",
+          "Number",
+          "Date",
+          "Select",
+          "MultiSelect",
+          "Relation",
+          "Checkbox",
+          "Url",
+          "Person",
+          "File",
+        ],
+      },
+    },
+    required: ["property_definition_id", "property_type"],
+  },
+  execute: (ctx, input) =>
+    updatePropertyType(
+      ctx.transport,
+      Number(input.property_definition_id),
+      String(input.property_type ?? ""),
+    ),
+};
+
 const listPropertiesTool: McpToolEntry = {
   name: "list_properties",
   description:
-    "List the property definitions (columns) for a database schema, including the exact " +
-    "property_definition_id needed by delete_property.",
+    "List the property definitions (columns) for a database schema, including each column's " +
+    "current config and the exact property_definition_id needed by rename_property, " +
+    "update_property_config, update_property_type and delete_property.",
   inputSchema: {
     type: "object",
     properties: {
@@ -1002,6 +1099,9 @@ export function buildToolRegistry(): McpToolEntry[] {
     listPropertiesTool,
     queryDatabaseTool,
     addPropertyTool,
+    renamePropertyTool,
+    updatePropertyConfigTool,
+    updatePropertyTypeTool,
     deletePropertyTool,
     setRowPropertiesTool,
     deletePageTool,
