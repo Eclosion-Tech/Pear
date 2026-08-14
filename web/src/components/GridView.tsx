@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback, type RefObject } from "react";
 import { useTable, useSpacetimeDB } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
 import {
@@ -590,10 +590,11 @@ export function GridView({ page }: GridViewProps) {
 
   // All Database pages for Relation target picker; users for Person cells.
   // Both subscribed once here and threaded to every cell (ticket 14379).
+  // The current database is included so a relation can target its own rows.
   const [allPages] = useTable(tables.page);
   const { users } = useUsers();
   const databasePages = allPages.filter(
-    (p) => p.pageType.tag === "Database" && !p.deletedAt && p.id !== page.id
+    (p) => p.pageType.tag === "Database" && !p.deletedAt
   );
 
   // ── Filtering ───────────────────────────────────────────────────────────────
@@ -1700,53 +1701,16 @@ export function GridView({ page }: GridViewProps) {
       )}
 
       {addStep === "relation-target" && (
-        <FloatingPopup
+        <RelationTargetPicker
           anchorRef={addAnchorRef}
           onClose={cancelAdd}
-          className="w-64 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-xl p-3"
-        >
-          <div className="text-xs text-neutral-500 dark:text-neutral-400 mb-1.5 font-medium">
-            Link to database
-          </div>
-          <div className="max-h-40 overflow-y-auto space-y-0.5">
-            {databasePages.length === 0 ? (
-              <p className="text-xs text-neutral-400 dark:text-neutral-600 italic py-2">
-                No other databases found
-              </p>
-            ) : (
-              databasePages.map((db) => (
-                <button
-                  key={String(db.id)}
-                  className={`w-full text-left px-2 py-1.5 text-sm rounded transition-colors ${
-                    relationTargetId === db.id
-                      ? "bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-200"
-                      : "text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700"
-                  }`}
-                  onClick={() =>
-                    setRelationTargetId(relationTargetId === db.id ? null : db.id)
-                  }
-                >
-                  {db.title || "Untitled"}
-                </button>
-              ))
-            )}
-          </div>
-          <div className="flex gap-2 mt-2 border-t border-neutral-100 dark:border-neutral-700 pt-2">
-            <button
-              className="flex-1 text-xs py-1 rounded bg-neutral-100 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-600"
-              onClick={() => setAddStep("name")}
-            >
-              ← Back
-            </button>
-            <button
-              className="flex-1 text-xs py-1 rounded bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-40"
-              disabled={!relationTargetId}
-              onClick={commitAddProperty}
-            >
-              Add
-            </button>
-          </div>
-        </FloatingPopup>
+          databasePages={databasePages}
+          selectedId={relationTargetId}
+          onSelect={setRelationTargetId}
+          onBack={() => setAddStep("name")}
+          onCommit={commitAddProperty}
+          commitLabel="Add"
+        />
       )}
 
       {contextMenu && (
@@ -1758,6 +1722,89 @@ export function GridView({ page }: GridViewProps) {
         />
       )}
     </div>
+  );
+}
+
+// ————————————————— Relation target picker —————————————————
+// Shared by the add-column wizard and ColumnHeader's change-type flow.
+
+function RelationTargetPicker({
+  anchorRef,
+  onClose,
+  databasePages,
+  selectedId,
+  onSelect,
+  onBack,
+  onCommit,
+  commitLabel,
+}: {
+  anchorRef: RefObject<HTMLElement | null>;
+  onClose: () => void;
+  databasePages: { id: bigint; title: string }[];
+  selectedId: bigint | null;
+  onSelect: (id: bigint | null) => void;
+  onBack: () => void;
+  onCommit: () => void;
+  commitLabel: string;
+}) {
+  const [search, setSearch] = useState("");
+  const filtered = databasePages.filter((db) =>
+    (db.title || "Untitled").toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <FloatingPopup
+      anchorRef={anchorRef}
+      onClose={onClose}
+      className="w-64 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-xl p-3"
+    >
+      <div className="text-xs text-neutral-500 dark:text-neutral-400 mb-1.5 font-medium">
+        Link to database
+      </div>
+      <input
+        autoFocus
+        className="w-full bg-neutral-100 dark:bg-neutral-700 text-sm text-neutral-900 dark:text-white px-2 py-0.5 rounded outline-none mb-1.5"
+        placeholder="Search databases…"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+      />
+      <div className="max-h-40 overflow-y-auto space-y-0.5">
+        {filtered.length === 0 ? (
+          <p className="text-xs text-neutral-400 dark:text-neutral-600 italic py-2">
+            No databases found
+          </p>
+        ) : (
+          filtered.map((db) => (
+            <button
+              key={String(db.id)}
+              className={`w-full text-left px-2 py-1.5 text-sm rounded transition-colors ${
+                selectedId === db.id
+                  ? "bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-200"
+                  : "text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+              }`}
+              onClick={() => onSelect(selectedId === db.id ? null : db.id)}
+            >
+              {db.title || "Untitled"}
+            </button>
+          ))
+        )}
+      </div>
+      <div className="flex gap-2 mt-2 border-t border-neutral-100 dark:border-neutral-700 pt-2">
+        <button
+          className="flex-1 text-xs py-1 rounded bg-neutral-100 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-600"
+          onClick={onBack}
+        >
+          ← Back
+        </button>
+        <button
+          className="flex-1 text-xs py-1 rounded bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-40"
+          disabled={!selectedId}
+          onClick={onCommit}
+        >
+          {commitLabel}
+        </button>
+      </div>
+    </FloatingPopup>
   );
 }
 
@@ -1816,7 +1863,17 @@ function ColumnHeader({
 
   async function handleChangeType(tag: PropertyTypeTag) {
     if (tag === "Relation") {
-      setRelTargetId(null);
+      // Pre-select the saved target when the column is already a Relation.
+      const saved = (() => {
+        if (prop.propertyType.tag !== "Relation") return null;
+        try {
+          const cfg = JSON.parse(prop.config) as { targetPageId?: string };
+          return cfg.targetPageId ? BigInt(cfg.targetPageId) : null;
+        } catch {
+          return null;
+        }
+      })();
+      setRelTargetId(saved);
       setMode("relation-target");
       return;
     }
@@ -1956,51 +2013,16 @@ function ColumnHeader({
       )}
 
       {mode === "relation-target" && (
-        <FloatingPopup
+        <RelationTargetPicker
           anchorRef={buttonRef}
           onClose={closeMenu}
-          className="w-64 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-xl p-3"
-        >
-          <div className="text-xs text-neutral-500 dark:text-neutral-400 mb-1.5 font-medium">
-            Link to database
-          </div>
-          <div className="max-h-40 overflow-y-auto space-y-0.5">
-            {databasePages.length === 0 ? (
-              <p className="text-xs text-neutral-400 dark:text-neutral-600 italic py-2">
-                No other databases found
-              </p>
-            ) : (
-              databasePages.map((db) => (
-                <button
-                  key={String(db.id)}
-                  className={`w-full text-left px-2 py-1.5 text-sm rounded transition-colors ${
-                    relTargetId === db.id
-                      ? "bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-200"
-                      : "text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700"
-                  }`}
-                  onClick={() => setRelTargetId(relTargetId === db.id ? null : db.id)}
-                >
-                  {db.title || "Untitled"}
-                </button>
-              ))
-            )}
-          </div>
-          <div className="flex gap-2 mt-2 border-t border-neutral-100 dark:border-neutral-700 pt-2">
-            <button
-              className="flex-1 text-xs py-1 rounded bg-neutral-100 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-600"
-              onClick={() => setMode("change-type")}
-            >
-              ← Back
-            </button>
-            <button
-              className="flex-1 text-xs py-1 rounded bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-40"
-              disabled={!relTargetId}
-              onClick={commitRelationTarget}
-            >
-              Save
-            </button>
-          </div>
-        </FloatingPopup>
+          databasePages={databasePages}
+          selectedId={relTargetId}
+          onSelect={setRelTargetId}
+          onBack={() => setMode("change-type")}
+          onCommit={commitRelationTarget}
+          commitLabel="Save"
+        />
       )}
 
       {mode === "set-default" && (

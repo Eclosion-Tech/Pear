@@ -18,6 +18,7 @@ import {
   usePatchAiUserProfileSettings,
   useProvisionAiUserMemory,
   useSetAiUserApiKey,
+  useSetAiUserInferenceBackend,
   useSetAiUserModel,
   useSetAiUserRoutineEnabled,
   useSetAiUserSerperApiKey,
@@ -346,6 +347,7 @@ function AiUserRowEditor({
   const setAiUserModel = useSetAiUserModel();
   const updateConfig = useUpdateAiUserConfig();
   const setApiKeyReducer = useSetAiUserApiKey();
+  const setInferenceBackend = useSetAiUserInferenceBackend();
   // External MCP clients bring their own model; no inference config applies.
   const isMcp = isExternalMcpProfile(profile);
   const savedPreset: ProviderPresetKey =
@@ -528,6 +530,18 @@ function AiUserRowEditor({
             ? "API key replaced and verified in the workspace database."
             : "API key replaced.",
         );
+      }
+      // The bridge/harness binding always wins at the worker's routing fork,
+      // so a mode chip moved to "Cloud API" must clear it on Save — otherwise
+      // turns keep running on the old device while the cloud config sits
+      // dormant. Runs last so the cloud config/key are in place when routing
+      // flips. (Binding to a device stays on the section's own Save, which
+      // validates the device/provider/model fields.)
+      if (!isMcp && backendMode === "cloud" && savedBackendMode !== "cloud") {
+        await setInferenceBackend({
+          aiUserId: profile.aiUserId,
+          inferenceBackendJson: undefined,
+        });
       }
     } catch (e) {
       setLocalErr(e instanceof Error ? e.message : String(e));

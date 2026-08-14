@@ -371,7 +371,10 @@ pub fn update_ai_user_system_prompt(
 
 /// Update the inference configuration of an AI user (provider, model, endpoint,
 /// system prompt, max tokens). Does NOT update the API key — use
-/// `set_ai_user_api_key` for that.
+/// `set_ai_user_api_key` for that — and does NOT touch the inference-backend
+/// binding: while a binding is live this edits the *dormant* cloud config, so
+/// the profile's provider/model display is left on the active backend (see
+/// `set_ai_user_inference_backend`). Clear the binding to switch to cloud.
 ///
 /// Intentionally has no `require_creator_or_admin` guard: some deployments
 /// restrict who may call reducers entirely at the HTTP/API layer.
@@ -406,6 +409,7 @@ pub fn update_ai_user_config(
     let prov_name = provider_profile_name(&provider, endpoint.as_deref());
     let model_name = model.trim().to_string();
     let system_prompt_for_profile = system_prompt.clone();
+    let binding_live = config.inference_backend_json.is_some();
 
     ctx.db.ai_user_config().id().update(AiUserConfig {
         provider,
@@ -418,13 +422,24 @@ pub fn update_ai_user_config(
     });
 
     if let Some(profile) = ctx.db.ai_user_profile().ai_user_id().find(ai_user_id) {
-        ctx.db.ai_user_profile().ai_user_id().update(AiUserProfile {
-            provider_name: prov_name,
-            model_name,
-            system_prompt: system_prompt_for_profile,
-            updated_at: ctx.timestamp,
-            ..profile
-        });
+        if binding_live {
+            // A bridge/harness binding is live: only the dormant cloud config
+            // changed, so the profile keeps displaying the ACTIVE backend's
+            // provider/model (invariant of `set_ai_user_inference_backend`).
+            ctx.db.ai_user_profile().ai_user_id().update(AiUserProfile {
+                system_prompt: system_prompt_for_profile,
+                updated_at: ctx.timestamp,
+                ..profile
+            });
+        } else {
+            ctx.db.ai_user_profile().ai_user_id().update(AiUserProfile {
+                provider_name: prov_name,
+                model_name,
+                system_prompt: system_prompt_for_profile,
+                updated_at: ctx.timestamp,
+                ..profile
+            });
+        }
     }
 
     Ok(())
@@ -452,17 +467,23 @@ pub fn set_ai_user_model(
         .id()
         .find(ai_user_id)
         .ok_or("AI user config not found")?;
+    let binding_live = config.inference_backend_json.is_some();
     ctx.db.ai_user_config().id().update(AiUserConfig {
         model: model_name.clone(),
         updated_at: ctx.timestamp,
         ..config
     });
-    if let Some(profile) = ctx.db.ai_user_profile().ai_user_id().find(ai_user_id) {
-        ctx.db.ai_user_profile().ai_user_id().update(AiUserProfile {
-            model_name,
-            updated_at: ctx.timestamp,
-            ..profile
-        });
+    // While a binding is live only the dormant cloud model changed; the
+    // profile keeps displaying the ACTIVE backend's model (invariant of
+    // `set_ai_user_inference_backend`).
+    if !binding_live {
+        if let Some(profile) = ctx.db.ai_user_profile().ai_user_id().find(ai_user_id) {
+            ctx.db.ai_user_profile().ai_user_id().update(AiUserProfile {
+                model_name,
+                updated_at: ctx.timestamp,
+                ..profile
+            });
+        }
     }
     Ok(())
 }

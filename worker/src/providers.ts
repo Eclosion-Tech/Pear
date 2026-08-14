@@ -782,6 +782,13 @@ export function getProviderForAiUser(
   // cloud fallback.
   const bridgeBinding = parseBridgeBackendBinding(config.inferenceBackendJson);
   if (bridgeBinding) {
+    // Make the active transport visible in worker logs: a live binding wins
+    // over the cloud provider config, which stays dormant until it's cleared.
+    console.log(
+      `[providers] AI user ${aiUserId} routes via ${bridgeBinding.mode} binding ` +
+        `(device ${bridgeBinding.device_id}, ${bridgeBinding.provider}) — ` +
+        `cloud config (${config.provider.tag}) is dormant`,
+    );
     const ProviderClass =
       bridgeBinding.mode === "harness" ? BridgeHarnessProvider : BridgeInferenceProvider;
     const entry: ResolvedProvider = {
