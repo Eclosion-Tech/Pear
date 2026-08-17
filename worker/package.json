@@ -13,6 +13,7 @@
     "scribe:stdio": "node --import tsx/esm src/scribe/stdio.ts",
     "test": "npm run typecheck:names && node --import tsx/esm --test $(find src -name '*.test.ts')",
     "generate": "spacetime generate --lang typescript --out-dir src/module_bindings --module-path ../server/spacetimedb",
+    "catalog:check": "node --import tsx/esm scripts/check-model-catalog.ts",
     "typecheck:names": "sh -c 'out=$(npx tsc --noEmit --pretty false 2>&1 | grep \"^src/\" | grep -v \"^src/module_bindings\" | grep -E \"TS2304|TS18004|TS2552\" || true); if [ -n \"$out\" ]; then echo \"$out\"; echo \"undefined-identifier errors found (see above)\"; exit 1; fi'"
   },
   "engines": {

@@ -166,17 +166,18 @@ export const MODEL_CATALOG: Record<ProviderPresetKey, CatalogModel[]> = {
   // model field accepts any slug. Keep in sync with worker/src/model-catalog.ts.
   OpenRouter: [
     { id: "anthropic/claude-fable-5", tier: "frontier", label: "Fable 5" },
-    { id: "openai/gpt-5.6", tier: "frontier", label: "GPT-5.6" },
-    { id: "google/gemini-3-pro", tier: "frontier", label: "Gemini 3 Pro" },
-    { id: "x-ai/grok-4.5", tier: "frontier", label: "Grok 4.5" },
-    { id: "anthropic/claude-opus-4.8", tier: "flagship", label: "Opus 4.8" },
-    { id: "openai/gpt-5.5", tier: "flagship", label: "GPT-5.5" },
+    { id: "openai/gpt-5.6-sol", tier: "frontier", label: "GPT-5.6 Sol" },
+    { id: "google/gemini-3.1-pro-preview", tier: "frontier", label: "Gemini 3.1 Pro" },
+    { id: "x-ai/grok-4.6", tier: "frontier", label: "Grok 4.6" },
+    { id: "anthropic/claude-opus-5", tier: "flagship", label: "Opus 5" },
     { id: "z-ai/glm-5.2", tier: "flagship", label: "GLM 5.2" },
     { id: "moonshotai/kimi-k3", tier: "flagship", label: "Kimi K3" },
-    { id: "anthropic/claude-sonnet-4.6", tier: "balanced", label: "Sonnet 4.6" },
-    { id: "deepseek/deepseek-chat-v3.1", tier: "balanced", label: "DeepSeek V3.1" },
+    { id: "anthropic/claude-sonnet-5", tier: "balanced", label: "Sonnet 5" },
+    { id: "openai/gpt-5.6-terra", tier: "balanced", label: "GPT-5.6 Terra" },
+    { id: "deepseek/deepseek-v4-pro-0813", tier: "balanced", label: "DeepSeek V4 Pro" },
     { id: "anthropic/claude-haiku-4.5", tier: "fast", label: "Haiku 4.5" },
-    { id: "google/gemini-3-flash", tier: "fast", label: "Gemini 3 Flash" },
+    { id: "google/gemini-3.7-flash", tier: "fast", label: "Gemini 3.7 Flash" },
+    { id: "openai/gpt-5.6-luna", tier: "fast", label: "GPT-5.6 Luna" },
   ],
   // Meta Model API (api.meta.ai) — Muse Spark family. NOTE: the dashboard
   // documents the Responses API (/v1/responses); if chat completions isn't
