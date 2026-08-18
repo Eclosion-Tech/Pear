@@ -292,6 +292,7 @@ import InstalledExtensionRow from "./installed_extension_table";
 import MessageFeedbackRow from "./message_feedback_table";
 import MigrationStateRow from "./migration_state_table";
 import ModuleInstallMetaRow from "./module_install_meta_table";
+import MyExtensionPermissionsRow from "./my_extension_permissions_table";
 import NotionImportJobRow from "./notion_import_job_table";
 import OrchaAgentRow from "./orcha_agent_table";
 import OrchaJobRow from "./orcha_job_table";
@@ -1274,6 +1275,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, ApiEndpointKeyLookupRow),
+  my_extension_permissions: __table({
+    name: 'my_extension_permissions',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, MyExtensionPermissionsRow),
 });
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */

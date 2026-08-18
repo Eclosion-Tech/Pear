@@ -1093,6 +1093,20 @@ export const ModuleInstallMeta = __t.object("ModuleInstallMeta", {
 });
 export type ModuleInstallMeta = __Infer<typeof ModuleInstallMeta>;
 
+export const MyExtensionPermissionRow = __t.object("MyExtensionPermissionRow", {
+  permissionId: __t.u64(),
+  installedExtensionId: __t.u64(),
+  get scope() {
+    return PermissionScope;
+  },
+  get action() {
+    return PermissionAction;
+  },
+  allowedDomains: __t.option(__t.string()),
+  grantedAt: __t.timestamp(),
+});
+export type MyExtensionPermissionRow = __Infer<typeof MyExtensionPermissionRow>;
+
 export const NotionImportJob = __t.object("NotionImportJob", {
   id: __t.u64(),
   requestedBy: __t.identity(),

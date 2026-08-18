@@ -2,10 +2,12 @@
 
 import { useState } from "react";
 import { Identity } from "spacetimedb";
+import { useSpacetimeDB } from "spacetimedb/react";
 import {
   useExtensionManifests,
   useInstalledExtensions,
   useExtensionRuntimeHealth,
+  useMyExtensionPermissions,
   usePublishExtension,
   useInstallExtension,
   useConfirmExtensionInstall,
@@ -14,9 +16,12 @@ import {
   useSetExtensionEnabled,
   useUpdateExtension,
   useSeedBuiltinExtensions,
+  useGrantExtensionPermission,
+  useRevokeExtensionPermission,
   type ExtensionManifestRow,
   type InstalledExtensionRow,
   type ExtensionRuntimeHealthRow,
+  type MyExtensionPermissionRow,
 } from "@/src/hooks/useExtensions";
 import { mintIdentity } from "@/src/lib/aiUserApi";
 
@@ -244,6 +249,238 @@ function InstallFromUrlForm({ onClose }: { onClose: () => void }) {
   );
 }
 
+// ── Permissions Section ───────────────────────────────────────────────────────
+
+const PERMISSION_ACTIONS = [
+  "Read",
+  "Write",
+  "Edit",
+  "Delete",
+  "Snapshot",
+  "PropertyRead",
+  "PropertyWrite",
+  "SpawnJob",
+  "HttpOutbound",
+] as const;
+type PermissionActionChoice = (typeof PERMISSION_ACTIONS)[number];
+
+const SCOPE_CHOICES = ["Workspace", "Page", "Subtree", "BridgeDevice"] as const;
+type ScopeChoice = (typeof SCOPE_CHOICES)[number];
+
+function scopeLabel(scope: MyExtensionPermissionRow["scope"]): string {
+  switch (scope.tag) {
+    case "Workspace":
+      return "Workspace";
+    case "Page":
+      return `Page ${scope.value}`;
+    case "Subtree":
+      return `Subtree of page ${scope.value}`;
+    case "BridgeDevice":
+      return `Bridge device ${scope.value}`;
+  }
+}
+
+/**
+ * Grants list + add/revoke controls for one install. Permissions are
+ * deny-by-default (no row = every tool call denied), so the collapsed header
+ * warns loudly when an enabled extension has zero grants. Only the installer
+ * sees this section — the grant/revoke reducers reject anyone else, and the
+ * my_extension_permissions view only returns the caller's own installs.
+ */
+function PermissionsSection({
+  installedExtensionId,
+  permissions,
+}: {
+  installedExtensionId: bigint;
+  permissions: MyExtensionPermissionRow[];
+}) {
+  const grantPermission = useGrantExtensionPermission();
+  const revokePermission = useRevokeExtensionPermission();
+
+  const [expanded, setExpanded] = useState(false);
+  const [scopeChoice, setScopeChoice] = useState<ScopeChoice>("Workspace");
+  const [scopeId, setScopeId] = useState("");
+  const [action, setAction] = useState<PermissionActionChoice>("Read");
+  const [domains, setDomains] = useState("");
+  const [error, setError] = useState("");
+
+  const needsScopeId = scopeChoice !== "Workspace";
+  const needsDomains = action === "HttpOutbound";
+
+  async function handleGrant() {
+    setError("");
+    let scope: MyExtensionPermissionRow["scope"];
+    if (scopeChoice === "Workspace") {
+      scope = { tag: "Workspace" };
+    } else {
+      if (!/^\d+$/.test(scopeId.trim())) {
+        setError(
+          scopeChoice === "BridgeDevice"
+            ? "Enter the numeric bridge device id"
+            : "Enter the numeric page id",
+        );
+        return;
+      }
+      scope = { tag: scopeChoice, value: BigInt(scopeId.trim()) };
+    }
+
+    let allowedDomains: string | undefined;
+    if (needsDomains) {
+      const list = domains
+        .split(",")
+        .map((d) => d.trim())
+        .filter(Boolean);
+      if (list.length === 0) {
+        setError("HttpOutbound requires at least one allowed domain");
+        return;
+      }
+      if (list.some((d) => d.includes("*"))) {
+        setError("Wildcard domains are not permitted");
+        return;
+      }
+      allowedDomains = JSON.stringify(list);
+    }
+
+    try {
+      await grantPermission({
+        installedExtensionId,
+        scope,
+        action: { tag: action },
+        allowedDomains,
+      });
+      setScopeId("");
+      setDomains("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function handleRevoke(permissionId: bigint) {
+    setError("");
+    revokePermission({ permissionId }).catch((err) =>
+      setError(err instanceof Error ? err.message : String(err)),
+    );
+  }
+
+  const inputClasses =
+    "px-2 py-1 text-xs border border-neutral-200 dark:border-neutral-700 rounded bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-teal-500";
+
+  return (
+    <div className="ml-12">
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="flex items-center gap-1.5 text-xs text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors"
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="11"
+          height="11"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className={`transition-transform ${expanded ? "rotate-90" : ""}`}
+        >
+          <polyline points="9 18 15 12 9 6" />
+        </svg>
+        Permissions · {permissions.length}
+        {permissions.length === 0 && (
+          <span
+            className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300"
+            title="Permissions are deny-by-default: with no grants, every tool call from this extension is rejected."
+          >
+            none granted — tool calls will be denied
+          </span>
+        )}
+      </button>
+
+      {expanded && (
+        <div className="mt-2 space-y-2">
+          {permissions.map((perm) => (
+            <div
+              key={String(perm.permissionId)}
+              className="flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-300"
+            >
+              <code className="bg-neutral-100 dark:bg-neutral-800 px-1.5 py-0.5 rounded">
+                {perm.action.tag}
+              </code>
+              <span>{scopeLabel(perm.scope)}</span>
+              {perm.allowedDomains && (
+                <span className="text-neutral-400 truncate" title={perm.allowedDomains}>
+                  {perm.allowedDomains}
+                </span>
+              )}
+              <button
+                onClick={() => handleRevoke(perm.permissionId)}
+                className="ml-auto px-1.5 py-0.5 rounded text-neutral-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                title="Revoke this permission"
+              >
+                Revoke
+              </button>
+            </div>
+          ))}
+
+          <div className="flex items-center gap-1.5 flex-wrap pt-1">
+            <select
+              value={action}
+              onChange={(e) => setAction(e.target.value as PermissionActionChoice)}
+              className={inputClasses}
+              aria-label="Permission action"
+            >
+              {PERMISSION_ACTIONS.map((a) => (
+                <option key={a} value={a}>
+                  {a}
+                </option>
+              ))}
+            </select>
+            <span className="text-xs text-neutral-400">on</span>
+            <select
+              value={scopeChoice}
+              onChange={(e) => setScopeChoice(e.target.value as ScopeChoice)}
+              className={inputClasses}
+              aria-label="Permission scope"
+            >
+              <option value="Workspace">Workspace</option>
+              <option value="Page">Page</option>
+              <option value="Subtree">Subtree</option>
+              <option value="BridgeDevice">Bridge device</option>
+            </select>
+            {needsScopeId && (
+              <input
+                type="text"
+                inputMode="numeric"
+                value={scopeId}
+                onChange={(e) => setScopeId(e.target.value)}
+                placeholder={scopeChoice === "BridgeDevice" ? "device id" : "page id"}
+                className={`${inputClasses} w-24`}
+              />
+            )}
+            {needsDomains && (
+              <input
+                type="text"
+                value={domains}
+                onChange={(e) => setDomains(e.target.value)}
+                placeholder="api.example.com, cdn.example.com"
+                className={`${inputClasses} w-56`}
+              />
+            )}
+            <button
+              onClick={handleGrant}
+              className="px-2 py-1 rounded text-xs font-medium text-teal-700 bg-teal-50 dark:bg-teal-900/20 dark:text-teal-300 hover:bg-teal-100 dark:hover:bg-teal-900/40 transition-colors"
+            >
+              Grant
+            </button>
+          </div>
+
+          {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Installed Extension Card ──────────────────────────────────────────────────
 
 function InstalledExtensionCard({
@@ -251,6 +488,8 @@ function InstalledExtensionCard({
   manifest,
   latestManifest,
   runtimeHealth,
+  permissions,
+  canManagePermissions = false,
   onToggleEnabled,
   onUninstall,
   onConfirm,
@@ -261,6 +500,9 @@ function InstalledExtensionCard({
   manifest: ExtensionManifestRow | undefined;
   latestManifest: ExtensionManifestRow | undefined;
   runtimeHealth: ExtensionRuntimeHealthRow | undefined;
+  permissions?: MyExtensionPermissionRow[];
+  /** True when the viewer installed this extension — grant/revoke are installer-only. */
+  canManagePermissions?: boolean;
   onToggleEnabled: (id: bigint, enabled: boolean) => void;
   onUninstall: (id: bigint) => void;
   onConfirm: (id: bigint) => void;
@@ -416,6 +658,15 @@ function InstalledExtensionCard({
           </>
         )}
       </div>
+
+      {/* Permission grants — installer-only, hidden for builtin (always
+          workspace-scoped) and pending installs (granted at confirm time). */}
+      {!builtin && !isPending && canManagePermissions && (
+        <PermissionsSection
+          installedExtensionId={installed.id}
+          permissions={permissions ?? []}
+        />
+      )}
     </div>
   );
 }
@@ -922,6 +1173,8 @@ export function ExtensionsSettings() {
   const { manifests } = useExtensionManifests();
   const { installed } = useInstalledExtensions();
   const { health } = useExtensionRuntimeHealth();
+  const { permissions } = useMyExtensionPermissions();
+  const { identity } = useSpacetimeDB();
 
   const setExtensionEnabled = useSetExtensionEnabled();
   const uninstallExtension = useUninstallExtension();
@@ -1139,6 +1392,12 @@ export function ExtensionsSettings() {
                     manifest={currentManifest}
                     latestManifest={latestManifest}
                     runtimeHealth={health.find((row) => row.installedExtensionId === ext.id)}
+                    permissions={permissions.filter(
+                      (perm) => perm.installedExtensionId === ext.id,
+                    )}
+                    canManagePermissions={
+                      identity?.toHexString() === ext.installedBy.toHexString()
+                    }
                     onToggleEnabled={handleToggleEnabled}
                     onUninstall={handleUninstall}
                     onConfirm={(id) => setConfirmTarget(installed.find((i) => i.id === id) ?? null)}

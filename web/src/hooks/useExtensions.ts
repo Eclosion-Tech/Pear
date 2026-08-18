@@ -20,6 +20,12 @@ export function useExtensionRuntimeHealth() {
   return { health, isReady };
 }
 
+/** Permission grants on installs owned by the caller (per-caller view). */
+export function useMyExtensionPermissions() {
+  const [permissions, isReady] = useTable(tables.my_extension_permissions);
+  return { permissions, isReady };
+}
+
 // ── Reducer hooks ─────────────────────────────────────────────────────────────
 
 export function usePublishExtension() {
@@ -79,3 +85,7 @@ export type InstalledExtensionRow = ReturnType<
 export type ExtensionRuntimeHealthRow = ReturnType<
   typeof useExtensionRuntimeHealth
 >["health"][number];
+
+export type MyExtensionPermissionRow = ReturnType<
+  typeof useMyExtensionPermissions
+>["permissions"][number];

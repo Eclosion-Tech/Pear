@@ -503,6 +503,37 @@ export const BlockAccessRule = __t.object("BlockAccessRule", {
 });
 export type BlockAccessRule = __Infer<typeof BlockAccessRule>;
 
+export const BridgeApproval = __t.object("BridgeApproval", {
+  id: __t.u64(),
+  commandId: __t.u64(),
+  requestId: __t.string(),
+  deviceId: __t.u64(),
+  ownerIdentity: __t.identity(),
+  requestedBy: __t.identity(),
+  conversationId: __t.u64(),
+  title: __t.option(__t.string()),
+  kind: __t.option(__t.string()),
+  toolCallId: __t.option(__t.string()),
+  optionsJson: __t.string(),
+  diffsJson: __t.option(__t.string()),
+  get status() {
+    return BridgeApprovalStatus;
+  },
+  decidedOptionId: __t.option(__t.string()),
+  decidedBy: __t.option(__t.identity()),
+  decidedAt: __t.option(__t.timestamp()),
+  createdAt: __t.timestamp(),
+});
+export type BridgeApproval = __Infer<typeof BridgeApproval>;
+
+// The tagged union or sum type for the algebraic type `BridgeApprovalStatus`.
+export const BridgeApprovalStatus = __t.enum("BridgeApprovalStatus", {
+  Pending: __t.unit(),
+  Decided: __t.unit(),
+  Expired: __t.unit(),
+});
+export type BridgeApprovalStatus = __Infer<typeof BridgeApprovalStatus>;
+
 export const BridgeCommand = __t.object("BridgeCommand", {
   id: __t.u64(),
   deviceId: __t.u64(),
@@ -1061,6 +1092,20 @@ export const ModuleInstallMeta = __t.object("ModuleInstallMeta", {
   publisherIdentity: __t.identity(),
 });
 export type ModuleInstallMeta = __Infer<typeof ModuleInstallMeta>;
+
+export const MyExtensionPermissionRow = __t.object("MyExtensionPermissionRow", {
+  permissionId: __t.u64(),
+  installedExtensionId: __t.u64(),
+  get scope() {
+    return PermissionScope;
+  },
+  get action() {
+    return PermissionAction;
+  },
+  allowedDomains: __t.option(__t.string()),
+  grantedAt: __t.timestamp(),
+});
+export type MyExtensionPermissionRow = __Infer<typeof MyExtensionPermissionRow>;
 
 export const NotionImportJob = __t.object("NotionImportJob", {
   id: __t.u64(),

@@ -357,6 +357,47 @@ fn ai_extension_runtime(ctx: &ViewContext) -> Vec<AiExtensionRuntimeRow> {
         .collect()
 }
 
+/// One of the caller's own permission grants, with the ids needed to revoke it.
+#[derive(SpacetimeType, Clone, Debug)]
+pub struct MyExtensionPermissionRow {
+    pub permission_id: u64,
+    pub installed_extension_id: u64,
+    pub scope: PermissionScope,
+    pub action: PermissionAction,
+    pub allowed_domains: Option<String>,
+    pub granted_at: Timestamp,
+}
+
+/// Permission grants on installs owned by the calling identity. The backing
+/// `extension_permission` table stays private; this per-caller projection lets
+/// the installer see and manage grants in Settings (grant/revoke reducers
+/// enforce the same installed_by check on mutation).
+#[view(accessor = my_extension_permissions, public)]
+fn my_extension_permissions(ctx: &ViewContext) -> Vec<MyExtensionPermissionRow> {
+    // Views cannot call `.iter()`; unbounded range over the `manifest_id`
+    // btree index provides the full installed-extension scan.
+    ctx.db
+        .installed_extension()
+        .manifest_id()
+        .filter(0u64..)
+        .filter(|installed| installed.installed_by == ctx.sender())
+        .flat_map(|installed| {
+            ctx.db
+                .extension_permission()
+                .installed_extension_id()
+                .filter(installed.id)
+                .map(|permission| MyExtensionPermissionRow {
+                    permission_id: permission.id,
+                    installed_extension_id: permission.installed_extension_id,
+                    scope: permission.scope,
+                    action: permission.action,
+                    allowed_domains: permission.allowed_domains,
+                    granted_at: permission.granted_at,
+                })
+        })
+        .collect()
+}
+
 const PEAR_WORKSPACE_TOOLS_MANIFEST: &str = r#"{
   "builtin": {
     "tools": [
