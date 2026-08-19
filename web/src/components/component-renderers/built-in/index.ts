@@ -4,6 +4,7 @@ import {
 import { ContainerRenderer } from "./Container";
 import { ImageRenderer } from "./Image";
 import { ImageBlockRenderer } from "./ImageBlock";
+import { FileBlockRenderer } from "./FileBlock";
 import { InputRenderer } from "./Input";
 import { ButtonRenderer } from "./Button";
 import { CodeRefRenderer } from "./CodeRef";
@@ -32,6 +33,7 @@ export function registerPearBuiltinRenderers(): void {
   registerRenderer("Container", ContainerRenderer);
   registerRenderer("Image", ImageRenderer);
   registerRenderer("ImageBlock", ImageBlockRenderer);
+  registerRenderer("FileBlock", FileBlockRenderer);
   registerRenderer("Input", InputRenderer);
   registerRenderer("Button", ButtonRenderer);
   registerRenderer("CodeRef", CodeRefRenderer);

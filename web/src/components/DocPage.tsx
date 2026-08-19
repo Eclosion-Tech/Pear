@@ -4,6 +4,8 @@ import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useTable } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
+import type { PageContent } from "@/src/module_bindings/types";
+import { useScopedTable } from "@/src/hooks/useScopedTable";
 import { useUpdatePageTitle, useUpdatePageIcon, useDeletePageSubtree, useChildPages } from "@/src/hooks/usePages";
 import type { PageRow } from "@/src/hooks/usePages";
 import { EmojiPicker } from "./EmojiPicker";
@@ -31,10 +33,16 @@ export function DocPage({ page }: DocPageProps) {
   const deletePage = useDeletePageSubtree();
   const iconButtonRef = useRef<HTMLButtonElement>(null);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
-  // Keep this unfiltered until the SpacetimeDB query builder honors generated
-  // column source names. In SDK 2.0.3, filtering on `pageId` emits invalid SQL
-  // against `pageId` instead of the server column `page_id`.
-  const [contents] = useTable(tables.page_content);
+  // Scoped by raw SQL (14384): the SDK 2.0.3 query builder renders the
+  // camelCase accessor (`pageId`) instead of the server column (`page_id`),
+  // so typed `.where()` scoping fails — useScopedTable subscribes with
+  // server-name SQL and falls back to the full table if the query is
+  // rejected.
+  const { rows: contents } = useScopedTable<PageContent>(
+    tables.page_content,
+    `SELECT * FROM page_content WHERE page_id = ${page.id}`,
+    (c) => c.pageId === page.id,
+  );
   const content = contents.find((c) => c.pageId === page.id);
 
   const [allPages] = useTable(tables.page);

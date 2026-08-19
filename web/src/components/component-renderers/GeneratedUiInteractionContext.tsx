@@ -9,8 +9,9 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useReducer, useSpacetimeDB, useTable } from "spacetimedb/react";
-import { reducers, tables } from "@/src/module_bindings";
+import { useReducer, useSpacetimeDB } from "spacetimedb/react";
+import { reducers } from "@/src/module_bindings";
+import type { AutomationEventQueue } from "@/src/module_bindings/types";
 import {
   normalizeGeneratedAutomationId,
   resolveGeneratedUiInput,
@@ -58,16 +59,23 @@ export function useGeneratedUiInteraction(): GeneratedUiInteractionValue | null 
   return useContext(GeneratedUiInteractionContext);
 }
 
+/** Shared empty index for mounts whose host surface hoists no subscription. */
+const NO_AUTOMATION_EVENTS: ReadonlyMap<string, AutomationEventQueue> = new Map();
+
 export function GeneratedUiInteractionProvider({
   messageId,
+  eventsByKey = NO_AUTOMATION_EVENTS,
   children,
 }: {
   messageId: bigint;
+  /** automation_event_queue rows indexed by idempotency key, hoisted by the
+   * host surface (the chat thread holds ONE subscription for every
+   * generated-UI message instead of one per provider mount). */
+  eventsByKey?: ReadonlyMap<string, AutomationEventQueue>;
   children: ReactNode;
 }) {
   const { identity } = useSpacetimeDB();
   const invokeAutomation = useReducer(reducers.invokeAutomation);
-  const [events] = useTable(tables.automation_event_queue);
   const fieldsRef = useRef(new Map<string, FieldRegistration>());
   const [invocations, setInvocations] = useState(
     () => new Map<bigint, Invocation>(),
@@ -86,16 +94,35 @@ export function GeneratedUiInteractionProvider({
     [],
   );
 
-  const eventFor = useCallback(
-    (invocation: Invocation) =>
-      events.find(
-        (event) =>
-          event.automationId === invocation.automationId &&
-          event.idempotencyKey === invocation.idempotencyKey &&
-          (!identity || event.invokedBy?.toHexString() === identity.toHexString()),
-      ),
-    [events, identity],
-  );
+  // Only the events for THIS provider's invocations matter, but the hoisted
+  // index changes identity whenever any queue row changes anywhere. Project
+  // the relevant rows (nodeId → committed event) and keep the previous
+  // instance when they are unchanged — the SDK cache replaces a row object
+  // only when that row changes — so the context value below only picks up a
+  // new identity when a relevant event actually changed.
+  const relevantEventsRef = useRef(new Map<bigint, AutomationEventQueue>());
+  const relevantEvents = useMemo(() => {
+    const next = new Map<bigint, AutomationEventQueue>();
+    for (const [nodeId, invocation] of invocations) {
+      const event = eventsByKey.get(invocation.idempotencyKey);
+      if (
+        event &&
+        event.automationId === invocation.automationId &&
+        (!identity || event.invokedBy?.toHexString() === identity.toHexString())
+      ) {
+        next.set(nodeId, event);
+      }
+    }
+    const prev = relevantEventsRef.current;
+    if (
+      prev.size === next.size &&
+      [...next].every(([nodeId, event]) => prev.get(nodeId) === event)
+    ) {
+      return prev;
+    }
+    relevantEventsRef.current = next;
+    return next;
+  }, [eventsByKey, identity, invocations]);
 
   const invoke = useCallback(
     async (nodeId: bigint, action: GeneratedAutomationAction) => {
@@ -132,7 +159,9 @@ export function GeneratedUiInteractionProvider({
       }
 
       const previous = invocations.get(nodeId);
-      const previousCommitted = previous ? eventFor(previous) != null : false;
+      const previousCommitted = previous
+        ? relevantEvents.get(nodeId) != null
+        : false;
       const idempotencyKey =
         previous && !previousCommitted
           ? previous.idempotencyKey
@@ -160,14 +189,14 @@ export function GeneratedUiInteractionProvider({
         });
       }
     },
-    [eventFor, invocations, invokeAutomation, messageId],
+    [invocations, invokeAutomation, messageId, relevantEvents],
   );
 
   const statusFor = useCallback(
     (nodeId: bigint): GeneratedInvocationStatus => {
       const invocation = invocations.get(nodeId);
       if (!invocation) return { busy: false, tone: "idle", message: null };
-      const event = eventFor(invocation);
+      const event = relevantEvents.get(nodeId);
       if (!event && invocation.clientError) {
         return { busy: false, tone: "error", message: invocation.clientError };
       }
@@ -202,7 +231,7 @@ export function GeneratedUiInteractionProvider({
           };
       }
     },
-    [eventFor, invocations],
+    [invocations, relevantEvents],
   );
 
   const value = useMemo(

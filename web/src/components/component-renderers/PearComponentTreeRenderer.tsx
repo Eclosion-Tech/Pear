@@ -14,7 +14,7 @@ import {
   type BlockInsertEvent,
   type BlockTree,
 } from "@eclosion-tech/pulp";
-import type { ComponentNode } from "@/src/module_bindings/types";
+import type { ComponentNode, Conversation } from "@/src/module_bindings/types";
 import { BlockThreadGutter } from "@/src/components/BlockThreadGutter";
 import {
   useComponentTree,
@@ -36,10 +36,7 @@ import { useSyncChildPageLinks } from "@/src/hooks/useSyncChildPageLinks";
 import { useWorkspace } from "@/src/providers/WorkspaceProvider";
 import { AudioAttachmentContext } from "@/src/components/AudioAttachmentContext";
 import { useCreateAttachment } from "@/src/hooks/usePages";
-import {
-  useConversations,
-  useCreateConversation,
-} from "@/src/hooks/useConversations";
+import { useCreateConversation } from "@/src/hooks/useConversations";
 import { useSpacetimeDB } from "spacetimedb/react";
 import { registerPearBuiltinRenderers } from "./built-in";
 import { PEAR_SLASH_ITEMS, slashItemsForDefs } from "./pearSlashItems";
@@ -105,15 +102,15 @@ export function ComponentTreeRenderer({
   onOpenThread?: (conversationId: bigint) => void;
 }) {
   const { idbNamespace } = useWorkspace();
-  const { identity } = useSpacetimeDB();
+  const { identity, getConnection } = useSpacetimeDB();
   const createConversation = useCreateConversation();
-  const { conversations } = useConversations();
-  const conversationsRef = useRef(conversations);
-  conversationsRef.current = conversations;
-  const pendingBlockThreadRef = useRef<{
-    blockAnchor: bigint;
-    existingIds: Set<string>;
-  } | null>(null);
+  // Cleanup for the click-time conversation onInsert listener armed by
+  // handleCommentBlock. Deliberately NOT a `conversation` table subscription:
+  // holding one here re-rendered the whole editor ~3.3×/s whenever any AI turn
+  // streamed anywhere in the workspace (streaming flushes bump
+  // conversation.updatedAt). The row itself arrives through BlockThreadGutter's
+  // subscription, which is mounted exactly when `onOpenThread` is provided.
+  const pendingThreadCleanupRef = useRef<(() => void) | null>(null);
   useHighlightNodeFromUrl(surfaceId);
   const insertComponent = useInsertComponent();
   const deleteComponent = useDeleteComponent();
@@ -316,70 +313,102 @@ export function ComponentTreeRenderer({
     deletePageLink,
   });
 
-  useEffect(() => {
-    const pending = pendingBlockThreadRef.current;
-    if (!pending || !identity || !onOpenThread) return;
-    const meHex = identity.toHexString();
-    const fresh = conversations
-      .filter(
-        (conversation) =>
-          !pending.existingIds.has(String(conversation.id)) &&
-          conversation.initiatedBy.toHexString() === meHex &&
-          conversation.pageId === surfaceId &&
-          conversation.kind.tag === "ContextThread" &&
-          conversation.blockAnchor === pending.blockAnchor,
-      )
-      .sort((a, b) => Number(b.id - a.id))[0];
-    if (!fresh) return;
-    pendingBlockThreadRef.current = null;
-    onOpenThread(fresh.id);
-  }, [conversations, identity, onOpenThread, surfaceId]);
+  useEffect(
+    () => () => {
+      pendingThreadCleanupRef.current?.();
+      pendingThreadCleanupRef.current = null;
+    },
+    [],
+  );
 
   const handleCommentBlock = useCallback(
     (nodeId: bigint) => {
       if (!identity) return;
-      const pending = onOpenThread
-        ? {
-            blockAnchor: nodeId,
-            existingIds: new Set(
-              conversationsRef.current.map((conversation) => String(conversation.id)),
-            ),
+      const meHex = identity.toHexString();
+      const conn = getConnection();
+      // Re-arming replaces any listener from a previous, unresolved click.
+      pendingThreadCleanupRef.current?.();
+      pendingThreadCleanupRef.current = null;
+
+      let cleanup: (() => void) | null = null;
+      if (onOpenThread && conn) {
+        const conversationTable = (conn.db as any).conversation;
+        const existingIds = new Set(
+          Array.from(conversationTable?.iter?.() ?? []).map((c: any) => String(c.id)),
+        );
+        const onInsert = (_ctx: unknown, row: Conversation) => {
+          if (
+            existingIds.has(String(row.id)) ||
+            row.initiatedBy.toHexString() !== meHex ||
+            row.pageId !== surfaceIdRef.current ||
+            row.kind.tag !== "ContextThread" ||
+            row.blockAnchor !== nodeId
+          ) {
+            return;
           }
-        : null;
-      pendingBlockThreadRef.current = pending;
+          cleanup?.();
+          onOpenThread(row.id);
+        };
+        cleanup = () => {
+          conversationTable?.removeOnInsert?.(onInsert);
+          if (pendingThreadCleanupRef.current === cleanup) {
+            pendingThreadCleanupRef.current = null;
+          }
+        };
+        conversationTable?.onInsert?.(onInsert);
+        pendingThreadCleanupRef.current = cleanup;
+      }
       void createConversation({
         pageId: surfaceId,
         participantIdentities: [identity],
         blockAnchor: nodeId,
       }).catch((error) => {
-        if (pendingBlockThreadRef.current === pending) {
-          pendingBlockThreadRef.current = null;
-        }
+        cleanup?.();
         console.error("[PearComponentTreeRenderer] Failed to create block thread", error);
       });
     },
-    [createConversation, identity, onOpenThread, surfaceId],
+    [createConversation, getConnection, identity, onOpenThread, surfaceId],
   );
 
   // Supplies rows to `Repeater` nodes (custom-view runtime, ADR D1). Stable
   // identity, so including it here does not churn the config memo.
   const queryResolver = useQueryResolver();
 
+  // linkTargets is pinned to a content key rather than the `pages` array
+  // identity: the page table ticks on every block save (touch_page), and
+  // letting that rebuild linkTargets churned the config — and with it every
+  // PulpProvider consumer — once per save anywhere in the workspace.
+  const pagesRef = useRef(pages);
+  pagesRef.current = pages;
+  const linkTargetsKey = useMemo(
+    () =>
+      pages
+        .map((p) => `${p.id}|${p.title}|${p.parentId ?? ""}|${p.isHidden ? 1 : 0}`)
+        .join("\n"),
+    [pages],
+  );
+  const linkTargets = useMemo(() => {
+    const allPages = pagesRef.current;
+    const byId = new Map(allPages.map((page) => [page.id, page]));
+    return filterNavVisiblePages(allPages).map((page) => ({
+      id: String(page.id),
+      label: page.title || "Untitled",
+      href: `/workspace/${page.id}`,
+      subtitle: buildBreadcrumb(page, byId),
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on page content, not array identity
+  }, [linkTargetsKey]);
+
   const config = useMemo(
     () => ({
       idbPrefix: `pear:${idbNamespace}`,
       validateProps: validateComponentProps,
       slashItems: slashItemsForDefs(PEAR_SLASH_ITEMS, tree.defs),
-      linkTargets: filterNavVisiblePages(pages).map((page) => ({
-        id: String(page.id),
-        label: page.title || "Untitled",
-        href: `/workspace/${page.id}`,
-        subtitle: buildBreadcrumb(page, pages),
-      })),
+      linkTargets,
       onCommentBlock: handleCommentBlock,
       queryResolver,
     }),
-    [idbNamespace, pages, tree.defs, handleCommentBlock, queryResolver],
+    [idbNamespace, linkTargets, tree.defs, handleCommentBlock, queryResolver],
   );
 
   const attachmentCtx = useMemo(
@@ -410,11 +439,11 @@ export function ComponentTreeRenderer({
   );
 }
 
-function buildBreadcrumb(page: PageRow, allPages: PageRow[]): string {
+function buildBreadcrumb(page: PageRow, byId: Map<bigint, PageRow>): string {
   const parts: string[] = [];
   let cur = page;
   while (cur.parentId != null) {
-    const parent = allPages.find((p) => p.id === cur.parentId);
+    const parent = byId.get(cur.parentId);
     if (!parent) break;
     parts.unshift(parent.title || "Untitled");
     cur = parent;

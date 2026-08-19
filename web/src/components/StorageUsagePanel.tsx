@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { usePearWorkspaceSlug } from "@/src/lib/blobUpload";
+import { formatBytes } from "@/src/lib/formatBytes";
 
 /**
  * Workspace storage usage: used vs quota, read from the deployment's blob
@@ -10,13 +11,6 @@ import { usePearWorkspaceSlug } from "@/src/lib/blobUpload";
  */
 
 type Usage = { usedBytes: number; quotaBytes: number };
-
-function formatBytes(n: number): string {
-  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`;
-  if (n >= 1024 ** 2) return `${(n / 1024 ** 2).toFixed(1)} MB`;
-  if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`;
-  return `${n} B`;
-}
 
 export function StorageUsagePanel() {
   const slug = usePearWorkspaceSlug();

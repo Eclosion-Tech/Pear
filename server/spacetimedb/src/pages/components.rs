@@ -26,6 +26,8 @@
 //! `serialize_component_tree` / `restore_component_tree` helpers consumed
 //! by the snapshot reducers in `pages/snapshots.rs`.
 
+use std::time::Duration;
+
 use spacetimedb::{reducer, table, Identity, ReducerContext, SpacetimeType, Table, Timestamp};
 
 use crate::access_control::helpers::require_page_write;
@@ -593,6 +595,22 @@ mod prop_schemas {
   }
 }"#;
 
+    /// Generic file attachment block (any content type). `storageKey` is the
+    /// workspace blob objectId; `filename` / `contentType` / `sizeBytes` are
+    /// captured at upload so the block can render without resolving the
+    /// `Attachment` row. `externalUrl` covers hotlinked files from imports.
+    pub const FILE_BLOCK: &str = r#"{
+  "type": "object",
+  "properties": {
+    "storageKey": { "type": "string" },
+    "externalUrl": { "type": "string" },
+    "filename": { "type": "string" },
+    "contentType": { "type": "string" },
+    "sizeBytes": { "type": "number" },
+    "caption": { "type": "string" }
+  }
+}"#;
+
     /// Document-list item components. Text lives in per-item Yjs state;
     /// checklist state is a normal prop so toggles are structural writes.
     pub const BULLET_LIST_ITEM: &str = r#"{
@@ -793,6 +811,15 @@ fn builtin_specs() -> Vec<BuiltinSpec> {
             display_name: "Image",
             description: "Uploaded image via workspace blob storage (BlockNote migration path). Distinct from v1 Image (attachmentId).",
             prop_schema: prop_schemas::IMAGE_BLOCK,
+            capabilities: vec![],
+            has_yjs_state: false,
+            accepts_children: false,
+        },
+        BuiltinSpec {
+            component_type: "FileBlock",
+            display_name: "File",
+            description: "Generic file attachment via workspace blob storage — any content type, rendered as a download card with name, size, and optional caption.",
+            prop_schema: prop_schemas::FILE_BLOCK,
             capabilities: vec![],
             has_yjs_state: false,
             accepts_children: false,
@@ -1106,6 +1133,24 @@ fn touch_page(ctx: &ReducerContext, page: Page) {
         ..page
     });
     enqueue_page_updated(ctx, page_id);
+}
+
+/// Debounce window for content-autosave page touches. Matches the client's
+/// ~30s Yjs flush tick: one page-row broadcast + automation event per window
+/// is enough for sidebar recency and downstream observers.
+const TOUCH_PAGE_DEBOUNCE: Duration = Duration::from_secs(30);
+
+/// [`touch_page`], but a no-op when the page was already touched within
+/// [`TOUCH_PAGE_DEBOUNCE`]. Used by the high-frequency Yjs autosave path
+/// (`save_component_yjs_state`) so every content flush — from every client
+/// and every block an agent writes — doesn't fan a page-row update out to
+/// all page-table subscribers and enqueue an automation event. Structural
+/// reducers keep the immediate [`touch_page`].
+fn touch_page_debounced(ctx: &ReducerContext, page: Page) {
+    if ctx.timestamp < page.updated_at + TOUCH_PAGE_DEBOUNCE {
+        return;
+    }
+    touch_page(ctx, page);
 }
 
 // ============================================================
@@ -1596,7 +1641,7 @@ pub fn save_component_yjs_state(
         });
     }
 
-    touch_page(ctx, page);
+    touch_page_debounced(ctx, page);
     Ok(())
 }
 

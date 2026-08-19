@@ -230,6 +230,12 @@ pub fn run_pending_migrations(ctx: &ReducerContext) -> Result<(), String> {
             Ok::<(), String>(())
         }
     );
+    // Generic file attachment block: seeds the `FileBlock` component type so
+    // the slash menu can offer "File" next to Image / Audio.
+    run_step!(ctx, "component_type_file_block_v1", |ctx: &ReducerContext| {
+        seed_builtin_component_types(ctx);
+        Ok::<(), String>(())
+    });
     Ok(())
 }
 

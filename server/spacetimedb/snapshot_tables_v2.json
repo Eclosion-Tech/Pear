@@ -70,6 +70,7 @@
     "id_counter": "Module-managed id allocator. import_v2_commit deletes all counter rows so the next allocation re-seeds from post-import max(id) (see id_counters.rs).",
     "migration_state": "Module-managed migration bookkeeping; owned by the module version that publishes, never restored.",
     "module_install_meta": "Module-managed publisher-identity record; re-created by init on the restore target.",
+    "my_extension_permissions": "Caller-scoped #[view] projection over the private extension_permission table for the Settings UI; derived per-sender at read time, nothing to export or restore.",
     "notion_import_job": "Transient background-import queue (carries Notion token ciphertexts, blanked on completion); jobs are meaningless on a restore target and must never ride along in backups.",
     "sensor_registry": "Fully seeded at init (seed_sensor_registry_inner); findings reference sensors by string (sensor_kind, code), never by id, so re-seeded rows are equivalent."
   },

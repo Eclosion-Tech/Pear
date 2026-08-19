@@ -131,6 +131,26 @@ export function workspaceBlobSrc(slug: string, storageKey: string): string {
 }
 
 /**
+ * Download URL for a stored blob that preserves the original filename.
+ *
+ * Same route as `workspaceBlobSrc` with `?download=1&filename=…`; the server
+ * presigns with a `Content-Disposition: attachment` override so the browser
+ * saves `filename` instead of the bare objectId. Falls back to the plain
+ * inline URL when no filename is known.
+ */
+export function workspaceBlobDownloadHref(
+  slug: string,
+  storageKey: string,
+  filename: string
+): string {
+  const base = workspaceBlobSrc(slug, storageKey);
+  if (!base) return "";
+  const name = filename.trim();
+  if (!name) return base;
+  return `${base}?download=1&filename=${encodeURIComponent(name)}`;
+}
+
+/**
  * Resolve the current workspace slug for blob URLs.
  *
  * Priority:

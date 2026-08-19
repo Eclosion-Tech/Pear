@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useTable } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
+import type { PageContent } from "@/src/module_bindings/types";
+import { useScopedTable } from "@/src/hooks/useScopedTable";
 import { PageEditorSurface } from "./PageEditorSurface";
 import { useUpdatePageTitle, useDeletePage } from "@/src/hooks/usePages";
 import type { PageRow } from "@/src/hooks/usePages";
@@ -24,9 +25,15 @@ interface RowDetailModalProps {
 
 export function RowDetailModal({ page, parentPage, onClose }: RowDetailModalProps) {
   const router = useRouter();
-  // SpacetimeDB 2.0.3 emits the generated client key `pageId` in typed SQL
-  // instead of the real server column `page_id`, so filtering fails.
-  const [contents] = useTable(tables.page_content);
+  // Scoped by raw SQL (14384): SpacetimeDB 2.0.3 emits the generated client
+  // key `pageId` in typed SQL instead of the real server column `page_id`,
+  // so useScopedTable subscribes with server-name SQL instead (with a
+  // full-table fallback if the query is rejected).
+  const { rows: contents } = useScopedTable<PageContent>(
+    tables.page_content,
+    `SELECT * FROM page_content WHERE page_id = ${page.id}`,
+    (c) => c.pageId === page.id,
+  );
   const content = contents.find((c) => c.pageId === page.id);
   const updateTitle = useUpdatePageTitle();
   const deletePage = useDeletePage();

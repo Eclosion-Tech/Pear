@@ -13,6 +13,7 @@ import {
   type OrchaJobRow,
 } from "@/src/hooks/useOrcha";
 import type {
+  AutomationEventQueue,
   BridgeApproval,
   BridgeCommand,
   MessageFeedback,
@@ -189,6 +190,10 @@ function InlineJobCard({ job }: { job: OrchaJobRow }) {
 const MD_REMARK_PLUGINS = [remarkGfm];
 /** Stable empty array so attachment-less messages don't churn props. */
 const NO_MESSAGE_ATTACHMENTS: ConversationAttachmentRow[] = [];
+/** Stable empty array so conversations without messages don't churn props. */
+const NO_CONVERSATION_MESSAGES: ConversationMessageRow[] = [];
+/** Stable empty array so messages without bridge commands don't churn props. */
+const NO_BRIDGE_COMMANDS: BridgeCommand[] = [];
 const MD_COMPONENTS: Components = {
   table: ({ node: _node, ...props }) => (
     <div className="overflow-x-auto">
@@ -565,12 +570,15 @@ const AiMessageContent = memo(function AiMessageContent({
   msg,
   aiName,
   bridgeCommands,
+  automationEventsByKey,
   feedback,
 }: {
   msg: ConversationMessageRow;
   aiName: string;
-  /** bridge_command rows scoped to this conversation (hoisted to the thread). */
+  /** bridge_command rows scoped to this message's tool_bash calls (hoisted to the thread). */
   bridgeCommands: BridgeCommand[];
+  /** automation_event_queue rows indexed by idempotency key (hoisted to the thread). */
+  automationEventsByKey: ReadonlyMap<string, AutomationEventQueue>;
   /** Current user's feedback row for this message, if any. */
   feedback: MessageFeedback | undefined;
 }) {
@@ -635,7 +643,11 @@ const AiMessageContent = memo(function AiMessageContent({
           read-only; generated controls may invoke server-authorized Manual
           automations through the narrow interaction context. */}
       {msg.componentTreeJson && (
-        <StaticComponentTree json={msg.componentTreeJson} messageId={msg.id} />
+        <StaticComponentTree
+          json={msg.componentTreeJson}
+          messageId={msg.id}
+          automationEventsByKey={automationEventsByKey}
+        />
       )}
 
       {/* Thinking indicator (no thinking text yet) */}
@@ -1130,6 +1142,51 @@ function AiMentionMenu({
   );
 }
 
+/** Unique tool_bash command strings stored in a message's `toolCallsJson`. */
+function bashCommandsIn(toolCallsJson: string): readonly string[] {
+  let calls: ToolCallInfo[];
+  try {
+    calls = JSON.parse(toolCallsJson);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(calls)) return [];
+  const commands: string[] = [];
+  for (const tc of calls) {
+    if (tc.name !== "tool_bash") continue;
+    const command = bashCommandOf(tc);
+    if (command && !commands.includes(command)) commands.push(command);
+  }
+  return commands;
+}
+
+type SpacetimeConnection = NonNullable<
+  ReturnType<ReturnType<typeof useSpacetimeDB>["getConnection"]>
+>;
+
+// Minimal structural views of the SDK cache rows the drop handlers read
+// imperatively (no standing per-thread subscriptions — see addPageAttachment).
+type CachedPageRow = { id: bigint; title: string };
+type CachedPageSnapshotRow = {
+  pageId: bigint;
+  content: string;
+  snapshotAt: { microsSinceUnixEpoch: bigint };
+};
+
+/** Imperative `page` cache read. The sidebar keeps the whole page table
+ * subscribed app-wide, so the row is already local — no per-thread
+ * subscription needed just for the drop handlers. */
+function findCachedPage(
+  conn: SpacetimeConnection,
+  pageId: bigint,
+): CachedPageRow | undefined {
+  const pages = (
+    conn.db as unknown as { page: { iter(): Iterable<CachedPageRow> } }
+  ).page;
+  for (const p of pages.iter()) if (p.id === pageId) return p;
+  return undefined;
+}
+
 function ConversationThread({
   conversation,
   messages,
@@ -1161,6 +1218,59 @@ function ConversationThread({
     () => allBridgeCommands.filter((c) => c.conversationId === conversation.id),
     [allBridgeCommands, conversation.id],
   );
+  // Per-message bridge-command slices. The conversation-wide array above gets
+  // a new identity whenever ANY bridge_command row changes, and handing it to
+  // every visible message defeated AiMessageContent's memo. Match each
+  // message's tool_bash command strings against the conversation's rows and
+  // reuse the previous slice instance when its rows are unchanged (the SDK
+  // cache replaces a row object only when that row changes), so only messages
+  // whose commands actually changed get a new prop identity.
+  const bashCommandCacheRef = useRef(
+    new Map<bigint, { json: string; commands: readonly string[] }>(),
+  );
+  const prevBridgeSlicesRef = useRef(new Map<bigint, BridgeCommand[]>());
+  const bridgeCommandsByMessage = useMemo(() => {
+    const next = new Map<bigint, BridgeCommand[]>();
+    if (conversationBridgeCommands.length > 0) {
+      const rowsByCommand = new Map<string, BridgeCommand[]>();
+      for (const c of conversationBridgeCommands) {
+        const list = rowsByCommand.get(c.command);
+        if (list) list.push(c);
+        else rowsByCommand.set(c.command, [c]);
+      }
+      const bashCache = bashCommandCacheRef.current;
+      const prev = prevBridgeSlicesRef.current;
+      for (const msg of messages) {
+        if (!msg.toolCallsJson) continue;
+        let cached = bashCache.get(msg.id);
+        if (!cached || cached.json !== msg.toolCallsJson) {
+          cached = {
+            json: msg.toolCallsJson,
+            commands: bashCommandsIn(msg.toolCallsJson),
+          };
+          bashCache.set(msg.id, cached);
+        }
+        if (cached.commands.length === 0) continue;
+        const slice: BridgeCommand[] = [];
+        for (const command of cached.commands) {
+          const rows = rowsByCommand.get(command);
+          if (rows) slice.push(...rows);
+        }
+        if (slice.length === 0) continue;
+        const before = prev.get(msg.id);
+        next.set(
+          msg.id,
+          before &&
+            before.length === slice.length &&
+            before.every((row, i) => row === slice[i])
+            ? before
+            : slice,
+        );
+      }
+    }
+    prevBridgeSlicesRef.current = next;
+    return next;
+  }, [conversationBridgeCommands, messages]);
   const [allBridgeApprovals] = useTable(tables.bridge_approval);
   const conversationBridgeApprovals = useMemo<BridgeApproval[]>(
     () =>
@@ -1181,6 +1291,18 @@ function ConversationThread({
     () => new Map(allFeedback.map((f) => [f.messageId, f])),
     [allFeedback],
   );
+  // Automation events for generated-UI messages, hoisted like bridge_command
+  // above: each StaticComponentTree provider used to mount its own full
+  // automation_event_queue subscription, and the virtualizer re-downloaded
+  // the grow-only queue on every scroll remount.
+  const [automationEvents] = useTable(tables.automation_event_queue);
+  const automationEventsByKey = useMemo(() => {
+    const map = new Map<string, AutomationEventQueue>();
+    for (const event of automationEvents) {
+      if (event.idempotencyKey) map.set(event.idempotencyKey, event);
+    }
+    return map;
+  }, [automationEvents]);
 
   // Bucketed once per attachment change — a per-message .filter() in the
   // message map is O(messages × attachments) on every render.
@@ -1196,7 +1318,7 @@ function ConversationThread({
   const closeConversation = useCloseConversation();
   const createConversation = useCreateConversation();
   const router = useRouter();
-  const { identity } = useSpacetimeDB();
+  const { identity, getConnection } = useSpacetimeDB();
   const { users: allHumanUsers } = useUsers();
   const [input, setInput] = useState("");
   const [caretIndex, setCaretIndex] = useState(0);
@@ -1229,10 +1351,6 @@ function ConversationThread({
             msgVirtualItems[msgVirtualItems.length - 1].end,
         )
       : 0;
-  // Page rows + snapshots for resolving a dropped page into a text snapshot.
-  const [allPages] = useTable(tables.page);
-  const [allSnapshots] = useTable(tables.page_snapshot);
-
   const isActive = conversation.status.tag === "Active";
   /** Fallback label / the thread's primary agent — used where no single message is in scope. */
   const aiName = aiUser?.displayName ?? "AI";
@@ -1428,8 +1546,14 @@ function ConversationThread({
     }
   }
 
-  /** Resolve a sidebar page drop into a snapshot-at-drag context attachment. */
-  function addPageAttachment(payload: PageDragPayload) {
+  /** Resolve a sidebar page drop into a snapshot-at-drag context attachment.
+   *
+   * Neither source table is worth a standing thread-lifetime subscription:
+   * `page` is already subscribed app-wide by the sidebar so the cache read is
+   * free, and `page_snapshot` rows carry full serialized page content (two
+   * rows per agent edit, never pruned) — hydrate just this page's snapshots
+   * with a one-shot scoped subscription and release it once read. */
+  async function addPageAttachment(payload: PageDragPayload) {
     let pageId: bigint;
     try {
       pageId = BigInt(payload.pageId);
@@ -1437,21 +1561,59 @@ function ConversationThread({
       return;
     }
     if (pending.some((a) => a.kind === "page" && a.pageId === pageId)) return;
-    const page = allPages.find((p) => p.id === pageId);
-    const latest = allSnapshots
-      .filter((s) => s.pageId === pageId)
-      .sort((a, b) => Number(b.snapshotAt.microsSinceUnixEpoch - a.snapshotAt.microsSinceUnixEpoch))[0];
-    const snapshot = latest?.content ? extractTextFromBlockJson(latest.content) : "";
-    setPending((prev) => [
-      ...prev,
-      {
-        id: newLocalId(),
-        kind: "page",
-        pageId,
-        title: page?.title ?? payload.title ?? "Untitled",
-        snapshot,
-      },
-    ]);
+    const conn = getConnection();
+    const page = conn ? findCachedPage(conn, pageId) : undefined;
+    let snapshot = "";
+    if (conn) {
+      let snapshotSub: { unsubscribe: () => void } | null = null;
+      try {
+        await new Promise<void>((resolve, reject) => {
+          snapshotSub = conn
+            .subscriptionBuilder()
+            .onApplied(() => resolve())
+            .onError((ctx) => {
+              const err = (ctx as { event?: unknown }).event;
+              reject(err instanceof Error ? err : new Error("Snapshot subscription failed"));
+            })
+            .subscribe([`SELECT * FROM page_snapshot WHERE page_id = ${pageId}`]);
+        });
+        const snapshots = (
+          conn.db as unknown as {
+            page_snapshot: { iter(): Iterable<CachedPageSnapshotRow> };
+          }
+        ).page_snapshot;
+        let latest: CachedPageSnapshotRow | undefined;
+        for (const s of snapshots.iter()) {
+          if (s.pageId !== pageId) continue;
+          if (!latest || s.snapshotAt.microsSinceUnixEpoch > latest.snapshotAt.microsSinceUnixEpoch) {
+            latest = s;
+          }
+        }
+        snapshot = latest?.content ? extractTextFromBlockJson(latest.content) : "";
+      } catch {
+        // Snapshot hydration failed — attach with the title only.
+      } finally {
+        try {
+          (snapshotSub as { unsubscribe: () => void } | null)?.unsubscribe();
+        } catch {
+          // Already torn down (e.g. disconnect mid-resolve) — nothing to release.
+        }
+      }
+    }
+    setPending((prev) =>
+      prev.some((a) => a.kind === "page" && a.pageId === pageId)
+        ? prev
+        : [
+            ...prev,
+            {
+              id: newLocalId(),
+              kind: "page",
+              pageId,
+              title: page?.title ?? payload.title ?? "Untitled",
+              snapshot,
+            },
+          ],
+    );
   }
 
   function handleComposerDrop(e: React.DragEvent) {
@@ -1460,7 +1622,7 @@ function ConversationThread({
     const pagePayload = e.dataTransfer.getData(PAGE_DRAG_MIME);
     if (pagePayload) {
       try {
-        addPageAttachment(JSON.parse(pagePayload) as PageDragPayload);
+        void addPageAttachment(JSON.parse(pagePayload) as PageDragPayload);
       } catch { /* malformed drag payload */ }
       return;
     }
@@ -1471,15 +1633,16 @@ function ConversationThread({
     // Editor / native text selection drag → block-snapshot context.
     const text = e.dataTransfer.getData("text/plain").trim();
     if (text) {
+      const conn = getConnection();
+      const activePage =
+        conn && activePageId != null ? findCachedPage(conn, activePageId) : undefined;
       setPending((prev) => [
         ...prev,
         {
           id: newLocalId(),
           kind: "blocks",
           pageId: activePageId,
-          title: activePageId
-            ? (allPages.find((p) => p.id === activePageId)?.title ?? "Selection")
-            : "Selection",
+          title: activePage?.title ?? "Selection",
           snapshot: text,
         },
       ]);
@@ -1654,7 +1817,8 @@ function ConversationThread({
                   <AiMessageContent
                     msg={msg}
                     aiName={senderName}
-                    bridgeCommands={conversationBridgeCommands}
+                    bridgeCommands={bridgeCommandsByMessage.get(msg.id) ?? NO_BRIDGE_COMMANDS}
+                    automationEventsByKey={automationEventsByKey}
                     feedback={feedbackByMessage.get(msg.id)}
                   />
                 )}
@@ -2141,6 +2305,16 @@ type PanelTab = "conversations" | "members";
  * review surface, auto-apply scope picker, and harness template selector
  * land here in subsequent phases.
  */
+/** Per-AI-member activity/cost slice, indexed once in MembersTab. */
+type AiMemberStats = {
+  /** PostAgentEdit snapshots authored by this AI in the last 7 days. */
+  proposed: number;
+  /** Open denied-tool-call findings mentioning this AI. */
+  denied: number;
+  /** orcha_usage_event tokens (in + out) this calendar month (UTC). */
+  usedTokens: number;
+};
+
 function MembersTab({ onOpenConversation }: { onOpenConversation: (id: bigint) => void }) {
   const { profiles } = useAiUserProfiles();
   const { users } = useUsers();
@@ -2148,6 +2322,53 @@ function MembersTab({ onOpenConversation }: { onOpenConversation: (id: bigint) =
   const otherHumans = users.filter(
     (u) => !myIdentity || u.identity.toHexString() !== myIdentity.toHexString(),
   );
+  // Retrospective / cost sources, subscribed once for the whole tab and
+  // indexed per AI member in a single pass. Previously every AiMemberRow
+  // mounted its own full-table page_snapshot / structural_sensor_finding /
+  // orcha_usage_event subscriptions and re-scanned them unmemoized on every
+  // render.
+  const [snapshots] = useTable(tables.page_snapshot);
+  const [findings] = useTable(tables.structural_sensor_finding);
+  const [usage] = useTable(tables.orcha_usage_event);
+  const statsByMember = useMemo(() => {
+    const sevenDaysAgoMs = Date.now() - 7 * 24 * 3600 * 1000;
+    const now = new Date();
+    // Calendar-month rollover. Worker / billing might want a fiscal month
+    // override later; for now align to UTC for determinism.
+    const monthStartMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+    const stats = new Map<string, AiMemberStats>();
+    const byHexPrefix: [string, AiMemberStats][] = [];
+    const byAiUserId = new Map<bigint, AiMemberStats>();
+    for (const profile of profiles) {
+      const s: AiMemberStats = { proposed: 0, denied: 0, usedTokens: 0 };
+      stats.set(profile.identity.toHexString(), s);
+      byHexPrefix.push([profile.identity.toHexString().slice(0, 8), s]);
+      byAiUserId.set(profile.aiUserId, s);
+    }
+    for (const s of snapshots) {
+      if (s.snapshotType.tag !== "PostAgentEdit") continue;
+      if (s.createdBy.tag !== "Agent") continue;
+      if (Number(s.snapshotAt.microsSinceUnixEpoch / 1000n) < sevenDaysAgoMs) continue;
+      const author = s.createdBy.value as string;
+      for (const [prefix, stat] of byHexPrefix) {
+        if (author.includes(prefix)) stat.proposed += 1;
+      }
+    }
+    for (const f of findings) {
+      if (f.resolvedAt) continue;
+      if (f.sensorKind !== "denied_tool_calls") continue;
+      for (const [prefix, stat] of byHexPrefix) {
+        if (f.detailsJson.includes(prefix)) stat.denied += 1;
+      }
+    }
+    for (const e of usage) {
+      const stat = e.aiUserId != null ? byAiUserId.get(e.aiUserId) : undefined;
+      if (!stat) continue;
+      if (Number(e.createdAt.microsSinceUnixEpoch / 1000n) < monthStartMs) continue;
+      stat.usedTokens += Number(e.tokensIn) + Number(e.tokensOut);
+    }
+    return stats;
+  }, [profiles, snapshots, findings, usage]);
 
   return (
     <div className="px-2 py-2 space-y-1">
@@ -2174,6 +2395,7 @@ function MembersTab({ onOpenConversation }: { onOpenConversation: (id: bigint) =
             <AiMemberRow
               key={profile.identity.toHexString()}
               profile={profile}
+              stats={statsByMember.get(profile.identity.toHexString())}
               onOpenConversation={onOpenConversation}
             />
           ))}
@@ -2243,9 +2465,11 @@ function HumanMemberRow({
 
 function AiMemberRow({
   profile,
+  stats,
   onOpenConversation,
 }: {
   profile: AiUserProfileRow;
+  stats: AiMemberStats | undefined;
   onOpenConversation: (id: bigint) => void;
 }) {
   const { identity: myIdentity } = useSpacetimeDB();
@@ -2288,10 +2512,10 @@ function AiMemberRow({
           >
             {pending ? "…" : "Message"}
           </button>
-          <CostBadge aiUserId={profile.aiUserId} />
+          <CostBadge usedTokens={stats?.usedTokens ?? 0} />
         </div>
       </div>
-      <RetrospectiveRow aiUserIdentity={profile.identity} />
+      <RetrospectiveRow proposed={stats?.proposed ?? 0} denied={stats?.denied ?? 0} />
     </div>
   );
 }
@@ -2299,31 +2523,13 @@ function AiMemberRow({
 /**
  * Steering loop retrospective. Shows last-7-day activity for an AI user:
  *   - Edits proposed (PostAgentEdit snapshots whose author is this AI user)
- *   - Edits rejected (PostAgentEdit snapshots whose author is this AI user
- *     AND a later snapshot of the same page exists with the same `pre`
- *     content — i.e. someone hit Reject)
  *   - Open denied tool call findings for this AI user
  * The numbers are deliberately conservative: we only count what we can
  * derive from the relational substrate without instrumentation that
- * doesn't exist yet (no explicit "rejected" flag on snapshots).
+ * doesn't exist yet (no explicit "rejected" flag on snapshots). Counts are
+ * computed once for all members in MembersTab's `statsByMember` pass.
  */
-function RetrospectiveRow({ aiUserIdentity }: { aiUserIdentity: Identity }) {
-  const [snapshots] = useTable(tables.page_snapshot);
-  const [findings] = useTable(tables.structural_sensor_finding);
-  const meHex = aiUserIdentity.toHexString();
-  const sevenDaysAgoMs = Date.now() - 7 * 24 * 3600 * 1000;
-  const proposed = snapshots.filter((s) => {
-    if (s.snapshotType.tag !== "PostAgentEdit") return false;
-    if (s.createdBy.tag !== "Agent") return false;
-    if (Number(s.snapshotAt.microsSinceUnixEpoch / BigInt(1000)) < sevenDaysAgoMs)
-      return false;
-    return (s.createdBy.value as string).includes(meHex.slice(0, 8));
-  }).length;
-  const denied = findings.filter((f) => {
-    if (f.resolvedAt) return false;
-    if (f.sensorKind !== "denied_tool_calls") return false;
-    return f.detailsJson.includes(meHex.slice(0, 8));
-  }).length;
+function RetrospectiveRow({ proposed, denied }: { proposed: number; denied: number }) {
   if (proposed === 0 && denied === 0) return null;
   return (
     <div className="flex items-center gap-2 pl-11 text-[10px] text-neutral-400 dark:text-neutral-500">
@@ -2336,59 +2542,20 @@ function RetrospectiveRow({ aiUserIdentity }: { aiUserIdentity: Identity }) {
 }
 
 /**
- * Compact monthly cost / budget badge for an AI user (Phase A cost surface).
+ * Compact monthly cost badge for an AI user (Phase A cost surface). Token
+ * totals are computed once for all members in MembersTab's `statsByMember`
+ * pass.
  *
- * Sums `orcha_usage_event` rows for the current calendar month, joins with
- * `ai_user_config.monthly_token_cap` to render `used / cap` with color
- * thresholds:
- *   - <80% → muted neutral
- *   - 80-99% → amber warning
- *   - >=100% → rose hard-stop indication (the worker should also refuse new tasks)
- *
- * The cell hover, column header rolling spend, pre-bulk confirmation, and
- * workspace dashboard surfaces the doc lists all consume this same data
- * shape; they are out of scope for the panel-level surface and land
- * incrementally as their host UIs ship.
+ * The old `used / cap` variant is gone: `ai_user_config` is RLS-scoped to
+ * the AI user's own identity (`AI_USER_CONFIG_FILTER` in ai/mod.rs), so
+ * human clients always receive zero rows and `monthly_token_cap` was never
+ * readable here — the badge only ever rendered the capless form while
+ * paying for a full-table subscription per member row.
  */
-function CostBadge({ aiUserId }: { aiUserId: bigint }) {
-  const [usage] = useTable(tables.orcha_usage_event);
-  const [configs] = useTable(tables.ai_user_config);
-  const config = configs.find((c) => c.id === aiUserId);
-  const cap = config?.monthlyTokenCap ?? null;
-
-  // Calendar-month rollover. Worker / billing might want a fiscal month
-  // override later; for now align to UTC for determinism.
-  const now = new Date();
-  const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
-  const usedTokens = usage.reduce((sum, e) => {
-    if (e.aiUserId !== aiUserId) return sum;
-    const eventMs = Number(e.createdAt.microsSinceUnixEpoch / 1000n);
-    if (eventMs < monthStart) return sum;
-    return sum + Number(e.tokensIn) + Number(e.tokensOut);
-  }, 0);
-
-  if (cap == null) {
-    return (
-      <span className="text-[10px] text-neutral-400 dark:text-neutral-500 shrink-0">
-        {formatTokens(usedTokens)} this month
-      </span>
-    );
-  }
-
-  const capN = Number(cap);
-  const ratio = capN > 0 ? usedTokens / capN : 0;
-  const cls =
-    ratio >= 1
-      ? "bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300"
-      : ratio >= 0.8
-        ? "bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300"
-        : "bg-neutral-100 dark:bg-neutral-800 text-neutral-500 dark:text-neutral-400";
+function CostBadge({ usedTokens }: { usedTokens: number }) {
   return (
-    <span
-      className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 font-medium ${cls}`}
-      title={`${usedTokens.toLocaleString()} / ${capN.toLocaleString()} tokens this month`}
-    >
-      {formatTokens(usedTokens)} / {formatTokens(capN)}
+    <span className="text-[10px] text-neutral-400 dark:text-neutral-500 shrink-0">
+      {formatTokens(usedTokens)} this month
     </span>
   );
 }
@@ -2574,7 +2741,7 @@ export function AiPanel({ pageId, onClose, openConversationId }: AiPanelProps) {
       <div className="flex flex-col h-full bg-white dark:bg-neutral-950">
         <ConversationThread
           conversation={selectedConv}
-          messages={messagesByConversation.get(selectedConv.id) ?? []}
+          messages={messagesByConversation.get(selectedConv.id) ?? NO_CONVERSATION_MESSAGES}
           aiUser={aiUserByConversation.get(selectedConv.id)}
           allAiProfiles={allAiProfiles}
           onBack={() => setSelectedConvId(null)}
@@ -2652,7 +2819,7 @@ export function AiPanel({ pageId, onClose, openConversationId }: AiPanelProps) {
               <ConversationListItem
                 key={String(conv.id)}
                 conversation={conv}
-                messages={messagesByConversation.get(conv.id) ?? []}
+                messages={messagesByConversation.get(conv.id) ?? NO_CONVERSATION_MESSAGES}
                 aiUser={aiUserByConversation.get(conv.id)}
                 allAiProfiles={allAiProfiles}
                 onClick={() => setSelectedConvId(conv.id)}

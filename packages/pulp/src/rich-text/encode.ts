@@ -54,12 +54,29 @@ export function parseInlineMarkdown(line: string): PMNode[] {
       i += link[0].length;
       continue;
     }
-    // Bold: **text**
-    const bold = /^\*\*([^*]+)\*\*/.exec(rest);
+    // Underscore emphasis follows CommonMark's flanking rule: a `_` run
+    // cannot open when preceded by a word character, and cannot close when
+    // followed by one. Without this, intra-word underscores pair across
+    // arbitrary spans and silently eat technical text — `prod_pear_cloud`
+    // became "prod" + italic("pear") + "cloud" (ticket 212).
+    const underscoreCanOpen = i === 0 || !/[A-Za-z0-9_]/.test(line[i - 1]);
+
+    // Bold: **text** / __text__ (content must not begin or end with a space —
+    // `2 ** 3 ** 4` is arithmetic, not emphasis)
+    const bold = /^\*\*([^\s*](?:[^*]*[^\s*])?)\*\*/.exec(rest);
     if (bold) {
       flushPlain();
       pushMarked(bold[1], richTextSchema.marks.bold.create());
       i += bold[0].length;
+      continue;
+    }
+    const boldUnderscore = underscoreCanOpen
+      ? /^__([^\s_](?:[^_]*[^\s_])?)__(?![A-Za-z0-9_])/.exec(rest)
+      : null;
+    if (boldUnderscore) {
+      flushPlain();
+      pushMarked(boldUnderscore[1], richTextSchema.marks.bold.create());
+      i += boldUnderscore[0].length;
       continue;
     }
     // Inline code: `text`
@@ -70,15 +87,22 @@ export function parseInlineMarkdown(line: string): PMNode[] {
       i += code[0].length;
       continue;
     }
-    // Italic: *text* or _text_ (single delimiter, not part of **)
-    const italic = /^(\*([^*]+)\*|_([^_]+)_)/.exec(rest);
-    if (italic) {
+    // Italic: *text* (intra-word `*` is legal markdown) or _text_ (flanking
+    // rules above). Content must not begin or end with a space.
+    const italicStar = /^\*([^\s*](?:[^*]*[^\s*])?)\*/.exec(rest);
+    if (italicStar) {
       flushPlain();
-      pushMarked(
-        italic[2] ?? italic[3] ?? "",
-        richTextSchema.marks.italic.create(),
-      );
-      i += italic[0].length;
+      pushMarked(italicStar[1], richTextSchema.marks.italic.create());
+      i += italicStar[0].length;
+      continue;
+    }
+    const italicUnderscore = underscoreCanOpen
+      ? /^_([^\s_](?:[^_]*[^\s_])?)_(?![A-Za-z0-9_])/.exec(rest)
+      : null;
+    if (italicUnderscore) {
+      flushPlain();
+      pushMarked(italicUnderscore[1], richTextSchema.marks.italic.create());
+      i += italicUnderscore[0].length;
       continue;
     }
 

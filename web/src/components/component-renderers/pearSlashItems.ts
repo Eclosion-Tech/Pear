@@ -16,6 +16,7 @@ export const PEAR_REGISTRY_REQUIRED_TYPES = [
   "ChecklistItem",
   "ImageBlock",
   "Audio",
+  "FileBlock",
   "PageLink",
   // Custom-view runtime M2. Listed so `useEnsureBuiltinComponentTypes` runs
   // pending migrations on workspaces provisioned before the type existed —
@@ -86,6 +87,25 @@ export const PEAR_SLASH_ITEMS: SlashMenuItem[] = [
     componentType: "Audio",
     defaultProps: { storageKey: "", transcript: "", durationSec: 0, boot: "" },
     searchTokens: ["audio", "record", "recording", "voice", "sound"],
+  },
+  {
+    id: "file-block",
+    section: "Media",
+    label: "File",
+    description: "Upload any file as a downloadable attachment.",
+    componentType: "FileBlock",
+    defaultProps: { storageKey: "", filename: "", contentType: "", sizeBytes: 0, caption: "" },
+    searchTokens: [
+      "file",
+      "upload",
+      "attachment",
+      "attach",
+      "document",
+      "pdf",
+      "csv",
+      "zip",
+      "download",
+    ],
   },
   {
     id: "new-page",

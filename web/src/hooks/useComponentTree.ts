@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useTable } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
+import { useScopedTable } from "@/src/hooks/useScopedTable";
 import type { BlockTree } from "@eclosion-tech/pulp";
 import type {
   ComponentNode,
@@ -42,6 +43,9 @@ export type ComponentTreeNodeCallbacks = {
 /**
  * Subscribes to `component_node`, `component_type_definition`, and
  * `component_yjs_state`; returns an indexed view scoped to one surface.
+ * The node/yjs subscriptions themselves are scoped to the surface
+ * server-side (14384) — `component_type_definition` stays full-table (it's
+ * the small registry).
  *
  * Pass `nodeCallbacks.onInsert` to run side effects (e.g. insert autofocus)
  * on the **same** `component_node` subscription that feeds the tree — avoids
@@ -51,12 +55,46 @@ export function useComponentTree(
   surfaceId: bigint,
   nodeCallbacks?: ComponentTreeNodeCallbacks,
 ): ComponentTree {
-  // Keep this unfiltered until the SpacetimeDB query builder honors generated
-  // column source names. In SDK 2.0.3, filtering on `surfaceId` emits invalid
-  // SQL against `surfaceId` instead of the server column `surface_id`.
-  const [nodes, nodesReady] = useTable(tables.component_node, nodeCallbacks);
+  // Scoped subscriptions via raw SQL (ticket 14384): the SDK 2.0.3 query
+  // builder renders the camelCase accessor (`surfaceId`) instead of the
+  // server column (`surface_id`), so typed `.where()` scoping errors out —
+  // raw server-name SQL through `useScopedTable` sidesteps that (and falls
+  // back to the old full-table subscription if the server rejects the query).
+  // The filter deliberately keeps soft-deleted rows: the memo below excludes
+  // them, and `nodeCallbacks.onUpdate` needs the deletedAt null→set
+  // transition (see the docs on ComponentTreeNodeCallbacks above).
+  const { rows: nodes, ready: nodesReady } = useScopedTable<ComponentNode>(
+    tables.component_node,
+    `SELECT * FROM component_node WHERE surface_id = ${surfaceId}`,
+    (row) => row.surfaceId === surfaceId,
+    nodeCallbacks,
+  );
   const [defRows, defsReady] = useTable(tables.component_type_definition);
-  const [yjsRows, yjsReady] = useTable(tables.component_yjs_state);
+  // `component_yjs_state` has no surface column, so scope it with a
+  // two-table semijoin through `component_node` — the exact shape the SDK's
+  // own query builder emits for semijoins (`SELECT rhs.* FROM lhs JOIN rhs
+  // ON … WHERE <lhs filter>`, see SemijoinImpl.toSql in
+  // spacetimedb/src/lib/query.ts), which is the join form SpacetimeDB
+  // subscriptions support. Join columns are indexed on both sides
+  // (component_node.id is the PK; component_yjs_state.component_node_id is
+  // the PK). If the server rejects it, useScopedTable's onError fallback
+  // degrades to the full-table subscription (today's behavior) with a
+  // console warning — no worse than before. The real fix is a `surface_id`
+  // column on `component_yjs_state` server-side.
+  //
+  // Client-side filter is `() => true` on purpose: yjs rows carry no surface
+  // column, and filtering against the current node set here would go stale
+  // when one transaction inserts a node + its yjs row together (the snapshot
+  // for this table would be rebuilt before `nodes` re-renders). The
+  // authoritative client-side filter is the `byId.has(...)` check in the
+  // memo below, which re-runs whenever either table changes.
+  const { rows: yjsRows, ready: yjsReady } = useScopedTable<ComponentYjsState>(
+    tables.component_yjs_state,
+    `SELECT component_yjs_state.* FROM component_node JOIN component_yjs_state ` +
+      `ON component_node.id = component_yjs_state.component_node_id ` +
+      `WHERE component_node.surface_id = ${surfaceId}`,
+    () => true,
+  );
 
   const loading = !nodesReady || !defsReady || !yjsReady;
 

@@ -8,6 +8,7 @@ import {
   type BlockTypeDefinition,
 } from "@eclosion-tech/pulp";
 import { tables } from "@/src/module_bindings";
+import type { AutomationEventQueue } from "@/src/module_bindings/types";
 import { registerPearBuiltinRenderers } from "./built-in";
 import { parseComponentTreeBlob } from "@/src/lib/componentTreeBlob";
 import { GeneratedUiInteractionProvider } from "./GeneratedUiInteractionContext";
@@ -33,9 +34,15 @@ registerPearBuiltinRenderers();
 export function StaticComponentTree({
   json,
   messageId,
+  automationEventsByKey,
 }: {
   json: string;
   messageId: bigint;
+  /** automation_event_queue rows indexed by idempotency key, hoisted by the
+   * host surface (one subscription per thread instead of one per generated-UI
+   * message). Non-thread mounts omit it; generated controls then see an empty
+   * event index. */
+  automationEventsByKey?: ReadonlyMap<string, AutomationEventQueue>;
 }) {
   const [defRows] = useTable(tables.component_type_definition);
 
@@ -59,7 +66,10 @@ export function StaticComponentTree({
   }
 
   return (
-    <GeneratedUiInteractionProvider messageId={messageId}>
+    <GeneratedUiInteractionProvider
+      messageId={messageId}
+      eventsByKey={automationEventsByKey}
+    >
       <div className="pear-static-component-tree my-2">
         <BlockView tree={parsed.tree} />
       </div>

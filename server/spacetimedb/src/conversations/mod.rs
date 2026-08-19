@@ -1170,6 +1170,8 @@ pub fn update_message(
         return Err("Conversation is closed".to_string());
     }
 
+    let is_terminal = matches!(status, MessageStatus::Complete | MessageStatus::Error);
+
     ctx.db
         .conversation_message()
         .id()
@@ -1188,10 +1190,18 @@ pub fn update_message(
             ..msg
         });
 
-    ctx.db.conversation().id().update(Conversation {
-        updated_at: ctx.timestamp,
-        ..conv
-    });
+    // Bump conversation recency only when the message reaches a terminal
+    // state. The worker flushes streaming progress through this reducer every
+    // ~300ms (status Thinking/Streaming/ToolUse); bumping `updated_at` on each
+    // flush made the conversation table tick at ~3.3Hz for every subscriber
+    // for the whole AI turn. Recency already moved when the message row was
+    // inserted, and moves again here on the final Complete/Error flush.
+    if is_terminal {
+        ctx.db.conversation().id().update(Conversation {
+            updated_at: ctx.timestamp,
+            ..conv
+        });
+    }
 
     Ok(())
 }
