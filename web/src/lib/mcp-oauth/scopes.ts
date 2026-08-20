@@ -38,6 +38,7 @@ const SCOPE_TOOLS: Record<McpOauthScope, readonly string[]> = {
   [SCOPE_CONVERSATIONS_READ]: ["search_conversations", "read_conversation"],
   [SCOPE_PAGES_READ]: [
     "get_page",
+    "read_file",
     "get_page_theme",
     "get_page_components",
     "list_page_threads",

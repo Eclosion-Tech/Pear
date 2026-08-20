@@ -27,6 +27,7 @@ import {
   type McpToolEntry,
 } from "../../web/src/lib/mcp/index.js";
 import { wsUriToHttpBase } from "./bridge-sql.js";
+import { workspaceFileReaderFor } from "./workspace-files.js";
 
 /**
  * Tools the chat surface takes verbatim from the MCP registry.
@@ -93,6 +94,9 @@ const PARITY_TOOL_NAMES = new Set([
   "search_pages",
   "list_child_pages",
   "get_page",
+  // Reads the contents of page file/image/audio blocks, File property cells
+  // and chat attachments. Host capability (S3) is injected per workspace below.
+  "read_file",
   "delete_page",
   "restore_page",
   "move_page",
@@ -144,24 +148,29 @@ const AMBIENT_CONVERSATION_TOOLS = new Set([
  * at call time avoids a second source of truth that could go stale across a
  * reconnect.
  */
-const transports = new Map<string, HttpStdbTransport>();
+const transports = new Map<string, { transport: HttpStdbTransport; dbName: string }>();
 
 export function registerMcpTransport(
   identityHex: string,
   opts: { uri: string; dbName: string; token: string },
 ): void {
-  transports.set(
-    identityHex,
-    new HttpStdbTransport({
+  transports.set(identityHex, {
+    transport: new HttpStdbTransport({
       baseUrl: wsUriToHttpBase(opts.uri),
       dbName: opts.dbName,
       token: opts.token,
     }),
-  );
+    dbName: opts.dbName,
+  });
 }
 
 export function unregisterMcpTransport(identityHex: string): void {
   transports.delete(identityHex);
+}
+
+/** The module (workspace) an AI user's registered connection belongs to. */
+export function mcpDbNameFor(identityHex: string): string | undefined {
+  return transports.get(identityHex)?.dbName;
 }
 
 let registry: Map<string, McpToolEntry> | null = null;
@@ -261,8 +270,9 @@ export async function executeMcpParityTool(
   if (!entry) {
     return JSON.stringify({ ok: false, error: `Unknown tool ${toolName}` });
   }
-  const transport = ctx.identityHex ? transports.get(ctx.identityHex) : undefined;
-  if (!transport || ctx.aiUserId === undefined) {
+  const registered = ctx.identityHex ? transports.get(ctx.identityHex) : undefined;
+  const transport = registered?.transport;
+  if (!transport || !registered || ctx.aiUserId === undefined) {
     return JSON.stringify({
       ok: false,
       error:
@@ -281,6 +291,7 @@ export async function executeMcpParityTool(
         transport,
         aiUserId: ctx.aiUserId,
         conversationId: ctx.conversationId,
+        files: workspaceFileReaderFor(registered.dbName),
       },
       args,
     );

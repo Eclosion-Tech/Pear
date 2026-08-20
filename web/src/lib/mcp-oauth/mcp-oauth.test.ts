@@ -214,6 +214,7 @@ describe("scopes", () => {
     expect(conversationRead("get_page")).toBe(false);
 
     expect(scopeForTool("update_page_content")).toBe("pages:write");
+    expect(scopeForTool("read_file")).toBe("pages:read");
     expect(scopeForTool("get_schema_id")).toBe("pages:read");
     expect(scopeForTool("list_properties")).toBe("pages:read");
     expect(scopeForTool("add_property")).toBe("pages:write");

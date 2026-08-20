@@ -3,11 +3,14 @@
 /**
  * Chat composer attachments — shared types + helpers for the AI panel.
  *
- * Three kinds (mirrors the module's `AttachmentKind`):
+ * Four kinds (mirrors the module's `AttachmentKind`):
  *   - image:  uploaded via the workspace blob API (same pipeline as editor
  *             images); `object_key` stores the full S3 key so the AI worker
  *             can fetch the bytes and hand them to the provider as a vision
  *             block.
+ *   - file:   any other upload (PDF, CSV, DOCX, code, …) through the same
+ *             blob API; the worker extracts text into the turn and the AI
+ *             can window the rest with `read_file`.
  *   - page:   a page dragged from the sidebar; we snapshot its text at drag
  *             time (from the latest `page_snapshot` row) into contentSnapshot.
  *   - blocks: a text/block selection dragged from the editor; the dragged
@@ -15,7 +18,11 @@
  */
 
 import type { AttachmentSpec } from "@/src/module_bindings/types";
-import { uploadWorkspaceBlob, workspaceBlobSrc } from "@/src/lib/blobUpload";
+import {
+  uploadWorkspaceBlob,
+  workspaceBlobDownloadHref,
+  workspaceBlobSrc,
+} from "@/src/lib/blobUpload";
 
 /** DataTransfer MIME type set by sidebar page rows on drag. */
 export const PAGE_DRAG_MIME = "application/x-pear-page";
@@ -34,6 +41,16 @@ export type PendingAttachment =
       objectKey?: string;
       status: "uploading" | "ready" | "error";
     }
+  | {
+      id: string;
+      kind: "file";
+      fileName: string;
+      mimeType: string;
+      sizeBytes: number;
+      /** S3 key once uploaded; absent while uploading or on error. */
+      objectKey?: string;
+      status: "uploading" | "ready" | "error";
+    }
   | { id: string; kind: "page"; pageId: bigint; title: string; snapshot: string }
   | { id: string; kind: "blocks"; pageId?: bigint; title?: string; snapshot: string };
 
@@ -47,11 +64,12 @@ export function isImageFile(file: File): boolean {
 }
 
 /**
- * Upload a chat image through the workspace blob API (same pipeline as editor
- * images). Returns the full S3 key (`workspaces/{workspaceId}/{objectId}`),
- * or null on failure (logged by the helper).
+ * Upload a chat attachment (image or any other file) through the workspace
+ * blob API (same pipeline as editor images). Returns the full S3 key
+ * (`workspaces/{workspaceId}/{objectId}`), or null on failure (logged by the
+ * helper).
  */
-export async function uploadChatImage(
+export async function uploadChatFile(
   slug: string,
   file: File,
 ): Promise<string | null> {
@@ -79,14 +97,20 @@ export function chatImageSrc(slug: string, objectKey: string): string {
   return workspaceBlobSrc(slug, objectId);
 }
 
+/** Filename-preserving download URL for a sent file attachment. */
+export function chatFileHref(slug: string, objectKey: string, fileName: string): string {
+  const objectId = objectKey.split("/").pop() ?? "";
+  return workspaceBlobDownloadHref(slug, objectId, fileName);
+}
+
 /** Convert ready pending attachments into reducer `AttachmentSpec`s. */
 export function toAttachmentSpecs(pending: PendingAttachment[]): AttachmentSpec[] {
   const specs: AttachmentSpec[] = [];
   for (const att of pending) {
-    if (att.kind === "image") {
+    if (att.kind === "image" || att.kind === "file") {
       if (att.status !== "ready" || !att.objectKey) continue;
       specs.push({
-        kind: { tag: "Image" },
+        kind: { tag: att.kind === "image" ? "Image" : "File" },
         objectKey: att.objectKey,
         mimeType: att.mimeType,
         fileName: att.fileName,

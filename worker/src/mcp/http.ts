@@ -32,6 +32,7 @@ import {
   HttpStdbTransport,
 } from "../../../web/src/lib/mcp/index.js";
 import { wsUriToHttpBase } from "../bridge-sql.js";
+import { workspaceFileReaderFor } from "../workspace-files.js";
 
 const URI = process.env.SPACETIMEDB_URI ?? "ws://localhost:3000";
 const DB_NAME = process.env.SPACETIMEDB_DB_NAME ?? "pear-dev";
@@ -81,7 +82,11 @@ interface PearMcpAuthExtra extends Record<string, unknown> {
 
 const mcpHandler = createMcpHandler(({ authInfo }) => {
   const extra = authInfo?.extra as PearMcpAuthExtra;
-  return createPearMcpServer({ transport: extra.transport, aiUserId: extra.aiUserId });
+  return createPearMcpServer({
+    transport: extra.transport,
+    aiUserId: extra.aiUserId,
+    files: workspaceFileReaderFor(DB_NAME),
+  });
 });
 const nodeMcpHandler = toNodeHandler(mcpHandler);
 

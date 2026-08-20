@@ -13,6 +13,7 @@
  */
 
 import type { McpContext, McpToolEntry } from "./types";
+import { capText } from "./file-text";
 import { getPageRow, listChildren, allLivePages, getPageContent } from "./pages";
 import { readComponentTreeDoc } from "./component-tree";
 import {
@@ -115,7 +116,9 @@ const getPageTool: McpToolEntry = {
   description:
     "Get details about a specific page by ID, including its title, type, parent, and content. " +
     "Long pages are returned in windows: when the response has `truncated: true`, call again with " +
-    "`offset` set to the returned `next_offset` to read the rest.",
+    "`offset` set to the returned `next_offset` to read the rest. Attached files, images and audio " +
+    "appear inline as `[File: \"name\" (size, type) storage_key=…]` / `[Image: … storage_key=…]` / " +
+    "`[Audio: … storage_key=…]` — pass that storage_key to read_file to read the file's contents.",
   inputSchema: {
     type: "object",
     properties: {
@@ -160,6 +163,108 @@ const getPageTool: McpToolEntry = {
         page.pageType === "Database"
           ? "This is a Database page; its rows are NOT in `content`. Call query_database(page_id) to read its columns and rows."
           : undefined,
+    });
+  },
+};
+
+const READ_FILE_WINDOW_CHARS = 20_000;
+const READ_FILE_MAX_WINDOW_CHARS = 100_000;
+
+const readFileTool: McpToolEntry = {
+  name: "read_file",
+  description:
+    "Read the contents of a file stored in this workspace — a file/image/audio block on a page, " +
+    "a File property cell, or a chat attachment. Pass the `storage_key` shown by get_page " +
+    "(`storage_key=…`), get_page_components (props.storageKey), or an attachment's object key. " +
+    "Text-like files (txt, md, csv, json, code…), PDFs and DOCX come back as text; other binary " +
+    "formats return metadata only. Long files are windowed like get_page: when `truncated: true`, " +
+    "call again with `offset` set to the returned `next_offset`.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      storage_key: {
+        type: "string",
+        description:
+          "The workspace blob key — a bare object id (UUID) as stored on page blocks, or the " +
+          "full `workspaces/…/<id>` key as stored on chat attachments.",
+      },
+      offset: {
+        type: "number",
+        description:
+          "Character offset into the extracted text to start from (default 0). Use the " +
+          "`next_offset` from a truncated response to continue.",
+      },
+      max_chars: {
+        type: "number",
+        description: `Window size in characters (default ${READ_FILE_WINDOW_CHARS}, max ${READ_FILE_MAX_WINDOW_CHARS}).`,
+      },
+    },
+    required: ["storage_key"],
+  },
+  execute: async (ctx, input) => {
+    const storageKey = String(input.storage_key ?? "").trim();
+    if (!storageKey) return JSON.stringify({ ok: false, error: "storage_key is required" });
+    // Keys are opaque handles: a UUID or `workspaces/<ws>/<uuid>`. Anything
+    // else (path traversal, URLs) is rejected before it reaches a host reader.
+    if (!/^[A-Za-z0-9_./-]{1,256}$/.test(storageKey) || storageKey.includes("..")) {
+      return JSON.stringify({ ok: false, error: "storage_key is not a valid workspace blob key" });
+    }
+    if (!ctx.files) {
+      return JSON.stringify({
+        ok: false,
+        error:
+          "File reading is not available on this host: no workspace blob storage is configured " +
+          "for this connection. The file's metadata is still visible via get_page.",
+      });
+    }
+
+    let file;
+    try {
+      file = await ctx.files.read(storageKey);
+    } catch (err) {
+      return JSON.stringify({
+        ok: false,
+        error: `Could not read file: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+    if (!file) {
+      return JSON.stringify({ ok: false, error: "File not found in this workspace" });
+    }
+
+    const base = {
+      ok: true as const,
+      storage_key: file.storageKey,
+      content_type: file.contentType ?? null,
+      byte_size: file.byteSize,
+      extractor: file.extractor ?? null,
+      note: file.note,
+    };
+    if (file.text === undefined) {
+      return JSON.stringify({
+        ...base,
+        text: null,
+        next_step:
+          "This file type has no text extractor on this host; only metadata is available. " +
+          "Ask the user for the relevant contents, or for a text/CSV/PDF export.",
+      });
+    }
+
+    const offset = Math.max(0, Math.trunc(Number(input.offset ?? 0)) || 0);
+    const requested = Math.trunc(Number(input.max_chars ?? READ_FILE_WINDOW_CHARS));
+    const windowSize = Math.min(
+      READ_FILE_MAX_WINDOW_CHARS,
+      Number.isFinite(requested) && requested > 0 ? requested : READ_FILE_WINDOW_CHARS,
+    );
+    const { text: window, truncated: cut } = capText(file.text.slice(offset), windowSize);
+    const truncated = cut || offset + window.length < file.text.length;
+    return JSON.stringify({
+      ...base,
+      text: window,
+      total_chars: file.text.length,
+      offset,
+      truncated,
+      next_offset: truncated ? offset + window.length : undefined,
+      extraction_truncated: file.textTruncated || undefined,
     });
   },
 };
@@ -1079,6 +1184,7 @@ export function buildToolRegistry(): McpToolEntry[] {
     readConversationTool,
     createPageTool,
     getPageTool,
+    readFileTool,
     updatePageContentTool,
     updatePageTitleTool,
     setPageThemeTool,

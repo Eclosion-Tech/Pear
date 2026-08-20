@@ -649,6 +649,12 @@ pub enum AttachmentKind {
     /// A snapshot of selected blocks (`content_snapshot` markdown) from a source
     /// `page_id`, captured at drag time.
     Blocks,
+    /// Any other uploaded file (S3 `object_key`, `mime_type`, `file_name`); the
+    /// worker extracts text (plain text, CSV, JSON, PDF, DOCX, …) into the turn
+    /// and the AI can window through it with `read_file`. Appended after the
+    /// original variants — sum-type additions at the end are the migration-safe
+    /// shape (same pattern as `PropertyType::File`).
+    File,
 }
 
 /// One attachment passed into `send_user_message`. The id/timestamps/keys are
@@ -656,7 +662,7 @@ pub enum AttachmentKind {
 #[derive(SpacetimeType, Clone, Debug)]
 pub struct AttachmentSpec {
     pub kind: AttachmentKind,
-    /// Image: the S3 object key of the uploaded image.
+    /// Image / File: the S3 object key of the uploaded blob.
     pub object_key: Option<String>,
     pub mime_type: Option<String>,
     pub file_name: Option<String>,

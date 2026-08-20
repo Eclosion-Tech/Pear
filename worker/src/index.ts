@@ -14,6 +14,15 @@
  *   ANTHROPIC_MODEL          Frontier model for llm tasks  (default: claude-haiku-4-5-20251001)
  *   ANTHROPIC_PLANNER_MODEL  Fast model for orchestrate    (default: same as ANTHROPIC_MODEL)
  *   ORCHA_AGENT_ID           Stable agent identity string  (default: pear-llm-worker)
+ *   S3_ENDPOINT / S3_BUCKET / S3_ACCESS_KEY / S3_SECRET_KEY
+ *                            Workspace blob storage. Enables chat image
+ *                            vision, File attachments and the `read_file`
+ *                            tool (page file/image/audio blocks, File cells).
+ *                            Unset → those degrade to "not available" notes.
+ *   LIFECYCLE_URL + SPACETIMEDB_ADMIN_TOKEN
+ *                            (Pear Cloud) resolve the workspace id for bare
+ *                            blob object ids via `blob-context`; standalone
+ *                            deployments leave them unset.
  */
 
 // Polyfill WebSocket for Node.js < 21. Must come before any spacetimedb import.

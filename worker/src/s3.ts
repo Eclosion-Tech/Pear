@@ -19,7 +19,12 @@ export function isS3Configured(): boolean {
 
 let client: S3Client | undefined;
 
-function getS3Client(): S3Client {
+/** Bucket name shared by every worker-side blob read/write. */
+export function s3Bucket(): string {
+  return S3_BUCKET;
+}
+
+export function getS3Client(): S3Client {
   if (!isS3Configured()) {
     throw new Error("S3 is not configured. Set S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY.");
   }

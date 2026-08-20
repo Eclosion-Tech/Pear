@@ -198,8 +198,13 @@ export function markdownToComponentBlocks(markdown: string): ComponentBlockSpec[
     }
 
     const rawLine = lines[i];
-    const line = rawLine.trimEnd();
-    if (line.trim() === "") continue;
+    // Leading indentation is dropped: the batched doc-write reducer is flat
+    // (siblings under the root), so a nested markdown item becomes a sibling
+    // item rather than a paragraph reading "- child" (the old behaviour —
+    // the list marker only matched at column 0). True parent/child nesting
+    // on write is a reducer change; see the FileBlock/read_file ticket.
+    const line = rawLine.trimEnd().replace(/^[ \t]+/, "");
+    if (line === "") continue;
 
     const heading = /^(#{1,6})\s+(.*)$/.exec(line);
     if (heading) {

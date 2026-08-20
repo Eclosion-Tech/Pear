@@ -103,6 +103,20 @@ test("bullets, numbers, and checklists are distinguished", () => {
   );
 });
 
+test("indented (nested) list items still parse as list items, not paragraphs", () => {
+  const blocks = markdownToComponentBlocks("- parent\n  - child\n    1. grandchild\n   - [x] deep task\n  ## odd heading");
+  assert.deepEqual(
+    blocks.map((b) => [b.componentType, b.text]),
+    [
+      ["BulletListItem", "parent"],
+      ["BulletListItem", "child"],
+      ["NumberedListItem", "grandchild"],
+      ["ChecklistItem", "deep task"],
+      ["Heading", "odd heading"],
+    ],
+  );
+});
+
 test("blank lines separate paragraphs; prose becomes RichText", () => {
   const blocks = markdownToComponentBlocks("para one\n\npara two");
   assert.deepEqual(

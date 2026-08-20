@@ -12,7 +12,25 @@
 export { createPearMcpServer, SERVER_INFO } from "./server";
 export { buildToolRegistry } from "./tools";
 export { resolveAiUser } from "./identity";
-export { McpAuthError, type McpContext, type McpToolEntry } from "./types";
+export {
+  McpAuthError,
+  type McpContext,
+  type McpToolEntry,
+  type WorkspaceFile,
+  type WorkspaceFileReader,
+} from "./types";
+// The page-body renderer, shared with the worker's page-context reader so
+// chat and MCP agents see identical document text.
+export { renderDocTree, collectDocYjsIds, type DocNode } from "./doc-render";
+// Shared "what counts as text" rules for hosts implementing WorkspaceFileReader.
+export {
+  capText,
+  decodeUtf8,
+  extractorFor,
+  isTextLikeType,
+  looksLikeUtf8Text,
+  type TextExtractor,
+} from "./file-text";
 export { HttpStdbTransport, type StdbTransport } from "../api-endpoint";
 // Re-exported so external consumers (the CF gateway) resolve the SDK from
 // THIS package's node_modules — one bundled copy, no version skew with the

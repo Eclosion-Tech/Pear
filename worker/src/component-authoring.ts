@@ -20,11 +20,11 @@ import * as Y from "yjs";
 import { yDocToPlainText } from "@eclosion-tech/pulp/rich-text/yjsToHtml";
 import type { ConnLike } from "./tools.js";
 import {
-  markdownTablePropsToMarkdown,
   markdownToComponentBlocks,
   richTextBlockToYjsBytes,
   type ComponentBlockSpec,
 } from "./rich-text-encode.js";
+import { renderDocTree, type DocNode } from "../../web/src/lib/mcp/index.js";
 
 type ComponentNodeRow = {
   id: bigint;
@@ -68,14 +68,6 @@ function findRoot(conn: ConnLike, surfaceId: bigint): ComponentNodeRow | undefin
   );
 }
 
-/** Markdown prefix to re-emit per block type when reconstructing page text. */
-const MARKDOWN_PREFIX: Record<string, string> = {
-  Heading: "# ",
-  BulletListItem: "- ",
-  NumberedListItem: "1. ",
-  ChecklistItem: "- [ ] ",
-};
-
 /**
  * Plain text of a single ComponentNode by id (its decoded per-node Yjs state).
  * Used to surface the block a conversation is anchored to (`block_anchor`) as
@@ -100,43 +92,30 @@ function decodeNodeText(conn: ConnLike, nodeId: bigint): string {
 }
 
 /**
- * Reconstruct a ComponentTree page's body as markdown-ish text: walk the live
- * children of the root in order and decode each block's per-node Yjs state.
+ * Reconstruct a ComponentTree page's body as markdown-ish text from the
+ * subscribed rows — the read counterpart to {@link writeComponentTreeDoc}.
+ * The legacy `page_content` table is empty for ComponentTree pages, so page
+ * context must be rebuilt from the nodes. Returns `undefined` when the page
+ * has no component tree (i.e. not ComponentTree).
  *
- * This is the read counterpart to {@link writeComponentTreeDoc}. The legacy
- * `page_content` table is empty for ComponentTree pages, so `get_page` must
- * rebuild content from the nodes (assessment #27 — read side). Returns
- * `undefined` when the page has no component tree (i.e. not ComponentTree).
+ * Rendering is the shared `renderDocTree` (full recursive walk: heading
+ * sections, nested lists, media descriptors) so the page the AI reads here
+ * is byte-for-byte what `get_page` returns over MCP.
  */
 export function readComponentTreeDoc(conn: ConnLike, pageId: bigint): string | undefined {
-  const root = findRoot(conn, pageId);
-  if (!root) return undefined;
-
-  const blocks: string[] = [];
-  // Direct children of the root cover the common flat doc (paragraphs/headings).
-  // Nested containers (e.g. list groups) are walked one level so their items
-  // aren't silently dropped.
-  for (const child of liveChildrenOf(conn, pageId, root.id).sort((a, b) => a.order - b.order)) {
-    if (YJS_BACKED.has(child.componentType)) {
-      const prefix = MARKDOWN_PREFIX[child.componentType] ?? "";
-      blocks.push(prefix + decodeNodeText(conn, child.id));
-      continue;
-    }
-    if (child.componentType === "MarkdownTable") {
-      blocks.push(markdownTablePropsToMarkdown(child.props) ?? "[MarkdownTable]");
-      continue;
-    }
-    const grandchildren = liveChildrenOf(conn, pageId, child.id).sort((a, b) => a.order - b.order);
-    if (grandchildren.length === 0) {
-      blocks.push(`[${child.componentType}]`);
-      continue;
-    }
-    for (const gc of grandchildren) {
-      const prefix = MARKDOWN_PREFIX[gc.componentType] ?? "";
-      blocks.push(prefix + (YJS_BACKED.has(gc.componentType) ? decodeNodeText(conn, gc.id) : `[${gc.componentType}]`));
-    }
+  const nodes: DocNode[] = [];
+  for (const n of conn.db.component_node.iter() as Iterable<ComponentNodeRow>) {
+    if (n.surfaceId !== pageId) continue;
+    nodes.push({
+      id: Number(n.id),
+      parentId: n.parentId === undefined || n.parentId === null ? null : Number(n.parentId),
+      componentType: n.componentType,
+      props: n.props,
+      order: Number(n.order),
+      deleted: !!n.deletedAt,
+    });
   }
-  return blocks.join("\n\n");
+  return renderDocTree(nodes, (id: number) => decodeNodeText(conn, BigInt(id)));
 }
 
 export interface WriteComponentTreeResult {

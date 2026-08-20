@@ -60,6 +60,8 @@ import {
   reconstructSessionTail,
 } from "./session-reconstruct.js";
 import { resolveConversationAttachments } from "./attachments.js";
+import { mcpDbNameFor } from "./mcp-parity-tools.js";
+import { workspaceFileReaderFor } from "./workspace-files.js";
 import {
   type StoredToolCall,
   cap,
@@ -638,6 +640,16 @@ function delegatedJobIdFromResult(result: string): bigint | undefined {
  * Confirm the AI user is a participant in `conversationId`. Cheap defensive
  * check on top of visibility filters.
  */
+/**
+ * The blob reader for the workspace this AI user is connected to. Resolved
+ * through the parity-tool registry (identity → dbName), so attachments and
+ * `read_file` read through exactly the same S3 path.
+ */
+function fileReaderForIdentity(selfHex: string) {
+  const dbName = mcpDbNameFor(selfHex);
+  return dbName ? workspaceFileReaderFor(dbName) : undefined;
+}
+
 function isParticipant(
   conn: ConnLike,
   conversationId: bigint,
@@ -873,6 +885,7 @@ async function handleConversationMessage(
       conn,
       conv.id,
       logTag,
+      fileReaderForIdentity(selfHex),
     );
     const tailMessages = reconstructSessionTail(
       conn,

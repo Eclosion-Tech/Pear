@@ -14,7 +14,6 @@
 import * as Y from "yjs";
 import { yDocToPlainText } from "@eclosion-tech/pulp/rich-text/yjsToHtml";
 import {
-  markdownTablePropsToMarkdown,
   markdownToComponentBlocks,
   richTextBlockToYjsBytes,
   type ComponentBlockSpec,
@@ -22,26 +21,12 @@ import {
 import type { StdbTransport } from "../api-endpoint";
 import type { ComponentNodeRow } from "./types";
 import { decodeBytesColumn, isOptionNone, orChain, toNumberOrNull } from "./decode";
+import { collectDocYjsIds, renderDocTree, YJS_BACKED } from "./doc-render";
 import { encodeBytes, encodeOption, encodeU64 } from "./encode";
 import { readCounter } from "./ids";
 import { reducerErrorMessage } from "./errors";
 
-/** Component types whose text lives in per-node Yjs state. */
-export const YJS_BACKED = new Set([
-  "RichText",
-  "Heading",
-  "BulletListItem",
-  "NumberedListItem",
-  "ChecklistItem",
-]);
-
-/** Markdown prefix to re-emit per block type when reconstructing page text. */
-export const MARKDOWN_PREFIX: Record<string, string> = {
-  Heading: "# ",
-  BulletListItem: "- ",
-  NumberedListItem: "1. ",
-  ChecklistItem: "- [ ] ",
-};
+export { YJS_BACKED };
 
 type RawNode = {
   id: number | string;
@@ -83,10 +68,6 @@ function findRoot(nodes: ComponentNodeRow[]): ComponentNodeRow | undefined {
   return nodes.find((n) => n.parentId === null && !n.deleted);
 }
 
-function liveChildrenOf(nodes: ComponentNodeRow[], parentId: number): ComponentNodeRow[] {
-  return nodes.filter((n) => n.parentId === parentId && !n.deleted);
-}
-
 /** Fetch + decode Yjs text for a set of node ids (chunked OR-chains). */
 async function nodeTexts(
   transport: StdbTransport,
@@ -120,59 +101,9 @@ function decodeYjsText(data: unknown): string {
 }
 
 // ── Document assembly (shared by single-page and bulk reads) ──────────────────
-
-type DocWalk = Array<{ node: ComponentNodeRow; nested: ComponentNodeRow[] }>;
-
-/**
- * Compute the render walk for one surface: live children of the root in
- * order, one level of nesting for list groups. Returns `undefined` when the
- * surface has no live root (i.e. not a ComponentTree page).
- */
-function docWalkOf(nodes: ComponentNodeRow[]): DocWalk | undefined {
-  const root = findRoot(nodes);
-  if (!root) return undefined;
-  const children = liveChildrenOf(nodes, root.id).sort((a, b) => a.order - b.order);
-  return children.map((child) => ({
-    node: child,
-    nested: YJS_BACKED.has(child.componentType)
-      ? []
-      : liveChildrenOf(nodes, child.id).sort((a, b) => a.order - b.order),
-  }));
-}
-
-/** Node ids in a walk whose text must be fetched from Yjs state. */
-function walkYjsIds(walk: DocWalk): number[] {
-  return walk.flatMap(({ node, nested }) => [
-    ...(YJS_BACKED.has(node.componentType) ? [node.id] : []),
-    ...nested.filter((gc) => YJS_BACKED.has(gc.componentType)).map((gc) => gc.id),
-  ]);
-}
-
-/** Render a walk to markdown-ish text given a node-id → text lookup. */
-function renderWalk(walk: DocWalk, textOf: (id: number) => string): string {
-  const blocks: string[] = [];
-  for (const { node, nested } of walk) {
-    if (YJS_BACKED.has(node.componentType)) {
-      blocks.push((MARKDOWN_PREFIX[node.componentType] ?? "") + textOf(node.id));
-      continue;
-    }
-    if (node.componentType === "MarkdownTable") {
-      blocks.push(markdownTablePropsToMarkdown(node.props) ?? "[MarkdownTable]");
-      continue;
-    }
-    if (nested.length === 0) {
-      blocks.push(`[${node.componentType}]`);
-      continue;
-    }
-    for (const gc of nested) {
-      const prefix = MARKDOWN_PREFIX[gc.componentType] ?? "";
-      blocks.push(
-        prefix + (YJS_BACKED.has(gc.componentType) ? textOf(gc.id) : `[${gc.componentType}]`),
-      );
-    }
-  }
-  return blocks.join("\n\n");
-}
+//
+// The walk itself lives in `doc-render.ts` (pure, shared with the worker's
+// page-context reader). This file only fetches nodes + Yjs text and feeds it.
 
 /**
  * Reconstruct a ComponentTree page's body as markdown-ish text. Returns
@@ -183,10 +114,12 @@ export async function readComponentTreeDoc(
   pageId: number,
 ): Promise<string | undefined> {
   const nodes = await selectSurfaceNodes(transport, pageId);
-  const walk = docWalkOf(nodes);
-  if (!walk) return undefined;
-  const texts = await nodeTexts(transport, walkYjsIds(walk));
-  return renderWalk(walk, (id) => texts.get(id) ?? "");
+  const yjsIds = collectDocYjsIds(nodes);
+  if (yjsIds.length === 0 && !nodes.some((n) => n.parentId === null && !n.deleted)) {
+    return undefined;
+  }
+  const texts = await nodeTexts(transport, yjsIds);
+  return renderDocTree(nodes, (id) => texts.get(id) ?? "");
 }
 
 /**
@@ -219,18 +152,15 @@ export async function readComponentTreeDocs(
     }
   }
 
-  const walks = new Map<number, DocWalk>();
   const allYjsIds: number[] = [];
   for (const pageId of pageIds) {
-    const walk = docWalkOf(nodesBySurface.get(pageId) ?? []);
-    if (!walk) continue;
-    walks.set(pageId, walk);
-    allYjsIds.push(...walkYjsIds(walk));
+    allYjsIds.push(...collectDocYjsIds(nodesBySurface.get(pageId) ?? []));
   }
 
   const texts = await nodeTexts(transport, allYjsIds);
-  for (const [pageId, walk] of walks) {
-    result.set(pageId, renderWalk(walk, (id) => texts.get(id) ?? ""));
+  for (const pageId of pageIds) {
+    const rendered = renderDocTree(nodesBySurface.get(pageId) ?? [], (id) => texts.get(id) ?? "");
+    if (rendered !== undefined) result.set(pageId, rendered);
   }
   return result;
 }

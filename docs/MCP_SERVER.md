@@ -111,7 +111,8 @@ Workspace pages (governed by page access rules):
 | Tool | Purpose |
 |---|---|
 | `create_page` | Create a Doc or Database page (`parent_id: 0` = workspace root) |
-| `get_page` | Title, type, parent, and content of a page |
+| `get_page` | Title, type, parent, and content of a page. Headings, nested lists and checklists come back as markdown; attached files/images/audio appear as `[File: "name" (size, type) storage_key=…]` descriptors |
+| `read_file` | Contents of a workspace file by `storage_key` (from `get_page`, `get_page_components` props, or a chat attachment). Text-like files, PDF and DOCX return text (windowed with `offset`/`next_offset`); other binaries return metadata. Needs blob storage on the host: the worker's `S3_*` env, or `HETZNER_S3_*` secrets on the Pear Cloud gateway — otherwise the tool reports itself unavailable |
 | `update_page_content` | Replace a Doc page's body with markdown |
 | `update_page_title` | Rename a page |
 | `list_child_pages` | Children of a page |

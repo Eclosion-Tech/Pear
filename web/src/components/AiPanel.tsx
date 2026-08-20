@@ -47,14 +47,16 @@ import {
   PAGE_DRAG_MIME,
   newLocalId,
   isImageFile,
-  uploadChatImage,
+  uploadChatFile,
   chatImageSrc,
+  chatFileHref,
   toAttachmentSpecs,
   extractTextFromBlockJson,
   type PendingAttachment,
   type PageDragPayload,
 } from "@/src/lib/chatAttachments";
 import { usePearWorkspaceSlug } from "@/src/lib/blobUpload";
+import { formatBytes } from "@/src/lib/formatBytes";
 import { optionStringFromRow } from "@/src/lib/spacetime";
 import {
   findActiveMentionQuery,
@@ -774,6 +776,26 @@ function LinkedConversationCard({ linkedConversationId }: { linkedConversationId
 
 // ── Attachments ──────────────────────────────────────────────────────────────
 
+function PaperclipIcon({ className = "", size = 12 }: { className?: string; size?: number }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+    </svg>
+  );
+}
+
 /** Chips + thumbnails for attachments queued in the composer (removable). */
 function ComposerAttachments({
   pending,
@@ -803,6 +825,20 @@ function ComposerAttachments({
                   ? "Uploading…"
                   : att.status === "error"
                     ? "Upload failed"
+                    : att.fileName}
+              </span>
+            </>
+          ) : att.kind === "file" ? (
+            <>
+              <PaperclipIcon className={`text-neutral-400 shrink-0 ${att.status === "uploading" ? "opacity-50" : ""}`} />
+              <span
+                className={`text-[11px] max-w-[140px] truncate ${att.status === "error" ? "text-red-500" : "text-neutral-600 dark:text-neutral-300"}`}
+                title={`${att.fileName}${att.sizeBytes ? ` · ${formatBytes(att.sizeBytes)}` : ""}`}
+              >
+                {att.status === "uploading"
+                  ? `Uploading ${att.fileName}…`
+                  : att.status === "error"
+                    ? `Upload failed: ${att.fileName}`
                     : att.fileName}
               </span>
             </>
@@ -859,6 +895,33 @@ function MessageAttachments({ attachments }: { attachments: ConversationAttachme
               alt={att.fileName ?? "attachment"}
               className="max-w-[160px] max-h-[120px] rounded-lg object-cover border border-black/10 dark:border-white/10"
             />
+          );
+        }
+        if (att.kind.tag === "File") {
+          const name = att.fileName ?? "file";
+          const href = att.objectKey ? chatFileHref(slug, att.objectKey, name) : "";
+          const chip = (
+            <>
+              <PaperclipIcon className="shrink-0" />
+              <span className="truncate max-w-[180px]">{name}</span>
+            </>
+          );
+          return href ? (
+            <a
+              key={String(att.id)}
+              href={href}
+              className="inline-flex items-center gap-1 rounded-md bg-black/10 dark:bg-white/10 px-1.5 py-0.5 text-[11px] opacity-80 hover:opacity-100 hover:underline"
+              title={`Download ${name}${att.mimeType ? ` (${att.mimeType})` : ""}`}
+            >
+              {chip}
+            </a>
+          ) : (
+            <span
+              key={String(att.id)}
+              className="inline-flex items-center gap-1 rounded-md bg-black/10 dark:bg-white/10 px-1.5 py-0.5 text-[11px] opacity-80"
+            >
+              {chip}
+            </span>
           );
         }
         return (
@@ -1330,6 +1393,7 @@ function ConversationThread({
   const workspaceSlug = usePearWorkspaceSlug();
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const attachInputRef = useRef<HTMLInputElement | null>(null);
   // Windowed transcript (ticket 14386): only ~a viewport of messages mounts.
   // Heights vary (markdown, tool cards, attachments) so rows are measured;
   // tanstack's ResizeObserver re-measures the streaming message as it grows,
@@ -1444,7 +1508,9 @@ function ConversationThread({
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [conversation.id]);
 
-  const uploading = pending.some((a) => a.kind === "image" && a.status === "uploading");
+  const uploading = pending.some(
+    (a) => (a.kind === "image" || a.kind === "file") && a.status === "uploading",
+  );
   const readySpecs = toAttachmentSpecs(pending);
   const canSend = (!!input.trim() || readySpecs.length > 0) && !sending && !uploading && isActive;
   const activeMention = useMemo(
@@ -1517,25 +1583,43 @@ function ConversationThread({
     });
   }
 
-  /** Queue an image file: instant local thumbnail, upload in the background. */
-  function addImageFiles(files: File[]) {
-    for (const file of files.filter(isImageFile)) {
+  /**
+   * Queue dropped/pasted/picked files: images get an instant local thumbnail
+   * and go to the model as vision; everything else becomes a file attachment
+   * whose text the worker extracts. Both upload in the background.
+   */
+  function addFiles(files: File[]) {
+    for (const file of files) {
       const id = newLocalId();
-      setPending((prev) => [
-        ...prev,
-        {
-          id,
-          kind: "image",
-          fileName: file.name || "image",
-          mimeType: file.type || "image/png",
-          previewUrl: URL.createObjectURL(file),
-          status: "uploading",
-        },
-      ]);
-      void uploadChatImage(workspaceSlug, file).then((objectKey) => {
+      if (isImageFile(file)) {
+        setPending((prev) => [
+          ...prev,
+          {
+            id,
+            kind: "image",
+            fileName: file.name || "image",
+            mimeType: file.type || "image/png",
+            previewUrl: URL.createObjectURL(file),
+            status: "uploading",
+          },
+        ]);
+      } else {
+        setPending((prev) => [
+          ...prev,
+          {
+            id,
+            kind: "file",
+            fileName: file.name || "file",
+            mimeType: file.type || "application/octet-stream",
+            sizeBytes: file.size,
+            status: "uploading",
+          },
+        ]);
+      }
+      void uploadChatFile(workspaceSlug, file).then((objectKey) => {
         setPending((prev) =>
           prev.map((a) =>
-            a.id === id && a.kind === "image"
+            a.id === id && (a.kind === "image" || a.kind === "file")
               ? objectKey
                 ? { ...a, objectKey, status: "ready" }
                 : { ...a, status: "error" }
@@ -1627,7 +1711,7 @@ function ConversationThread({
       return;
     }
     if (e.dataTransfer.files.length > 0) {
-      addImageFiles(Array.from(e.dataTransfer.files));
+      addFiles(Array.from(e.dataTransfer.files));
       return;
     }
     // Editor / native text selection drag → block-snapshot context.
@@ -1650,10 +1734,10 @@ function ConversationThread({
   }
 
   function handlePaste(e: React.ClipboardEvent) {
-    const files = Array.from(e.clipboardData.files).filter(isImageFile);
+    const files = Array.from(e.clipboardData.files);
     if (files.length > 0) {
       e.preventDefault();
-      addImageFiles(files);
+      addFiles(files);
     }
   }
 
@@ -1935,6 +2019,26 @@ function ConversationThread({
                 }
               }}
             />
+            <input
+              ref={attachInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                const files = Array.from(e.target.files ?? []);
+                e.target.value = "";
+                if (files.length > 0) addFiles(files);
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => attachInputRef.current?.click()}
+              className="self-end p-2 rounded-lg text-neutral-500 hover:text-neutral-800 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:text-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+              title="Attach files (or drop / paste them)"
+              aria-label="Attach files"
+            >
+              <PaperclipIcon size={16} />
+            </button>
             <button
               onClick={() => void handleSend()}
               disabled={!canSend}
@@ -1951,7 +2055,7 @@ function ConversationThread({
             <span className="text-xs text-neutral-400">
               {isAiActive
                 ? `${aiName} is working — new messages queue until the turn finishes`
-                : "↵ send · ⇧↵ newline · drop images or pages"}
+                : "↵ send · ⇧↵ newline · drop files, images or pages"}
             </span>
             <div className="flex items-center gap-3">
               <HandoffPanel

@@ -256,6 +256,7 @@ export const AttachmentKind = __t.enum("AttachmentKind", {
   Image: __t.unit(),
   Page: __t.unit(),
   Blocks: __t.unit(),
+  File: __t.unit(),
 });
 export type AttachmentKind = __Infer<typeof AttachmentKind>;
 

@@ -1270,6 +1270,7 @@ describe("registry", () => {
       "post_to_thread",
       "query_database",
       "read_conversation",
+      "read_file",
       "read_memory",
       "read_thread",
       "remember",
@@ -2046,5 +2047,178 @@ describe("id discovery under concurrency", () => {
     expect(read.content).toMatch(/# H/);
     expect(read.content).toMatch(/para one/);
     expect(read.content).toMatch(/- item/);
+  });
+});
+
+// ── Files: get_page media rendering + read_file ───────────────────────────────
+
+import type { WorkspaceFile, WorkspaceFileReader } from "./types";
+
+class FakeFiles implements WorkspaceFileReader {
+  objects = new Map<string, WorkspaceFile>();
+  reads: string[] = [];
+  async read(storageKey: string): Promise<WorkspaceFile | null> {
+    this.reads.push(storageKey);
+    return this.objects.get(storageKey) ?? null;
+  }
+}
+
+async function runWithFiles(
+  fake: FakeStdb,
+  files: WorkspaceFileReader | undefined,
+  tool: string,
+  input: Record<string, unknown> = {},
+): Promise<Record<string, unknown>> {
+  const entry = tools.get(tool);
+  if (!entry) throw new Error(`no tool ${tool}`);
+  return JSON.parse(await entry.execute({ ...ctxFor(fake), files }, input));
+}
+
+describe("page media blocks in get_page", () => {
+  function seedMediaPage(fake: FakeStdb): void {
+    fake.seedPage({ id: 700, title: "Attachments", contentFormat: "ComponentTree" });
+    const rootId = fake.alloc("component_node");
+    fake.nodes.push({ id: rootId, surfaceId: 700, parentId: null, componentType: "Container", order: 1000, deletedAtMicros: null });
+    const push = (componentType: string, props: Record<string, unknown>, order: number) => {
+      fake.nodes.push({
+        id: fake.alloc("component_node"),
+        surfaceId: 700,
+        parentId: rootId,
+        componentType,
+        props: JSON.stringify(props),
+        order,
+        deletedAtMicros: null,
+      });
+    };
+    push("FileBlock", { storageKey: "11111111-2222-3333-4444-555555555555", filename: "q3 report.pdf", contentType: "application/pdf", sizeBytes: 2_411_724, caption: "Board deck" }, 1000);
+    push("ImageBlock", { storageKey: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", caption: "Org chart" }, 2000);
+    push("Audio", { storageKey: "99999999-8888-7777-6666-555555555555", transcript: "hello world", durationSec: 12.4 }, 3000);
+    push("FileBlock", { externalUrl: "https://example.com/spec.docx", filename: "spec.docx" }, 4000);
+    push("FileBlock", {}, 5000);
+  }
+
+  test("renders file/image/audio blocks with their storage keys instead of bare placeholders", async () => {
+    const fake = memoryFake();
+    seedMediaPage(fake);
+    const res = await run(fake, "get_page", { page_id: 700 });
+    expect(res.ok).toBe(true);
+    const content = res.content as string;
+    expect(content).toContain('[File: "q3 report.pdf" (2.3 MB, application/pdf) storage_key=11111111-2222-3333-4444-555555555555]');
+    expect(content).toContain("Board deck");
+    expect(content).toContain('[Image: "Org chart" storage_key=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee]');
+    expect(content).toContain("[Audio: (12s) storage_key=99999999-8888-7777-6666-555555555555]");
+    expect(content).toContain("Transcript: hello world");
+    expect(content).toContain('[File: "spec.docx" url=https://example.com/spec.docx]');
+    // An empty file block still renders as a recognisable placeholder.
+    expect(content).toContain("[File:]");
+    expect(content).not.toContain("[FileBlock]");
+  });
+});
+
+describe("read_file", () => {
+  const KEY = "11111111-2222-3333-4444-555555555555";
+
+  test("reports the capability as unavailable when the host provides no reader", async () => {
+    const res = await runWithFiles(memoryFake(), undefined, "read_file", { storage_key: KEY });
+    expect(res.ok).toBe(false);
+    expect(String(res.error)).toMatch(/not available on this host/i);
+  });
+
+  test("rejects keys that are not opaque blob handles", async () => {
+    const files = new FakeFiles();
+    for (const bad of ["", "../etc/passwd", "https://evil.example/x", "a b"]) {
+      const res = await runWithFiles(memoryFake(), files, "read_file", { storage_key: bad });
+      expect(res.ok).toBe(false);
+    }
+    expect(files.reads).toEqual([]);
+  });
+
+  test("returns not-found when the reader has no such object", async () => {
+    const res = await runWithFiles(memoryFake(), new FakeFiles(), "read_file", { storage_key: KEY });
+    expect(res.ok).toBe(false);
+    expect(String(res.error)).toMatch(/not found/i);
+  });
+
+  test("returns extracted text with windowing metadata", async () => {
+    const files = new FakeFiles();
+    files.objects.set(KEY, {
+      storageKey: KEY,
+      contentType: "text/csv",
+      byteSize: 45_000,
+      text: "x".repeat(45_000),
+      extractor: "utf8",
+    });
+    const first = await runWithFiles(memoryFake(), files, "read_file", { storage_key: KEY });
+    expect(first.ok).toBe(true);
+    expect(first.content_type).toBe("text/csv");
+    expect(first.byte_size).toBe(45_000);
+    expect((first.text as string).length).toBe(20_000);
+    expect(first.total_chars).toBe(45_000);
+    expect(first.truncated).toBe(true);
+    expect(first.next_offset).toBe(20_000);
+
+    const last = await runWithFiles(memoryFake(), files, "read_file", { storage_key: KEY, offset: 40_000 });
+    expect((last.text as string).length).toBe(5_000);
+    expect(last.truncated).toBe(false);
+    expect(last.next_offset).toBeUndefined();
+
+    const wide = await runWithFiles(memoryFake(), files, "read_file", { storage_key: KEY, max_chars: 1_000_000 });
+    // max_chars is clamped to the hard ceiling, never unbounded.
+    expect((wide.text as string).length).toBe(45_000);
+  });
+
+  test("binary files without an extractor return metadata and no text", async () => {
+    const files = new FakeFiles();
+    files.objects.set(KEY, { storageKey: KEY, contentType: "application/zip", byteSize: 1024 });
+    const res = await runWithFiles(memoryFake(), files, "read_file", { storage_key: KEY });
+    expect(res.ok).toBe(true);
+    expect(res.text).toBeNull();
+    expect(String(res.next_step)).toMatch(/no text extractor/i);
+  });
+
+  test("accepts full chat-attachment object keys", async () => {
+    const files = new FakeFiles();
+    const full = `workspaces/ws-1/${KEY}`;
+    files.objects.set(full, { storageKey: full, contentType: "text/plain", byteSize: 5, text: "hello", extractor: "utf8" });
+    const res = await runWithFiles(memoryFake(), files, "read_file", { storage_key: full });
+    expect(res.ok).toBe(true);
+    expect(res.text).toBe("hello");
+  });
+
+  test("surfaces reader failures as tool errors rather than throwing", async () => {
+    const files: WorkspaceFileReader = {
+      read: async () => {
+        throw new Error("S3 unreachable");
+      },
+    };
+    const res = await runWithFiles(memoryFake(), files, "read_file", { storage_key: KEY });
+    expect(res.ok).toBe(false);
+    expect(String(res.error)).toMatch(/S3 unreachable/);
+  });
+});
+
+describe("get_page keeps nested structure", () => {
+  test("section bodies under headings and nested list items are read back", async () => {
+    const fake = memoryFake();
+    fake.seedPage({ id: 800, title: "Nested", contentFormat: "ComponentTree" });
+    const rootId = fake.alloc("component_node");
+    fake.nodes.push({ id: rootId, surfaceId: 800, parentId: null, componentType: "Container", order: 1000, deletedAtMicros: null });
+    const add = (parentId: number, componentType: string, text: string, order: number, props?: Record<string, unknown>) => {
+      const id = fake.alloc("component_node");
+      fake.nodes.push({ id, surfaceId: 800, parentId, componentType, order, props: props ? JSON.stringify(props) : undefined, deletedAtMicros: null });
+      fake.yjs.set(id, toHex(richTextBlockToYjsBytes(text, true)));
+      return id;
+    };
+    const h = add(rootId, "Heading", "Goals", 1000, { level: 2 });
+    add(h, "RichText", "Ship file reading.", 1000);
+    const b = add(h, "BulletListItem", "parent bullet", 2000);
+    add(b, "BulletListItem", "child bullet", 1000);
+    add(rootId, "ChecklistItem", "verify", 2000, { checked: true });
+
+    const res = await run(fake, "get_page", { page_id: 800 });
+    expect(res.ok).toBe(true);
+    expect(res.content).toBe(
+      ["## Goals", "", "Ship file reading.", "", "- parent bullet", "  - child bullet", "- [x] verify"].join("\n"),
+    );
   });
 });

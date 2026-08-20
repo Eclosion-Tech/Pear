@@ -57,6 +57,7 @@ const EXPECTED = [
   "remember",
   "list_memory",
   "set_row_properties",
+  "read_file",
 ];
 
 test("every parity tool resolves against the shared MCP registry", () => {

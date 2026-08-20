@@ -25,6 +25,7 @@ import {
   HttpStdbTransport,
 } from "../../../web/src/lib/mcp/index.js";
 import { wsUriToHttpBase } from "../bridge-sql.js";
+import { workspaceFileReaderFor } from "../workspace-files.js";
 
 const uri = process.env.SPACETIMEDB_URI ?? "ws://localhost:3000";
 const dbName = process.env.SPACETIMEDB_DB_NAME ?? "pear-dev";
@@ -48,7 +49,9 @@ async function main(): Promise<void> {
   // Resolves the AI user AND authenticates the token in one RLS-scoped read.
   const aiUserId = await resolveAiUser(transport);
 
-  serveStdio(() => createPearMcpServer({ transport, aiUserId }));
+  serveStdio(() =>
+    createPearMcpServer({ transport, aiUserId, files: workspaceFileReaderFor(dbName) }),
+  );
   console.error(
     `[mcp] pear MCP server ready on stdio (workspace: ${dbName}, ai user: ${aiUserId})`,
   );
