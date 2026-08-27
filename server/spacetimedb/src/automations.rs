@@ -1478,7 +1478,18 @@ fn execute_orcha_job(
         .and_then(Value::as_str)
         .and_then(|f| json_u64(payload.get(f)))
         .or_else(|| json_u64(payload.get("page_id")));
-    let ai_user_id = json_u64(config.get("ai_user_id"));
+    // The AI user whose credentials and governed connection run this job. An
+    // explicit `config.ai_user_id` wins; otherwise the run-as principal itself
+    // when it is an AI user — "Runs as Kira" means the job is Kira's, using her
+    // key. Without either, the worker falls back to its default provider, which
+    // a deployment may not configure at all (the job then fails at claim time).
+    let ai_user_id = json_u64(config.get("ai_user_id")).or_else(|| {
+        ctx.db
+            .ai_user_config()
+            .identity()
+            .find(effective_run_as)
+            .map(|c| c.id)
+    });
     if let Some(id) = ai_user_id {
         ctx.db
             .ai_user_config()
@@ -1513,7 +1524,12 @@ fn execute_orcha_job(
         None,
         task_graph.to_string(),
     )?;
-    Ok(json!({ "nonce": nonce, "page_id": page_id, "job_id": job_id }))
+    Ok(json!({
+        "nonce": nonce,
+        "page_id": page_id,
+        "job_id": job_id,
+        "ai_user_id": ai_user_id,
+    }))
 }
 
 fn resolve_property_action_value<'a>(
