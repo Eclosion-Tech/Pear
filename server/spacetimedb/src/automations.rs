@@ -25,7 +25,9 @@ use crate::ai::{ai_user_config, ai_user_profile};
 use crate::auth::{sender_is_admin, user};
 use crate::cron::{cron_matches, minute_bucket, parse_cron_fields, parse_timezone};
 use crate::id_counters::alloc_id;
-use crate::orcha::{ai_user_at_hard_cap, create_job};
+use crate::orcha::{
+    ai_user_at_hard_cap, create_job_inner, orcha_job, tail_chars, truncate_chars, OrchaTask,
+};
 use crate::pages::schemas::{
     property_definition, set_property_value_inner, PropertyType, PropertyValue,
 };
@@ -1164,17 +1166,37 @@ fn process_automation_event_inner(
     // recorded invoker so generated controls cannot borrow the author's ACLs.
     // An action failure logs and marks the event Failed but returns Ok — an
     // Err here would roll back the triggering transaction (and the logs).
+    //
+    // `OrchaJob` is asynchronous: the reducer only enqueues the job, and the
+    // worker does the real work later. The event therefore stays `Running`
+    // until every spawned job reaches a terminal state — `on_orcha_job_finished`
+    // (called from the orcha completion path) logs the outcome and closes it.
+    let mut awaiting_jobs = false;
     for action in actions {
         match execute_live_action(ctx, &rule, effective_run_as, &action, queue_id, &payload) {
-            Ok(result) => insert_run_log(
-                ctx,
-                queue_id,
-                Some(action.id),
-                true,
-                false,
-                format!("Executed {}", action_kind_name(&action.action_kind)),
-                result.to_string(),
-            ),
+            Ok(result) => {
+                let is_job = matches!(action.action_kind, AutomationActionKind::OrchaJob);
+                let message = if is_job {
+                    awaiting_jobs = true;
+                    match json_u64(result.get("job_id")) {
+                        Some(job_id) => {
+                            format!("Queued OrchaJob #{job_id} — waiting for the worker to run it")
+                        }
+                        None => "Queued OrchaJob — waiting for the worker to run it".to_string(),
+                    }
+                } else {
+                    format!("Executed {}", action_kind_name(&action.action_kind))
+                };
+                insert_run_log(
+                    ctx,
+                    queue_id,
+                    Some(action.id),
+                    true,
+                    false,
+                    message,
+                    result.to_string(),
+                );
+            }
             Err(err) => {
                 insert_run_log(
                     ctx,
@@ -1190,8 +1212,118 @@ fn process_automation_event_inner(
             }
         }
     }
+    if awaiting_jobs {
+        return Ok(());
+    }
     update_event_status(ctx, queue_id, AutomationEventStatus::Completed, None);
     Ok(())
+}
+
+/// Nonce `execute_orcha_job` stamps on the jobs it spawns, so the run log, the
+/// UI, and the completion hook can all find the job for a given action run.
+fn automation_job_nonce(queue_id: u64, action_id: u64) -> String {
+    format!("automation-q{queue_id}-a{action_id}")
+}
+
+/// Inverse of [`automation_job_nonce`]: `(queue_id, action_id)`, or `None` for
+/// jobs that weren't spawned by an automation.
+pub(crate) fn parse_automation_nonce(nonce: &str) -> Option<(u64, u64)> {
+    let rest = nonce.strip_prefix("automation-q")?;
+    let (queue, action) = rest.split_once("-a")?;
+    Some((queue.parse().ok()?, action.parse().ok()?))
+}
+
+/// Called from `check_orcha_job_completion` when a job transitions to a
+/// terminal state. For automation-spawned jobs this records the per-task
+/// outcome in the run log and — once every job spawned by the same event is
+/// terminal — moves the event from `Running` to `Completed` / `Failed`.
+pub(crate) fn on_orcha_job_finished(
+    ctx: &ReducerContext,
+    job_id: u64,
+    nonce: &str,
+    tasks: &[OrchaTask],
+    any_failed: bool,
+) {
+    let Some((queue_id, action_id)) = parse_automation_nonce(nonce) else {
+        return;
+    };
+    let done = tasks.iter().filter(|t| t.status == "done").count();
+    let failed = tasks.iter().filter(|t| t.status == "failed").count();
+    let first_error = tasks
+        .iter()
+        .find(|t| t.status == "failed")
+        .and_then(|t| t.result.as_deref())
+        .map(|r| truncate_chars(r, 300));
+    let message = if any_failed {
+        format!(
+            "OrchaJob #{job_id} failed: {failed} of {} task(s) failed{}",
+            tasks.len(),
+            first_error
+                .as_deref()
+                .map(|e| format!(" — {e}"))
+                .unwrap_or_default()
+        )
+    } else {
+        format!(
+            "OrchaJob #{job_id} completed: {done}/{} task(s) done",
+            tasks.len()
+        )
+    };
+    let summary = json!({
+        "job_id": job_id,
+        "nonce": nonce,
+        "status": if any_failed { "failed" } else { "complete" },
+        "tasks": tasks
+            .iter()
+            .map(|t| json!({
+                "id": t.id,
+                "task_type": t.task_type,
+                "status": t.status,
+                "description": truncate_chars(&t.description, 200),
+                "result": t.result.as_deref().map(|r| tail_chars(r, 400)),
+            }))
+            .collect::<Vec<_>>(),
+    });
+    insert_run_log(
+        ctx,
+        queue_id,
+        Some(action_id),
+        !any_failed,
+        false,
+        message.clone(),
+        summary.to_string(),
+    );
+
+    let Some(event) = ctx.db.automation_event_queue().id().find(queue_id) else {
+        return;
+    };
+    // Only the async-wait state is ours to close; a synchronous action failure
+    // may already have marked the event Failed.
+    if !matches!(event.status, AutomationEventStatus::Running) {
+        return;
+    }
+    // A rule may spawn several jobs from one event (one per OrchaJob action):
+    // the event closes when the last one lands, failing if any of them failed.
+    let prefix = format!("automation-q{queue_id}-a");
+    let siblings: Vec<_> = ctx
+        .db
+        .orcha_job()
+        .iter()
+        .filter(|j| j.nonce.as_deref().is_some_and(|n| n.starts_with(&prefix)))
+        .collect();
+    if siblings.iter().any(|j| j.status == "executing") {
+        return;
+    }
+    if siblings.iter().any(|j| j.status == "failed") {
+        let error = if any_failed {
+            message
+        } else {
+            "An OrchaJob spawned by this run failed".to_string()
+        };
+        update_event_status(ctx, queue_id, AutomationEventStatus::Failed, Some(error));
+    } else {
+        update_event_status(ctx, queue_id, AutomationEventStatus::Completed, None);
+    }
 }
 
 /// Execute one live action. Returns a JSON result for the run log, or an error
@@ -1363,14 +1495,14 @@ fn execute_orcha_job(
         .map(str::to_string);
     // Same single-task graph the worker's `delegate` tool creates; the nonce
     // lets observers read back exactly this job.
-    let nonce = format!("automation-q{queue_id}-a{action_id}");
+    let nonce = automation_job_nonce(queue_id, action_id);
     let task_graph = json!([{
         "description": prompt,
         "task_type": "orchestrate",
         "depends_on": [],
         "required_capabilities": ["orchestrate"],
     }]);
-    create_job(
+    let job_id = create_job_inner(
         ctx,
         effective_run_as.to_hex().to_string(),
         prompt,
@@ -1381,7 +1513,7 @@ fn execute_orcha_job(
         None,
         task_graph.to_string(),
     )?;
-    Ok(json!({ "nonce": nonce, "page_id": page_id }))
+    Ok(json!({ "nonce": nonce, "page_id": page_id, "job_id": job_id }))
 }
 
 fn resolve_property_action_value<'a>(
@@ -2125,6 +2257,18 @@ fn action_kind_name(kind: &AutomationActionKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn automation_job_nonce_round_trips() {
+        let nonce = automation_job_nonce(42, 7);
+        assert_eq!(nonce, "automation-q42-a7");
+        assert_eq!(parse_automation_nonce(&nonce), Some((42, 7)));
+        // Jobs from chat/editor (no nonce, or a `delegate` nonce) are not ours.
+        assert_eq!(parse_automation_nonce(""), None);
+        assert_eq!(parse_automation_nonce("delegate-1234"), None);
+        assert_eq!(parse_automation_nonce("automation-q1"), None);
+        assert_eq!(parse_automation_nonce("automation-qx-a1"), None);
+    }
 
     #[test]
     fn render_template_substitutes_payload_fields() {

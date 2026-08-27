@@ -16,7 +16,14 @@
  */
 
 import { DbConnection, type EventContext } from "./module_bindings/index.js";
-import { callLlm, planTasks, buildPageContext } from "./llm.js";
+import {
+  callLlm,
+  planTasks,
+  buildPageContext,
+  serializeToolTrace,
+  traceKeyForTask,
+} from "./llm.js";
+import type { StoredToolCall } from "./tool-call-record.js";
 import { type ResolvedProvider, type TokenUsage } from "./providers.js";
 import { resolveRouting, type ModelTier } from "./model-catalog.js";
 import { AiUserWorker } from "./ai-user-worker.js";
@@ -669,6 +676,9 @@ export class DatabaseWorker {
             llmOverrides,
             exec,
           );
+          // Persist the execution trace before the terminal reducer so a
+          // finished task (done OR failed) always has its trace on the job.
+          await this.persistToolTrace(conn, task, llmOut.toolCalls);
           // A subagent that self-reported it couldn't finish (TASK_FAILED:) must
           // fail the task, not report success — otherwise a blocked subtask shows
           // as done and the job reports full completion for work it didn't do.
@@ -843,6 +853,30 @@ export class DatabaseWorker {
       duration_ms: Number(resultRow.durationMs ?? BigInt(0)),
     };
     return JSON.stringify(out);
+  }
+
+  /** Write a task's tool-call trace to the job's shared context under
+   * `trace:task:<id>` (see `traceKeyForTask`). Best-effort: a failure here
+   * must not fail the task itself. */
+  private async persistToolTrace(
+    conn: DbConnection,
+    task: TaskRow,
+    toolCalls: StoredToolCall[],
+  ): Promise<void> {
+    if (toolCalls.length === 0) return;
+    try {
+      await conn.reducers.setSharedContext({
+        jobId: task.jobId,
+        key: traceKeyForTask(task.id),
+        value: serializeToolTrace(toolCalls),
+        createdBy: this.agentId,
+      });
+    } catch (err) {
+      console.warn(
+        `[worker:${this.dbName}] Failed to persist tool trace for task ${task.id}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
   }
 
   private findConversationIdForJob(conn: DbConnection, jobId: bigint): bigint | undefined {

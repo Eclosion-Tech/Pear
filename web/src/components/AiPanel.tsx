@@ -7,11 +7,8 @@ import { useSpacetimeDB } from "spacetimedb/react";
 import Markdown, { type Components } from "react-markdown";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import remarkGfm from "remark-gfm";
-import {
-  useOrchaJobs,
-  useOrchaTasksForJob,
-  type OrchaJobRow,
-} from "@/src/hooks/useOrcha";
+import { useOrchaJobs, type OrchaJobRow } from "@/src/hooks/useOrcha";
+import { OrchaJobCard } from "@/src/components/OrchaJobCard";
 import type {
   AutomationEventQueue,
   BridgeApproval,
@@ -75,93 +72,6 @@ import { useTable, useReducer } from "spacetimedb/react";
 import { tables, reducers } from "@/src/module_bindings";
 import type { Identity } from "spacetimedb";
 
-function StatusBadge({ status }: { status: string }) {
-  const colors: Record<string, string> = {
-    executing: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400",
-    complete:  "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400",
-    failed:    "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400",
-    pending:   "bg-neutral-100 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400",
-    claimed:   "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400",
-    done:      "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400",
-  };
-  return (
-    <span
-      className={`text-xs font-medium px-1.5 py-0.5 rounded shrink-0 ${
-        colors[status] ?? colors.pending
-      }`}
-    >
-      {status}
-    </span>
-  );
-}
-
-function JobCard({ job }: { job: OrchaJobRow }) {
-  const tasks = useOrchaTasksForJob(job.id);
-  const [expanded, setExpanded] = useState(job.status === "executing");
-
-  return (
-    <div className="border border-neutral-200 dark:border-neutral-800 rounded-lg overflow-hidden">
-      <button
-        onClick={() => setExpanded((e) => !e)}
-        className="w-full flex items-start gap-2 p-3 text-left hover:bg-neutral-50 dark:hover:bg-neutral-800/50 transition-colors"
-      >
-        <div className="flex-1 min-w-0">
-          <p className="text-sm text-neutral-800 dark:text-neutral-200 line-clamp-2 leading-snug">
-            {job.prompt}
-          </p>
-          <div className="flex items-center gap-2 mt-1.5">
-            <StatusBadge status={job.status} />
-            <span className="text-xs text-neutral-400">
-              {tasks.length} task{tasks.length !== 1 ? "s" : ""}
-            </span>
-          </div>
-        </div>
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className={`shrink-0 mt-1 text-neutral-400 transition-transform ${
-            expanded ? "rotate-180" : ""
-          }`}
-        >
-          <polyline points="6 9 12 15 18 9" />
-        </svg>
-      </button>
-
-      {expanded && tasks.length > 0 && (
-        <div className="border-t border-neutral-200 dark:border-neutral-800 divide-y divide-neutral-100 dark:divide-neutral-800/60">
-          {tasks.map((task) => (
-            <div key={String(task.id)} className="px-3 py-2.5 flex items-start gap-2">
-              <StatusBadge status={task.status} />
-              <div className="flex-1 min-w-0">
-                <p className="text-xs text-neutral-700 dark:text-neutral-300 leading-relaxed">
-                  {task.description}
-                </p>
-                {task.result && task.status === "done" && (
-                  <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1.5 line-clamp-4 leading-relaxed">
-                    {task.result}
-                  </p>
-                )}
-                {task.result && task.status === "failed" && (
-                  <p className="text-xs text-red-500 mt-1.5 leading-relaxed">
-                    {task.result}
-                  </p>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 /**
  * A delegated Orcha job rendered inline in the conversation thread as a
  * subagent-style card — the full expandable task breakdown (`JobCard`) framed
@@ -178,7 +88,7 @@ function InlineJobCard({ job }: { job: OrchaJobRow }) {
           Delegated subagent
         </span>
       </div>
-      <JobCard job={job} />
+      <OrchaJobCard job={job} />
     </div>
   );
 }

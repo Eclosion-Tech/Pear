@@ -13,7 +13,11 @@ import {
 } from "./tools.js";
 import { CompositeToolExecutor } from "./composite-tool-executor.js";
 import { SystemPromptBuilder } from "./prompt-builder.js";
-import { extractAffected } from "./tool-call-record.js";
+import {
+  cap,
+  extractAffected,
+  type StoredToolCall,
+} from "./tool-call-record.js";
 import {
   buildAiUserMemoryIndex,
   discoverAccessibleResources,
@@ -186,6 +190,42 @@ export interface LlmResult {
    * began with "TASK_FAILED:"), so the caller marks the task failed instead of
    * letting a blocked task report success. */
   failed?: boolean;
+  /** Every tool call the loop made, in order, with capped input/output — the
+   * task's execution trace. The worker persists it to the job's shared context
+   * (`trace:task:<id>`) so the UI can show what a background job actually did. */
+  toolCalls: StoredToolCall[];
+}
+
+/** Per-call caps for the persisted trace — tighter than a chat message's
+ * `tool_calls_json` because a task can run up to MAX_ITERATIONS rounds. */
+export const TRACE_INPUT_CHARS = 1_000;
+export const TRACE_OUTPUT_CHARS = 2_000;
+/** Calls beyond this are dropped from the trace (a marker call is appended). */
+export const TRACE_MAX_CALLS = 60;
+
+/** Serialize a trace for `orcha_shared_context`, dropping the tail if it grows
+ * past TRACE_MAX_CALLS so a runaway loop can't write an unbounded row. */
+export function serializeToolTrace(calls: StoredToolCall[]): string {
+  if (calls.length <= TRACE_MAX_CALLS) return JSON.stringify(calls);
+  const dropped = calls.length - TRACE_MAX_CALLS;
+  return JSON.stringify([
+    ...calls.slice(0, TRACE_MAX_CALLS),
+    {
+      type: "tool_use",
+      id: "trace-truncated",
+      name: "…",
+      input: "{}",
+      status: "done",
+      output: `${dropped} more tool call${dropped === 1 ? "" : "s"} not recorded`,
+    } satisfies StoredToolCall,
+  ]);
+}
+
+/** Shared-context key under which a task's tool trace is stored. Readers that
+ * feed shared context back into prompts must skip this prefix. */
+export const TRACE_KEY_PREFIX = "trace:";
+export function traceKeyForTask(taskId: bigint): string {
+  return `${TRACE_KEY_PREFIX}task:${taskId}`;
 }
 
 /**
@@ -291,6 +331,7 @@ export async function callLlm(
 
   // Page ids this job created/edited, surfaced as artifacts in the result.
   const artifactPageIds = new Set<number>();
+  const trace: StoredToolCall[] = [];
 
   const usage: TokenUsage = {
     inputTokens: 0,
@@ -329,7 +370,12 @@ export async function callLlm(
         const textBlock = response.content.find((b) => b.type === "text");
         const summary = textBlock?.type === "text" ? textBlock.text : "Done.";
         const failed = /^\s*TASK_FAILED:/i.test(summary);
-        return { text: appendArtifacts(summary, artifactPageIds), usage, failed };
+        return {
+          text: appendArtifacts(summary, artifactPageIds),
+          usage,
+          failed,
+          toolCalls: trace,
+        };
       }
 
       messages.push({ role: "assistant", content: response.content });
@@ -341,6 +387,16 @@ export async function callLlm(
         console.log(`[worker] Tool result [${block.name}]: ${result}`);
         const affected = extractAffected(result);
         if (affected?.pageId !== undefined) artifactPageIds.add(affected.pageId);
+        trace.push({
+          type: "tool_use",
+          id: block.id,
+          name: block.name,
+          input: cap(JSON.stringify(block.input ?? {}), TRACE_INPUT_CHARS),
+          status: isToolError(result) ? "error" : "done",
+          output: cap(result, TRACE_OUTPUT_CHARS),
+          isError: isToolError(result) || undefined,
+          affected: affected ?? undefined,
+        });
         toolResults.push({ type: "tool_result", tool_use_id: block.id, content: result });
       }
 
@@ -350,9 +406,21 @@ export async function callLlm(
     return {
       text: appendArtifacts("Reached maximum tool iterations.", artifactPageIds),
       usage,
+      toolCalls: trace,
     };
   } finally {
     await toolExecutor.disconnect();
+  }
+}
+
+/** Pear tools answer `{ ok: false, error }` JSON on failure; anything else
+ * (including non-JSON text from web/sandbox tools) counts as success. */
+function isToolError(result: string): boolean {
+  try {
+    const parsed = JSON.parse(result) as { ok?: unknown };
+    return typeof parsed === "object" && parsed !== null && parsed.ok === false;
+  } catch {
+    return false;
   }
 }
 

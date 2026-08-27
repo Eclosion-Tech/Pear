@@ -229,6 +229,7 @@ fn check_orcha_job_completion(ctx: &ReducerContext, job_id: u64) {
         // Only act on the *transition* into a terminal state. Guards against a
         // double-post if this fn is ever re-entered for an already-finished job.
         let was_terminal = job.status == "complete" || job.status == "failed";
+        let nonce = job.nonce.clone();
         ctx.db.orcha_job().id().update(OrchaJob {
             status: if any_failed {
                 "failed".to_string()
@@ -244,6 +245,13 @@ fn check_orcha_job_completion(ctx: &ReducerContext, job_id: u64) {
             // completion trigger into that thread so the AI user's worker wakes up,
             // verifies the work, and reports to the human.
             post_job_completion_trigger(ctx, job_id, &tasks, any_failed);
+            // Close the automation run this job was spawned from (if any): the
+            // run log gets the per-task outcome and the event leaves `Running`.
+            if let Some(nonce) = nonce.as_deref() {
+                crate::automations::on_orcha_job_finished(
+                    ctx, job_id, nonce, &tasks, any_failed,
+                );
+            }
         }
     }
 }
@@ -358,7 +366,7 @@ fn job_outcome_body(job_id: u64, tasks: &[OrchaTask], any_failed: bool) -> Strin
 
 /// Char-boundary-safe head truncation with an ellipsis (byte slicing a UTF-8
 /// string can panic mid-codepoint).
-fn truncate_chars(s: &str, max: usize) -> String {
+pub(crate) fn truncate_chars(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
     }
@@ -367,7 +375,7 @@ fn truncate_chars(s: &str, max: usize) -> String {
 }
 
 /// Char-boundary-safe tail truncation with a leading ellipsis.
-fn tail_chars(s: &str, max: usize) -> String {
+pub(crate) fn tail_chars(s: &str, max: usize) -> String {
     let count = s.chars().count();
     if count <= max {
         return s.to_string();
@@ -385,7 +393,36 @@ fn tail_chars(s: &str, max: usize) -> String {
 ///
 /// `page_id`: optional Pear page this job acts on (schema generation, summarization, NL filter, etc.)
 #[reducer]
+#[allow(clippy::too_many_arguments)]
 pub fn create_job(
+    ctx: &ReducerContext,
+    user_id: String,
+    prompt: String,
+    page_id: Option<u64>,
+    ai_user_id: Option<u64>,
+    tier: Option<String>,
+    nonce: String,
+    parent_job_id: Option<u64>,
+    task_graph_json: String,
+) -> Result<(), String> {
+    create_job_inner(
+        ctx,
+        user_id,
+        prompt,
+        page_id,
+        ai_user_id,
+        tier,
+        nonce,
+        parent_job_id,
+        task_graph_json,
+    )
+    .map(|_| ())
+}
+
+/// In-module form of [`create_job`] that returns the new job's id, so callers
+/// inside the module (automations) can record which job they spawned.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn create_job_inner(
     ctx: &ReducerContext,
     user_id: String,
     prompt: String,
@@ -406,7 +443,7 @@ pub fn create_job(
     // job). Drives `spawn_depth` and the delegation-tree reconstruction.
     parent_job_id: Option<u64>,
     task_graph_json: String,
-) -> Result<(), String> {
+) -> Result<u64, String> {
     // Delegation-depth guard: derive this job's depth from its parent and refuse
     // to spawn past the max, so a runaway delegate->delegate chain can't fan out
     // unbounded across jobs (a different axis from the within-job orchestrate
@@ -492,7 +529,7 @@ pub fn create_job(
         job_id,
         task_ids.len()
     );
-    Ok(())
+    Ok(job_id)
 }
 
 /// Register or update an agent's capabilities. Safe to call on reconnect.

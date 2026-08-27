@@ -91,7 +91,9 @@ export function getPearTools(
   // Snapshot current shared context for this job so Claude knows what exists.
   const ctx: Record<string, string> = {};
   for (const row of conn.db.orcha_shared_context.iter() as Iterable<SharedContextRow>) {
-    if (row.jobId === jobId) ctx[row.key] = row.value;
+    // `trace:*` rows are per-task execution traces written for the UI — never
+    // feed them back into a prompt (they'd bloat every sibling task's context).
+    if (row.jobId === jobId && !row.key.startsWith("trace:")) ctx[row.key] = row.value;
   }
   const ctxSummary = Object.keys(ctx).length
     ? `Available shared context keys for this job: ${JSON.stringify(ctx)}`

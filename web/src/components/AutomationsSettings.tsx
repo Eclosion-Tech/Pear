@@ -17,6 +17,8 @@ import {
   type AutomationRunLogRow,
 } from "@/src/hooks/useAutomations";
 import { useCurrentUser } from "@/src/hooks/useUser";
+import { useOrchaJobs, type OrchaJobRow } from "@/src/hooks/useOrcha";
+import { OrchaJobCard } from "@/src/components/OrchaJobCard";
 import {
   canManageAutomation,
   liveAutomationBlockers,
@@ -395,6 +397,23 @@ function AutomationRuleCard({
   );
 }
 
+/**
+ * Job reference an `OrchaJob` action's run log carries in `result_json`
+ * (`{ nonce, page_id, job_id }` when queued; `{ job_id, nonce, status, tasks }`
+ * when the job finishes). The nonce is the stable link — older module builds
+ * logged only the nonce, and a job row is found by it either way.
+ */
+function jobNonceFromLog(log: AutomationRunLogRow): string | null {
+  try {
+    const parsed = JSON.parse(log.resultJson) as { nonce?: unknown };
+    return typeof parsed?.nonce === "string" && parsed.nonce.startsWith("automation-")
+      ? parsed.nonce
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function AutomationHistory({
   events,
   logs,
@@ -408,6 +427,19 @@ function AutomationHistory({
     list.push(log);
     logsByQueue.set(log.queueId, list);
   }
+  // Run logs arrive newest-first; within one run read them in execution order.
+  for (const list of logsByQueue.values()) {
+    list.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  }
+
+  const { jobs } = useOrchaJobs();
+  const jobsByNonce = useMemo(() => {
+    const map = new Map<string, OrchaJobRow>();
+    for (const job of jobs) {
+      if (job.nonce) map.set(job.nonce, job);
+    }
+    return map;
+  }, [jobs]);
 
   return (
     <div className="border-t border-neutral-200 bg-neutral-50 px-4 py-3 dark:border-neutral-800 dark:bg-neutral-900/40">
@@ -424,7 +456,9 @@ function AutomationHistory({
                       ? "enabled"
                       : event.status.tag === "Failed"
                         ? "error"
-                        : "disabled"
+                        : event.status.tag === "Running"
+                          ? "running"
+                          : "disabled"
                   }
                 >
                   {event.status.tag}
@@ -462,8 +496,34 @@ function AutomationHistory({
                     {log.dryRun ? "DryRun · " : "Live · "}
                     {log.message}
                   </span>
+                  <span className="ml-2 text-neutral-400 dark:text-neutral-500">
+                    {formatTimestamp(log.createdAt.microsSinceUnixEpoch)}
+                  </span>
                 </div>
               ))}
+              {/* One card per job this run spawned — the actual work, with
+                  task results/errors and each LLM task's tool-call trace. */}
+              {[
+                ...new Set(
+                  (logsByQueue.get(event.id) ?? [])
+                    .map(jobNonceFromLog)
+                    .filter((nonce): nonce is string => nonce !== null),
+                ),
+              ].map((nonce) => {
+                const job = jobsByNonce.get(nonce);
+                return (
+                  <div key={nonce} className="mt-2">
+                    {job ? (
+                      <OrchaJobCard job={job} defaultExpanded={job.status !== "complete"} />
+                    ) : (
+                      <p className="text-neutral-400 dark:text-neutral-500">
+                        Job {nonce} not found — it may have been pruned, or its row
+                        hasn&apos;t synced yet.
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
             </li>
           ))}
         </ol>
@@ -564,10 +624,11 @@ function StatusBadge({
   tone,
 }: {
   children: string;
-  tone: "live" | "dry" | "enabled" | "disabled" | "error";
+  tone: "live" | "dry" | "enabled" | "disabled" | "error" | "running";
 }) {
   const colors = {
     live: "bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300",
+    running: "bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300",
     dry: "bg-sky-100 text-sky-700 dark:bg-sky-950/50 dark:text-sky-300",
     enabled: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300",
     disabled: "bg-neutral-100 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400",
