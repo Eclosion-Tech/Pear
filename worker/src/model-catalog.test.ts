@@ -67,6 +67,13 @@ test("modelForTier maps each tier to the right model", () => {
   assert.equal(modelForTier("Ollama", "flagship"), undefined);
 });
 
+test("OpenRouter catalog offers the current GLM 5.3 models", () => {
+  const ids = MODEL_CATALOG.OpenRouter.map((model) => model.id);
+  assert.ok(ids.includes("z-ai/glm-5.3"));
+  assert.ok(ids.includes("z-ai/glm-5.3-flash"));
+  assert.ok(!ids.includes("z-ai/glm-5.2"));
+});
+
 test("resolveRouting: human override wins over the agent's tier", () => {
   const r = resolveRouting(
     { providerTag: "Anthropic", model: "claude-opus-4-8" },

@@ -233,6 +233,7 @@ import UpdateDatabaseSchemaConfigReducer from "./update_database_schema_config_r
 import UpdateExtensionReducer from "./update_extension_reducer";
 import UpdateMessageReducer from "./update_message_reducer";
 import UpdateNotionImportJobReducer from "./update_notion_import_job_reducer";
+import UpdatePageBlocksReducer from "./update_page_blocks_reducer";
 import UpdatePageContentReducer from "./update_page_content_reducer";
 import UpdatePageIconReducer from "./update_page_icon_reducer";
 import UpdatePageTitleReducer from "./update_page_title_reducer";
@@ -1485,6 +1486,7 @@ const reducersSchema = __reducers(
   __reducerSchema("update_extension", UpdateExtensionReducer),
   __reducerSchema("update_message", UpdateMessageReducer),
   __reducerSchema("update_notion_import_job", UpdateNotionImportJobReducer),
+  __reducerSchema("update_page_blocks", UpdatePageBlocksReducer),
   __reducerSchema("update_page_content", UpdatePageContentReducer),
   __reducerSchema("update_page_icon", UpdatePageIconReducer),
   __reducerSchema("update_page_title", UpdatePageTitleReducer),

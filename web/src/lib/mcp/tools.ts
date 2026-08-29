@@ -18,8 +18,10 @@ import { getPageRow, listChildren, allLivePages, getPageContent } from "./pages"
 import { readComponentTreeDoc } from "./component-tree";
 import {
   deleteComponent,
+  editPageContent,
   getPageComponents,
   insertComponent,
+  updateBlockContent,
   updateComponentProps,
 } from "./authoring";
 import { getPageTheme, setPageTheme } from "./theme";
@@ -272,7 +274,10 @@ const readFileTool: McpToolEntry = {
 const updatePageContentTool: McpToolEntry = {
   name: "update_page_content",
   description:
-    "Write or replace the text content of a Doc page. " +
+    "Replace the ENTIRE text content of a Doc page. Use this for a new page or an intentional " +
+    "full rewrite, not for a targeted edit: existing blocks are replaced and their identities " +
+    "change. To edit existing blocks safely, call get_page_components and then " +
+    "update_block_content for one block or edit_page_content for several. " +
     "Pass markdown — headings (#/##/###), bullet lists (- item), numbered lists (1. item), " +
     "and plain paragraphs are all supported. The worker converts markdown to BlockNote format automatically.",
   inputSchema: {
@@ -296,9 +301,10 @@ const updatePageContentTool: McpToolEntry = {
 const getPageComponentsTool: McpToolEntry = {
   name: "get_page_components",
   description:
-    "Read a page's component tree: every block with its component_id, component_type, order and " +
-    "parsed props, nested as it renders. Use this before authoring UI — you need a component_id to " +
-    "insert under, and current props to modify without dropping keys. " +
+    "Read a page's component tree: every block with its component_id, component_type, order, " +
+    "parsed props and current plain-text content, nested as it renders. Use this before authoring " +
+    "UI — you need a component_id to insert under or update in place, and current props to modify " +
+    "without dropping keys. " +
     "This is the structural view; `get_page` returns rendered text instead.",
   inputSchema: {
     type: "object",
@@ -373,6 +379,87 @@ const updateComponentPropsTool: McpToolEntry = {
     JSON.stringify(
       await updateComponentProps(ctx.transport, Number(input.component_id), input.props ?? {}),
     ),
+};
+
+const updateBlockContentTool: McpToolEntry = {
+  name: "update_block_content",
+  description:
+    "Update the text of one existing page block in place, preserving its component_id, " +
+    "comment-thread anchors, props, type, order and children. Call get_page_components first to " +
+    "find the target component_id and read its current content. Pass the complete replacement " +
+    "content for that one block as inline markdown (bold, italic, code and links are supported; " +
+    "do not include a heading/list prefix). Use update_page_content only when intentionally " +
+    "replacing the entire page. For several blocks, use edit_page_content so they update " +
+    "atomically. This tool supports RichText, Heading and list-item blocks.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      component_id: {
+        type: "number",
+        description: "The existing text block's component_id from get_page_components.",
+      },
+      markdown: {
+        type: "string",
+        description: "Complete new inline-markdown content for this block only.",
+      },
+    },
+    required: ["component_id", "markdown"],
+  },
+  execute: async (ctx, input) =>
+    JSON.stringify(
+      await updateBlockContent(
+        ctx.transport,
+        Number(input.component_id),
+        String(input.markdown ?? input.content ?? ""),
+      ),
+    ),
+};
+
+const editPageContentTool: McpToolEntry = {
+  name: "edit_page_content",
+  description:
+    "Atomically update the text of several existing blocks without replacing the page. Call " +
+    "get_page_components first, then pass the complete replacement inline-markdown content for " +
+    "each selected component_id. The whole batch succeeds or fails together, and every block " +
+    "keeps its component_id, comment anchors, props, type, order and children. Use this when an " +
+    "edit spans multiple blocks but is not an intentional whole-page rewrite. Supports RichText, " +
+    "Heading and list-item blocks.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      page_id: { type: "number", description: "Page containing every block in the patch." },
+      updates: {
+        type: "array",
+        minItems: 1,
+        maxItems: 2000,
+        description: "Blocks to update atomically. Each component_id may appear only once.",
+        items: {
+          type: "object",
+          properties: {
+            component_id: { type: "number" },
+            markdown: {
+              type: "string",
+              description: "Complete new inline-markdown content for this block only.",
+            },
+          },
+          required: ["component_id", "markdown"],
+        },
+      },
+    },
+    required: ["page_id", "updates"],
+  },
+  execute: async (ctx, input) => {
+    const updates = Array.isArray(input.updates)
+      ? input.updates.map((raw) => {
+          const update = raw as Record<string, unknown>;
+          return {
+            componentId: Number(update.component_id),
+            markdown: String(update.markdown ?? update.content ?? ""),
+          };
+        })
+      : [];
+    return JSON.stringify(await editPageContent(ctx.transport, Number(input.page_id), updates));
+  },
 };
 
 const deleteComponentTool: McpToolEntry = {
@@ -1191,6 +1278,8 @@ export function buildToolRegistry(): McpToolEntry[] {
     getPageThemeTool,
     getPageComponentsTool,
     insertComponentTool,
+    updateBlockContentTool,
+    editPageContentTool,
     updateComponentPropsTool,
     deleteComponentTool,
     createThreadTool,

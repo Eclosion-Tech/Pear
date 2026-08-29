@@ -207,10 +207,10 @@ export const MODEL_CATALOG: Record<CatalogFamily, CatalogModel[]> = {
       effort: NO_EFFORT,
     },
     {
-      id: "z-ai/glm-5.2",
+      id: "z-ai/glm-5.3",
       tier: "flagship",
-      label: "GLM 5.2",
-      useFor: "Top open-weight model — long-horizon coding and planning at low cost.",
+      label: "GLM 5.3",
+      useFor: "Long-horizon coding and complex software engineering with a 1M context window.",
       effort: NO_EFFORT,
     },
     {
@@ -261,6 +261,13 @@ export const MODEL_CATALOG: Record<CatalogFamily, CatalogModel[]> = {
       tier: "fast",
       label: "GPT-5.6 Luna",
       useFor: "High-volume, latency-sensitive tasks at OpenAI's lowest cost.",
+      effort: NO_EFFORT,
+    },
+    {
+      id: "z-ai/glm-5.3-flash",
+      tier: "fast",
+      label: "GLM 5.3 Flash",
+      useFor: "Fast, low-cost coding and long-horizon agent tasks with multimodal input.",
       effort: NO_EFFORT,
     },
   ],

@@ -1488,6 +1488,13 @@ function targetPageForAccessRequest(
       ? propertyPageId(conn, propertyDefinitionId)
       : undefined;
   }
+  if (toolName === "update_block_content") {
+    const componentId = numericInputToBigInt(input.component_id);
+    const node = componentId
+      ? (conn.db.component_node?.id?.find?.(componentId) as { surfaceId?: bigint } | undefined)
+      : undefined;
+    return node?.surfaceId;
+  }
   return (
     numericInputToBigInt(input.page_id) ??
     numericInputToBigInt(input.pageId) ??
@@ -1504,6 +1511,8 @@ function isPageWriteTool(toolName: string): boolean {
     "set_property_value",
     "set_property_values",
     "update_page_content",
+    "update_block_content",
+    "edit_page_content",
     "update_page_title",
     "delete_page",
     "restore_page",

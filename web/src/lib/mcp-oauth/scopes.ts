@@ -61,6 +61,8 @@ const SCOPE_TOOLS: Record<McpOauthScope, readonly string[]> = {
     "set_page_theme",
     "create_thread",
     "insert_component",
+    "update_block_content",
+    "edit_page_content",
     "update_component_props",
     "delete_component",
     "post_to_thread",

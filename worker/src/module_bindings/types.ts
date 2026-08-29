@@ -504,6 +504,12 @@ export const BlockAccessRule = __t.object("BlockAccessRule", {
 });
 export type BlockAccessRule = __Infer<typeof BlockAccessRule>;
 
+export const BlockContentUpdateInput = __t.object("BlockContentUpdateInput", {
+  componentId: __t.u64(),
+  data: __t.byteArray(),
+});
+export type BlockContentUpdateInput = __Infer<typeof BlockContentUpdateInput>;
+
 export const BridgeApproval = __t.object("BridgeApproval", {
   id: __t.u64(),
   commandId: __t.u64(),

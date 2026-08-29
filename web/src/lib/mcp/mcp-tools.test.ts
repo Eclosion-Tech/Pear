@@ -443,8 +443,66 @@ class FakeStdb implements StdbTransport {
       }
       case "save_component_yjs_state": {
         const [nodeId, data] = args as [number, number[]];
-        if (!this.nodes.find((n) => n.id === Number(nodeId))) fail("Component not found");
+        const node = this.nodes.find(
+          (n) => n.id === Number(nodeId) && n.deletedAtMicros === null,
+        );
+        if (!node) fail("Component not found");
+        if (
+          ![
+            "RichText",
+            "Heading",
+            "BulletListItem",
+            "NumberedListItem",
+            "ChecklistItem",
+          ].includes(node!.componentType)
+        ) {
+          fail(
+            `Component type "${node!.componentType}" does not support Yjs state — refusing to upsert ComponentYjsState`,
+          );
+        }
         this.yjs.set(Number(nodeId), toHex(new Uint8Array(data)));
+        return;
+      }
+      case "update_page_blocks": {
+        const [pageId, updates] = args as [number, Array<[number, number[]]>];
+        const page = this.pages.find(
+          (p) => p.id === Number(pageId) && p.deletedAtMicros === null,
+        );
+        if (!page) fail("Page not found");
+        if (page!.contentFormat !== "ComponentTree") {
+          fail("Page is not in ComponentTree format — component mutations are rejected");
+        }
+        if (updates.length === 0) fail("At least one block update is required");
+
+        const seen = new Set<number>();
+        for (let i = 0; i < updates.length; i++) {
+          const componentId = Number(updates[i]![0]);
+          if (seen.has(componentId)) {
+            fail(`Update ${i}: component ${componentId} appears more than once`);
+          }
+          seen.add(componentId);
+          const node = this.nodes.find(
+            (n) => n.id === componentId && n.deletedAtMicros === null,
+          );
+          if (!node) fail(`Update ${i}: Component not found`);
+          if (node!.surfaceId !== Number(pageId)) {
+            fail(`Update ${i}: component ${componentId} does not belong to page ${pageId}`);
+          }
+          if (
+            ![
+              "RichText",
+              "Heading",
+              "BulletListItem",
+              "NumberedListItem",
+              "ChecklistItem",
+            ].includes(node!.componentType)
+          ) {
+            fail(`Update ${i}: component type "${node!.componentType}" does not support Yjs state`);
+          }
+        }
+        for (const [componentId, data] of updates) {
+          this.yjs.set(Number(componentId), toHex(new Uint8Array(data)));
+        }
         return;
       }
       case "update_page_content": {
@@ -1257,6 +1315,7 @@ describe("registry", () => {
       "delete_component",
       "delete_page",
       "delete_property",
+      "edit_page_content",
       "get_page",
       "get_page_components",
       "get_page_theme",
@@ -1283,6 +1342,7 @@ describe("registry", () => {
       "search_pages",
       "set_page_theme",
       "set_row_properties",
+      "update_block_content",
       "update_component_props",
       "update_page_content",
       "update_page_title",
@@ -1710,6 +1770,171 @@ describe("pages", () => {
     const res = await run(fake, "update_page_content", { page_id: 300, markdown: "hello" });
     expect(res.ok).toBe(true);
     expect(fake.pageContent.get(300)).toMatch(/hello/);
+  });
+
+  test("get_page_components exposes current text for block-level edits", async () => {
+    const res = await run(memoryFake(), "get_page_components", { page_id: 101 });
+    expect(res.ok).toBe(true);
+    const root = res.root as { children: Array<Record<string, unknown>> };
+    expect(root.children).toHaveLength(1);
+    expect(root.children[0]).toMatchObject({
+      component_type: "RichText",
+      content: "old note",
+    });
+  });
+
+  test("update_block_content changes one block without replacing nodes or detaching anchors", async () => {
+    const fake = memoryFake();
+    const root = fake.nodes.find(
+      (n) => n.surfaceId === 101 && n.parentId === null && n.deletedAtMicros === null,
+    )!;
+    const anchored = fake.nodes.find(
+      (n) => n.parentId === root.id && n.deletedAtMicros === null,
+    )!;
+
+    // Make the page large enough that an accidental full rewrite is obvious.
+    for (let i = 2; i <= 200; i++) {
+      const id = fake.alloc("component_node");
+      fake.nodes.push({
+        id,
+        surfaceId: 101,
+        parentId: root.id,
+        componentType: "RichText",
+        order: i * 1000,
+        deletedAtMicros: null,
+      });
+      fake.yjs.set(id, toHex(richTextBlockToYjsBytes(`block ${i}`, true)));
+    }
+    const target = fake.nodes.find((n) => n.parentId === root.id && n.order === 100_000)!;
+    fake.conversations.push({
+      id: 700,
+      pageId: 101,
+      blockAnchor: anchored.id,
+      kind: 0,
+      status: 0,
+    });
+
+    const nodeIdsBefore = fake.nodes
+      .filter((n) => n.surfaceId === 101 && n.deletedAtMicros === null)
+      .map((n) => n.id);
+    const yjsBefore = new Map(fake.yjs);
+    fake.calls = [];
+
+    const res = await run(fake, "update_block_content", {
+      component_id: target.id,
+      markdown: "changed **block**",
+    });
+
+    expect(res).toEqual({ ok: true, component_id: target.id });
+    expect(fake.calls).toEqual(["save_component_yjs_state"]);
+    expect(
+      fake.nodes
+        .filter((n) => n.surfaceId === 101 && n.deletedAtMicros === null)
+        .map((n) => n.id),
+    ).toEqual(nodeIdsBefore);
+    expect(fake.conversations[0]!.blockAnchor).toBe(anchored.id);
+    for (const [id, bytes] of yjsBefore) {
+      if (id !== target.id) expect(fake.yjs.get(id)).toBe(bytes);
+    }
+    expect(fake.yjs.get(target.id)).not.toBe(yjsBefore.get(target.id));
+
+    const page = await run(fake, "get_page", { page_id: 101 });
+    expect(page.content).toContain("changed block");
+  });
+
+  test("update_block_content rejects structural components", async () => {
+    const fake = memoryFake();
+    const root = fake.nodes.find(
+      (n) => n.surfaceId === 101 && n.parentId === null && n.deletedAtMicros === null,
+    )!;
+    const res = await run(fake, "update_block_content", {
+      component_id: root.id,
+      markdown: "not container content",
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/does not support Yjs state/);
+  });
+
+  test("edit_page_content atomically updates several blocks and preserves the rest", async () => {
+    const fake = memoryFake();
+    const root = fake.nodes.find(
+      (n) => n.surfaceId === 101 && n.parentId === null && n.deletedAtMicros === null,
+    )!;
+    const first = fake.nodes.find(
+      (n) => n.parentId === root.id && n.deletedAtMicros === null,
+    )!;
+    const addBlock = (text: string, order: number): FakeNode => {
+      const node: FakeNode = {
+        id: fake.alloc("component_node"),
+        surfaceId: 101,
+        parentId: root.id,
+        componentType: "RichText",
+        order,
+        deletedAtMicros: null,
+      };
+      fake.nodes.push(node);
+      fake.yjs.set(node.id, toHex(richTextBlockToYjsBytes(text, true)));
+      return node;
+    };
+    const second = addBlock("second", 2000);
+    const untouched = addBlock("untouched", 3000);
+    fake.conversations.push({
+      id: 701,
+      pageId: 101,
+      blockAnchor: untouched.id,
+      kind: 0,
+      status: 0,
+    });
+    const nodeIdsBefore = fake.nodes.map((n) => n.id);
+    const untouchedBytes = fake.yjs.get(untouched.id);
+    fake.calls = [];
+
+    const res = await run(fake, "edit_page_content", {
+      page_id: 101,
+      updates: [
+        { component_id: first.id, markdown: "first revised" },
+        { component_id: second.id, markdown: "second **revised**" },
+      ],
+    });
+
+    expect(res).toEqual({
+      ok: true,
+      page_id: 101,
+      updated_component_ids: [first.id, second.id],
+      blocks: 2,
+    });
+    expect(fake.calls).toEqual(["update_page_blocks"]);
+    expect(fake.nodes.map((n) => n.id)).toEqual(nodeIdsBefore);
+    expect(fake.yjs.get(untouched.id)).toBe(untouchedBytes);
+    expect(fake.conversations[0]!.blockAnchor).toBe(untouched.id);
+
+    const page = await run(fake, "get_page", { page_id: 101 });
+    expect(page.content).toContain("first revised");
+    expect(page.content).toContain("second revised");
+    expect(page.content).toContain("untouched");
+  });
+
+  test("edit_page_content rejects the entire batch before a structural target can partially write", async () => {
+    const fake = memoryFake();
+    const root = fake.nodes.find(
+      (n) => n.surfaceId === 101 && n.parentId === null && n.deletedAtMicros === null,
+    )!;
+    const text = fake.nodes.find(
+      (n) => n.parentId === root.id && n.deletedAtMicros === null,
+    )!;
+    const before = fake.yjs.get(text.id);
+
+    const res = await run(fake, "edit_page_content", {
+      page_id: 101,
+      updates: [
+        { component_id: text.id, markdown: "must not land" },
+        { component_id: root.id, markdown: "invalid container edit" },
+      ],
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/Update 1.*does not support Yjs state/);
+    expect(fake.yjs.get(text.id)).toBe(before);
   });
 
   test("ComponentTree table writes read back as GFM instead of raw pipes (#197)", async () => {

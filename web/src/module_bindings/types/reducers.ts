@@ -205,6 +205,7 @@ import UpdateDatabaseSchemaConfigReducer from "../update_database_schema_config_
 import UpdateExtensionReducer from "../update_extension_reducer";
 import UpdateMessageReducer from "../update_message_reducer";
 import UpdateNotionImportJobReducer from "../update_notion_import_job_reducer";
+import UpdatePageBlocksReducer from "../update_page_blocks_reducer";
 import UpdatePageContentReducer from "../update_page_content_reducer";
 import UpdatePageIconReducer from "../update_page_icon_reducer";
 import UpdatePageTitleReducer from "../update_page_title_reducer";
@@ -413,6 +414,7 @@ export type UpdateDatabaseSchemaConfigParams = __Infer<typeof UpdateDatabaseSche
 export type UpdateExtensionParams = __Infer<typeof UpdateExtensionReducer>;
 export type UpdateMessageParams = __Infer<typeof UpdateMessageReducer>;
 export type UpdateNotionImportJobParams = __Infer<typeof UpdateNotionImportJobReducer>;
+export type UpdatePageBlocksParams = __Infer<typeof UpdatePageBlocksReducer>;
 export type UpdatePageContentParams = __Infer<typeof UpdatePageContentReducer>;
 export type UpdatePageIconParams = __Infer<typeof UpdatePageIconReducer>;
 export type UpdatePageTitleParams = __Infer<typeof UpdatePageTitleReducer>;

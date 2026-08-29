@@ -170,7 +170,7 @@ export const MODEL_CATALOG: Record<ProviderPresetKey, CatalogModel[]> = {
     { id: "google/gemini-3.1-pro-preview", tier: "frontier", label: "Gemini 3.1 Pro" },
     { id: "x-ai/grok-4.6", tier: "frontier", label: "Grok 4.6" },
     { id: "anthropic/claude-opus-5", tier: "flagship", label: "Opus 5" },
-    { id: "z-ai/glm-5.2", tier: "flagship", label: "GLM 5.2" },
+    { id: "z-ai/glm-5.3", tier: "flagship", label: "GLM 5.3" },
     { id: "moonshotai/kimi-k3", tier: "flagship", label: "Kimi K3" },
     { id: "anthropic/claude-sonnet-5", tier: "balanced", label: "Sonnet 5" },
     { id: "openai/gpt-5.6-terra", tier: "balanced", label: "GPT-5.6 Terra" },
@@ -178,6 +178,7 @@ export const MODEL_CATALOG: Record<ProviderPresetKey, CatalogModel[]> = {
     { id: "anthropic/claude-haiku-4.5", tier: "fast", label: "Haiku 4.5" },
     { id: "google/gemini-3.7-flash", tier: "fast", label: "Gemini 3.7 Flash" },
     { id: "openai/gpt-5.6-luna", tier: "fast", label: "GPT-5.6 Luna" },
+    { id: "z-ai/glm-5.3-flash", tier: "fast", label: "GLM 5.3 Flash" },
   ],
   // Meta Model API (api.meta.ai) — Muse Spark family. NOTE: the dashboard
   // documents the Responses API (/v1/responses); if chat completions isn't

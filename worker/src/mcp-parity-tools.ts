@@ -49,6 +49,8 @@ const PARITY_TOOL_NAMES = new Set([
   // Page UI authoring (M2/M4 — the reason a repeater can exist on a page)
   "get_page_components",
   "insert_component",
+  "update_block_content",
+  "edit_page_content",
   "update_component_props",
   "delete_component",
   // Theming (style_v1 S2)

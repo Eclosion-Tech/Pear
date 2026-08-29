@@ -201,6 +201,8 @@ describe("scopes", () => {
     expect(readWrite("rename_property")).toBe(true);
     expect(readWrite("update_property_config")).toBe(true);
     expect(readWrite("update_property_type")).toBe(true);
+    expect(readWrite("update_block_content")).toBe(true);
+    expect(readWrite("edit_page_content")).toBe(true);
     expect(readWrite("query_database")).toBe(true);
     expect(readWrite("set_row_properties")).toBe(true);
     expect(readWrite("restore_page")).toBe(true);
@@ -214,6 +216,8 @@ describe("scopes", () => {
     expect(conversationRead("get_page")).toBe(false);
 
     expect(scopeForTool("update_page_content")).toBe("pages:write");
+    expect(scopeForTool("update_block_content")).toBe("pages:write");
+    expect(scopeForTool("edit_page_content")).toBe("pages:write");
     expect(scopeForTool("read_file")).toBe("pages:read");
     expect(scopeForTool("get_schema_id")).toBe("pages:read");
     expect(scopeForTool("list_properties")).toBe("pages:read");

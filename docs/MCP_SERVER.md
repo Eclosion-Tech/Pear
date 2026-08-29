@@ -114,6 +114,8 @@ Workspace pages (governed by page access rules):
 | `get_page` | Title, type, parent, and content of a page. Headings, nested lists and checklists come back as markdown; attached files/images/audio appear as `[File: "name" (size, type) storage_key=…]` descriptors |
 | `read_file` | Contents of a workspace file by `storage_key` (from `get_page`, `get_page_components` props, or a chat attachment). Text-like files, PDF and DOCX return text (windowed with `offset`/`next_offset`); other binaries return metadata. Needs blob storage on the host: the worker's `S3_*` env, or `HETZNER_S3_*` secrets on the Pear Cloud gateway — otherwise the tool reports itself unavailable |
 | `update_page_content` | Replace a Doc page's body with markdown |
+| `update_block_content` | Replace one text block's inline-markdown content in place, preserving its component id and comment anchors |
+| `edit_page_content` | Atomically replace several selected text blocks in place while preserving their component ids and comment anchors |
 | `update_page_title` | Rename a page |
 | `list_child_pages` | Children of a page |
 | `search_pages` | Case-insensitive title search |

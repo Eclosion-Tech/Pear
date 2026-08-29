@@ -1593,6 +1593,31 @@ fn require_blocknote_page(ctx: &ReducerContext, page_id: u64) -> Result<Page, St
 // Reducers — per-component Yjs state
 // ============================================================
 
+/// Write one already-validated component state without touching its page.
+fn upsert_component_yjs_state(ctx: &ReducerContext, component_id: u64, data: Vec<u8>) {
+    if let Some(existing) = ctx
+        .db
+        .component_yjs_state()
+        .component_node_id()
+        .find(component_id)
+    {
+        ctx.db
+            .component_yjs_state()
+            .component_node_id()
+            .update(ComponentYjsState {
+                data,
+                updated_at: ctx.timestamp,
+                ..existing
+            });
+    } else {
+        ctx.db.component_yjs_state().insert(ComponentYjsState {
+            component_node_id: component_id,
+            data,
+            updated_at: ctx.timestamp,
+        });
+    }
+}
+
 /// Upsert the Yjs blob for a Yjs-backed component (typically `RichText`).
 ///
 /// Refuses to write for component types whose registry entry has
@@ -1619,28 +1644,75 @@ pub fn save_component_yjs_state(
         ));
     }
 
-    if let Some(existing) = ctx
-        .db
-        .component_yjs_state()
-        .component_node_id()
-        .find(component_id)
-    {
-        ctx.db
-            .component_yjs_state()
-            .component_node_id()
-            .update(ComponentYjsState {
-                data,
-                updated_at: ctx.timestamp,
-                ..existing
-            });
-    } else {
-        ctx.db.component_yjs_state().insert(ComponentYjsState {
-            component_node_id: component_id,
-            data,
-            updated_at: ctx.timestamp,
-        });
+    upsert_component_yjs_state(ctx, component_id, data);
+
+    touch_page_debounced(ctx, page);
+    Ok(())
+}
+
+/// One existing block's replacement Yjs state for [`update_page_blocks`].
+#[derive(SpacetimeType, Clone, Debug)]
+pub struct BlockContentUpdateInput {
+    pub component_id: u64,
+    pub data: Vec<u8>,
+}
+
+/// Defensive ceiling shared with whole-document writes. It is high enough for
+/// real documents while preventing an unbounded reducer payload.
+const MAX_BLOCK_CONTENT_UPDATES_PER_CALL: usize = 2_000;
+
+/// Atomically replace the rich-text state of several existing blocks on one
+/// page. Every target is validated before the first row changes, so a bad id,
+/// cross-page target, structural component, or permission failure rejects the
+/// entire patch. ComponentNode rows are never replaced: ids, comment anchors,
+/// props, order, type, and children all remain stable.
+#[reducer]
+pub fn update_page_blocks(
+    ctx: &ReducerContext,
+    page_id: u64,
+    updates: Vec<BlockContentUpdateInput>,
+) -> Result<(), String> {
+    if updates.is_empty() {
+        return Err("At least one block update is required".to_string());
+    }
+    if updates.len() > MAX_BLOCK_CONTENT_UPDATES_PER_CALL {
+        return Err(format!(
+            "Too many block updates in one call ({} > {MAX_BLOCK_CONTENT_UPDATES_PER_CALL})",
+            updates.len()
+        ));
     }
 
+    let page = require_component_tree_page(ctx, page_id)?;
+    require_page_write(ctx, page_id)?;
+
+    let mut seen = std::collections::HashSet::with_capacity(updates.len());
+    for (i, update) in updates.iter().enumerate() {
+        if !seen.insert(update.component_id) {
+            return Err(format!(
+                "Update {i}: component {} appears more than once",
+                update.component_id
+            ));
+        }
+        let node = require_live_node(ctx, update.component_id)
+            .map_err(|err| format!("Update {i}: {err}"))?;
+        if node.surface_id != page_id {
+            return Err(format!(
+                "Update {i}: component {} does not belong to page {page_id}",
+                update.component_id
+            ));
+        }
+        let type_def = require_type_def(ctx, &node.component_type)?;
+        if !type_def.has_yjs_state {
+            return Err(format!(
+                "Update {i}: component type {:?} does not support Yjs state",
+                node.component_type
+            ));
+        }
+    }
+
+    for update in updates {
+        upsert_component_yjs_state(ctx, update.component_id, update.data);
+    }
     touch_page_debounced(ctx, page);
     Ok(())
 }

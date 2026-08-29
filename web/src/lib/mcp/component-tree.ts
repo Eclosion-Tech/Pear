@@ -69,7 +69,7 @@ function findRoot(nodes: ComponentNodeRow[]): ComponentNodeRow | undefined {
 }
 
 /** Fetch + decode Yjs text for a set of node ids (chunked OR-chains). */
-async function nodeTexts(
+export async function readComponentTexts(
   transport: StdbTransport,
   nodeIds: number[],
 ): Promise<Map<number, string>> {
@@ -118,7 +118,7 @@ export async function readComponentTreeDoc(
   if (yjsIds.length === 0 && !nodes.some((n) => n.parentId === null && !n.deleted)) {
     return undefined;
   }
-  const texts = await nodeTexts(transport, yjsIds);
+  const texts = await readComponentTexts(transport, yjsIds);
   return renderDocTree(nodes, (id) => texts.get(id) ?? "");
 }
 
@@ -157,7 +157,7 @@ export async function readComponentTreeDocs(
     allYjsIds.push(...collectDocYjsIds(nodesBySurface.get(pageId) ?? []));
   }
 
-  const texts = await nodeTexts(transport, allYjsIds);
+  const texts = await readComponentTexts(transport, allYjsIds);
   for (const pageId of pageIds) {
     const rendered = renderDocTree(nodesBySurface.get(pageId) ?? [], (id) => texts.get(id) ?? "");
     if (rendered !== undefined) result.set(pageId, rendered);

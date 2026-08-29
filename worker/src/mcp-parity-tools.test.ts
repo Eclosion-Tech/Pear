@@ -25,6 +25,8 @@ const EXPECTED = [
   "query_database",
   "get_page_components",
   "insert_component",
+  "update_block_content",
+  "edit_page_content",
   "update_component_props",
   "delete_component",
   "set_page_theme",
