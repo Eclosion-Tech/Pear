@@ -1,8 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { callLlm } from "./llm.js";
-import type { ConnLike } from "./tools.js";
+import {
+  buildOrchaSystemPrompt,
+  callLlm,
+  rollbackCreatedPages,
+} from "./llm.js";
+import { getPearTools, type ConnLike } from "./tools.js";
 import type { InferenceProvider, ChatResponse } from "./providers.js";
 
 // ── Stubs ───────────────────────────────────────────────────────────────────────
@@ -62,6 +66,78 @@ test("a normal completion is not marked failed", async () => {
 test("TASK_FAILED only counts at the start of the reply, not mid-text", async () => {
   const res = await run("Completed. Note: earlier I nearly hit TASK_FAILED: but recovered.");
   assert.ok(!res.failed);
+});
+
+test("Orcha system prompts use the clock for that job invocation", () => {
+  const first = buildOrchaSystemPrompt(new Date("2026-08-29T16:00:00.000Z"));
+  const second = buildOrchaSystemPrompt(new Date("2026-08-31T12:30:00.000Z"));
+  assert.match(first, /Date: 2026-08-29 \(UTC\)/);
+  assert.match(second, /Date: 2026-08-31 \(UTC\)/);
+  assert.match(second, /Current time \(UTC\): 2026-08-31T12:30:00\.000Z/);
+  assert.doesNotMatch(second, /Date: 2026-08-29 \(UTC\)/);
+});
+
+test("Orcha receives Pear page tools without recursive delegation controls", () => {
+  const toolNames = getPearTools(conn, 0n).map((tool) => tool.name);
+  const names = new Set(toolNames);
+  for (const name of [
+    "get_page",
+    "query_database",
+    "list_properties",
+    "update_page_content",
+    "get_page_components",
+    "update_block_content",
+    "edit_page_content",
+    "create_thread",
+  ]) {
+    assert.ok(names.has(name), `Orcha tool surface is missing ${name}`);
+  }
+  assert.equal(names.has("delegate"), false);
+  assert.equal(names.has("check_job"), false);
+  assert.equal(names.has("set_effort"), false);
+  assert.equal(names.size, toolNames.length, "Orcha tool names must be unique");
+});
+
+test("failed-task cleanup trashes only created pages in reverse order", async () => {
+  const calls: number[] = [];
+  const trace: Array<import("./tool-call-record.js").StoredToolCall> = [];
+  const rollback = await rollbackCreatedPages(
+    {
+      async execute(name, input) {
+        assert.equal(name, "delete_page");
+        calls.push(Number(input.page_id));
+        return JSON.stringify({ ok: true, page_id: Number(input.page_id) });
+      },
+    },
+    [10, 11, 11, 12],
+    trace,
+  );
+
+  assert.deepEqual(calls, [12, 11, 10]);
+  assert.deepEqual(rollback.deletedPageIds, [12, 11, 10]);
+  assert.deepEqual(rollback.failures, []);
+  assert.deepEqual(trace.map((call) => call.name), ["delete_page", "delete_page", "delete_page"]);
+  assert.ok(trace.every((call) => call.status === "done"));
+});
+
+test("failed-task cleanup reports a page it could not trash", async () => {
+  const trace: Array<import("./tool-call-record.js").StoredToolCall> = [];
+  const rollback = await rollbackCreatedPages(
+    {
+      async execute(_name, input) {
+        const pageId = Number(input.page_id);
+        return pageId === 20
+          ? JSON.stringify({ ok: false, page_id: pageId, error: "permission denied" })
+          : JSON.stringify({ ok: true, page_id: pageId });
+      },
+    },
+    [20, 21],
+    trace,
+  );
+
+  assert.deepEqual(rollback.deletedPageIds, [21]);
+  assert.deepEqual(rollback.failures, [{ pageId: 20, error: "permission denied" }]);
+  assert.equal(trace[1]?.status, "error");
 });
 
 // ── Tool trace ───────────────────────────────────────────────────────────────────

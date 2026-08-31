@@ -100,11 +100,20 @@ export function getPearTools(
     : "No shared context yet for this job.";
 
   return [
-    ...PEAR_TOOLS,
+    // Orcha executes against the same authenticated AI-user transport as chat,
+    // so it must receive the same page/database authoring surface. The system
+    // prompt already instructs background workers to use these tools; omitting
+    // them previously left only create_row + bridge/delegation escape hatches.
+    ...getMcpParityToolDefs(),
+    // An Orcha task is already the background unit of work. Letting it call
+    // delegate/check_job recursively creates detached child jobs whose outcome
+    // is not part of the parent task's terminal state. set_effort is likewise a
+    // conversation preference, not a background-task action.
+    ...PEAR_TOOLS.filter((tool) => !ORCHA_EXCLUDED_TOOL_NAMES.has(tool.name)),
     ...WEB_TOOLS,
     ...SANDBOX_TOOLS,
-    // Delegated jobs attributed to an AI user get its read-only memory tools, so
-    // a subagent can consult the same memory the chat agent has.
+    // AI-attributed jobs also get the memory-consolidation marker. Memory
+    // reading/writing itself comes from the authenticated parity surface above.
     ...(opts.includeMemoryTools ? MEMORY_TOOLS : []),
     {
       name: "get_context",
@@ -119,6 +128,8 @@ export function getPearTools(
     },
   ];
 }
+
+const ORCHA_EXCLUDED_TOOL_NAMES = new Set(["delegate", "check_job", "set_effort"]);
 
 /**
  * Tools available to the AI during conversations.

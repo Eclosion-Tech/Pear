@@ -184,7 +184,11 @@ export class SystemPromptBuilder {
    * previously lacked. `pearContext` (architecture facts) and `toolRules`
    * (task-specific procedures) are the only Orcha-specific additions.
    */
-  buildOrchaTaskSystem(pearContext: string, toolRules: string): string {
+  buildOrchaTaskSystem(
+    pearContext: string,
+    toolRules: string,
+    now: Date = new Date(),
+  ): string {
     return [
       this.introSection(),
       pearContext,
@@ -194,7 +198,7 @@ export class SystemPromptBuilder {
       toolRules,
       // Orcha tasks have no WorkspaceContext, so give them the clock directly
       // (task #322: date/time must never depend on a page context or the bridge).
-      `# Environment\n${clockBullets().map((b) => ` - ${b}`).join("\n")}`,
+      `# Environment\n${clockBullets(undefined, now).map((b) => ` - ${b}`).join("\n")}`,
       injectionDefenseSection(),
     ].join("\n\n");
   }
@@ -243,8 +247,7 @@ export class SystemPromptBuilder {
  * clock at prompt-assembly time (#322). `dateOverride` keeps a caller-supplied
  * date (WorkspaceContext.currentDate) authoritative when present.
  */
-function clockBullets(dateOverride?: string): string[] {
-  const now = new Date();
+function clockBullets(dateOverride?: string, now: Date = new Date()): string[] {
   return [
     `Date: ${dateOverride ?? now.toISOString().split("T")[0]!} (UTC)`,
     `Current time (UTC): ${now.toISOString()}`,

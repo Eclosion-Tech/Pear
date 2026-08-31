@@ -69,11 +69,18 @@ Tool-use rules:
 - Complete ALL steps the task specifies before returning your final text summary.
 - Be concise in your final summary — just confirm what was done and any relevant IDs.`;
 
-/** Single-sourced Orcha `llm`-task prompt — shared sections + Orcha specifics (#18). */
-const SYSTEM_PROMPT = new SystemPromptBuilder().buildOrchaTaskSystem(
-  PEAR_CONTEXT,
-  ORCHA_TOOL_RULES,
-);
+/**
+ * Build the Orcha prompt for one job execution. This must stay a function:
+ * buildOrchaTaskSystem embeds the current clock, so a module-level constant
+ * would freeze "today" at worker-process startup for every later automation.
+ */
+export function buildOrchaSystemPrompt(now: Date = new Date()): string {
+  return new SystemPromptBuilder().buildOrchaTaskSystem(
+    PEAR_CONTEXT,
+    ORCHA_TOOL_RULES,
+    now,
+  );
+}
 
 // ── Page context helpers ───────────────────────────────────────────────────────
 
@@ -285,6 +292,87 @@ function appendArtifacts(text: string, pageIds: Set<number>): string {
   return `${text}\n\nArtifacts: ${list}`;
 }
 
+type RollbackExecutor = Pick<CompositeToolExecutor, "execute">;
+
+export interface CreatedPageRollback {
+  deletedPageIds: number[];
+  failures: Array<{ pageId: number; error: string }>;
+}
+
+/**
+ * Move pages created by a failed task to trash, newest first. This intentionally
+ * does not attempt to undo edits to pre-existing pages: deleting those would be
+ * destructive and a content snapshot is the proper recovery mechanism there.
+ *
+ * Exported as a narrow test seam; production passes the task's authenticated
+ * CompositeToolExecutor so the same page ACL and reducer path still apply.
+ */
+export async function rollbackCreatedPages(
+  executor: RollbackExecutor,
+  createdPageIds: readonly number[],
+  trace: StoredToolCall[] = [],
+): Promise<CreatedPageRollback> {
+  const deletedPageIds: number[] = [];
+  const failures: Array<{ pageId: number; error: string }> = [];
+  const uniqueNewestFirst = [...new Set(createdPageIds)].reverse();
+
+  for (const pageId of uniqueNewestFirst) {
+    const input = { page_id: pageId };
+    let result: string;
+    try {
+      result = await executor.execute("delete_page", input);
+    } catch (err) {
+      result = JSON.stringify({
+        ok: false,
+        page_id: pageId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    const failed = isToolError(result);
+    trace.push({
+      type: "tool_use",
+      id: `rollback-page-${pageId}`,
+      name: "delete_page",
+      input: JSON.stringify(input),
+      status: failed ? "error" : "done",
+      output: cap(result, TRACE_OUTPUT_CHARS),
+      isError: failed || undefined,
+      affected: { pageId },
+    });
+    if (failed) {
+      let error = result;
+      try {
+        const parsed = JSON.parse(result) as { error?: unknown };
+        if (typeof parsed.error === "string") error = parsed.error;
+      } catch {
+        // Keep the raw result when a tool returned non-JSON error text.
+      }
+      failures.push({ pageId, error });
+    } else {
+      deletedPageIds.push(pageId);
+    }
+  }
+
+  return { deletedPageIds, failures };
+}
+
+function appendRollbackSummary(text: string, rollback: CreatedPageRollback): string {
+  const parts: string[] = [];
+  if (rollback.deletedPageIds.length > 0) {
+    parts.push(
+      `Rolled back partial pages to trash: ${rollback.deletedPageIds.join(", ")}.`,
+    );
+  }
+  if (rollback.failures.length > 0) {
+    parts.push(
+      `Rollback failed for: ${rollback.failures
+        .map((failure) => `page ${failure.pageId} (${failure.error})`)
+        .join(", ")}.`,
+    );
+  }
+  return parts.length > 0 ? `${text}\n\n${parts.join(" ")}` : text;
+}
+
 export async function callLlm(
   taskDescription: string,
   conn: ConnLike,
@@ -304,6 +392,7 @@ export async function callLlm(
 
   const execConn = exec?.conn ?? conn;
   const toolContext = exec?.toolContext ?? {};
+  const systemPrompt = buildOrchaSystemPrompt();
 
   let userMessage = extraContext
     ? `${taskDescription}\n\n---\n${extraContext}`
@@ -332,6 +421,9 @@ export async function callLlm(
 
   // Page ids this job created/edited, surfaced as artifacts in the result.
   const artifactPageIds = new Set<number>();
+  // Only these are eligible for automatic rollback if the task fails. Existing
+  // pages the task merely edited remain protected from cleanup deletion.
+  const createdPageIds: number[] = [];
   const trace: StoredToolCall[] = [];
 
   const usage: TokenUsage = {
@@ -349,7 +441,7 @@ export async function callLlm(
       const response = await inf.chat({
         model,
         maxTokens,
-        system: SYSTEM_PROMPT,
+        system: systemPrompt,
         messages,
         tools,
       });
@@ -371,8 +463,14 @@ export async function callLlm(
         const textBlock = response.content.find((b) => b.type === "text");
         const summary = textBlock?.type === "text" ? textBlock.text : "Done.";
         const failed = /^\s*TASK_FAILED:/i.test(summary);
+        let finalText = summary;
+        if (failed && createdPageIds.length > 0) {
+          const rollback = await rollbackCreatedPages(toolExecutor, createdPageIds, trace);
+          for (const pageId of rollback.deletedPageIds) artifactPageIds.delete(pageId);
+          finalText = appendRollbackSummary(summary, rollback);
+        }
         return {
-          text: appendArtifacts(summary, artifactPageIds),
+          text: appendArtifacts(finalText, artifactPageIds),
           usage,
           failed,
           toolCalls: trace,
@@ -388,6 +486,13 @@ export async function callLlm(
         console.log(`[worker] Tool result [${block.name}]: ${result}`);
         const affected = extractAffected(result);
         if (affected?.pageId !== undefined) artifactPageIds.add(affected.pageId);
+        if (
+          affected?.pageId !== undefined &&
+          !isToolError(result) &&
+          (block.name === "create_page" || block.name === "create_row")
+        ) {
+          createdPageIds.push(affected.pageId);
+        }
         trace.push({
           type: "tool_use",
           id: block.id,
@@ -404,11 +509,22 @@ export async function callLlm(
       messages.push({ role: "user", content: toolResults });
     }
 
+    const summary = "TASK_FAILED: Reached maximum tool iterations.";
+    const rollback = await rollbackCreatedPages(toolExecutor, createdPageIds, trace);
+    for (const pageId of rollback.deletedPageIds) artifactPageIds.delete(pageId);
     return {
-      text: appendArtifacts("Reached maximum tool iterations.", artifactPageIds),
+      text: appendArtifacts(appendRollbackSummary(summary, rollback), artifactPageIds),
       usage,
+      failed: true,
       toolCalls: trace,
     };
+  } catch (err) {
+    const rollback = await rollbackCreatedPages(toolExecutor, createdPageIds, trace);
+    const message = appendRollbackSummary(
+      err instanceof Error ? err.message : String(err),
+      rollback,
+    );
+    throw new Error(message, err instanceof Error ? { cause: err } : undefined);
   } finally {
     await toolExecutor.disconnect();
   }
