@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSpacetimeDB } from "spacetimedb/react";
 
 import { useAiUserProfiles, type AiUserProfileRow } from "@/src/hooks/useAiUsers";
@@ -10,9 +10,12 @@ import {
   useConversationParticipants,
   useConversations,
   useCreateConversation,
+  useDmConversation,
+  useFindOrCreateDm,
   type ConversationMessageRow,
   type ConversationRow,
 } from "@/src/hooks/useConversations";
+import { useUsers } from "@/src/hooks/useUser";
 import { selectMyConversations } from "@/src/lib/chatAdapter";
 import { EclosionChatThread } from "./EclosionChatThread";
 
@@ -40,9 +43,7 @@ export function EclosionChatPanel({
   const allParticipants = useConversationParticipants();
   const allMessages = useConversationMessages();
   const { profiles } = useAiUserProfiles();
-  const createConversation = useCreateConversation();
   const [selectedId, setSelectedId] = useState<bigint | null>(openConversationId ?? null);
-  const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     if (openConversationId != null) setSelectedId(openConversationId);
@@ -84,19 +85,6 @@ export function EclosionChatPanel({
   const conversation: ConversationRow | undefined = conversations.find((c) => c.id === selectedId)
     ?? allConversations.find((c) => c.id === selectedId);
 
-  const newThread = async () => {
-    setCreating(true);
-    try {
-      await createConversation({
-        pageId,
-        participantIdentities: profiles[0] ? [profiles[0].identity] : [],
-        blockAnchor: undefined,
-      });
-    } finally {
-      setCreating(false);
-    }
-  };
-
   const kindBadge = (c: ConversationRow): string | null =>
     c.kind.tag === "Dm" ? "DM"
       : c.kind.tag === "AiDm" ? "AI DM"
@@ -121,14 +109,12 @@ export function EclosionChatPanel({
         </div>
         <div className="flex items-center gap-2">
           {!conversation ? (
-            <button
-              type="button"
-              onClick={newThread}
-              disabled={creating}
-              className="rounded border border-neutral-300 px-2 py-0.5 text-xs hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:hover:bg-neutral-800"
-            >
-              New thread
-            </button>
+            <NewChatMenu
+              pageId={pageId}
+              conversations={allConversations}
+              profiles={profiles}
+              onOpen={(id) => setSelectedId(id)}
+            />
           ) : null}
           <button
             type="button"
@@ -193,5 +179,157 @@ export function EclosionChatPanel({
         </ul>
       )}
     </div>
+  );
+}
+
+/**
+ * "New chat" picker: start a fresh thread with a specific AI user, or open a
+ * DM with a workspace member — AiPanel's NewConversationButton and
+ * HumanMemberRow flows, in one menu.
+ */
+function NewChatMenu({
+  pageId,
+  conversations,
+  profiles,
+  onOpen,
+}: {
+  pageId: bigint;
+  conversations: readonly ConversationRow[];
+  profiles: readonly AiUserProfileRow[];
+  onOpen: (id: bigint) => void;
+}) {
+  const { identity } = useSpacetimeDB();
+  const { users } = useUsers();
+  const createConversation = useCreateConversation();
+  const [open, setOpen] = useState(false);
+  const pendingRef = useRef<Set<string> | null>(null);
+
+  // Auto-open the conversation created by startThread once it replicates.
+  useEffect(() => {
+    const existing = pendingRef.current;
+    if (!existing || !identity) return;
+    const meHex = identity.toHexString();
+    const fresh = conversations
+      .filter((c) => !existing.has(String(c.id)) && c.initiatedBy.toHexString() === meHex)
+      .sort((a, b) => Number(b.id - a.id))[0];
+    if (fresh) {
+      pendingRef.current = null;
+      setOpen(false);
+      onOpen(fresh.id);
+    }
+  }, [conversations, identity, onOpen]);
+
+  const startThread = async (aiIdentity?: { toHexString(): string }) => {
+    pendingRef.current = new Set(conversations.map((c) => String(c.id)));
+    await createConversation({
+      pageId,
+      participantIdentities: aiIdentity ? [aiIdentity as never] : [],
+      blockAnchor: undefined,
+    });
+  };
+
+  const otherHumans = users.filter(
+    (u) => !identity || u.identity.toHexString() !== identity.toHexString()
+  );
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="rounded border border-neutral-300 px-2 py-0.5 text-xs hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+      >
+        New chat
+      </button>
+      {open ? (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 z-20 mt-1 max-h-72 w-60 overflow-y-auto rounded-lg border border-neutral-200 bg-white py-1 shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
+            <p className="px-3 py-1.5 text-[10px] uppercase tracking-wide text-neutral-400">
+              Start a thread with
+            </p>
+            {profiles.length === 0 ? (
+              <button
+                type="button"
+                onClick={() => void startThread()}
+                className="w-full px-3 py-1.5 text-left text-sm hover:bg-neutral-50 dark:hover:bg-neutral-800"
+              >
+                New thread (no AI members yet)
+              </button>
+            ) : (
+              profiles.map((p) => (
+                <button
+                  key={String(p.aiUserId)}
+                  type="button"
+                  onClick={() => void startThread(p.identity)}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-neutral-50 dark:hover:bg-neutral-800"
+                >
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-400 to-indigo-500 text-[10px] font-bold text-white">
+                    {p.displayName[0]?.toUpperCase() ?? "?"}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm text-neutral-800 dark:text-neutral-200">{p.displayName}</span>
+                    <span className="block truncate text-[11px] text-neutral-400">{p.modelName}</span>
+                  </span>
+                </button>
+              ))
+            )}
+            {otherHumans.length > 0 ? (
+              <>
+                <p className="px-3 py-1.5 text-[10px] uppercase tracking-wide text-neutral-400">People</p>
+                {otherHumans.map((u) => (
+                  <HumanDmItem key={u.identity.toHexString()} user={u} onOpen={(id) => { setOpen(false); onOpen(id); }} />
+                ))}
+              </>
+            ) : null}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function HumanDmItem({
+  user,
+  onOpen,
+}: {
+  user: ReturnType<typeof useUsers>["users"][number];
+  onOpen: (id: bigint) => void;
+}) {
+  const { identity: myIdentity } = useSpacetimeDB();
+  const findOrCreate = useFindOrCreateDm();
+  const dm = useDmConversation(myIdentity, user.identity);
+  const [pending, setPending] = useState(false);
+  const displayName = user.name || user.email || user.identity.toHexString().slice(0, 8);
+
+  useEffect(() => {
+    if (pending && dm) {
+      setPending(false);
+      onOpen(dm.id);
+    }
+  }, [pending, dm, onOpen]);
+
+  const handleClick = async () => {
+    if (dm) {
+      onOpen(dm.id);
+      return;
+    }
+    setPending(true);
+    await findOrCreate({ otherIdentity: user.identity });
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={() => void handleClick()}
+      disabled={pending}
+      className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-neutral-50 disabled:opacity-50 dark:hover:bg-neutral-800"
+    >
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-neutral-300 text-[10px] font-bold text-neutral-700 dark:bg-neutral-600 dark:text-neutral-200">
+        {displayName[0]?.toUpperCase() ?? "?"}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-sm text-neutral-800 dark:text-neutral-200">{displayName}</span>
+      <span className="text-[10px] text-neutral-400">{pending ? "…" : "DM"}</span>
+    </button>
   );
 }

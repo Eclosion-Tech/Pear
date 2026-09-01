@@ -148,8 +148,8 @@ describe("conversationIsRunning", () => {
   const aiDone = msg({ status: { tag: "Complete" } });
   const aiStreaming = msg({ status: { tag: "Streaming" } });
 
-  it("true when a human turn awaits a reply", () => {
-    expect(conversationIsRunning("Active", [aiDone, human], ctx)).toBe(true);
+  it("false when the last message is a human turn — isRunning gates the composer, and a pending turn must not block replies (e.g. the other side of a DM)", () => {
+    expect(conversationIsRunning("Active", [aiDone, human], ctx)).toBe(false);
   });
   it("true while the AI message is non-terminal, false when terminal", () => {
     expect(conversationIsRunning("Active", [human, aiStreaming], ctx)).toBe(true);

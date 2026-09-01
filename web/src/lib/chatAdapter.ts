@@ -250,9 +250,15 @@ export function selectMyConversations<T extends AdapterConversation>(
 }
 
 /**
- * Port of AiPanel's `isAiActive`: the conversation is Active and the last
- * visible message is either a human turn awaiting a reply, or an AI message
- * that hasn't reached a terminal status.
+ * Whether an AI participant is actively generating: the conversation is
+ * Active and the last visible message is an AI message that hasn't reached a
+ * terminal status.
+ *
+ * Deliberately NOT AiPanel's `isAiActive`, which also counts "last message is
+ * from a human" (a pending turn). AiPanel only uses that for status dots; the
+ * external-store runtime uses `isRunning` to gate the composer, and with the
+ * pending-turn variant the second human in a DM could never reply — their
+ * sends were queued client-side and `onNew` never fired.
  */
 export function conversationIsRunning(
   conversationStatusTag: "Active" | "Closed",
@@ -261,10 +267,8 @@ export function conversationIsRunning(
 ): boolean {
   if (conversationStatusTag !== "Active") return false;
   const last = messages[messages.length - 1];
-  if (!last) return false;
+  if (!last || last.sender.tag === "System") return false;
   const hex = senderHex(last.sender);
-  if (last.sender.tag === "System") return false;
   const isAi = !!hex && ctx.aiIdentityHexes.has(hex);
-  if (!isAi) return true;
-  return isMessageInFlight(last);
+  return isAi && isMessageInFlight(last);
 }
