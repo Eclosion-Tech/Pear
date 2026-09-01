@@ -42,7 +42,13 @@ function pickRecorderMimeType(): string {
 
 function getSpeechRecognitionCtor(): (new () => SpeechRecognition) | null {
   if (typeof window === "undefined") return null;
-  return window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null;
+  // @assistant-ui/core (via @eclosion-tech/chat) ships its own Web Speech
+  // globals whose Window.SpeechRecognition type wins over ours in
+  // src/types/speech-recognition.d.ts; both describe the same runtime
+  // constructor, so bridge the declaration mismatch here.
+  return (window.SpeechRecognition ??
+    window.webkitSpeechRecognition ??
+    null) as (new () => SpeechRecognition) | null;
 }
 
 async function uploadAudioBlob(
