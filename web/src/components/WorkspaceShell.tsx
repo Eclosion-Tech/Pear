@@ -13,6 +13,10 @@ import {
 import { usePathname, useSearchParams } from "next/navigation";
 import { Sidebar } from "@/src/components/Sidebar";
 import { AiPanel } from "@/src/components/AiPanel";
+import {
+  ECLOSION_CHAT_PANEL_ENABLED,
+  EclosionChatPanel,
+} from "@/src/components/chat/EclosionChatPanel";
 
 interface WorkspaceAiPanelContextValue {
   isOpen: boolean;
@@ -165,11 +169,21 @@ export function WorkspaceAiPanelLayout({ children }: { children: ReactNode }) {
               />
             </div>
             <div className="flex-1 min-w-0">
-              <AiPanel
-                pageId={activePageId}
-                onClose={closePanel}
-                openConversationId={openConversationId}
-              />
+              {ECLOSION_CHAT_PANEL_ENABLED ? (
+                <EclosionChatPanel
+                  pageId={activePageId}
+                  onClose={closePanel}
+                  openConversationId={openConversationId}
+                />
+
+              ) : (
+                <AiPanel
+                  pageId={activePageId}
+                  onClose={closePanel}
+                  openConversationId={openConversationId}
+                />
+
+              )}
             </div>
           </aside>
         )}
