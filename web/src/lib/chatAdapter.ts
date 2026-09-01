@@ -212,6 +212,43 @@ export function toThreadMessage(msg: AdapterMessage, ctx: AdapterContext): Threa
   } as ThreadMessageLike;
 }
 
+// ---------------------------------------------------------------------------
+// Conversation list selection (mirrors AiPanel)
+
+export interface AdapterParticipant {
+  conversationId: bigint;
+  identity: { toHexString(): string };
+  /** Set when the member left; such rows no longer select the conversation. */
+  leftAt?: unknown;
+}
+
+export interface AdapterConversation {
+  id: bigint;
+  updatedAt: { microsSinceUnixEpoch: bigint };
+}
+
+/**
+ * The conversations the panel lists: ones the current user participates in
+ * (and hasn't left), newest first — AiPanel's exact selection. Notably NOT
+ * "all conversations on the page": that would drown the list in other
+ * people's block-anchored comment threads.
+ */
+export function selectMyConversations<T extends AdapterConversation>(
+  conversations: readonly T[],
+  participants: readonly AdapterParticipant[],
+  myIdentityHex: string | undefined
+): T[] {
+  if (!myIdentityHex) return [];
+  const mine = new Set(
+    participants
+      .filter((p) => !p.leftAt && p.identity.toHexString() === myIdentityHex)
+      .map((p) => String(p.conversationId))
+  );
+  return conversations
+    .filter((c) => mine.has(String(c.id)))
+    .sort((a, b) => Number(b.updatedAt.microsSinceUnixEpoch - a.updatedAt.microsSinceUnixEpoch));
+}
+
 /**
  * Port of AiPanel's `isAiActive`: the conversation is Active and the last
  * visible message is either a human turn awaiting a reply, or an AI message

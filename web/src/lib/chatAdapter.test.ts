@@ -119,6 +119,30 @@ describe("toThreadMessage", () => {
   });
 });
 
+describe("selectMyConversations", () => {
+  const conv = (id: bigint, updatedMs: number) => ({ id, updatedAt: at(updatedMs) });
+  const part = (conversationId: bigint, hex: string, leftAt?: unknown) => ({
+    conversationId,
+    identity: identity(hex),
+    leftAt,
+  });
+
+  it("keeps only conversations I participate in, newest first", async () => {
+    const { selectMyConversations } = await import("./chatAdapter");
+    const conversations = [conv(1n, 100), conv(2n, 300), conv(3n, 200), conv(4n, 400)];
+    const participants = [
+      part(1n, HUMAN),
+      part(2n, OTHER_HUMAN), // someone else's comment thread on the page
+      part(3n, HUMAN),
+      part(4n, HUMAN, { some: "left" }), // I left this one
+      part(3n, AI),
+    ];
+    const mine = selectMyConversations(conversations, participants, HUMAN);
+    expect(mine.map((c) => c.id)).toEqual([3n, 1n]);
+    expect(selectMyConversations(conversations, participants, undefined)).toEqual([]);
+  });
+});
+
 describe("conversationIsRunning", () => {
   const human = msg({ sender: { tag: "User", value: identity(HUMAN) } });
   const aiDone = msg({ status: { tag: "Complete" } });
