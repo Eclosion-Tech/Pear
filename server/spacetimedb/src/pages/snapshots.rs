@@ -64,6 +64,8 @@ pub fn take_snapshot(
     page_id: u64,
     snapshot_type: SnapshotType,
 ) -> Result<(), String> {
+    crate::access_control::helpers::require_page_read(ctx, page_id)?;
+
     let page = ctx.db.page().id().find(page_id).ok_or("Page not found")?;
     let content = match page.content_format {
         PageContentFormat::BlockNote => ctx
@@ -106,6 +108,8 @@ pub fn take_snapshot_with_content(
     snapshot_type: SnapshotType,
     content: String,
 ) -> Result<(), String> {
+    crate::access_control::helpers::require_page_write(ctx, page_id)?;
+
     let page = ctx.db.page().id().find(page_id).ok_or("Page not found")?;
     if matches!(page.content_format, PageContentFormat::ComponentTree) {
         return Err(
@@ -160,6 +164,8 @@ pub fn restore_page_to_snapshot(
     page_id: u64,
     snapshot_id: u64,
 ) -> Result<(), String> {
+    crate::access_control::helpers::require_page_write(ctx, page_id)?;
+
     let snapshot = ctx
         .db
         .page_snapshot()

@@ -85,8 +85,8 @@ pub struct UserPreference {
 // Auth Reducers
 // ============================================================
 
-/// Creates a new account and marks the current identity as authenticated.
-/// Returns an error if the email is already registered.
+/// Bootstraps the first native account and authenticates the current identity.
+/// Once initialized, administrators must provision additional native accounts.
 #[reducer]
 pub fn register(
     ctx: &ReducerContext,
@@ -94,6 +94,10 @@ pub fn register(
     name: String,
     password: String,
 ) -> Result<(), String> {
+    if ctx.db.user_credential().iter().next().is_some() || ctx.db.user().iter().any(|u| u.is_admin) {
+        return Err("This workspace is already initialized; ask an admin to create your account".to_string());
+    }
+
     let email = email.trim().to_lowercase();
     if email.is_empty() {
         return Err("Email is required".to_string());
@@ -291,14 +295,14 @@ pub(crate) fn sender_is_admin(ctx: &ReducerContext) -> bool {
         .unwrap_or(false)
 }
 
-/// True iff there is currently zero authenticated admin in the workspace.
-/// Drives the bootstrap rule: the first user to authenticate on a fresh
-/// database is auto-promoted, so a workspace can never be admin-less.
+/// True iff the workspace has no administrator, including logged-out admins.
+/// The first authenticated user on a fresh database is auto-promoted; logging
+/// out must not reopen this bootstrap path.
 pub(crate) fn workspace_has_no_admin(ctx: &ReducerContext) -> bool {
     !ctx.db
         .user()
         .iter()
-        .any(|u| u.is_admin && u.is_authenticated)
+        .any(|u| u.is_admin)
 }
 
 /// Parses OIDC `email` and `name`/`preferred_username` claims from the sender's JWT.

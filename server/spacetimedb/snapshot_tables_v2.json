@@ -72,7 +72,11 @@
     "module_install_meta": "Module-managed publisher-identity record; re-created by init on the restore target.",
     "my_extension_permissions": "Caller-scoped #[view] projection over the private extension_permission table for the Settings UI; derived per-sender at read time, nothing to export or restore.",
     "notion_import_job": "Transient background-import queue (carries Notion token ciphertexts, blanked on completion); jobs are meaningless on a restore target and must never ride along in backups.",
-    "sensor_registry": "Fully seeded at init (seed_sensor_registry_inner); findings reference sensors by string (sensor_kind, code), never by id, so re-seeded rows are equivalent."
+    "sensor_registry": "Fully seeded at init (seed_sensor_registry_inner); findings reference sensors by string (sensor_kind, code), never by id, so re-seeded rows are equivalent.",
+    "readable_pages": "Derived caller-scoped access projection. Recomputed by the module; never restore cached grants.",
+    "readable_components": "Derived caller-scoped access projection. Recomputed by the module; never restore cached grants.",
+    "readable_schemas": "Derived caller-scoped access projection. Recomputed by the module; never restore cached grants.",
+    "readable_conversations": "Derived caller-scoped access projection. Recomputed by the module; never restore cached grants."
   },
   "import_row_guards": {
     "harness_template": "Skip rows with source == Builtin (re-seeded by init; unique external_id would collide).",

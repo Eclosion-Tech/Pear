@@ -1437,6 +1437,11 @@ export const PropertyValueInput = __t.object("PropertyValueInput", {
 });
 export type PropertyValueInput = __Infer<typeof PropertyValueInput>;
 
+export const ReadableResource = __t.object("ReadableResource", {
+  id: __t.u64(),
+});
+export type ReadableResource = __Infer<typeof ReadableResource>;
+
 export const ReviewAgentBinding = __t.object("ReviewAgentBinding", {
   id: __t.u64(),
   reviewerAiUserId: __t.u64(),

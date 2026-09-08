@@ -13,6 +13,7 @@ use std::collections::HashSet;
 use spacetimedb::{Identity, ReducerContext};
 
 use crate::access_control::{block_access_rule, page_access_rule, BlockAccessRule};
+use crate::ai::ai_user_profile;
 use crate::auth::{sender_is_admin, user};
 use crate::module_install::sender_is_module_publisher;
 use crate::pages::page;
@@ -71,8 +72,41 @@ pub(crate) fn explicit_page_access_rule_allows(
     false
 }
 
+/// Authenticated human, provisioned AI identity, or the module publisher.
+/// A bare SpacetimeDB identity is not workspace membership.
+pub(crate) fn is_workspace_principal(ctx: &ReducerContext, identity: Identity) -> bool {
+    use crate::module_install::module_install_meta;
+    ctx.db
+        .module_install_meta()
+        .id()
+        .find(0)
+        .is_some_and(|m| m.publisher_identity == identity)
+        || ctx
+            .db
+            .user()
+            .identity()
+            .find(identity)
+            .is_some_and(|u| u.is_authenticated)
+        || ctx.db.ai_user_profile().identity().find(identity).is_some()
+}
+
+pub(crate) fn require_workspace_principal(ctx: &ReducerContext) -> Result<(), String> {
+    if is_workspace_principal(ctx, ctx.sender()) {
+        Ok(())
+    } else {
+        Err("Authentication required".to_string())
+    }
+}
+
 /// True iff `identity` may read `page_id`. Open-by-default.
 pub fn can_read_page(ctx: &ReducerContext, page_id: u64, identity: Identity) -> bool {
+    if !is_workspace_principal(ctx, identity) || ctx.db.page().id().find(page_id).is_none() {
+        return false;
+    }
+    if identity == ctx.sender() && sender_is_module_publisher(ctx) {
+        return true;
+    }
+
     if !page_or_ancestor_has_any_rule(ctx, page_id) {
         return true;
     }
@@ -86,6 +120,13 @@ pub fn can_read_page(ctx: &ReducerContext, page_id: u64, identity: Identity) -> 
 
 /// True iff `identity` may write `page_id`. Open-by-default.
 pub fn can_write_page(ctx: &ReducerContext, page_id: u64, identity: Identity) -> bool {
+    if !is_workspace_principal(ctx, identity) || ctx.db.page().id().find(page_id).is_none() {
+        return false;
+    }
+    if identity == ctx.sender() && sender_is_module_publisher(ctx) {
+        return true;
+    }
+
     if !page_or_ancestor_has_any_rule(ctx, page_id) {
         return true;
     }
@@ -109,8 +150,7 @@ pub(crate) fn require_page_write(ctx: &ReducerContext, page_id: u64) -> Result<(
 
 /// Reducer guard: ensures the caller may read the page (used by reducers
 /// that surface page state through side effects, e.g. snapshotting).
-#[allow(dead_code)]
-fn require_page_read(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
+pub(crate) fn require_page_read(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
     if can_read_page(ctx, page_id, ctx.sender()) {
         Ok(())
     } else {
@@ -132,6 +172,10 @@ pub fn can_read_block(
     block_id: &str,
     identity: Identity,
 ) -> bool {
+    if !is_workspace_principal(ctx, identity) {
+        return false;
+    }
+
     let block_rules: Vec<BlockAccessRule> = ctx
         .db
         .block_access_rule()
@@ -192,8 +236,5 @@ pub(crate) fn require_creator_or_admin(
 }
 
 pub(crate) fn require_rule_authority(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
-    if !page_or_ancestor_has_any_rule(ctx, page_id) {
-        return Ok(());
-    }
     require_page_write(ctx, page_id)
 }

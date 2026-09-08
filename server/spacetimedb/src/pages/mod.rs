@@ -5,8 +5,7 @@
 
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, SpacetimeType, Table, Timestamp};
 
-use crate::access_control::helpers::{can_write_page, page_has_any_rule, require_page_write};
-use crate::access_control::{next_page_access_rule_id, page_access_rule, PageAccessRule};
+use crate::access_control::helpers::{can_write_page, require_page_write};
 use crate::automations::{enqueue_page_created, enqueue_page_deleted, enqueue_page_updated};
 use crate::id_counters::alloc_id;
 use crate::pages::components::{
@@ -146,29 +145,6 @@ pub(crate) fn next_attachment_id(ctx: &ReducerContext) -> u64 {
     })
 }
 
-/// When creating a child of a restricted page, copy access rules so the subtree stays private.
-pub(crate) fn copy_page_access_rules_from_parent(ctx: &ReducerContext, parent_id: u64, new_page_id: u64) {
-    if !page_has_any_rule(ctx, parent_id) {
-        return;
-    }
-    let rules: Vec<PageAccessRule> = ctx
-        .db
-        .page_access_rule()
-        .page_id()
-        .filter(&parent_id)
-        .collect();
-    for r in rules {
-        ctx.db.page_access_rule().insert(PageAccessRule {
-            id: next_page_access_rule_id(ctx),
-            page_id: new_page_id,
-            principal: r.principal.clone(),
-            permission: r.permission.clone(),
-            granted_by: ctx.sender(),
-            granted_at: ctx.timestamp,
-        });
-    }
-}
-
 /// Returns the next sort_order for a new sibling under `parent_id`.
 /// Scans all active siblings and returns max_order + 1000.
 pub(crate) fn next_sort_order(ctx: &ReducerContext, parent_id: Option<u64>) -> u32 {
@@ -193,6 +169,8 @@ pub fn create_page(
     page_type: PageType,
     title: String,
 ) -> Result<(), String> {
+    crate::access_control::helpers::require_workspace_principal(ctx)?;
+
     if title.trim().is_empty() {
         return Err("Title cannot be empty".to_string());
     }
@@ -226,9 +204,8 @@ pub fn create_page(
         content: String::new(),
         updated_at: ctx.timestamp,
     });
-    if let Some(pid) = parent_id {
-        copy_page_access_rules_from_parent(ctx, pid, page.id);
-    }
+    // Access is inherited dynamically from ancestors. Copying grants here
+    // would leave stale child permissions after a parent grant is revoked.
     enqueue_page_created(ctx, page.id);
     Ok(())
 }
@@ -262,9 +239,8 @@ pub(crate) fn create_component_tree_page_inner(
 
     seed_default_component_tree(ctx, page.id);
 
-    if let Some(pid) = parent_id {
-        copy_page_access_rules_from_parent(ctx, pid, page.id);
-    }
+    // Access is inherited dynamically from ancestors. Copying grants here
+    // would leave stale child permissions after a parent grant is revoked.
     enqueue_page_created(ctx, page.id);
     Ok(page.id)
 }
@@ -310,6 +286,8 @@ pub fn create_component_tree_page(
     page_type: PageType,
     title: String,
 ) -> Result<(), String> {
+    crate::access_control::helpers::require_workspace_principal(ctx)?;
+
     if title.trim().is_empty() {
         return Err("Title cannot be empty".to_string());
     }
@@ -918,6 +896,6 @@ pub fn promote_to_instruction(
         content,
         updated_at: ctx.timestamp,
     });
-    copy_page_access_rules_from_parent(ctx, parent_page_id, new_page.id);
+    // Parent access is inherited dynamically; do not clone grants.
     Ok(())
 }

@@ -8,6 +8,7 @@ use crate::id_counters::alloc_id;
 use crate::types::{Permission, Principal};
 
 pub(crate) mod helpers;
+pub(crate) mod read_visibility;
 pub(crate) mod reducers;
 
 pub(crate) fn next_page_access_rule_id(ctx: &ReducerContext) -> u64 {

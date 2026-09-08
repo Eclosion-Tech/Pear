@@ -461,6 +461,8 @@ pub fn create_database_row(
     values: Vec<PropertyValueInput>,
     client_request_id: String,
 ) -> Result<(), String> {
+    crate::access_control::helpers::require_page_write(ctx, database_page_id)?;
+
     if client_request_id.is_empty() || client_request_id.len() > 128 {
         return Err("client_request_id must be 1-128 characters".to_string());
     }
@@ -570,6 +572,8 @@ pub fn update_database_row(
     set_values: Vec<PropertyValueInput>,
     clear_values: Vec<u64>,
 ) -> Result<(), String> {
+    crate::access_control::helpers::require_page_write(ctx, page_id)?;
+
     let row = ctx.db.page().id().find(page_id).ok_or("Page not found")?;
     if row.page_type != PageType::Database {
         return Err("Target page must be a database row".to_string());
@@ -681,6 +685,8 @@ pub fn update_database_row(
 /// Idempotent — already-deleted rows succeed without modification.
 #[reducer]
 pub fn delete_database_row(ctx: &ReducerContext, page_id: u64) -> Result<(), String> {
+    crate::access_control::helpers::require_page_write(ctx, page_id)?;
+
     let row = ctx.db.page().id().find(page_id).ok_or("Page not found")?;
     if row.page_type != PageType::Database {
         return Err("Target page must be a database row".to_string());

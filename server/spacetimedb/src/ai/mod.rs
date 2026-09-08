@@ -240,6 +240,10 @@ pub fn create_ai_user(
     max_tokens: Option<u32>,
     avatar_url: Option<String>,
 ) -> Result<(), String> {
+    if !crate::auth::sender_is_admin(ctx) && !crate::module_install::sender_is_module_publisher(ctx) {
+        return Err("Only a workspace admin or publisher can provision AI identities".to_string());
+    }
+
     let display_name = display_name.trim().to_string();
     if display_name.is_empty() {
         return Err("Display name is required".to_string());
