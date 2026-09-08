@@ -39,6 +39,7 @@ pub fn set_conversation_visibility(
         .id()
         .find(conversation_id)
         .ok_or("Conversation not found")?;
+    crate::conversations::require_conversation_authority(ctx, &conv)?;
 
     if conv.initiated_by != ctx.sender() && !sender_is_admin(ctx) {
         return Err("Only the initiator or an admin can change visibility".to_string());
@@ -71,6 +72,7 @@ pub fn mark_conversation_read(
     conversation_id: u64,
     message_id: u64,
 ) -> Result<(), String> {
+    crate::access_control::helpers::require_workspace_principal(ctx)?;
     let participant = ctx
         .db
         .conversation_participant()
@@ -107,6 +109,7 @@ pub fn add_conversation_participant(
         .id()
         .find(conversation_id)
         .ok_or("Conversation not found")?;
+    crate::conversations::require_conversation_authority(ctx, &conv)?;
     if conv.initiated_by != ctx.sender() && !sender_is_admin(ctx) {
         return Err("Only the initiator or an admin can add participants".to_string());
     }
@@ -157,6 +160,7 @@ pub fn remove_conversation_participant(
         .id()
         .find(conversation_id)
         .ok_or("Conversation not found")?;
+    crate::conversations::require_conversation_authority(ctx, &conv)?;
     let is_self = identity == ctx.sender();
     if !is_self && conv.initiated_by != ctx.sender() && !sender_is_admin(ctx) {
         return Err(

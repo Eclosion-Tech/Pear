@@ -309,6 +309,10 @@ import PagePropertyValueHistoryRow from "./page_property_value_history_table";
 import PageSnapshotRow from "./page_snapshot_table";
 import PageYjsStateRow from "./page_yjs_state_table";
 import PropertyDefinitionRow from "./property_definition_table";
+import ReadableComponentsRow from "./readable_components_table";
+import ReadableConversationsRow from "./readable_conversations_table";
+import ReadablePagesRow from "./readable_pages_table";
+import ReadableSchemasRow from "./readable_schemas_table";
 import ReviewAgentBindingRow from "./review_agent_binding_table";
 import ReviewAnnotationRow from "./review_annotation_table";
 import SensorRegistryRow from "./sensor_registry_table";
@@ -368,6 +372,9 @@ const tablesSchema = __schema({
       ] },
       { name: 'id', algorithm: 'btree', columns: [
         'id',
+      ] },
+      { name: 'root_page_id', algorithm: 'btree', columns: [
+        'rootPageId',
       ] },
     ],
     constraints: [
@@ -757,6 +764,9 @@ const tablesSchema = __schema({
       { name: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
+      { name: 'initiated_by', algorithm: 'btree', columns: [
+        'initiatedBy',
+      ] },
       { name: 'page_id', algorithm: 'btree', columns: [
         'pageId',
       ] },
@@ -768,6 +778,9 @@ const tablesSchema = __schema({
   conversation_attachment: __table({
     name: 'conversation_attachment',
     indexes: [
+      { name: 'conversation_id', algorithm: 'btree', columns: [
+        'conversationId',
+      ] },
       { name: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
@@ -818,6 +831,9 @@ const tablesSchema = __schema({
       ] },
       { name: 'id', algorithm: 'btree', columns: [
         'id',
+      ] },
+      { name: 'page_id', algorithm: 'btree', columns: [
+        'pageId',
       ] },
     ],
     constraints: [
@@ -1283,6 +1299,34 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, MyExtensionPermissionsRow),
+  readable_components: __table({
+    name: 'readable_components',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, ReadableComponentsRow),
+  readable_conversations: __table({
+    name: 'readable_conversations',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, ReadableConversationsRow),
+  readable_pages: __table({
+    name: 'readable_pages',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, ReadablePagesRow),
+  readable_schemas: __table({
+    name: 'readable_schemas',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, ReadableSchemasRow),
 });
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */

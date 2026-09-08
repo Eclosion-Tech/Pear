@@ -271,31 +271,33 @@ pub(crate) fn is_conversation_participant(
     conversation_id: u64,
     identity: Identity,
 ) -> bool {
-    ctx.db.conversation_participant().iter().any(|p| {
-        p.conversation_id == conversation_id && p.identity == identity && p.left_at.is_none()
-    })
+    crate::access_control::helpers::is_workspace_principal(ctx, identity)
+        && ctx.db.conversation_participant().conversation_id().filter(conversation_id)
+            .any(|p| p.identity == identity && p.left_at.is_none())
 }
 
-/// Authority to change a conversation's lifecycle (resolve / reopen).
+/// Authority to mutate a conversation, including its lifecycle.
 ///
-/// Participants always qualify. For a page-attached thread, page-write holders
-/// also qualify — a comment thread on a page you can edit is yours to resolve,
-/// and this is what keeps workspace admins working without a separate admin
-/// concept.
+/// Active workspace participants qualify. For page-inheriting threads,
+/// page-write holders also qualify. Private threads require participation
+/// even for workspace administrators.
 ///
 /// This exists because `close_conversation` was deliberately unguarded at the
 /// reducer level, relying on deployments to restrict callers at the HTTP/API
 /// layer. That assumption stops holding the moment an AI user can call it
 /// through a tool: without this, any AI could close any conversation in the
 /// workspace, including a human's private DM.
-fn require_conversation_authority(
+pub(crate) fn require_conversation_authority(
     ctx: &ReducerContext,
     conv: &Conversation,
 ) -> Result<(), String> {
+    crate::access_control::helpers::require_workspace_principal(ctx)?;
+    if crate::module_install::sender_is_module_publisher(ctx) { return Ok(()); }
+
     if is_conversation_participant(ctx, conv.id, ctx.sender()) {
         return Ok(());
     }
-    if let Some(page_id) = conv.page_id {
+    if let Some(page_id) = conv.page_id.filter(|_| matches!(conv.visibility, ConversationVisibility::PageInheriting)) {
         if require_page_write(ctx, page_id).is_ok() {
             return Ok(());
         }
@@ -444,6 +446,7 @@ pub struct Conversation {
     pub page_id: Option<u64>,
     /// The Identity that opened the thread (a human today; could be any
     /// participant in future flows).
+    #[index(btree)]
     pub initiated_by: Identity,
     pub status: ConversationStatus,
     pub created_at: Timestamp,
@@ -673,7 +676,7 @@ pub struct AttachmentSpec {
 }
 
 /// An attachment on a `ConversationMessage` — an image, a page reference, or a
-/// snapshot of selected blocks dragged in as context. Public with advisory
+/// snapshot of selected blocks dragged in as context. RLS follows conversation
 /// visibility, mirroring `conversation_message` (the image bytes themselves stay
 /// behind presigned S3 URLs; `object_key` alone is not the image).
 #[table(accessor = conversation_attachment, public)]
@@ -683,6 +686,7 @@ pub struct ConversationAttachment {
     pub id: u64,
     #[index(btree)]
     pub message_id: u64,
+    #[index(btree)]
     pub conversation_id: u64,
     pub kind: AttachmentKind,
     pub object_key: Option<String>,
@@ -762,6 +766,8 @@ pub fn create_conversation(
     participant_identities: Vec<Identity>,
     block_anchor: Option<u64>,
 ) -> Result<(), String> {
+    crate::access_control::helpers::require_workspace_principal(ctx)?;
+
     if let Some(pid) = page_id {
         ctx.db.page().id().find(pid).ok_or("Page not found")?;
         // Starting a thread on a page is a write to that page's surface, so it
@@ -805,9 +811,7 @@ pub fn create_conversation(
         // *wake list* (who gets notified / responds), not an access-control
         // list, so adding someone is no longer a sharing decision.
         //
-        // NB: neither value is enforced today — the conversation tables have no
-        // `client_visibility_filter`. See the RLS ticket; this sets the correct
-        // intent so the fix is a filter rather than also a data migration.
+        // Read visibility is enforced by the caller-scoped conversation RLS view.
         visibility: if block_anchor.is_some() {
             ConversationVisibility::PageInheriting
         } else {
@@ -891,6 +895,7 @@ pub fn send_message(
         .id()
         .find(conversation_id)
         .ok_or("Conversation not found")?;
+    require_conversation_authority(ctx, &conv)?;
     if conv.status != ConversationStatus::Active {
         return Err("Conversation is closed".to_string());
     }
@@ -1060,6 +1065,7 @@ pub fn send_user_message(
         .id()
         .find(conversation_id)
         .ok_or("Conversation not found")?;
+    require_conversation_authority(ctx, &conv)?;
     if conv.status != ConversationStatus::Active {
         return Err("Conversation is closed".to_string());
     }
@@ -1172,6 +1178,7 @@ pub fn update_message(
         .id()
         .find(msg.conversation_id)
         .ok_or("Conversation not found")?;
+    require_conversation_authority(ctx, &conv)?;
     if conv.status != ConversationStatus::Active {
         return Err("Conversation is closed".to_string());
     }
@@ -1255,6 +1262,7 @@ pub fn set_message_component_tree(
         .id()
         .find(msg.conversation_id)
         .ok_or("Conversation not found")?;
+    require_conversation_authority(ctx, &conv)?;
     if conv.status != ConversationStatus::Active {
         return Err("Conversation is closed".to_string());
     }
@@ -1330,8 +1338,8 @@ pub fn reopen_conversation(ctx: &ReducerContext, conversation_id: u64) -> Result
 /// in this thread to `model`; `None` — or a blank/whitespace string — reverts to
 /// the AI user's configured default. Only the model changes: provider and API
 /// key are untouched, so the override must name a model the AI user's existing
-/// key can reach. Like `close_conversation`, this is intentionally unguarded at
-/// the reducer level (deployments restrict callers at the HTTP/API layer).
+/// key can reach. Requires active participation or page-write access for a
+/// page-inheriting thread.
 #[reducer]
 pub fn set_conversation_model(
     ctx: &ReducerContext,
@@ -1344,6 +1352,7 @@ pub fn set_conversation_model(
         .id()
         .find(conversation_id)
         .ok_or("Conversation not found")?;
+    require_conversation_authority(ctx, &conv)?;
     let model_override = model
         .map(|m| m.trim().to_string())
         .filter(|m| !m.is_empty());
@@ -1358,7 +1367,7 @@ pub fn set_conversation_model(
 /// Set (or clear, with `None`/blank) the per-conversation reasoning-effort
 /// override. The AI user adjusts this for its own thread; it's applied only when
 /// the resolved model supports an effort knob. Like `set_conversation_model`,
-/// intentionally unguarded at the reducer level (callers restricted at the API layer).
+/// guarded by active participation or page-write access for page-inheriting threads.
 #[reducer]
 pub fn set_conversation_effort(
     ctx: &ReducerContext,
@@ -1371,6 +1380,7 @@ pub fn set_conversation_effort(
         .id()
         .find(conversation_id)
         .ok_or("Conversation not found")?;
+    require_conversation_authority(ctx, &conv)?;
     let effort_override = effort
         .map(|e| e.trim().to_string())
         .filter(|e| !e.is_empty());
@@ -1400,6 +1410,7 @@ pub fn record_compaction(
         .id()
         .find(conversation_id)
         .ok_or("Conversation not found")?;
+    require_conversation_authority(ctx, &conv)?;
     if conv.status != ConversationStatus::Active {
         return Err("Conversation is closed".to_string());
     }
@@ -1474,6 +1485,8 @@ pub fn find_or_create_dm(
     ctx: &ReducerContext,
     other_identity: Identity,
 ) -> Result<(), String> {
+    crate::access_control::helpers::require_workspace_principal(ctx)?;
+
     let me = ctx.sender();
     if other_identity == Identity::ZERO {
         return Err("other_identity must not be zero".to_string());
@@ -1520,6 +1533,8 @@ pub fn find_or_create_ai_dm(
     ctx: &ReducerContext,
     ai_identity: Identity,
 ) -> Result<(), String> {
+    crate::access_control::helpers::require_workspace_principal(ctx)?;
+
     let me = ctx.sender();
     if ai_identity == Identity::ZERO {
         return Err("ai_identity must not be zero".to_string());

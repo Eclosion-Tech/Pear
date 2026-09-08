@@ -280,6 +280,7 @@ pub struct DatabaseRowMarker {
     pub id: u64,
     #[unique]
     pub client_request_id: String,
+    #[index(btree)]
     pub page_id: u64,
     pub created_at: Timestamp,
 }

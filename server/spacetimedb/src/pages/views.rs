@@ -4,6 +4,7 @@
 use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table, Timestamp};
 
 use crate::id_counters::alloc_id;
+use crate::access_control::helpers::require_page_write;
 use crate::pages::{page, ActorType};
 
 pub(crate) fn next_database_view_id(ctx: &ReducerContext) -> u64 {
@@ -58,6 +59,7 @@ pub fn create_view(
     view_type: ViewType,
     owner_identity: Option<String>,
 ) -> Result<(), String> {
+    require_page_write(ctx, page_id)?;
     ctx.db.page().id().find(page_id).ok_or("Page not found")?;
     let is_default = ctx
         .db
@@ -93,6 +95,7 @@ pub fn update_view_config(
         .id()
         .find(view_id)
         .ok_or("View not found")?;
+    require_page_write(ctx, view.page_id)?;
     ctx.db.database_view().id().update(DatabaseView {
         config,
         updated_at: ctx.timestamp,
@@ -109,6 +112,7 @@ pub fn rename_view(ctx: &ReducerContext, view_id: u64, name: String) -> Result<(
         .id()
         .find(view_id)
         .ok_or("View not found")?;
+    require_page_write(ctx, view.page_id)?;
     ctx.db.database_view().id().update(DatabaseView {
         name,
         updated_at: ctx.timestamp,
@@ -126,6 +130,7 @@ pub fn set_default_view(ctx: &ReducerContext, view_id: u64) -> Result<(), String
         .id()
         .find(view_id)
         .ok_or("View not found")?;
+    require_page_write(ctx, target.page_id)?;
     let page_id = target.page_id;
 
     // Collect other current-default views before mutating
@@ -155,6 +160,8 @@ pub fn set_default_view(ctx: &ReducerContext, view_id: u64) -> Result<(), String
 
 #[reducer]
 pub fn delete_view(ctx: &ReducerContext, view_id: u64) -> Result<(), String> {
+    let view = ctx.db.database_view().id().find(view_id).ok_or("View not found")?;
+    require_page_write(ctx, view.page_id)?;
     ctx.db.database_view().id().delete(view_id);
     Ok(())
 }

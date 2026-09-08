@@ -77,6 +77,7 @@ pub struct AiUserMemory {
     #[unique]
     pub ai_user_id: u64,
     /// Hidden Page that hosts the memory subtree.
+    #[index(btree)]
     pub root_page_id: u64,
     /// Page under root that holds the working-memory snapshot (small,
     /// frequently rewritten). Nullable until first write.

@@ -12,6 +12,7 @@
  */
 
 import { ApiEndpointError, type StdbTransport } from "./types";
+import { readVisibilityViews } from "./read-visibility";
 
 export interface HttpTransportOptions {
   /** Base URL for the SpacetimeDB HTTP API, e.g. `http://stdb:3000`. */
@@ -42,6 +43,7 @@ export class HttpStdbTransport implements StdbTransport {
   private readonly token: string;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs?: number;
+  private readonly visibilityViews = new Map<string, Promise<unknown>>();
 
   constructor(opts: HttpTransportOptions) {
     if (!opts.baseUrl) throw new Error("HttpStdbTransport: baseUrl required");
@@ -66,6 +68,21 @@ export class HttpStdbTransport implements StdbTransport {
 
   async sql<Row = unknown>(query: string, params: unknown[] = []): Promise<Row[]> {
     const finalSql = inlineParams(query, params);
+    await Promise.all(readVisibilityViews(finalSql).map((view) => {
+      let ready = this.visibilityViews.get(view);
+      if (!ready) {
+        ready = this.sqlRaw(`SELECT COUNT(*) AS count FROM ${view}`).catch((error) => {
+          this.visibilityViews.delete(view);
+          throw error;
+        });
+        this.visibilityViews.set(view, ready);
+      }
+      return ready;
+    }));
+    return this.sqlRaw<Row>(finalSql);
+  }
+
+  private async sqlRaw<Row = unknown>(finalSql: string): Promise<Row[]> {
     const url = `${this.baseUrl}/v1/database/${this.dbName}/sql`;
     const res = await this.request(url, {
       method: "POST",
