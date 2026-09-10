@@ -367,6 +367,26 @@ pub(super) fn decode_property_value(v: &Value) -> Result<PropertyValue, String> 
             }
             Ok(PropertyValue::Person(xs))
         }
+        "File" => {
+            let arr = o.get("value").and_then(Value::as_array).ok_or("File.value")?;
+            let refs = arr.iter().map(|value| {
+                let file = obj(value, "File entry")?;
+                Ok(crate::FileRef {
+                    name: string_at(file, "name")?,
+                    object_id: string_at(file, "objectId")?,
+                    external_url: string_at(file, "externalUrl")?,
+                })
+            }).collect::<Result<Vec<_>, String>>()?;
+            Ok(PropertyValue::File(refs))
+        }
+        "Ai" => {
+            let value = obj(o.get("value").ok_or("Ai.value")?, "Ai.value")?;
+            Ok(PropertyValue::Ai(crate::AiPropertyValue {
+                output: string_at(value, "output")?,
+                evaluation_id: u64_at(value, "evaluationId")?,
+                is_stale: bool_at(value, "isStale")?,
+            }))
+        }
         _ => Err(format!("PropertyValue::{tag}")),
     }
 }
@@ -471,6 +491,10 @@ pub(super) fn decode_property_type(v: &Value) -> Result<PropertyType, String> {
         "Checkbox" => Ok(PropertyType::Checkbox),
         "Url" => Ok(PropertyType::Url),
         "Person" => Ok(PropertyType::Person),
+        "Ai" => Ok(PropertyType::Ai),
+        "Formula" => Ok(PropertyType::Formula),
+        "Rollup" => Ok(PropertyType::Rollup),
+        "File" => Ok(PropertyType::File),
         _ => Err(format!("PropertyType::{tag}")),
     }
 }
@@ -963,4 +987,50 @@ pub(super) fn decode_api_endpoint_key(v: &Value) -> Result<ApiEndpointKey, Strin
         last_used_at: opt_timestamp_at(m, "lastUsedAt")?,
         expires_at: opt_timestamp_at(m, "expiresAt")?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn snapshot_file_values_preserve_blob_and_external_references() {
+        let value = json!({"tag": "File", "value": [
+            {"name": "photo.png", "objectId": "blob-123", "externalUrl": ""},
+            {"name": "manual.pdf", "objectId": "", "externalUrl": "https://example.com/manual.pdf"}
+        ]});
+        assert_eq!(decode_property_value(&value).unwrap(), PropertyValue::File(vec![
+            crate::FileRef { name: "photo.png".into(), object_id: "blob-123".into(), external_url: "".into() },
+            crate::FileRef { name: "manual.pdf".into(), object_id: "".into(), external_url: "https://example.com/manual.pdf".into() },
+        ]));
+        assert_eq!(decode_property_value(&json!({"tag": "File", "value": []})).unwrap(), PropertyValue::File(vec![]));
+        let mut invalid = value.clone();
+        invalid["value"][0].as_object_mut().unwrap().remove("objectId");
+        assert!(decode_property_value(&invalid).is_err());
+    }
+
+    #[test]
+    fn snapshot_ai_values_preserve_output_and_provenance() {
+        let value = json!({"tag": "Ai", "value": {
+            "output": "classified", "evaluationId": {"__pear": "bigint", "v": "9007199254740993"}, "isStale": true
+        }});
+        assert_eq!(decode_property_value(&value).unwrap(), PropertyValue::Ai(crate::AiPropertyValue {
+            output: "classified".into(), evaluation_id: 9007199254740993, is_stale: true,
+        }));
+        let mut invalid = value;
+        invalid["value"]["isStale"] = Value::Null;
+        assert!(decode_property_value(&invalid).is_err());
+    }
+
+    #[test]
+    fn snapshot_property_types_include_file_and_computed_columns() {
+        for (tag, expected) in [
+            ("File", PropertyType::File), ("Ai", PropertyType::Ai),
+            ("Formula", PropertyType::Formula), ("Rollup", PropertyType::Rollup),
+        ] {
+            assert_eq!(decode_property_type(&json!({"tag": tag})).unwrap(), expected);
+        }
+        assert!(decode_property_type(&json!({"tag": "Unknown"})).is_err());
+    }
 }
