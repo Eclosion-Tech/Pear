@@ -25,7 +25,6 @@ import {
 } from "./llm.js";
 import type { StoredToolCall } from "./tool-call-record.js";
 import { type ResolvedProvider, type TokenUsage } from "./providers.js";
-import { resolveRouting, type ModelTier } from "./model-catalog.js";
 import { AiUserWorker } from "./ai-user-worker.js";
 import { handleAiPrimitiveTask } from "./ai-primitive-task.js";
 import { StructuralSensorsScheduler } from "./structural-sensors.js";
@@ -115,22 +114,24 @@ export class DatabaseWorker {
    * Resolve the inference provider for a job attributed to an AI user. The
    * per-AI-user `ai_user_config` (with the API key) is RLS-scoped to the AI
    * user's own connection, so it is never visible on this host connection —
-   * resolution must happen on the AI user's own worker. Returns undefined when
-   * the job has no AI user or that worker isn't connected yet, so the caller
-   * falls back to the default env provider rather than failing the job.
+   * resolution must happen on the AI user's own worker. Only jobs without an
+   * AI assignment may use the environment provider. AI-attributed jobs fail
+   * when their configured inference source is unavailable.
    */
   private resolveProviderForJob(job: JobRow | undefined): ResolvedProvider | undefined {
-    if (!job?.aiUserId) return undefined;
+    if (!job) throw new Error("Cannot resolve inference for a missing job");
+    if (job.aiUserId === undefined) return undefined;
     const base = this.aiUserWorkers.get(job.aiUserId)?.resolveProvider(job.aiUserId);
-    if (!base) return undefined;
-    // Apply the delegating agent's chosen tier (if any) → concrete model within
-    // the AI user's provider family. The provider/key/maxTokens are unchanged.
-    const tier = typeof job.tier === "string" ? (job.tier as ModelTier) : undefined;
-    const routed = resolveRouting(
-      { providerTag: base.providerTag, model: base.model },
-      { tier },
-    );
-    return { ...base, model: routed.model };
+    if (!base) {
+      throw new Error(
+        `Job ${job.id}: AI user ${job.aiUserId}'s configured inference source is unavailable; ` +
+          `refusing to fall back to the environment provider.`,
+      );
+    }
+    // Automations and delegated jobs inherit the AI user's current settings.
+    // Ignore legacy job.tier values: an aggregator tier can silently switch
+    // vendors (e.g. OpenRouter "balanced" replaces GLM with Claude Sonnet).
+    return base;
   }
 
   /**

@@ -1033,7 +1033,7 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
       "Use this for work that benefits from being decomposed and run as its own task graph — e.g. " +
       "'build a CRM database with these columns and seed rows', or any request spanning several pages " +
       "or many steps. The job is planned and executed asynchronously by worker agents; its live " +
-      "progress and results render inline in this conversation. Prefer doing small, single-step " +
+      "progress and results render inline in this conversation. It uses your configured inference source and model. Prefer doing small, single-step " +
       "actions yourself with the direct tools; reach for `delegate` when the task is large or open-ended. " +
       "Returns a `job_id`. After delegating, tell the user you've started the job and that progress is shown below — do not claim the work is finished.",
     input_schema: {
@@ -1044,15 +1044,6 @@ const PEAR_TOOLS: Anthropic.Messages.Tool[] = [
           description:
             "A clear, self-contained description of the subtask to orchestrate. Include all specifics " +
             "(titles, columns, values, target pages) — the background agent does not see this chat.",
-        },
-        tier: {
-          type: "string",
-          enum: ["fast", "balanced", "flagship", "frontier"],
-          description:
-            "Optional capability tier for the subagent's model, chosen by you for this task: " +
-            "'fast' (cheapest, simple/scoped work), 'balanced' (most tasks), 'flagship' (hard reasoning/coding), " +
-            "'frontier' (the most demanding work; slowest, most expensive). Resolved to a concrete model in " +
-            "the AI user's provider family. Omit to use the configured default.",
         },
       },
       required: ["description"],
@@ -2959,7 +2950,6 @@ export async function executeTool(
         if (!description) {
           return JSON.stringify({ ok: false, error: "description is required" });
         }
-        const tier = String((input.tier as string) ?? "").trim() || undefined;
         const userId = toolContext.aiIdentityHex ?? "";
         type JobRow = { id: bigint; userId: string; prompt: string; nonce?: string };
         // Client nonce so we read back exactly the job we created, not a
@@ -2981,8 +2971,8 @@ export async function executeTool(
             // Run the delegated job as the AI user that spawned it, so its
             // inference uses that AI user's own credentials.
             aiUserId: toolContext.aiUserId,
-            // Optional capability tier the agent picked for this subagent.
-            tier,
+            // Legacy clients may still send a tier; the configured model wins.
+            tier: undefined,
             nonce,
             // If this delegate is itself running inside a job (nested subagent),
             // that job is the parent — drives spawn_depth + the delegation tree.

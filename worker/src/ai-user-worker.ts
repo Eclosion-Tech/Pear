@@ -103,7 +103,7 @@ export class AiUserWorker {
    * Resolve this AI user's inference provider on its own connection — the only
    * one where the `ai_user_config` row (with the API key) is RLS-visible.
    * Returns undefined if not connected yet or the config/key isn't available,
-   * so the host worker falls back to the default provider instead of failing.
+   * so the host worker fails the job without selecting another provider.
    */
   resolveProvider(aiUserId: bigint): ResolvedProvider | undefined {
     if (!this.conn) return undefined;
