@@ -36,6 +36,11 @@ import {
   type TokenUsage,
   getProviderForAiUser,
 } from "./providers.js";
+import {
+  answerRecoveryRequest,
+  isThinkingOnlyExhaustion,
+  emptyAnswerMessage,
+} from "./thinking-recovery.js";
 import { resolveRouting } from "./model-catalog.js";
 import { buildPageContext } from "./llm.js";
 import { readComponentNodeText } from "./component-authoring.js";
@@ -711,6 +716,8 @@ async function handleConversationMessage(
   let thinkingText = "";
   let responseText = "";
   let toolExecutor: CompositeToolExecutor | undefined;
+  // Preserve usage even when recovery or finalization fails.
+  const turnUsage = emptyUsage();
 
   try {
     const conv = conn.db.conversation.id.find(msg.conversationId) as
@@ -957,9 +964,9 @@ async function handleConversationMessage(
     /** First Orcha job this turn spawned via `delegate`, linked to the message
      * so the thread renders it inline as a subagent card. */
     let spawnedJobId: bigint | undefined;
-    /** Running token total across every LLM call this turn — persisted on the
-     * finalized message so the per-AI-user spend surface is real (#3). */
-    const turnUsage = emptyUsage();
+    let lastStopReason = "missing_done";
+    let recoveryAttempted = false;
+    let recoveryRequest: ChatStreamRequest | undefined;
 
     /** Append the current segment to `narration` before it is reset between
      * tool iterations. */
@@ -1019,7 +1026,7 @@ async function handleConversationMessage(
       while (iterations++ < MAX_TOOL_ITERATIONS) {
         let lastFlush = Date.now();
 
-        const streamReq: ChatStreamRequest = {
+        const streamReq: ChatStreamRequest = recoveryRequest ?? {
           model,
           maxTokens: streamBudget.maxTokens,
           system: systemBlocks,
@@ -1030,6 +1037,9 @@ async function handleConversationMessage(
           conversationId: conv.id,
         };
 
+        recoveryRequest = undefined;
+        lastStopReason = "missing_done";
+        let sawTool = false;
         let doneResponse: (StreamEvent & { type: "done" }) | null = null;
 
         for await (const event of aiProvider.chatStream(streamReq)) {
@@ -1067,6 +1077,7 @@ async function handleConversationMessage(
               lastFlush = Date.now();
             }
           } else if (event.type === "tool_use_start") {
+            sawTool = true;
             // Emitted at content_block_stop, so id + input are already complete.
             allToolCalls.push({
               type: "tool_use",
@@ -1100,6 +1111,20 @@ async function handleConversationMessage(
         );
 
         const stopReason = doneResponse.response.stopReason;
+        lastStopReason = stopReason;
+        // Retry only a segment with no answer or tools. Existing tool results
+        // remain in llmMessages, and this allowance is shared by the whole turn.
+        if (
+          !recoveryAttempted && iterations < MAX_TOOL_ITERATIONS
+          && isThinkingOnlyExhaustion(doneResponse.response, responseText, sawTool)
+        ) {
+          recoveryRequest = answerRecoveryRequest(streamReq, providerTag);
+          if (recoveryRequest) {
+            recoveryAttempted = true;
+            console.warn(`${logTag} thinking-only max_tokens in conversation ${conv.id}; retrying once with reduced reasoning (model=${model}, maxTokens=${streamReq.maxTokens})`);
+            continue;
+          }
+        }
         if (
           toolBlocks.length === 0 ||
           stopReason === "end_turn" ||
@@ -1193,6 +1218,7 @@ async function handleConversationMessage(
         });
 
         addUsage(turnUsage, response.usage);
+        lastStopReason = response.stopReason;
         // Non-streaming providers (bridge-backed users) deliver thinking on
         // the response, not as thinking_delta events — accumulate like the
         // streaming path does so multi-hop tool loops keep every hop's
@@ -1291,15 +1317,20 @@ async function handleConversationMessage(
 
     if (responseText === "(No response generated)") {
       console.warn(
-        `${logTag} no text response and no tool results to assess for conversation ${conv.id}`,
+        `${logTag} no answer in conversation ${conv.id} (model=${model}, stop=${lastStopReason}, truncated=${truncated}, recovery=${recoveryAttempted}, thinking=${thinkingText.length} chars, tokens: in=${turnUsage.inputTokens} out=${turnUsage.outputTokens} cacheRead=${turnUsage.cacheReadInputTokens})`,
       );
+      const failure = emptyAnswerMessage(truncated);
+      timeline.push({ t: "text", text: failure });
       await flushMessage(
         conn,
         aiMsgId,
-        responseText,
+        failure,
         "Error",
         thinkingText,
         allToolCalls,
+        undefined,
+        turnUsage,
+        timeline.length > 0 ? JSON.stringify(timeline) : undefined,
       );
       return;
     }
@@ -1374,6 +1405,8 @@ async function handleConversationMessage(
         "Error",
         thinkingText,
         allToolCalls,
+        undefined,
+        turnUsage,
       );
     }
   } finally {
