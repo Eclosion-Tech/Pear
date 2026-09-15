@@ -60,7 +60,7 @@ export function tierRank(tier: ModelTier): number {
  * effort knob, so the worker must never send one: the agent's intensity choice
  * is a silent no-op there rather than an error.
  */
-export type EffortKind = "anthropic_effort" | "openai_reasoning_effort" | "none";
+export type EffortKind = "anthropic_effort" | "openai_reasoning_effort" | "openrouter_reasoning_effort" | "none";
 
 export interface EffortSupport {
   kind: EffortKind;
@@ -91,6 +91,12 @@ const OPENAI_REASONING_EFFORT: EffortSupport = {
   // tier also accepts `xhigh`, left out here conservatively until confirmed so
   // we never send a level a given model rejects.
   levels: ["none", "low", "medium", "high"],
+};
+// OpenRouter /api/v1/models: GLM 5.3 reasoning is mandatory; default is max.
+// Its lowest supported effort is low, not none/minimal.
+const GLM_OPENROUTER_EFFORT: EffortSupport = {
+  kind: "openrouter_reasoning_effort",
+  levels: ["low", "high", "max"],
 };
 const NO_EFFORT: EffortSupport = { kind: "none" };
 
@@ -164,7 +170,7 @@ export const MODEL_CATALOG: Record<CatalogFamily, CatalogModel[]> = {
   ],
   // OpenRouter proxies many vendors behind OpenAI-compatible chat completions
   // with vendor-prefixed slugs — the menu spans vendors on one key. Effort
-  // knobs are conservatively `none`: the proxy's passthrough of vendor effort
+  // knobs are conservatively `none` except verified GLM controls: the proxy's passthrough of vendor effort
   // params isn't guaranteed, and a no-op beats a request error. Slugs drift as
   // vendors release; treat these as curated suggestions, not an exhaustive
   // registry. Keep in sync with web/src/lib/aiUserApi.ts.
@@ -211,7 +217,7 @@ export const MODEL_CATALOG: Record<CatalogFamily, CatalogModel[]> = {
       tier: "flagship",
       label: "GLM 5.3",
       useFor: "Long-horizon coding and complex software engineering with a 1M context window.",
-      effort: NO_EFFORT,
+      effort: GLM_OPENROUTER_EFFORT,
     },
     {
       id: "moonshotai/kimi-k3",
@@ -268,7 +274,7 @@ export const MODEL_CATALOG: Record<CatalogFamily, CatalogModel[]> = {
       tier: "fast",
       label: "GLM 5.3 Flash",
       useFor: "Fast, low-cost coding and long-horizon agent tasks with multimodal input.",
-      effort: NO_EFFORT,
+      effort: GLM_OPENROUTER_EFFORT,
     },
   ],
   // Meta Model API (api.meta.ai) — Muse Spark family. NOTE: Meta's dashboard

@@ -61,3 +61,52 @@ test("known OpenAI reasoning models recover using the catalog's lowest effort", 
   assert.equal(retry.maxTokens, request.maxTokens);
   assert.equal(retry.messages, request.messages);
 });
+
+for (const model of ["z-ai/glm-5.3", "z-ai/glm-5.3-flash"]) {
+  test(`${model} recovery sends low reasoning through OpenRouter's actual streaming adapter`, async () => {
+    const initial = { ...request, model, effort: undefined, thinkingBudget: undefined };
+    const retry = answerRecoveryRequest(initial, "OpenRouter")!;
+    assert.ok(retry, "GLM must not skip recovery");
+    assert.equal(retry.effort, "low");
+    assert.equal(retry.maxTokens, initial.maxTokens);
+    assert.equal(retry.messages, initial.messages);
+    const provider = createProviderFromConfig({
+      id: 1n, provider: { tag: "OpenAiCompatible" }, apiKey: "test-key",
+      identity: { toHexString: () => "test" }, createdBy: { toHexString: () => "test" },
+      endpoint: "https://openrouter.ai/api/v1", systemPrompt: undefined, model, maxTokens: initial.maxTokens,
+    });
+    const params: Record<string, unknown>[] = [];
+    (provider as any).client = { chat: { completions: { create: async (arg: Record<string, unknown>) => {
+      params.push(arg);
+      return (async function* () {
+        yield { choices: [{ delta: { content: "Recovered answer" }, finish_reason: "stop" }] };
+      })();
+    } } } };
+    for await (const _ of provider.chatStream!(initial)) { /* drain */ }
+    const events = [];
+    for await (const event of provider.chatStream!(retry)) events.push(event);
+    assert.equal(params[0].reasoning, undefined, "normal request keeps configured/default effort");
+    assert.deepEqual(params[1].reasoning, { effort: "low" });
+    assert.equal(params[1].reasoning_effort, undefined);
+    assert.equal(params[1].max_tokens, initial.maxTokens);
+    assert.ok(events.some(e => e.type === "text_delta" && e.text === "Recovered answer"));
+    assert.equal(answerRecoveryRequest(initial, "OpenAiCompatible"), undefined);
+  });
+}
+
+test("GLM rejects unsupported effort and does not send gateway controls to other endpoints", () => {
+  for (const endpoint of ["https://openrouter.ai/api/v1", "https://example.com/v1", "https://openrouter.ai.example.com/v1"]) {
+    const provider = createProviderFromConfig({
+      id: 1n, provider: { tag: "OpenAiCompatible" }, apiKey: "test-key",
+      identity: { toHexString: () => "test" }, createdBy: { toHexString: () => "test" },
+      endpoint, systemPrompt: undefined, model: "z-ai/glm-5.3", maxTokens: 8192,
+    });
+    const disabled = (provider as any).buildParams({ ...request, model: "z-ai/glm-5.3", effort: "none" });
+    assert.equal(disabled.reasoning, undefined);
+    assert.equal(disabled.reasoning_effort, undefined);
+    if (endpoint !== "https://openrouter.ai/api/v1") {
+      const low = (provider as any).buildParams({ ...request, model: "z-ai/glm-5.3", effort: "low" });
+      assert.equal(low.reasoning, undefined);
+    }
+  }
+});
