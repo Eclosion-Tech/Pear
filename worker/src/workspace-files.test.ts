@@ -90,9 +90,20 @@ test("pdf extraction runs through unpdf", async () => {
 
 // ── key resolution ────────────────────────────────────────────────────────────
 
+test("denied file and image references never reach storage", async () => {
+  const reader = createWorkspaceFileReader({
+    dbName: "acme", authorize: async () => false,
+    resolveWorkspaceId: async () => "ws",
+    fetchObject: async () => { assert.fail("unauthorized storage access"); },
+  })!;
+  assert.equal(await reader.read("workspaces/ws/secret"), null);
+  assert.equal(await reader.readImage!("workspaces/ws/secret"), null);
+});
+
 test("bare object ids resolve inside the workspace prefix; foreign full keys are not found", async () => {
   const fetched: string[] = [];
   const reader = createWorkspaceFileReader({
+    authorize: async () => true,
     dbName: "acme",
     resolveWorkspaceId: async () => "ws-123",
     fetchObject: async (key) => {
@@ -110,9 +121,28 @@ test("bare object ids resolve inside the workspace prefix; foreign full keys are
   ]);
 });
 
+test("cloud workspace lookup failure never fetches a supplied storage key", async () => {
+  const previous = process.env.LIFECYCLE_URL;
+  process.env.LIFECYCLE_URL = "https://lifecycle.invalid";
+  try {
+    const reader = createWorkspaceFileReader({
+    authorize: async () => true,
+      dbName: "acme",
+      resolveWorkspaceId: async () => null,
+      fetchObject: async () => { assert.fail("must not reach storage without workspace isolation"); },
+    })!;
+    assert.equal(await reader.read("bare-id"), null);
+    assert.equal(await reader.read("workspaces/another-workspace/private-file"), null);
+  } finally {
+    if (previous === undefined) delete process.env.LIFECYCLE_URL;
+    else process.env.LIFECYCLE_URL = previous;
+  }
+});
+
 test("without a workspace id (standalone) keys pass through unchanged", async () => {
   const fetched: string[] = [];
   const reader = createWorkspaceFileReader({
+    authorize: async () => true,
     dbName: "local",
     resolveWorkspaceId: async () => null,
     fetchObject: async (key) => {
@@ -127,6 +157,7 @@ test("without a workspace id (standalone) keys pass through unchanged", async ()
 
 test("missing objects resolve to null; the storage key is echoed as supplied", async () => {
   const reader = createWorkspaceFileReader({
+    authorize: async () => true,
     dbName: "acme",
     resolveWorkspaceId: async () => null,
     fetchObject: async (key) => (key === "present" ? obj(enc("x"), "text/plain") : null),
@@ -144,7 +175,8 @@ test("no S3 and no override → no reader", () => {
   try {
     // `isS3Configured` reads env at module load, so this only asserts the
     // contract when the test process itself has no S3 config.
-    if (!prev.e) assert.equal(createWorkspaceFileReader({ dbName: "x" }), null);
+    if (!prev.e) assert.equal(createWorkspaceFileReader({
+    authorize: async () => true, dbName: "x" }), null);
   } finally {
     if (prev.e) process.env.S3_ENDPOINT = prev.e;
     if (prev.a) process.env.S3_ACCESS_KEY = prev.a;
@@ -156,6 +188,7 @@ test("no S3 and no override → no reader", () => {
 
 test("File attachments render as attached_file context with the storage key", async () => {
   const reader = createWorkspaceFileReader({
+    authorize: async () => true,
     dbName: "acme",
     resolveWorkspaceId: async () => "ws",
     fetchObject: async () => obj(enc("col1,col2\n1,2"), "text/csv"),
@@ -169,6 +202,7 @@ test("File attachments render as attached_file context with the storage key", as
 test("long File attachments are capped with a read_file pointer", async () => {
   const big = "y".repeat(ATTACHED_FILE_INLINE_CHARS + 500);
   const reader = createWorkspaceFileReader({
+    authorize: async () => true,
     dbName: "acme",
     resolveWorkspaceId: async () => "ws",
     fetchObject: async () => obj(enc(big), "text/plain"),
@@ -180,6 +214,7 @@ test("long File attachments are capped with a read_file pointer", async () => {
 
 test("binary, missing, and reader-less File attachments degrade to notes", async () => {
   const binReader = createWorkspaceFileReader({
+    authorize: async () => true,
     dbName: "acme",
     resolveWorkspaceId: async () => "ws",
     fetchObject: async () => obj(new Uint8Array([0x50, 0x4b, 3, 4]), "application/zip"),
@@ -189,6 +224,7 @@ test("binary, missing, and reader-less File attachments degrade to notes", async
     /no text extractor/,
   );
   const missing = createWorkspaceFileReader({
+    authorize: async () => true,
     dbName: "acme",
     resolveWorkspaceId: async () => "ws",
     fetchObject: async () => null,

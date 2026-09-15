@@ -16,6 +16,10 @@ export function readVisibilityViews(query: string): string[] {
         ["readable_components", /\bcomponent_yjs_state\b/i],
         ["readable_schemas", /\bproperty_definition\b/i],
         ["readable_conversations", /\b(?:conversation|conversation_message|conversation_participant|conversation_attachment|page_access_request)\b/i],
+        ["readable_jobs", /\b(?:orcha_job|orcha_task|orcha_shared_context)\b/i],
+        ["readable_automations", /\b(?:automation_rule|automation_action|automation_condition|automation_capability)\b/i],
+        ["readable_automation_events", /\b(?:automation_event_queue|automation_run_log)\b/i],
+        ["readable_review_snapshots", /\breview_annotation\b/i],
     ];
     return projections.filter(([, pattern]) => pattern.test(query)).map(([view]) => view);
 }

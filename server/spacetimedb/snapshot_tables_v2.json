@@ -76,7 +76,12 @@
     "readable_pages": "Derived caller-scoped access projection. Recomputed by the module; never restore cached grants.",
     "readable_components": "Derived caller-scoped access projection. Recomputed by the module; never restore cached grants.",
     "readable_schemas": "Derived caller-scoped access projection. Recomputed by the module; never restore cached grants.",
-    "readable_conversations": "Derived caller-scoped access projection. Recomputed by the module; never restore cached grants."
+    "readable_conversations": "Derived caller-scoped access projection. Recomputed by the module; never restore cached grants.",
+    "readable_jobs": "Derived caller-scoped job access projection. Recomputed by the module; never restore cached grants.",
+    "readable_automations": "Derived or transient caller-scoped security state; never restore.",
+    "readable_automation_events": "Derived or transient caller-scoped security state; never restore.",
+    "readable_review_snapshots": "Derived or transient caller-scoped security state; never restore.",
+    "login_result": "Derived or transient caller-scoped security state; never restore."
   },
   "import_row_guards": {
     "harness_template": "Skip rows with source == Builtin (re-seeded by init; unique external_id would collide).",

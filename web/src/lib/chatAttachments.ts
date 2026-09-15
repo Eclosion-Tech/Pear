@@ -72,10 +72,12 @@ export function isImageFile(file: File): boolean {
 export async function uploadChatFile(
   slug: string,
   file: File,
+  conversationId: bigint,
 ): Promise<string | null> {
   const up = await uploadWorkspaceBlob({
     slug,
     body: file,
+    conversationId,
     contentType: file.type || "application/octet-stream",
   });
   if (!up) return null;

@@ -85,7 +85,7 @@ const mcpHandler = createMcpHandler(({ authInfo }) => {
   return createPearMcpServer({
     transport: extra.transport,
     aiUserId: extra.aiUserId,
-    files: workspaceFileReaderFor(DB_NAME),
+    files: workspaceFileReaderFor(DB_NAME, extra.transport),
   });
 });
 const nodeMcpHandler = toNodeHandler(mcpHandler);

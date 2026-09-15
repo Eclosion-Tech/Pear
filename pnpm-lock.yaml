@@ -169,7 +169,7 @@ importers:
         version: 0.34.5
       spacetimedb:
         specifier: 2.0.3
-        version: 2.0.3(react@19.2.3)
+        version: 2.0.3(react@19.2.3)(undici@7.29.0)
       y-indexeddb:
         specifier: ^9.0.12
         version: 9.0.12(yjs@13.6.29)
@@ -248,7 +248,10 @@ importers:
         version: 1.25.7
       spacetimedb:
         specifier: 2.0.3
-        version: 2.0.3(react@19.2.3)
+        version: 2.0.3(react@19.2.3)(undici@7.29.0)
+      undici:
+        specifier: ^7
+        version: 7.29.0
       unpdf:
         specifier: ^1.8.1
         version: 1.8.1
@@ -11411,7 +11414,7 @@ snapshots:
 
   space-separated-tokens@2.0.2: {}
 
-  spacetimedb@2.0.3(react@19.2.3):
+  spacetimedb@2.0.3(react@19.2.3)(undici@7.29.0):
     dependencies:
       base64-js: 1.5.1
       headers-polyfill: 4.0.3
@@ -11423,6 +11426,7 @@ snapshots:
       url-polyfill: 1.1.14
     optionalDependencies:
       react: 19.2.3
+      undici: 7.29.0
 
   sprintf-js@1.0.3: {}
 

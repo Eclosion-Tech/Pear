@@ -22,7 +22,6 @@
 
 import type { ConnLike } from "./tools.js";
 import type { ImageBlock } from "./providers.js";
-import { fetchObjectBase64, isS3Configured } from "./s3.js";
 import { readComponentTreeDoc } from "./component-authoring.js";
 import type { WorkspaceFileReader } from "../../web/src/lib/mcp/index.js";
 
@@ -117,7 +116,7 @@ export async function resolveConversationAttachments(
       const objectKey = optString(row.objectKey);
       const fileName = optString(row.fileName) ?? "image";
       if (!objectKey) continue;
-      if (!isS3Configured()) {
+      if (!files?.readImage) {
         appendContext(
           entry,
           `[Attached image "${fileName}" could not be loaded: S3 is not configured for this worker]`,
@@ -125,7 +124,8 @@ export async function resolveConversationAttachments(
         continue;
       }
       try {
-        const data = await fetchObjectBase64(objectKey);
+        const data = await files!.readImage!(objectKey);
+        if (!data) throw new Error("Attachment is not accessible");
         const rawType = optString(row.mimeType) ?? "image/png";
         const mediaType = SUPPORTED_IMAGE_TYPES.has(rawType) ? rawType : "image/png";
         entry.images.push({

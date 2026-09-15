@@ -322,6 +322,10 @@ pub fn update_ai_user_profile(
     display_name: String,
     avatar_url: Option<String>,
 ) -> Result<(), String> {
+    let managed = ctx.db.ai_user_config().id().find(ai_user_id)
+        .ok_or("AI user not found")?;
+    require_creator_or_admin(ctx, managed.created_by, "manage this AI user")?;
+
     let display_name = display_name.trim().to_string();
     if display_name.is_empty() {
         return Err("Display name is required".to_string());
@@ -380,8 +384,7 @@ pub fn update_ai_user_system_prompt(
 /// the profile's provider/model display is left on the active backend (see
 /// `set_ai_user_inference_backend`). Clear the binding to switch to cloud.
 ///
-/// Intentionally has no `require_creator_or_admin` guard: some deployments
-/// restrict who may call reducers entirely at the HTTP/API layer.
+/// Authorization is enforced here even when a caller bypasses the HTTP UI.
 #[reducer]
 pub fn update_ai_user_config(
     ctx: &ReducerContext,
@@ -392,6 +395,10 @@ pub fn update_ai_user_config(
     system_prompt: Option<String>,
     max_tokens: Option<u32>,
 ) -> Result<(), String> {
+    let managed = ctx.db.ai_user_config().id().find(ai_user_id)
+        .ok_or("AI user not found")?;
+    require_creator_or_admin(ctx, managed.created_by, "manage this AI user")?;
+
     if model.trim().is_empty() {
         return Err("Model is required".to_string());
     }
@@ -453,14 +460,17 @@ pub fn update_ai_user_config(
 /// endpoint, and max tokens. The chosen model must be reachable by the existing
 /// key (same provider family). Mirrors the new model to the public profile.
 ///
-/// Unguarded at the reducer level like the other AI-user config updates;
-/// deployments restrict callers at the HTTP/API layer.
+/// Only the authenticated creator, workspace admin, or publisher may change it.
 #[reducer]
 pub fn set_ai_user_model(
     ctx: &ReducerContext,
     ai_user_id: u64,
     model: String,
 ) -> Result<(), String> {
+    let managed = ctx.db.ai_user_config().id().find(ai_user_id)
+        .ok_or("AI user not found")?;
+    require_creator_or_admin(ctx, managed.created_by, "manage this AI user")?;
+
     let model_name = model.trim().to_string();
     if model_name.is_empty() {
         return Err("Model is required".to_string());
@@ -502,6 +512,10 @@ pub fn set_ai_user_api_key(
     ai_user_id: u64,
     api_key: Option<String>,
 ) -> Result<(), String> {
+    let managed = ctx.db.ai_user_config().id().find(ai_user_id)
+        .ok_or("AI user not found")?;
+    require_creator_or_admin(ctx, managed.created_by, "manage this AI user")?;
+
     let config = ctx
         .db
         .ai_user_config()
@@ -537,6 +551,10 @@ pub fn set_ai_user_worker_token(
     ai_user_identity: Identity,
     worker_token: Option<String>,
 ) -> Result<(), String> {
+    let managed = ctx.db.ai_user_config().identity().find(ai_user_identity)
+        .ok_or("AI user not found")?;
+    require_creator_or_admin(ctx, managed.created_by, "manage this AI user")?;
+
     let config = ctx
         .db
         .ai_user_config()
@@ -555,6 +573,10 @@ pub fn set_ai_user_worker_token(
 /// and the public profile.
 #[reducer]
 pub fn delete_ai_user(ctx: &ReducerContext, ai_user_id: u64) -> Result<(), String> {
+    let managed = ctx.db.ai_user_config().id().find(ai_user_id)
+        .ok_or("AI user not found")?;
+    require_creator_or_admin(ctx, managed.created_by, "manage this AI user")?;
+
     ctx.db
         .ai_user_config()
         .id()
@@ -575,6 +597,10 @@ pub fn set_ai_user_tool_secrets_json(
     ai_user_id: u64,
     tool_secrets_json: Option<String>,
 ) -> Result<(), String> {
+    let managed = ctx.db.ai_user_config().id().find(ai_user_id)
+        .ok_or("AI user not found")?;
+    require_creator_or_admin(ctx, managed.created_by, "manage this AI user")?;
+
     let config = ctx
         .db
         .ai_user_config()
@@ -600,6 +626,10 @@ pub fn set_ai_user_inference_backend(
     ai_user_id: u64,
     inference_backend_json: Option<String>,
 ) -> Result<(), String> {
+    let managed = ctx.db.ai_user_config().id().find(ai_user_id)
+        .ok_or("AI user not found")?;
+    require_creator_or_admin(ctx, managed.created_by, "manage this AI user")?;
+
     if inference_backend_json.as_deref().is_some_and(|j| j.len() > 4096) {
         return Err("Inference backend binding too large (max 4 KiB)".to_string());
     }
@@ -673,6 +703,10 @@ pub fn set_ai_user_serper_api_key(
     ai_user_id: u64,
     serper_api_key: Option<String>,
 ) -> Result<(), String> {
+    let managed = ctx.db.ai_user_config().id().find(ai_user_id)
+        .ok_or("AI user not found")?;
+    require_creator_or_admin(ctx, managed.created_by, "manage this AI user")?;
+
     let config = ctx
         .db
         .ai_user_config()

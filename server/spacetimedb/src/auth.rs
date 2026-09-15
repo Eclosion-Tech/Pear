@@ -55,14 +55,39 @@ pub struct User {
 }
 
 /// Stores hashed credentials — never synced to clients (private).
+#[derive(Clone)]
 #[table(accessor = user_credential, private)]
 pub struct UserCredential {
     #[primary_key]
     pub email: String,
     pub name: String,
-    /// SHA-256( email + NUL + password + NUL + "pear-auth-v1" ) as lowercase hex.
+    /// Versioned PBKDF2-HMAC-SHA256 envelope; legacy digests require migration.
     pub password_hash: String,
     pub created_at: Timestamp,
+}
+
+/// Publisher-configured trust anchor. Empty/missing means native login only.
+#[table(accessor = oidc_trust_policy, private)]
+pub struct OidcTrustPolicy {
+    #[primary_key]
+    pub id: u8,
+    pub issuer: String,
+    pub audience: String,
+}
+
+#[reducer]
+pub fn set_oidc_trust_policy(ctx: &ReducerContext, issuer: String, audience: String) -> Result<(), String> {
+    if !crate::module_install::sender_is_module_publisher(ctx) {
+        return Err("Only the publisher may configure OIDC trust".into());
+    }
+    if !issuer.starts_with("https://") || audience.trim().is_empty() {
+        return Err("OIDC requires an HTTPS issuer and a non-empty audience".into());
+    }
+    let row = OidcTrustPolicy { id: 0, issuer, audience };
+    if ctx.db.oidc_trust_policy().id().find(0).is_some() {
+        ctx.db.oidc_trust_policy().id().update(row);
+    } else { ctx.db.oidc_trust_policy().insert(row); }
+    Ok(())
 }
 
 /// Per-human user preferences. Sparse — only stores the keys the user has
@@ -106,8 +131,8 @@ pub fn register(
     if name.is_empty() {
         return Err("Name is required".to_string());
     }
-    if password.len() < 6 {
-        return Err("Password must be at least 6 characters".to_string());
+    if password.len() < 12 || password.len() > 1024 {
+        return Err("Password must be between 12 and 1024 bytes".to_string());
     }
     if ctx.db.user_credential().email().find(&email).is_some() {
         return Err("Email already registered".to_string());
@@ -116,7 +141,7 @@ pub fn register(
     ctx.db.user_credential().insert(UserCredential {
         email: email.clone(),
         name: name.clone(),
-        password_hash: hash_password(&email, &password),
+        password_hash: harden_digest(&legacy_password_digest(&email, &password), &crate::stable_ids::generate_external_id(ctx, "password-salt", &email)),
         created_at: ctx.timestamp,
     });
 
@@ -159,8 +184,8 @@ pub fn create_local_user(
     if name.is_empty() {
         return Err("Name is required".to_string());
     }
-    if password.len() < 6 {
-        return Err("Password must be at least 6 characters".to_string());
+    if password.len() < 12 || password.len() > 1024 {
+        return Err("Password must be between 12 and 1024 bytes".to_string());
     }
     if ctx.db.user_credential().email().find(&email).is_some() {
         return Err("Email already registered".to_string());
@@ -169,7 +194,7 @@ pub fn create_local_user(
     ctx.db.user_credential().insert(UserCredential {
         email: email.clone(),
         name,
-        password_hash: hash_password(&email, &password),
+        password_hash: harden_digest(&legacy_password_digest(&email, &password), &crate::stable_ids::generate_external_id(ctx, "password-salt", &email)),
         created_at: ctx.timestamp,
     });
     Ok(())
@@ -179,16 +204,40 @@ pub fn create_local_user(
 #[reducer]
 pub fn login(ctx: &ReducerContext, email: String, password: String) -> Result<(), String> {
     let email = email.trim().to_lowercase();
-    let cred = ctx
-        .db
-        .user_credential()
-        .email()
-        .find(&email)
-        .ok_or_else(|| "Invalid email or password".to_string())?;
-
-    if cred.password_hash != hash_password(&email, &password) {
-        return Err("Invalid email or password".to_string());
+    if email.len() > 320 || password.len() > 1024 { return Err("Invalid credentials".into()); }
+    let Some(mut cred) = ctx.db.user_credential().email().find(&email) else {
+        record_login_result(ctx, false, "Invalid email or password");
+        return Ok(());
+    };
+    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let mut attempts = ctx.db.local_login_attempt().email().find(&email)
+        .unwrap_or(LocalLoginAttempt { email: email.clone(), window_start: now, attempts: 0 });
+    if now.saturating_sub(attempts.window_start) >= 900_000_000 {
+        attempts.window_start = now;
+        attempts.attempts = 0;
     }
+    if attempts.attempts >= 10 {
+        record_login_result(ctx, false, "Too many attempts; try again in 15 minutes");
+        return Ok(());
+    }
+    attempts.attempts += 1;
+    let digest = legacy_password_digest(&email, &password);
+    let valid = verify_password_digest(&cred.password_hash, &digest);
+    if valid { attempts.attempts = 0; }
+    if ctx.db.local_login_attempt().email().find(&email).is_some() {
+        ctx.db.local_login_attempt().email().update(attempts);
+    } else { ctx.db.local_login_attempt().insert(attempts); }
+    // Returning Err would roll back the failed-attempt counter. The caller
+    // observes its private login_result row; authentication remains false.
+    if !valid {
+        record_login_result(ctx, false, "Invalid email or password");
+        return Ok(());
+    }
+    if !cred.password_hash.starts_with("pbkdf2-sha256-v1$") {
+        cred.password_hash = harden_digest(&digest, &crate::stable_ids::generate_external_id(ctx, "password-salt", &email));
+        ctx.db.user_credential().email().update(cred.clone());
+    }
+    record_login_result(ctx, true, "");
 
     let identity = ctx.sender();
     let needs_bootstrap_admin = workspace_has_no_admin(ctx);
@@ -314,6 +363,12 @@ pub(crate) fn extract_oidc_profile(ctx: &ReducerContext) -> (String, String) {
     let Ok(claims) = serde_json::from_str::<serde_json::Value>(jwt.raw_payload()) else {
         return (String::new(), String::new());
     };
+    let Some(policy) = ctx.db.oidc_trust_policy().id().find(0) else {
+        return (String::new(), String::new());
+    };
+    if !trusted_oidc_claims(&claims, &policy.issuer, &policy.audience) {
+        return (String::new(), String::new());
+    }
     let email = claims["email"].as_str().unwrap_or("").to_string();
     let name = claims["name"]
         .as_str()
@@ -322,9 +377,15 @@ pub(crate) fn extract_oidc_profile(ctx: &ReducerContext) -> (String, String) {
         .to_string();
     (email, name)
 }
+
+fn trusted_oidc_claims(claims: &serde_json::Value, issuer: &str, audience: &str) -> bool {
+    claims["iss"].as_str() == Some(issuer)
+        && (claims["aud"].as_str() == Some(audience)
+            || claims["aud"].as_array().is_some_and(|a| a.iter().any(|v| v.as_str() == Some(audience))))
+}
 /// SHA-256( email + NUL + password + NUL + "pear-auth-v1" ) as lowercase hex.
 /// The email acts as a per-user salt — simple and deterministic, fine for local use.
-fn hash_password(email: &str, password: &str) -> String {
+fn legacy_password_digest(email: &str, password: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(email.as_bytes());
     hasher.update(b"\x00");
@@ -483,4 +544,86 @@ pub fn set_workspace_setting(
         });
     }
     Ok(())
+}
+
+
+#[table(accessor = local_login_attempt, private)]
+pub struct LocalLoginAttempt {
+    #[primary_key]
+    pub email: String,
+    pub window_start: i64,
+    pub attempts: u32,
+}
+
+#[table(accessor = login_result, public)]
+pub struct LoginResult {
+    #[primary_key]
+    pub identity: Identity,
+    pub success: bool,
+    pub message: String,
+    pub at: Timestamp,
+}
+
+#[spacetimedb::client_visibility_filter]
+const LOGIN_RESULT_READ: spacetimedb::Filter = spacetimedb::Filter::Sql("SELECT * FROM login_result WHERE identity = :sender");
+
+fn record_login_result(ctx: &ReducerContext, success: bool, message: &str) {
+    let row = LoginResult { identity: ctx.sender(), success, message: message.into(), at: ctx.timestamp };
+    if ctx.db.login_result().identity().find(ctx.sender()).is_some() {
+        ctx.db.login_result().identity().update(row);
+    } else { ctx.db.login_result().insert(row); }
+}
+
+const PASSWORD_ROUNDS: u32 = 600_000;
+fn harden_digest(digest: &str, salt: &str) -> String {
+    let mut out = [0u8; 32];
+    pbkdf2::pbkdf2_hmac::<Sha256>(digest.as_bytes(), salt.as_bytes(), PASSWORD_ROUNDS, &mut out);
+    format!("pbkdf2-sha256-v1${}${}", salt, hex::encode(out))
+}
+fn verify_password_digest(stored: &str, digest: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    if let Some(rest) = stored.strip_prefix("pbkdf2-sha256-v1$") {
+        let Some((salt, _)) = rest.split_once('$') else { return false; };
+        stored.as_bytes().ct_eq(harden_digest(digest, salt).as_bytes()).into()
+    } else {
+        stored.as_bytes().ct_eq(digest.as_bytes()).into()
+    }
+}
+
+/// Harden legacy stored digests without needing users' plaintext passwords.
+/// Bounded batches avoid a long-running migration transaction.
+#[reducer]
+pub fn harden_local_passwords(ctx: &ReducerContext, limit: u32) -> Result<(), String> {
+    if !crate::module_install::sender_is_module_publisher(ctx) {
+        return Err("Only the publisher may migrate passwords".into());
+    }
+    let rows: Vec<_> = ctx.db.user_credential().iter()
+        .filter(|c| !c.password_hash.starts_with("pbkdf2-sha256-v1$"))
+        .take(limit.clamp(1, 10) as usize).collect();
+    for mut row in rows {
+        row.password_hash = harden_digest(&row.password_hash, &crate::stable_ids::generate_external_id(ctx, "password-salt", &row.email));
+        ctx.db.user_credential().email().update(row);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+    #[test]
+    fn password_envelope_preserves_legacy_migration_without_accepting_wrong_password() {
+        let digest = legacy_password_digest("user@test", "a sufficiently long password");
+        let hardened = harden_digest(&digest, "unique-salt");
+        assert!(verify_password_digest(&hardened, &digest));
+        assert!(!verify_password_digest(&hardened, &legacy_password_digest("user@test", "wrong")));
+        assert_ne!(hardened, harden_digest(&digest, "another-salt"));
+    }
+    #[test]
+    fn oidc_requires_exact_issuer_and_audience() {
+        let good = serde_json::json!({"iss":"https://trusted.test", "aud":["pear"]});
+        assert!(trusted_oidc_claims(&good, "https://trusted.test", "pear"));
+        assert!(!trusted_oidc_claims(&good, "https://attacker.test", "pear"));
+        assert!(!trusted_oidc_claims(&good, "https://trusted.test", "other"));
+        assert!(!trusted_oidc_claims(&serde_json::json!({"email":"admin@test"}), "https://trusted.test", "pear"));
+    }
 }

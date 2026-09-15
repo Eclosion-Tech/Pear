@@ -1,6 +1,20 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isPrivateIp, ssrfSafeFetch } from "./ssrf.js";
+import { isPrivateIp, ssrfSafeFetch, publicSocketLookup } from "./ssrf.js";
+
+test("socket lookup rejects rebinding and returns only the addresses it validated", async () => {
+  const lookup = publicSocketLookup((async () => [{ address: "127.0.0.1", family: 4 }]) as any);
+  await new Promise<void>(resolve => lookup("attacker.test", { all: true }, (err) => {
+    assert.match(err?.message ?? "", /Blocked/);
+    resolve();
+  }));
+  const publicLookup = publicSocketLookup((async () => [{ address: "1.1.1.1", family: 4 }]) as any);
+  await new Promise<void>(resolve => publicLookup("public.test", { all: true }, (err, addresses) => {
+    assert.equal(err, null);
+    assert.deepEqual(addresses, [{ address: "1.1.1.1", family: 4 }]);
+    resolve();
+  }));
+});
 
 test("blocks cloud metadata link-local address", () => {
   assert.equal(isPrivateIp("169.254.169.254"), true);
@@ -52,6 +66,19 @@ test("blocks IPv4-mapped IPv6 pointing at a private address", () => {
 
 test("allows a public IPv6 address", () => {
   assert.equal(isPrivateIp("2606:4700:4700::1111"), false); // cloudflare
+});
+
+test("rejects canonical mapped IPv6, alternate loopback and transition ranges", async () => {
+  for (const ip of ["::ffff:7f00:1", "::ffff:a9fe:a9fe", "0:0:0:0:0:0:0:1", "febf::1", "64:ff9b::7f00:1", "2002:7f00:1::", "invalid::address"]) {
+    assert.equal(isPrivateIp(ip), true, ip);
+  }
+  const originalFetch = globalThis.fetch;
+  let fetched = false;
+  globalThis.fetch = async () => { fetched = true; return new Response("unexpected"); };
+  try {
+    await assert.rejects(ssrfSafeFetch("http://[::ffff:127.0.0.1]/"), /Blocked/);
+    assert.equal(fetched, false);
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test("treats malformed addresses as unsafe (fail closed)", () => {

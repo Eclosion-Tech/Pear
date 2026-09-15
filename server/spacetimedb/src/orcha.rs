@@ -13,6 +13,17 @@ use crate::conversations::{
     ConversationMessage, ConversationStatus, MessageSender, MessageStatus,
 };
 use crate::id_counters::alloc_id;
+use crate::access_control::helpers::{can_write_page, is_workspace_principal};
+use crate::auth::user;
+use crate::module_install::module_install_meta;
+use crate::module_install::sender_is_module_publisher;
+
+/// Queue execution belongs to the trusted worker, never a caller-supplied
+/// agent name. The cloud and standalone worker connect as module publisher.
+fn require_worker(ctx: &ReducerContext) -> Result<(), String> {
+    if sender_is_module_publisher(ctx) { Ok(()) }
+    else { Err("Only the module publisher may execute worker operations".to_string()) }
+}
 
 /// Max delegation depth (job spawning a job via `delegate`). A top-level job is
 /// depth 0; `create_job` refuses anything deeper than this.
@@ -125,6 +136,7 @@ pub struct OrchaJob {
     /// Must remain last for schema migration (STDB only allows additive changes
     /// at the end of a struct).
     #[default(Identity::ZERO)]
+    #[index(btree)]
     pub spawning_principal: Identity,
 }
 
@@ -405,9 +417,20 @@ pub fn create_job(
     parent_job_id: Option<u64>,
     task_graph_json: String,
 ) -> Result<(), String> {
+    let _ = user_id;
+    if let Some(id) = parent_job_id {
+        let parent = ctx.db.orcha_job().id().find(id).ok_or("Parent job not found")?;
+        let acting_ai = parent.ai_user_id.and_then(|id| ctx.db.ai_user_config().id().find(id));
+        if parent.spawning_principal != ctx.sender()
+            && !acting_ai.is_some_and(|a| a.identity == ctx.sender())
+            && !sender_is_module_publisher(ctx) {
+            return Err("Cannot delegate from another principal's job".to_string());
+        }
+    }
     create_job_inner(
         ctx,
-        user_id,
+        // Ignore the legacy display identity supplied by clients for attribution.
+        ctx.sender(),
         prompt,
         page_id,
         ai_user_id,
@@ -424,7 +447,7 @@ pub fn create_job(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn create_job_inner(
     ctx: &ReducerContext,
-    user_id: String,
+    principal: Identity,
     prompt: String,
     page_id: Option<u64>,
     // AI user whose credentials should be used for inference. The caller knows
@@ -444,6 +467,28 @@ pub(crate) fn create_job_inner(
     parent_job_id: Option<u64>,
     task_graph_json: String,
 ) -> Result<u64, String> {
+    // Apply the same checks to direct requests and automation run-as identities.
+    // Jobs without an AI assignment execute tools on the publisher connection.
+    if !is_workspace_principal(ctx, principal) {
+        return Err("Authentication required".to_string());
+    }
+    let privileged = ctx.db.user().identity().find(principal)
+        .is_some_and(|u| u.is_authenticated && u.is_admin)
+        || ctx.db.module_install_meta().id().find(0)
+            .is_some_and(|m| m.publisher_identity == principal);
+    if let Some(id) = page_id {
+        if !can_write_page(ctx, id, principal) {
+            return Err("Cannot run a job on this page".to_string());
+        }
+    }
+    if let Some(id) = ai_user_id {
+        let ai = ctx.db.ai_user_config().id().find(id).ok_or("AI user not found")?;
+        if ai.identity != principal && ai.created_by != principal && !privileged {
+            return Err("Cannot run jobs with this AI user's credentials".to_string());
+        }
+    } else if !privileged {
+        return Err("Jobs without an AI identity require workspace administrator authority".to_string());
+    }
     // Delegation-depth guard: derive this job's depth from its parent and refuse
     // to spawn past the max, so a runaway delegate->delegate chain can't fan out
     // unbounded across jobs (a different axis from the within-job orchestrate
@@ -475,7 +520,7 @@ pub(crate) fn create_job_inner(
 
     let job = ctx.db.orcha_job().insert(OrchaJob {
         id: next_orcha_job_id(ctx),
-        user_id,
+        user_id: principal.to_hex().to_string(),
         ai_user_id,
         prompt,
         page_id,
@@ -485,7 +530,7 @@ pub(crate) fn create_job_inner(
         nonce: if nonce.is_empty() { None } else { Some(nonce) },
         parent_job_id,
         spawn_depth,
-        spawning_principal: ctx.sender(),
+        spawning_principal: principal,
     });
     let job_id = job.id;
 
@@ -539,6 +584,7 @@ pub fn register_agent(
     agent_id: String,
     capabilities: Vec<String>,
 ) -> Result<(), String> {
+    require_worker(ctx)?;
     if let Some(existing) = ctx.db.orcha_agent().id().find(agent_id.clone()) {
         ctx.db.orcha_agent().id().update(OrchaAgent {
             capabilities,
@@ -562,6 +608,7 @@ pub fn register_agent(
 /// hasn't registered yet (register_agent will stamp it on the next connect).
 #[reducer]
 pub fn heartbeat_agent(ctx: &ReducerContext, agent_id: String) -> Result<(), String> {
+    require_worker(ctx)?;
     if let Some(agent) = ctx.db.orcha_agent().id().find(agent_id) {
         ctx.db.orcha_agent().id().update(OrchaAgent {
             last_heartbeat_at: Some(ctx.timestamp),
@@ -574,6 +621,7 @@ pub fn heartbeat_agent(ctx: &ReducerContext, agent_id: String) -> Result<(), Str
 /// Claim a pending task. Fails if already claimed, dependencies unmet, or agent lacks capabilities.
 #[reducer]
 pub fn claim_task(ctx: &ReducerContext, agent_id: String, task_id: u64) -> Result<(), String> {
+    require_worker(ctx)?;
     let task = ctx
         .db
         .orcha_task()
@@ -636,6 +684,7 @@ pub fn submit_result(
     task_id: u64,
     result: String,
 ) -> Result<(), String> {
+    require_worker(ctx)?;
     let task = ctx
         .db
         .orcha_task()
@@ -663,6 +712,7 @@ pub fn fail_task(
     task_id: u64,
     error: String,
 ) -> Result<(), String> {
+    require_worker(ctx)?;
     let task = ctx
         .db
         .orcha_task()
@@ -695,6 +745,7 @@ pub fn add_tasks_to_job(
     job_id: u64,
     task_graph_json: String,
 ) -> Result<(), String> {
+    require_worker(ctx)?;
     ctx.db
         .orcha_job()
         .id()
@@ -756,6 +807,7 @@ pub fn set_shared_context(
     value: String,
     created_by: String,
 ) -> Result<(), String> {
+    require_worker(ctx)?;
     ctx.db
         .orcha_job()
         .id()
@@ -809,6 +861,7 @@ pub fn record_usage_event(
     tokens_out: u64,
     wall_clock_ms: u64,
 ) -> Result<(), String> {
+    require_worker(ctx)?;
     if let Some(uid) = ai_user_id {
         if let Some(cap) = ctx
             .db

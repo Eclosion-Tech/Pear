@@ -43,6 +43,7 @@ pub fn create_api_endpoint(
     allowed_methods: Vec<HttpMethod>,
     require_auth: bool,
 ) -> Result<(), String> {
+    crate::access_control::helpers::require_page_write(ctx, database_page_id)?;
     validate_slug(&slug)?;
 
     if display_name.trim().is_empty() {

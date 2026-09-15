@@ -14,14 +14,36 @@
  *   3. Redirects are followed manually, re-validating the host of every hop, so
  *      a public URL cannot redirect into the internal network.
  *
- * Residual risk: DNS rebinding between our resolve and the socket's own resolve
- * (TOCTOU). Closing it fully needs connect-time IP pinning (a custom dispatcher
- * lookup); this resolve-then-validate approach blocks the realistic attacks
- * (literal private IPs, hostnames pointing at metadata, redirects to internal)
- * without a new dependency.
+ * The dispatcher's socket lookup independently validates every address it
+ * returns. The socket uses those exact addresses, closing the DNS-rebinding
+ * gap between preflight and connection. TLS still verifies the original host.
  */
 
 import { lookup as dnsLookup } from "node:dns/promises";
+import type { LookupFunction } from "node:net";
+import { Agent } from "undici";
+
+export function publicSocketLookup(resolve = dnsLookup): LookupFunction {
+  return (hostname, options, callback) => {
+    resolve(hostname, { all: true }).then(addresses => {
+      if (!addresses.length || addresses.some(a => isPrivateIp(a.address))) {
+        callback(new Error("Blocked private/internal socket address"), "", 4);
+        return;
+      }
+      const family = typeof options === "number" ? options : options.family;
+      const eligible = addresses.filter(a => !family || a.family === family);
+      if (!eligible.length) {
+        callback(new Error("No public address for requested family"), "", 4);
+      } else if (typeof options === "object" && options.all) {
+        callback(null, eligible);
+      } else {
+        callback(null, eligible[0].address, eligible[0].family);
+      }
+    }).catch(() => callback(new Error("Socket DNS resolution failed"), "", 4));
+  };
+}
+
+const publicDispatcher = new Agent({ connect: { lookup: publicSocketLookup() } });
 
 const MAX_REDIRECTS = 5;
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -34,9 +56,18 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 export function isPrivateIp(ip: string): boolean {
   let addr = ip.toLowerCase().trim();
 
-  // Unwrap IPv4-mapped IPv6 (e.g. ::ffff:169.254.169.254) to its IPv4 form.
-  const mapped = addr.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
-  if (mapped) addr = mapped[1];
+  if (addr.includes(":")) {
+    // URL canonicalization turns ::ffff:127.0.0.1 into ::ffff:7f00:1.
+    // Checking only dotted mapped addresses allows requests to loopback.
+    try { addr = new URL(`http://[${addr}]/`).hostname.slice(1, -1); }
+    catch { return true; }
+    // Only ordinary global-unicast IPv6 is eligible. Mapped IPv4, NAT64,
+    // local, multicast and unclassified/reserved ranges fail closed.
+    return !/^[23][0-9a-f]{3}:/.test(addr)
+      || (addr.startsWith("2001:") && parseInt(addr.split(":")[1] || "0", 16) < 0x200)
+      || addr.startsWith("2001:db8:")
+      || addr.startsWith("2002:"); // 6to4 embeds an IPv4 destination.
+  }
 
   // IPv4
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(addr)) {
@@ -55,14 +86,6 @@ export function isPrivateIp(ip: string): boolean {
     if (a >= 224) return true; // 224/4 multicast + 240/4 reserved
     return false;
   }
-
-  // IPv6
-  if (addr === "::" || addr === "::1") return true; // unspecified + loopback
-  if (addr.startsWith("fe80")) return true; // link-local
-  if (addr.startsWith("fc") || addr.startsWith("fd")) return true; // fc00::/7 ULA
-  if (addr.startsWith("ff")) return true; // multicast
-  // Anything else that still looks like IPv6 we can't classify → treat as unsafe.
-  if (addr.includes(":")) return false;
 
   // Not an IP literal we recognize.
   return true;
@@ -140,7 +163,8 @@ export async function ssrfSafeFetch(
         ...requestInit,
         signal: controller.signal,
         redirect: "manual",
-      });
+        dispatcher: publicDispatcher,
+      } as RequestInit & { dispatcher: Agent });
 
       if (res.status >= 300 && res.status < 400 && res.headers.has("location")) {
         const location = res.headers.get("location");

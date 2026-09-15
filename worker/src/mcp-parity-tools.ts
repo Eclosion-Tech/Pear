@@ -293,7 +293,7 @@ export async function executeMcpParityTool(
         transport,
         aiUserId: ctx.aiUserId,
         conversationId: ctx.conversationId,
-        files: workspaceFileReaderFor(registered.dbName),
+        files: workspaceFileReaderFor(registered.dbName, transport),
       },
       args,
     );
@@ -303,4 +303,9 @@ export async function executeMcpParityTool(
       error: err instanceof Error ? err.message : String(err),
     });
   }
+}
+
+export function mcpFilesFor(identityHex: string) {
+  const registered = transports.get(identityHex);
+  return registered ? workspaceFileReaderFor(registered.dbName, registered.transport) : undefined;
 }

@@ -59,7 +59,7 @@ export function FileBlockRenderer({ node }: BlockRendererProps) {
     setError(null);
     try {
       const contentType = file.type || DEFAULT_CONTENT_TYPE;
-      const up = await uploadWorkspaceBlob({ slug, body: file, contentType });
+      const up = await uploadWorkspaceBlob({ slug, body: file, contentType, pageId: attachmentCtx.pageId });
       if (!up) {
         setError("Upload failed — check storage quota and try again.");
         return;

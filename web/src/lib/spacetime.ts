@@ -150,6 +150,9 @@ export function buildConnectionBuilder(
   const savedToken =
     typeof window !== "undefined" ? (localStorage.getItem(tokenKey) ?? undefined) : undefined;
 
+  // Cloud membership must be revalidated with a live OIDC credential. Never
+  // fall back to a cached native identity while OIDC is loading/refreshing.
+  if (onOidcExpired && !oidcToken) return null;
   const token = oidcToken ?? savedToken;
 
   const handleAuthError = () => {
@@ -176,7 +179,7 @@ export function buildConnectionBuilder(
       .onConnect((conn, identity, newToken) => {
         console.log("[SpacetimeDB] Connected, identity:", identity.toHexString());
         if (typeof window !== "undefined") {
-          localStorage.setItem(tokenKey, newToken);
+          if (!oidcToken) localStorage.setItem(tokenKey, newToken);
         }
         // No subscribeToAllTables here — every consumer subscribes through
         // useTable (per-query subscriptions), and the SDK documents mixing

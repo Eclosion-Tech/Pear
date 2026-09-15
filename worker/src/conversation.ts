@@ -65,8 +65,7 @@ import {
   reconstructSessionTail,
 } from "./session-reconstruct.js";
 import { resolveConversationAttachments } from "./attachments.js";
-import { mcpDbNameFor } from "./mcp-parity-tools.js";
-import { workspaceFileReaderFor } from "./workspace-files.js";
+import { mcpFilesFor } from "./mcp-parity-tools.js";
 import {
   type StoredToolCall,
   cap,
@@ -651,8 +650,7 @@ function delegatedJobIdFromResult(result: string): bigint | undefined {
  * `read_file` read through exactly the same S3 path.
  */
 function fileReaderForIdentity(selfHex: string) {
-  const dbName = mcpDbNameFor(selfHex);
-  return dbName ? workspaceFileReaderFor(dbName) : undefined;
+  return mcpFilesFor(selfHex);
 }
 
 function isParticipant(

@@ -108,6 +108,7 @@ import FindOrCreateDmReducer from "./find_or_create_dm_reducer";
 import GrantAutoApplyReducer from "./grant_auto_apply_reducer";
 import GrantBridgeDeviceReducer from "./grant_bridge_device_reducer";
 import GrantExtensionPermissionReducer from "./grant_extension_permission_reducer";
+import HardenLocalPasswordsReducer from "./harden_local_passwords_reducer";
 import HeartbeatAgentReducer from "./heartbeat_agent_reducer";
 import ImportNotionReducer from "./import_notion_reducer";
 import ImportPearSnapshotV1Reducer from "./import_pear_snapshot_v_1_reducer";
@@ -204,6 +205,7 @@ import SetExtensionEnabledReducer from "./set_extension_enabled_reducer";
 import SetMcpServerApiKeyReducer from "./set_mcp_server_api_key_reducer";
 import SetMessageComponentTreeReducer from "./set_message_component_tree_reducer";
 import SetMessageFeedbackReducer from "./set_message_feedback_reducer";
+import SetOidcTrustPolicyReducer from "./set_oidc_trust_policy_reducer";
 import SetPageAccessRuleReducer from "./set_page_access_rule_reducer";
 import SetPageEmbeddingReducer from "./set_page_embedding_reducer";
 import SetPageHiddenReducer from "./set_page_hidden_reducer";
@@ -290,6 +292,7 @@ import ExtensionRuntimeHealthRow from "./extension_runtime_health_table";
 import HarnessTemplateRow from "./harness_template_table";
 import IdCounterRow from "./id_counter_table";
 import InstalledExtensionRow from "./installed_extension_table";
+import LoginResultRow from "./login_result_table";
 import MessageFeedbackRow from "./message_feedback_table";
 import MigrationStateRow from "./migration_state_table";
 import ModuleInstallMetaRow from "./module_install_meta_table";
@@ -309,9 +312,13 @@ import PagePropertyValueHistoryRow from "./page_property_value_history_table";
 import PageSnapshotRow from "./page_snapshot_table";
 import PageYjsStateRow from "./page_yjs_state_table";
 import PropertyDefinitionRow from "./property_definition_table";
+import ReadableAutomationEventsRow from "./readable_automation_events_table";
+import ReadableAutomationsRow from "./readable_automations_table";
 import ReadableComponentsRow from "./readable_components_table";
 import ReadableConversationsRow from "./readable_conversations_table";
+import ReadableJobsRow from "./readable_jobs_table";
 import ReadablePagesRow from "./readable_pages_table";
+import ReadableReviewSnapshotsRow from "./readable_review_snapshots_table";
 import ReadableSchemasRow from "./readable_schemas_table";
 import ReviewAgentBindingRow from "./review_agent_binding_table";
 import ReviewAnnotationRow from "./review_annotation_table";
@@ -566,6 +573,9 @@ const tablesSchema = __schema({
   automation_rule: __table({
     name: 'automation_rule',
     indexes: [
+      { name: 'created_by', algorithm: 'btree', columns: [
+        'createdBy',
+      ] },
       { name: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
@@ -930,6 +940,17 @@ const tablesSchema = __schema({
       { name: 'installed_extension_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, InstalledExtensionRow),
+  login_result: __table({
+    name: 'login_result',
+    indexes: [
+      { name: 'identity', algorithm: 'btree', columns: [
+        'identity',
+      ] },
+    ],
+    constraints: [
+      { name: 'login_result_identity_key', constraint: 'unique', columns: ['identity'] },
+    ],
+  }, LoginResultRow),
   message_feedback: __table({
     name: 'message_feedback',
     indexes: [
@@ -996,6 +1017,9 @@ const tablesSchema = __schema({
       ] },
       { name: 'page_id', algorithm: 'btree', columns: [
         'pageId',
+      ] },
+      { name: 'spawning_principal', algorithm: 'btree', columns: [
+        'spawningPrincipal',
       ] },
     ],
     constraints: [
@@ -1299,6 +1323,20 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, MyExtensionPermissionsRow),
+  readable_automation_events: __table({
+    name: 'readable_automation_events',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, ReadableAutomationEventsRow),
+  readable_automations: __table({
+    name: 'readable_automations',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, ReadableAutomationsRow),
   readable_components: __table({
     name: 'readable_components',
     indexes: [
@@ -1313,6 +1351,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, ReadableConversationsRow),
+  readable_jobs: __table({
+    name: 'readable_jobs',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, ReadableJobsRow),
   readable_pages: __table({
     name: 'readable_pages',
     indexes: [
@@ -1320,6 +1365,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, ReadablePagesRow),
+  readable_review_snapshots: __table({
+    name: 'readable_review_snapshots',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, ReadableReviewSnapshotsRow),
   readable_schemas: __table({
     name: 'readable_schemas',
     indexes: [
@@ -1405,6 +1457,7 @@ const reducersSchema = __reducers(
   __reducerSchema("grant_auto_apply", GrantAutoApplyReducer),
   __reducerSchema("grant_bridge_device", GrantBridgeDeviceReducer),
   __reducerSchema("grant_extension_permission", GrantExtensionPermissionReducer),
+  __reducerSchema("harden_local_passwords", HardenLocalPasswordsReducer),
   __reducerSchema("heartbeat_agent", HeartbeatAgentReducer),
   __reducerSchema("import_notion", ImportNotionReducer),
   __reducerSchema("import_pear_snapshot_v_1", ImportPearSnapshotV1Reducer),
@@ -1501,6 +1554,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_mcp_server_api_key", SetMcpServerApiKeyReducer),
   __reducerSchema("set_message_component_tree", SetMessageComponentTreeReducer),
   __reducerSchema("set_message_feedback", SetMessageFeedbackReducer),
+  __reducerSchema("set_oidc_trust_policy", SetOidcTrustPolicyReducer),
   __reducerSchema("set_page_access_rule", SetPageAccessRuleReducer),
   __reducerSchema("set_page_embedding", SetPageEmbeddingReducer),
   __reducerSchema("set_page_hidden", SetPageHiddenReducer),

@@ -50,7 +50,7 @@ async function main(): Promise<void> {
   const aiUserId = await resolveAiUser(transport);
 
   serveStdio(() =>
-    createPearMcpServer({ transport, aiUserId, files: workspaceFileReaderFor(dbName) }),
+    createPearMcpServer({ transport, aiUserId, files: workspaceFileReaderFor(dbName, transport) }),
   );
   console.error(
     `[mcp] pear MCP server ready on stdio (workspace: ${dbName}, ai user: ${aiUserId})`,

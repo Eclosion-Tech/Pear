@@ -1526,7 +1526,7 @@ function ConversationThread({
           },
         ]);
       }
-      void uploadChatFile(workspaceSlug, file).then((objectKey) => {
+      void uploadChatFile(workspaceSlug, file, conversation.id).then((objectKey) => {
         setPending((prev) =>
           prev.map((a) =>
             a.id === id && (a.kind === "image" || a.kind === "file")
