@@ -9,6 +9,9 @@ export function answerRecoveryRequest(request: ChatStreamRequest, providerTag: s
     return { ...request, thinkingBudget: undefined, effort: undefined };
   }
   const support = effortSupportFor(request.model);
+  if (providerTag === "OpenRouter" && support.kind === "openrouter_reasoning_effort") {
+    return { ...request, thinkingBudget: undefined, effort: "low" };
+  }
   if (support.kind !== "openai_reasoning_effort") return undefined;
   const effort = support.levels?.includes("none") ? "none"
     : support.levels?.includes("low") ? "low" : undefined;

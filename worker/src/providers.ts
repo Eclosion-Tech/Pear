@@ -388,9 +388,11 @@ const OPENAI_STOP_MAP: Record<string, string> = {
 
 class OpenAIProvider implements InferenceProvider {
   private client: OpenAI;
+  private readonly isOpenRouter: boolean;
 
   constructor(apiKey: string, baseURL?: string) {
     this.client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
+    this.isOpenRouter = Boolean(baseURL && new URL(baseURL).hostname === "openrouter.ai");
   }
 
   private buildParams(
@@ -467,6 +469,13 @@ class OpenAIProvider implements InferenceProvider {
       effortSupport.levels?.includes(request.effort)
     ) {
       Object.assign(params, { reasoning_effort: request.effort });
+    } else if (
+      this.isOpenRouter && request.effort &&
+      effortSupport.kind === "openrouter_reasoning_effort" &&
+      effortSupport.levels?.includes(request.effort)
+    ) {
+      // OpenRouter's normalized control differs from OpenAI's native field.
+      Object.assign(params, { reasoning: { effort: request.effort } });
     }
     return params;
   }
