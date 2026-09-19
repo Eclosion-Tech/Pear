@@ -148,6 +148,7 @@ export function PropertyCell({
     case "File":
       return (
         <FileCell
+          pageId={pageId}
           value={value?.tag === "File" ? (value.value as FileRefValue[]) : []}
           onSave={(v) => save({ tag: "File", value: v } as PropertyValue)}
         />
@@ -1269,9 +1270,11 @@ function fileHref(slug: string | null, f: FileRefValue): string | null {
 }
 
 function FileCell({
+  pageId,
   value,
   onSave,
 }: {
+  pageId: bigint;
   value: FileRefValue[];
   onSave: (v: FileRefValue[]) => void;
 }) {
@@ -1286,6 +1289,7 @@ function FileCell({
     try {
       const uploaded = await uploadWorkspaceBlob({
         slug: slug ?? "",
+        pageId,
         body: file,
         contentType: file.type || "application/octet-stream",
       });

@@ -600,6 +600,7 @@ pub fn update_property_type(
 /// Workers call discover_instruction_pages gracefully if this property is absent.
 #[reducer]
 pub fn seed_agent_instruction_property(ctx: &ReducerContext, schema_id: u64) -> Result<(), String> {
+    require_schema_write(ctx, schema_id)?;
     ctx.db
         .database_schema()
         .id()

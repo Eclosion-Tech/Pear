@@ -19,6 +19,7 @@ mod conversations;
 mod cron;
 mod extensions;
 mod harness;
+mod human_input;
 mod id_counters;
 mod import;
 mod migrations;

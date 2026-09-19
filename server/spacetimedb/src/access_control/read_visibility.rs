@@ -12,6 +12,9 @@ use crate::conversations::{
 use crate::pages::components::component_node__view;
 use crate::pages::schemas::database_schema__view;
 use crate::pages::{page__view, Page};
+use crate::orcha::orcha_job__view;
+use crate::automations::{automation_rule__view, automation_event_queue__view};
+use crate::pages::snapshots::page_snapshot__view;
 use crate::types::Principal;
 use spacetimedb::{client_visibility_filter, view, Filter, Identity, SpacetimeType, ViewContext};
 use std::collections::{BTreeMap, HashSet};
@@ -168,6 +171,82 @@ pub fn readable_conversations(ctx: &ViewContext) -> Vec<ReadableResource> {
         .map(|c| ReadableResource { id: c.id })
         .collect()
 }
+
+/// Job prompts, results and handoffs are private to the requester and the
+/// executing AI identity. Page visibility alone does not grant job access.
+#[view(accessor=readable_jobs, public)]
+pub fn readable_jobs(ctx: &ViewContext) -> Vec<ReadableResource> {
+    let policy = PagePolicy::load(ctx);
+    if !policy.authenticated { return vec![]; }
+    let mut jobs: BTreeMap<u64, _> = ctx.db.orcha_job()
+        .spawning_principal().filter(ctx.sender()).map(|j| (j.id, j)).collect();
+    if let Some(ai) = ctx.db.ai_user_profile().identity().find(ctx.sender()) {
+        for job in ctx.db.orcha_job().spawning_principal().filter(Identity::ZERO..)
+            .filter(|j| j.ai_user_id == Some(ai.ai_user_id)) {
+            jobs.insert(job.id, job);
+        }
+    }
+    jobs.into_values()
+        .filter(|j| j.page_id.is_none_or(|id| policy.can_read(id)))
+        .map(|j| ReadableResource { id: j.id }).collect()
+}
+
+#[client_visibility_filter]
+const ORCHA_JOB_READ: Filter = Filter::Sql("SELECT orcha_job.* FROM orcha_job JOIN readable_jobs ON orcha_job.id = readable_jobs.id");
+#[client_visibility_filter]
+const ORCHA_TASK_READ: Filter = Filter::Sql("SELECT orcha_task.* FROM orcha_task JOIN readable_jobs ON orcha_task.job_id = readable_jobs.id");
+#[client_visibility_filter]
+const ORCHA_CONTEXT_READ: Filter = Filter::Sql("SELECT orcha_shared_context.* FROM orcha_shared_context JOIN readable_jobs ON orcha_shared_context.job_id = readable_jobs.id");
+
+#[view(accessor=readable_automations, public)]
+pub fn readable_automations(ctx: &ViewContext) -> Vec<ReadableResource> {
+    let policy = PagePolicy::load(ctx);
+    if !policy.authenticated { return vec![]; }
+    ctx.db.automation_rule().created_by().filter(Identity::ZERO..)
+        .filter(|r| policy.admin || r.created_by == ctx.sender() || r.run_as == ctx.sender())
+        .map(|r| ReadableResource { id: r.id }).collect()
+}
+
+#[view(accessor=readable_automation_events, public)]
+pub fn readable_automation_events(ctx: &ViewContext) -> Vec<ReadableResource> {
+    let policy = PagePolicy::load(ctx);
+    if !policy.authenticated { return vec![]; }
+    let rules: BTreeMap<_, _> = ctx.db.automation_rule().created_by().filter(Identity::ZERO..)
+        .map(|r| (r.id, r)).collect();
+    ctx.db.automation_event_queue().by_rule().filter(0u64..)
+        .filter(|e| rules.get(&e.automation_id).is_some_and(|r| {
+            let principal = e.invoked_by.unwrap_or(r.run_as);
+            (policy.admin || principal == ctx.sender())
+                && serde_json::from_str::<serde_json::Value>(&e.trigger_payload).ok()
+                    .is_some_and(|p| p.get("page_id").and_then(|v| v.as_u64())
+                        .is_none_or(|id| policy.can_read(id)))
+        }))
+        .map(|e| ReadableResource { id: e.id }).collect()
+}
+
+#[view(accessor=readable_review_snapshots, public)]
+pub fn readable_review_snapshots(ctx: &ViewContext) -> Vec<ReadableResource> {
+    let policy = PagePolicy::load(ctx);
+    if !policy.authenticated { return vec![]; }
+    ctx.db.page_snapshot().page_id().filter(0u64..)
+        .filter(|s| policy.can_read(s.page_id))
+        .map(|s| ReadableResource { id: s.id }).collect()
+}
+
+#[client_visibility_filter]
+const AUTOMATION_RULE_READ: Filter = Filter::Sql("SELECT automation_rule.* FROM automation_rule JOIN readable_automations ON automation_rule.id = readable_automations.id");
+#[client_visibility_filter]
+const AUTOMATION_ACTION_READ: Filter = Filter::Sql("SELECT automation_action.* FROM automation_action JOIN readable_automations ON automation_action.automation_id = readable_automations.id");
+#[client_visibility_filter]
+const AUTOMATION_CONDITION_READ: Filter = Filter::Sql("SELECT automation_condition.* FROM automation_condition JOIN readable_automations ON automation_condition.automation_id = readable_automations.id");
+#[client_visibility_filter]
+const AUTOMATION_CAPABILITY_READ: Filter = Filter::Sql("SELECT automation_capability.* FROM automation_capability JOIN readable_automations ON automation_capability.automation_id = readable_automations.id");
+#[client_visibility_filter]
+const AUTOMATION_EVENT_READ: Filter = Filter::Sql("SELECT automation_event_queue.* FROM automation_event_queue JOIN readable_automation_events ON automation_event_queue.id = readable_automation_events.id");
+#[client_visibility_filter]
+const AUTOMATION_LOG_READ: Filter = Filter::Sql("SELECT automation_run_log.* FROM automation_run_log JOIN readable_automation_events ON automation_run_log.queue_id = readable_automation_events.id");
+#[client_visibility_filter]
+const REVIEW_ANNOTATION_READ: Filter = Filter::Sql("SELECT review_annotation.* FROM review_annotation JOIN readable_review_snapshots ON review_annotation.snapshot_id = readable_review_snapshots.id");
 
 // Direct joins only; publisher access retains the host-provided bypass.
 #[client_visibility_filter]

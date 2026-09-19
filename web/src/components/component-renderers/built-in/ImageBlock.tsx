@@ -50,6 +50,7 @@ export function ImageBlockRenderer({ node }: BlockRendererProps) {
       const up = await uploadWorkspaceBlob({
         slug,
         body: file,
+        pageId: attachmentCtx.pageId,
         contentType,
       });
       if (!up) return;

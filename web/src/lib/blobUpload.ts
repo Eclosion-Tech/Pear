@@ -24,6 +24,8 @@ export type UploadWorkspaceBlobParams = {
   body: Blob;
   /** MIME type to store alongside the object. */
   contentType: string;
+  pageId?: bigint;
+  conversationId?: bigint;
 };
 
 export type UploadWorkspaceBlobResult = {
@@ -62,6 +64,8 @@ export async function uploadWorkspaceBlob(
       body: JSON.stringify({
         contentType,
         contentLength: body.size,
+        resourceKind: params.conversationId !== undefined ? "conversation" : params.pageId !== undefined ? "page" : undefined,
+        resourceId: (params.conversationId ?? params.pageId)?.toString(),
       }),
     }
   );

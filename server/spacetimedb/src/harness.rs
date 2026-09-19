@@ -379,16 +379,20 @@ pub fn record_review_annotation(
     severity: ReviewSeverity,
     comment: String,
 ) -> Result<(), String> {
-    ctx.db
+    let snapshot = ctx.db
         .page_snapshot()
         .id()
         .find(snapshot_id)
         .ok_or("Snapshot not found")?;
-    ctx.db
+    let reviewer = ctx.db
         .ai_user_config()
         .id()
         .find(reviewer_ai_user_id)
         .ok_or("Reviewer AI user not found")?;
+    crate::access_control::helpers::require_page_read(ctx, snapshot.page_id)?;
+    if reviewer.identity != ctx.sender() && !crate::module_install::sender_is_module_publisher(ctx) {
+        return Err("Only the reviewing AI or publisher may record its review".to_string());
+    }
     ctx.db.review_annotation().insert(ReviewAnnotation {
         id: next_review_annotation_id(ctx),
         snapshot_id,

@@ -32,6 +32,8 @@ import {
   type WorkspaceFileReader,
 } from "../../web/src/lib/mcp/index.js";
 import { getS3Client, isS3Configured, s3Bucket } from "./s3.js";
+import { canReadBlob, type BlobAccessBinding } from "../../web/src/lib/api-endpoint/blob-access.js";
+import type { StdbTransport } from "../../web/src/lib/api-endpoint/types.js";
 
 /** Largest object we will pull into memory for extraction. */
 export const MAX_READ_BYTES = 25 * 1024 * 1024;
@@ -45,6 +47,7 @@ export interface WorkspaceFilesOptions {
   resolveWorkspaceId?: (dbName: string) => Promise<string | null>;
   /** Override for tests; defaults to S3 GetObject. */
   fetchObject?: (key: string) => Promise<FetchedObject | null>;
+  authorize?: (key: string) => Promise<boolean>;
 }
 
 export interface FetchedObject {
@@ -218,11 +221,21 @@ export function createWorkspaceFileReader(opts: WorkspaceFilesOptions): Workspac
     async read(storageKey: string): Promise<WorkspaceFile | null> {
       const key = storageKey.trim();
       if (!key) return null;
+      if (!opts.authorize || !await opts.authorize(key)) return null;
       const s3Key = await resolveS3Key(key);
       if (!s3Key) return null;
       const obj = await fetchObject(s3Key);
       if (!obj) return null;
       return extractWorkspaceFileText(obj, key);
+    },
+    async readImage(storageKey: string): Promise<string | null> {
+      const key = storageKey.trim();
+      if (!key || !opts.authorize || !await opts.authorize(key)) return null;
+      const s3Key = await resolveS3Key(key);
+      if (!s3Key) return null;
+      const obj = await fetchObject(s3Key);
+      if (!obj || obj.byteSize > MAX_READ_BYTES) return null;
+      return Buffer.from(obj.bytes).toString("base64");
     },
   };
 
@@ -233,27 +246,37 @@ export function createWorkspaceFileReader(opts: WorkspaceFilesOptions): Workspac
    *                     workspace's prefix; anything else is "not found", so a
    *                     chat attachment key from another workspace (or a
    *                     hand-built one) can never cross the tenancy boundary.
-   * Without a known workspace id (standalone deployments) keys pass through.
+   * Only standalone deployments may use unprefixed keys. Cloud lookup
+   * failures must never remove the workspace boundary.
    */
   async function resolveS3Key(key: string): Promise<string | null> {
     const wsId = await resolveWorkspaceId(opts.dbName);
-    if (!wsId) return key;
+    if (!wsId) return process.env.LIFECYCLE_URL?.trim() ? null : key;
     const prefix = `workspaces/${wsId}/`;
     if (!key.includes("/")) return `${prefix}${key}`;
     return key.startsWith(prefix) ? key : null;
   }
 }
 
-const readers = new Map<string, WorkspaceFileReader | null>();
-
-/** Per-module reader cache — one S3 client and one workspace-id lookup each. */
-export function workspaceFileReaderFor(dbName: string): WorkspaceFileReader | undefined {
-  if (!readers.has(dbName)) readers.set(dbName, createWorkspaceFileReader({ dbName }));
-  return readers.get(dbName) ?? undefined;
+/** Bind a reader to the current caller; cache only workspace metadata. */
+export function workspaceFileReaderFor(dbName: string, transport: StdbTransport): WorkspaceFileReader | undefined {
+  // Never cache a reader across principals: each authorization uses the
+  // current caller's transport and reevaluates revocation on every read.
+  return createWorkspaceFileReader({ dbName, authorize: async key => {
+    const ws = await lifecycleWorkspaceId(dbName);
+    const objectId = key.includes("/") ? key.startsWith(`workspaces/${ws}/`) ? key.slice(`workspaces/${ws}/`.length) : "" : key;
+    if (!ws || !/^[0-9a-f-]{36}$/i.test(objectId)) return false;
+    const base = process.env.LIFECYCLE_URL?.trim().replace(/\/$/, "");
+    const token = process.env.SPACETIMEDB_ADMIN_TOKEN?.trim();
+    if (!base || !token) return false;
+    const response = await fetch(`${base}/api/internal/workspaces/${encodeURIComponent(dbName)}/blobs/${objectId}/access`, { headers: { Authorization: `Bearer ${token}` } });
+    if (response.status === 404) return false;
+    if (!response.ok) throw new Error("Blob authorization unavailable");
+    return canReadBlob(await response.json() as BlobAccessBinding, transport);
+  } }) ?? undefined;
 }
 
 /** Test hook: drop cached readers/workspace ids. */
 export function _resetWorkspaceFileCaches(): void {
-  readers.clear();
-  workspaceIdCache.clear();
+    workspaceIdCache.clear();
 }

@@ -66,6 +66,7 @@ import {
   type AiUserProfileRow,
 } from "@/src/hooks/useAiUsers";
 import { ContextBar } from "@/src/components/ContextBar";
+import { HumanInputRequests } from "@/src/components/HumanInputRequests";
 import { BridgeApprovalCard } from "@/src/components/BridgeApprovalCard";
 import { StaticComponentTree } from "@/src/components/component-renderers/StaticComponentTree";
 import { useTable, useReducer } from "spacetimedb/react";
@@ -1526,7 +1527,7 @@ function ConversationThread({
           },
         ]);
       }
-      void uploadChatFile(workspaceSlug, file).then((objectKey) => {
+      void uploadChatFile(workspaceSlug, file, conversation.id).then((objectKey) => {
         setPending((prev) =>
           prev.map((a) =>
             a.id === id && (a.kind === "image" || a.kind === "file")
@@ -1829,6 +1830,7 @@ function ConversationThread({
         {msgPadBottom > 0 && (
           <div aria-hidden="true" style={{ height: msgPadBottom }} />
         )}
+        <HumanInputRequests conversationId={conversation.id} />
         {conversationBridgeApprovals.length > 0 && (
           <div className="space-y-2 pt-3" aria-live="polite">
             {conversationBridgeApprovals.map((approval) => (

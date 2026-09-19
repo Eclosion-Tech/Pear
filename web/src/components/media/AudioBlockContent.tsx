@@ -59,7 +59,7 @@ async function uploadAudioBlob(
   contentType: string,
   createAttachment: CreateAttachmentFn,
 ): Promise<string | null> {
-  const up = await uploadWorkspaceBlob({ slug, body: blob, contentType });
+  const up = await uploadWorkspaceBlob({ slug, body: blob, contentType, pageId });
   if (!up) return null;
   createAttachment({
     pageId,

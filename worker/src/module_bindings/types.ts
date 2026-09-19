@@ -1049,6 +1049,21 @@ export const InstalledExtension = __t.object("InstalledExtension", {
 });
 export type InstalledExtension = __Infer<typeof InstalledExtension>;
 
+export const LocalLoginAttempt = __t.object("LocalLoginAttempt", {
+  email: __t.string(),
+  windowStart: __t.i64(),
+  attempts: __t.u32(),
+});
+export type LocalLoginAttempt = __Infer<typeof LocalLoginAttempt>;
+
+export const LoginResult = __t.object("LoginResult", {
+  identity: __t.identity(),
+  success: __t.bool(),
+  message: __t.string(),
+  at: __t.timestamp(),
+});
+export type LoginResult = __Infer<typeof LoginResult>;
+
 export const MessageFeedback = __t.object("MessageFeedback", {
   id: __t.u64(),
   messageId: __t.u64(),
@@ -1142,6 +1157,13 @@ export const NotionImportJobStatus = __t.enum("NotionImportJobStatus", {
   Failed: __t.unit(),
 });
 export type NotionImportJobStatus = __Infer<typeof NotionImportJobStatus>;
+
+export const OidcTrustPolicy = __t.object("OidcTrustPolicy", {
+  id: __t.u8(),
+  issuer: __t.string(),
+  audience: __t.string(),
+});
+export type OidcTrustPolicy = __Infer<typeof OidcTrustPolicy>;
 
 export const OrchaAgent = __t.object("OrchaAgent", {
   id: __t.string(),

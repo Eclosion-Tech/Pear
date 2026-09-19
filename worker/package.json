@@ -2,7 +2,7 @@
   "name": "@pear/worker",
   "version": "0.2.2",
   "private": true,
-  "description": "Pear LLM worker \u2014 Orcha agent that claims tasks from SpacetimeDB and executes them via Anthropic Claude",
+  "description": "Pear LLM worker — Orcha agent that claims tasks from SpacetimeDB and executes them via Anthropic Claude",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -32,6 +32,7 @@
     "openai": "^6.33.0",
     "prosemirror-model": "^1.25.7",
     "spacetimedb": "2.0.3",
+    "undici": "^7",
     "unpdf": "^1.8.1",
     "ws": "^8.18.0",
     "y-prosemirror": "^1.3.7",

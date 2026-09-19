@@ -21,6 +21,7 @@ import {
 } from "./mcp-parity-tools.js";
 
 const EXPECTED = [
+  "request_human_input",
   "create_page",
   "query_database",
   "get_page_components",
@@ -151,6 +152,7 @@ test("an unknown tool name is reported rather than thrown", async () => {
  * this stops the remaining ones diverging again.
  */
 const INTENTIONAL_DIVERGENCE: Record<string, string> = {
+  request_human_input: "chat defaults conversation_id to the current thread",
   // These three now share ONE implementation with MCP; only the schema differs.
   // Chat knows the conversation it is running in, so `conversation_id` is
   // optional there and required over MCP, and `executeMcpParityTool` fills it

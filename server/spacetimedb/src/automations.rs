@@ -143,6 +143,7 @@ pub struct AutomationRule {
     pub expires_at: Option<Timestamp>,
     /// The principal whose authority live execution will use. Defaults to creator.
     pub run_as: Identity,
+    #[index(btree)]
     pub created_by: Identity,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
@@ -437,6 +438,7 @@ pub fn create_automation_draft(
     timezone: String,
     canonical_description: String,
 ) -> Result<(), String> {
+    crate::access_control::helpers::require_workspace_principal(ctx)?;
     if name.trim().is_empty() {
         return Err("Automation name cannot be empty".to_string());
     }
@@ -1515,7 +1517,7 @@ fn execute_orcha_job(
     }]);
     let job_id = create_job_inner(
         ctx,
-        effective_run_as.to_hex().to_string(),
+        effective_run_as,
         prompt,
         page_id,
         ai_user_id,

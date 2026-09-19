@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useReducer } from "spacetimedb/react";
-import { reducers } from "@/src/module_bindings";
+import { useReducer, useTable } from "spacetimedb/react";
+import { reducers, tables } from "@/src/module_bindings";
 import { consumeIdentityDriftReason } from "@/src/lib/identityRecovery";
 
 type Mode = "login" | "register";
@@ -25,6 +25,11 @@ export function LoginGate() {
 
   const login = useReducer(reducers.login);
   const register = useReducer(reducers.register);
+  const [loginResults] = useTable(tables.login_result);
+  useEffect(() => {
+    const result = loginResults[0];
+    if (result && !result.success) setError(result.message);
+  }, [loginResults]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

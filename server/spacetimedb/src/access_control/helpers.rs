@@ -226,6 +226,7 @@ pub(crate) fn require_creator_or_admin(
     created_by: Identity,
     action: &str,
 ) -> Result<(), String> {
+    require_workspace_principal(ctx)?;
     if created_by == ctx.sender() || sender_is_admin(ctx) || sender_is_module_publisher(ctx) {
         Ok(())
     } else {

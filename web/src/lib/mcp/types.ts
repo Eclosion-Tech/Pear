@@ -66,6 +66,8 @@ export interface WorkspaceFileReader {
    * Throws on infrastructure failure.
    */
   read(storageKey: string): Promise<WorkspaceFile | null>;
+  /** Same authorization boundary as read; used for vision attachments. */
+  readImage?(storageKey: string): Promise<string | null>;
 }
 
 /** One MCP tool: JSON-Schema surface + stateless executor. */
