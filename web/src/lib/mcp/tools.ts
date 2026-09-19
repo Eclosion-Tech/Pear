@@ -1,3 +1,4 @@
+import { requestHumanInputTool } from "./human-input";
 /**
  * The Pear MCP tool surface: stateless tools over `/sql` + `/call`.
  *
@@ -1263,6 +1264,7 @@ const readConversationTool: McpToolEntry = {
 
 export function buildToolRegistry(): McpToolEntry[] {
   return [
+    requestHumanInputTool,
     rememberTool,
     listMemoryTool,
     readMemoryTool,

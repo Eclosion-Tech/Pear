@@ -176,7 +176,7 @@ pub(crate) fn choose_human_response_targets(
         .collect()
 }
 
-fn is_ai_user(ctx: &ReducerContext, identity: Identity) -> bool {
+pub(crate) fn is_ai_user(ctx: &ReducerContext, identity: Identity) -> bool {
     ctx.db
         .ai_user_profile()
         .identity()

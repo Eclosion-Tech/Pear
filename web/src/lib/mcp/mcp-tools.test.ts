@@ -1335,6 +1335,7 @@ describe("registry", () => {
       "remember",
       "rename_property",
       "reopen_thread",
+      "request_human_input",
       "resolve_thread",
       "restore_page",
       "search_conversations",

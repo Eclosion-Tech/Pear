@@ -37,6 +37,7 @@ import { workspaceFileReaderFor } from "./workspace-files.js";
  * there too. This names only what was missing.
  */
 const PARITY_TOOL_NAMES = new Set([
+  "request_human_input",
   // Migrated from the worker's own catalogue after a schema diff showed the two
   // copies had drifted apart in ways that cost the chat surface real ability:
   // the MCP `create_page` accepts `properties` (set row columns in one call) and
@@ -137,6 +138,7 @@ const PARITY_TOOL_NAMES = new Set([
  * cannot reach a thread the AI is not in.
  */
 const AMBIENT_CONVERSATION_TOOLS = new Set([
+  "request_human_input",
   "post_to_thread",
   "resolve_thread",
   "reopen_thread",
