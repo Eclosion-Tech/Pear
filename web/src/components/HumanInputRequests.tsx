@@ -32,5 +32,9 @@ function Question({ request }: { request: HumanInputRequest }) {
 
 export function HumanInputRequests({ conversationId }: { conversationId: bigint }) {
   const [requests] = useTable(tables.human_input_request);
-  return <>{requests.filter(r => r.conversationId === conversationId).map(r => <Question key={String(r.id)} request={r} />)}</>;
+  const conversationRequests = requests.filter(r => r.conversationId === conversationId);
+  if (conversationRequests.length === 0) return null;
+  return <div className="space-y-2 pt-3" aria-live="polite">
+    {conversationRequests.map(r => <Question key={String(r.id)} request={r} />)}
+  </div>;
 }

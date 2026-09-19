@@ -1830,9 +1830,9 @@ function ConversationThread({
         {msgPadBottom > 0 && (
           <div aria-hidden="true" style={{ height: msgPadBottom }} />
         )}
+        <HumanInputRequests conversationId={conversation.id} />
         {conversationBridgeApprovals.length > 0 && (
           <div className="space-y-2 pt-3" aria-live="polite">
-            <HumanInputRequests conversationId={conversation.id} />
             {conversationBridgeApprovals.map((approval) => (
               <BridgeApprovalCard key={String(approval.id)} approval={approval} />
             ))}
