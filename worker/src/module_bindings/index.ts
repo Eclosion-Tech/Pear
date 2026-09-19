@@ -40,6 +40,7 @@ import AddAutomationConditionReducer from "./add_automation_condition_reducer";
 import AddConversationParticipantReducer from "./add_conversation_participant_reducer";
 import AddPropertyReducer from "./add_property_reducer";
 import AddTasksToJobReducer from "./add_tasks_to_job_reducer";
+import AnswerHumanInputReducer from "./answer_human_input_reducer";
 import AppendBridgeCommandChunkReducer from "./append_bridge_command_chunk_reducer";
 import AppendPageDocReducer from "./append_page_doc_reducer";
 import AwaitBridgeCommandConfirmationReducer from "./await_bridge_command_confirmation_reducer";
@@ -158,6 +159,7 @@ import ReorderPropertyReducer from "./reorder_property_reducer";
 import ReplacePageDocReducer from "./replace_page_doc_reducer";
 import ReportBridgeDeviceCapabilityReducer from "./report_bridge_device_capability_reducer";
 import ReportExtensionRuntimeHealthReducer from "./report_extension_runtime_health_reducer";
+import RequestHumanInputReducer from "./request_human_input_reducer";
 import RequestPageAccessReducer from "./request_page_access_reducer";
 import ResolveBridgeApprovalReducer from "./resolve_bridge_approval_reducer";
 import ResolvePageAccessRequestReducer from "./resolve_page_access_request_reducer";
@@ -290,6 +292,7 @@ import DatabaseViewRow from "./database_view_table";
 import ExtensionManifestRow from "./extension_manifest_table";
 import ExtensionRuntimeHealthRow from "./extension_runtime_health_table";
 import HarnessTemplateRow from "./harness_template_table";
+import HumanInputRequestRow from "./human_input_request_table";
 import IdCounterRow from "./id_counter_table";
 import InstalledExtensionRow from "./installed_extension_table";
 import LoginResultRow from "./login_result_table";
@@ -915,6 +918,20 @@ const tablesSchema = __schema({
       { name: 'harness_template_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, HarnessTemplateRow),
+  human_input_request: __table({
+    name: 'human_input_request',
+    indexes: [
+      { name: 'conversation_id', algorithm: 'btree', columns: [
+        'conversationId',
+      ] },
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'human_input_request_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, HumanInputRequestRow),
   id_counter: __table({
     name: 'id_counter',
     indexes: [
@@ -1389,6 +1406,7 @@ const reducersSchema = __reducers(
   __reducerSchema("add_conversation_participant", AddConversationParticipantReducer),
   __reducerSchema("add_property", AddPropertyReducer),
   __reducerSchema("add_tasks_to_job", AddTasksToJobReducer),
+  __reducerSchema("answer_human_input", AnswerHumanInputReducer),
   __reducerSchema("append_bridge_command_chunk", AppendBridgeCommandChunkReducer),
   __reducerSchema("append_page_doc", AppendPageDocReducer),
   __reducerSchema("await_bridge_command_confirmation", AwaitBridgeCommandConfirmationReducer),
@@ -1507,6 +1525,7 @@ const reducersSchema = __reducers(
   __reducerSchema("replace_page_doc", ReplacePageDocReducer),
   __reducerSchema("report_bridge_device_capability", ReportBridgeDeviceCapabilityReducer),
   __reducerSchema("report_extension_runtime_health", ReportExtensionRuntimeHealthReducer),
+  __reducerSchema("request_human_input", RequestHumanInputReducer),
   __reducerSchema("request_page_access", RequestPageAccessReducer),
   __reducerSchema("resolve_bridge_approval", ResolveBridgeApprovalReducer),
   __reducerSchema("resolve_page_access_request", ResolvePageAccessRequestReducer),
