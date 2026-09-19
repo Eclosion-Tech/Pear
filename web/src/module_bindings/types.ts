@@ -996,6 +996,19 @@ export const HttpMethod = __t.enum("HttpMethod", {
 });
 export type HttpMethod = __Infer<typeof HttpMethod>;
 
+export const HumanInputRequest = __t.object("HumanInputRequest", {
+  id: __t.u64(),
+  conversationId: __t.u64(),
+  requester: __t.identity(),
+  recipient: __t.identity(),
+  requestKey: __t.string(),
+  question: __t.string(),
+  answer: __t.option(__t.string()),
+  createdAt: __t.timestamp(),
+  answeredAt: __t.option(__t.timestamp()),
+});
+export type HumanInputRequest = __Infer<typeof HumanInputRequest>;
+
 export const IdCounter = __t.object("IdCounter", {
   name: __t.string(),
   value: __t.u64(),

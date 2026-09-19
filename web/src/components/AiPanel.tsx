@@ -66,6 +66,7 @@ import {
   type AiUserProfileRow,
 } from "@/src/hooks/useAiUsers";
 import { ContextBar } from "@/src/components/ContextBar";
+import { HumanInputRequests } from "@/src/components/HumanInputRequests";
 import { BridgeApprovalCard } from "@/src/components/BridgeApprovalCard";
 import { StaticComponentTree } from "@/src/components/component-renderers/StaticComponentTree";
 import { useTable, useReducer } from "spacetimedb/react";
@@ -1831,6 +1832,7 @@ function ConversationThread({
         )}
         {conversationBridgeApprovals.length > 0 && (
           <div className="space-y-2 pt-3" aria-live="polite">
+            <HumanInputRequests conversationId={conversation.id} />
             {conversationBridgeApprovals.map((approval) => (
               <BridgeApprovalCard key={String(approval.id)} approval={approval} />
             ))}

@@ -80,7 +80,7 @@ pub fn set_oidc_trust_policy(ctx: &ReducerContext, issuer: String, audience: Str
     if !crate::module_install::sender_is_module_publisher(ctx) {
         return Err("Only the publisher may configure OIDC trust".into());
     }
-    if !issuer.starts_with("https://") || audience.trim().is_empty() {
+    if !issuer.starts_with("https://") || !audience.split(',').any(|s| !s.trim().is_empty()) {
         return Err("OIDC requires an HTTPS issuer and a non-empty audience".into());
     }
     let row = OidcTrustPolicy { id: 0, issuer, audience };
@@ -380,7 +380,8 @@ pub(crate) fn extract_oidc_profile(ctx: &ReducerContext) -> (String, String) {
 
 fn trusted_oidc_claims(claims: &serde_json::Value, issuer: &str, audience: &str) -> bool {
     claims["iss"].as_str() == Some(issuer)
-        && (claims["aud"].as_str() == Some(audience)
+        && audience.split(',').map(str::trim).filter(|a| !a.is_empty()).any(|audience|
+            claims["aud"].as_str() == Some(audience)
             || claims["aud"].as_array().is_some_and(|a| a.iter().any(|v| v.as_str() == Some(audience))))
 }
 /// SHA-256( email + NUL + password + NUL + "pear-auth-v1" ) as lowercase hex.
@@ -622,6 +623,9 @@ mod security_tests {
     fn oidc_requires_exact_issuer_and_audience() {
         let good = serde_json::json!({"iss":"https://trusted.test", "aud":["pear"]});
         assert!(trusted_oidc_claims(&good, "https://trusted.test", "pear"));
+        assert!(trusted_oidc_claims(&good, "https://trusted.test", "pear-mobile, pear"));
+        assert!(!trusted_oidc_claims(&good, "https://trusted.test", "pear-mobile"));
+        assert!(!trusted_oidc_claims(&good, "https://trusted.test", ", ,"));
         assert!(!trusted_oidc_claims(&good, "https://attacker.test", "pear"));
         assert!(!trusted_oidc_claims(&good, "https://trusted.test", "other"));
         assert!(!trusted_oidc_claims(&serde_json::json!({"email":"admin@test"}), "https://trusted.test", "pear"));
