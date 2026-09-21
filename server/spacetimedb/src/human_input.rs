@@ -9,10 +9,11 @@ use spacetimedb::{
     client_visibility_filter, reducer, table, Filter, Identity, ReducerContext, Table, Timestamp,
 };
 
+// Keep these alternatives in one filter. SpacetimeDB 2.0.3 rejects live
+// subscriptions when it unions two filters joining the same caller-scoped
+// view, even though HTTP SQL succeeds and conversation_id is indexed.
 #[client_visibility_filter]
-const INPUT_RECIPIENT: Filter = Filter::Sql("SELECT human_input_request.* FROM human_input_request JOIN readable_conversations ON human_input_request.conversation_id = readable_conversations.id WHERE human_input_request.recipient = :sender");
-#[client_visibility_filter]
-const INPUT_REQUESTER: Filter = Filter::Sql("SELECT human_input_request.* FROM human_input_request JOIN readable_conversations ON human_input_request.conversation_id = readable_conversations.id WHERE human_input_request.requester = :sender");
+const INPUT_PARTICIPANT: Filter = Filter::Sql("SELECT human_input_request.* FROM human_input_request JOIN readable_conversations ON human_input_request.conversation_id = readable_conversations.id WHERE human_input_request.recipient = :sender OR human_input_request.requester = :sender");
 
 #[table(accessor = human_input_request, public)]
 pub struct HumanInputRequest {

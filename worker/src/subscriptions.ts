@@ -54,6 +54,11 @@ const BRIDGE_TABLE_NAMES = [
 // unrelated query is degraded.
 const AI_CONFIG_TABLE_NAMES = ["ai_user_config"];
 
+// Human-input tools use the caller-scoped HTTP transport. This auxiliary cache
+// must not gate the main subscription or its pending-chat catch-up: a rejected
+// human_input_request RLS query previously left every AI connected but idle.
+const HUMAN_INPUT_TABLE_NAMES = ["human_input_request"];
+
 export function subscribeToAvailableTables(
   conn: unknown,
   logTag: string,
@@ -63,7 +68,9 @@ export function subscribeToAvailableTables(
   const skipped = new Set<string>();
 
   const subscribe = (): void => {
-    const queries = ALL_TABLE_NAMES.filter((name) => !skipped.has(name)).map(
+    const queries = ALL_TABLE_NAMES.filter((name) =>
+      !skipped.has(name) && !HUMAN_INPUT_TABLE_NAMES.includes(name),
+    ).map(
       (name) => `SELECT * FROM ${name}`,
     );
 
@@ -94,6 +101,7 @@ export function subscribeToAvailableTables(
   subscribe();
   subscribeIsolatedTables(connection, logTag, "bridge", BRIDGE_TABLE_NAMES);
   subscribeIsolatedTables(connection, logTag, "AI config", AI_CONFIG_TABLE_NAMES);
+  subscribeIsolatedTables(connection, logTag, "human input", HUMAN_INPUT_TABLE_NAMES);
 }
 
 /**
