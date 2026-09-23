@@ -11,6 +11,7 @@ import type { PageRow } from "@/src/hooks/usePages";
 import { EmojiPicker } from "./EmojiPicker";
 import { PageEditorSurface } from "./PageEditorSurface";
 import { PageMoreMenu } from "./PageMoreMenu";
+import { PageAccessMenu } from "./PageAccessMenu";
 import { PageHistoryPanel } from "./PageHistoryPanel";
 import { PagePropertiesPanel } from "./PagePropertiesPanel";
 import { Breadcrumb } from "./Breadcrumb";
@@ -114,7 +115,7 @@ export function DocPage({ page }: DocPageProps) {
             />
           )}
           <input
-            className="flex-1 text-4xl font-bold text-neutral-900 dark:text-white bg-transparent outline-none placeholder:text-neutral-300 dark:placeholder:text-neutral-700"
+            className="min-w-0 flex-1 text-4xl font-bold text-neutral-900 dark:text-white bg-transparent outline-none placeholder:text-neutral-300 dark:placeholder:text-neutral-700"
             value={title}
             onChange={(e) => handleTitleChange(e.target.value)}
             onFocus={() => { titleFocusedRef.current = true; }}
@@ -153,6 +154,7 @@ export function DocPage({ page }: DocPageProps) {
               <polyline points="12 6 12 12 16 14"/>
             </svg>
           </button>
+          <PageAccessMenu key={String(page.id)} pageId={page.id} />
           <PageMoreMenu
             items={[
               {

@@ -18,6 +18,7 @@ import {
 import { useUsers } from "@/src/hooks/useUser";
 import { selectMyConversations } from "@/src/lib/chatAdapter";
 import { EclosionChatThread } from "./EclosionChatThread";
+import { PageAccessMenu } from "../PageAccessMenu";
 
 /** Flag for the parallel @eclosion-tech/chat panel (phase 0/1 of the migration). */
 export const ECLOSION_CHAT_PANEL_ENABLED = process.env.NEXT_PUBLIC_PEAR_ECLOSION_CHAT === "1";
@@ -108,6 +109,7 @@ export function EclosionChatPanel({
           <span className="font-medium">Chat (new renderer)</span>
         </div>
         <div className="flex items-center gap-2">
+          <PageAccessMenu key={String(pageId)} pageId={pageId} />
           {!conversation ? (
             <NewChatMenu
               pageId={pageId}
@@ -128,7 +130,7 @@ export function EclosionChatPanel({
       </header>
       {conversation ? (
         <div className="min-h-0 flex-1">
-          <EclosionChatThread conversation={conversation} />
+          <EclosionChatThread key={String(conversation.id)} conversation={conversation} activePageId={pageId} />
         </div>
       ) : (
         <ul className="min-h-0 flex-1 overflow-y-auto p-2">

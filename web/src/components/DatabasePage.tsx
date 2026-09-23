@@ -6,6 +6,7 @@ import { useUpdatePageTitle, useUpdatePageIcon, useDeletePageSubtree } from "@/s
 import type { PageRow } from "@/src/hooks/usePages";
 import { GridView } from "./GridView";
 import { PageMoreMenu } from "./PageMoreMenu";
+import { PageAccessMenu } from "./PageAccessMenu";
 import { PageHistoryPanel } from "./PageHistoryPanel";
 import { Breadcrumb } from "./Breadcrumb";
 import { EmojiPicker } from "./EmojiPicker";
@@ -67,7 +68,7 @@ export function DatabasePage({ page }: DatabasePageProps) {
             />
           )}
           <input
-            className="flex-1 text-3xl font-bold text-neutral-900 dark:text-white bg-transparent outline-none placeholder:text-neutral-300 dark:placeholder:text-neutral-700"
+            className="min-w-0 flex-1 text-3xl font-bold text-neutral-900 dark:text-white bg-transparent outline-none placeholder:text-neutral-300 dark:placeholder:text-neutral-700"
             value={title}
             onChange={(e) => handleTitleChange(e.target.value)}
             placeholder="Untitled Database"
@@ -101,6 +102,7 @@ export function DatabasePage({ page }: DatabasePageProps) {
               <polyline points="12 6 12 12 16 14"/>
             </svg>
           </button>
+          <PageAccessMenu key={String(page.id)} pageId={page.id} />
           <PageMoreMenu
             items={[
               {

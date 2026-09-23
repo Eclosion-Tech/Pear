@@ -38,6 +38,17 @@ export interface AdapterContext {
   aiIdentityHexes: ReadonlySet<string>;
   /** Optional identity hex → display name (AI profiles, members). */
   displayNames?: ReadonlyMap<string, string>;
+  attachmentsByMessage?: ReadonlyMap<bigint, readonly AdapterAttachment[]>;
+}
+
+export interface AdapterAttachment {
+  id: bigint;
+  kind: { tag: "Image" | "File" | "Page" | "Blocks" };
+  objectKey?: string;
+  mimeType?: string;
+  fileName?: string;
+  pageId?: bigint;
+  contentSnapshot?: string;
 }
 
 /** Per-message app data carried in `metadata.custom`. */
@@ -197,7 +208,13 @@ export function toThreadMessage(msg: AdapterMessage, ctx: AdapterContext): Threa
     id: msg.id.toString(),
     role,
     createdAt: new Date(Number(msg.createdAt.microsSinceUnixEpoch / 1000n)),
-    content: messageParts(msg),
+    content: [
+      ...(ctx.attachmentsByMessage?.get(msg.id)?.length ? [{
+        type: "data-pear-attachments",
+        data: { attachments: ctx.attachmentsByMessage.get(msg.id) },
+      } as Part] : []),
+      ...messageParts(msg),
+    ],
     ...(role === "assistant"
       ? {
           status:
