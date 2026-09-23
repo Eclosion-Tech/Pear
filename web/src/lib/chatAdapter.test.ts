@@ -45,6 +45,13 @@ describe("parsers", () => {
 });
 
 describe("messageParts", () => {
+  it.each([HUMAN, OTHER_HUMAN, AI])("renders persisted attachments for sender %s", (sender) => {
+    const attachments = [{ id: 5n, kind: { tag: "Page" as const }, pageId: 42n, fileName: "Roadmap" }];
+    const converted = toThreadMessage(msg({ sender: { tag: "User", value: identity(sender) } }), {
+      ...ctx, attachmentsByMessage: new Map([[1n, attachments]]),
+    });
+    expect(converted.content).toEqual([{ type: "data-pear-attachments", data: { attachments } }]);
+  });
   it("orders timeline text and tools, resolving tool ids", () => {
     const m = msg({
       thinking: "let me look",
