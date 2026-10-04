@@ -23,11 +23,18 @@ export const PEAR_REGISTRY_REQUIRED_TYPES = [
   // without it, a repeater on an older workspace renders as an unregistered
   // component with no path to recovery.
   "Repeater",
+  "Reference",
 ] as const;
 
 /** Pear sprint-4 slash / turn-into items — extends pulp's curated set. */
 export const PEAR_SLASH_ITEMS: SlashMenuItem[] = [
   ...SPRINT_3B_SLASH_ITEMS,
+  {
+    id: "reference", section: "Pages", label: "Reference",
+    description: "Include and edit a page or block from elsewhere.",
+    componentType: "Reference", defaultProps: {},
+    searchTokens: ["reference", "include", "embed", "linked", "section"],
+  },
   {
     id: "repeater",
     section: "Data",

@@ -2,6 +2,7 @@ import { registerRenderer } from "./registry";
 import { RichTextRenderer } from "./rich-text/RichText";
 import { HeadingRenderer } from "./heading/HeadingRenderer";
 import { RepeaterRenderer } from "./repeater/RepeaterRenderer";
+import { ReferenceRenderer } from "./reference/ReferenceRenderer";
 
 let registered = false;
 
@@ -14,4 +15,5 @@ export function registerCoreBlocks(): void {
   // Repeater is pulp-native (ADR D1) rather than host-supplied: materialization
   // and render memoization are one decision, so they live together here.
   registerRenderer("Repeater", RepeaterRenderer);
+  registerRenderer("Reference", ReferenceRenderer);
 }

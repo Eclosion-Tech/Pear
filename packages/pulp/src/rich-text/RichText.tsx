@@ -19,6 +19,7 @@ import { splitEditorAtCaret } from "./splitEditorAtCaret";
 import type { BlockRendererProps } from "../registry";
 import type { BlockId } from "../types";
 import { RichTextEditor } from "./RichTextEditor";
+import { useLocalTextDocument } from "./localTextDocuments";
 import {
   SPRINT_3B_SLASH_ITEMS,
   filterSlashItems,
@@ -545,7 +546,11 @@ function EditableRichText({
   // see the populated block from their first delta.
   const [{ doc, wasPrepopulated }] = useState(() => {
     const initial = focus.consumeInitialDoc(node.id);
-    return { doc: initial ?? new Y.Doc(), wasPrepopulated: initial != null };
+    const doc = initial ?? new Y.Doc();
+    if (state?.data?.byteLength) {
+      try { Y.applyUpdate(doc, state.data, "remote"); } catch { /* reconciler reports malformed state */ }
+    }
+    return { doc, wasPrepopulated: initial != null };
   });
   const appliedInitialDocRef = useRef(wasPrepopulated);
 
@@ -579,6 +584,8 @@ function EditableRichText({
       }
     }
   }, [doc, node.id, state?.data, state?.updatedAt?.microsSinceUnixEpoch]);
+
+  useLocalTextDocument(config.idbPrefix, node.id, doc);
 
   useEffect(() => {
     return () => {
@@ -741,10 +748,10 @@ function EditableRichText({
           shouldClaimFocus={claimInsertFocus}
           onFocus={() => setHasFocus(true)}
           onBlur={() => setHasFocus(false)}
-          onSplit={onSplit}
+          onSplit={tree.root?.id === node.id ? undefined : onSplit}
           onDeleteSelf={canBackspaceDeleteEmpty ? onDeleteSelf : undefined}
           onMergeWithPrev={onMergeWithPrev}
-          onSlashSessionChange={onSlashSessionChange}
+          onSlashSessionChange={tree.root?.id === node.id ? undefined : onSlashSessionChange}
           onSlashNavigate={navigateSlash}
           onSlashCommit={commitSlash}
           onSlashDismiss={dismissSlash}
@@ -754,10 +761,10 @@ function EditableRichText({
           onIndent={onIndent}
           onOutdent={onOutdent}
           bindFocus={bindFocus}
-          blockActions={blockActions}
+          blockActions={tree.root?.id === node.id ? undefined : blockActions}
           markdownShortcuts={markdownShortcuts}
-          onMarkdownShortcut={onMarkdownShortcut}
-          onPaste={onPaste}
+          onMarkdownShortcut={tree.root?.id === node.id ? undefined : onMarkdownShortcut}
+          onPaste={tree.root?.id === node.id ? undefined : onPaste}
           onEscape={onEscape}
         />
       ) : (

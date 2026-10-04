@@ -1,9 +1,12 @@
 "use client";
 
+import "@eclosion-tech/pulp/composition.css";
+
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   BlockEditor,
+  PageComposition,
   PulpProvider,
   SurfaceFocusCoordinator,
   SurfaceFocusProvider,
@@ -13,6 +16,7 @@ import {
   validateComponentProps,
   type BlockInsertEvent,
   type BlockTree,
+  type CompositionLayout,
 } from "@eclosion-tech/pulp";
 import type { ComponentNode, Conversation } from "@/src/module_bindings/types";
 import { BlockThreadGutter } from "@/src/components/BlockThreadGutter";
@@ -41,6 +45,7 @@ import { useSpacetimeDB } from "spacetimedb/react";
 import { registerPearBuiltinRenderers } from "./built-in";
 import { PEAR_SLASH_ITEMS, slashItemsForDefs } from "./pearSlashItems";
 import { useQueryResolver } from "@/src/lib/repeater/queryResolver";
+import { pearReferences } from "./PearReferenceSource";
 
 registerCoreBlocks();
 registerPearBuiltinRenderers();
@@ -96,9 +101,13 @@ function useHighlightNodeFromUrl(surfaceId: bigint): void {
  */
 export function ComponentTreeRenderer({
   surfaceId,
+  layout,
+  onLayoutChange,
   onOpenThread,
 }: {
   surfaceId: bigint;
+  layout: CompositionLayout;
+  onLayoutChange: (layout: CompositionLayout) => void;
   onOpenThread?: (conversationId: bigint) => void;
 }) {
   const { idbNamespace } = useWorkspace();
@@ -407,6 +416,7 @@ export function ComponentTreeRenderer({
       linkTargets,
       onCommentBlock: handleCommentBlock,
       queryResolver,
+      references: pearReferences,
     }),
     [idbNamespace, linkTargets, tree.defs, handleCommentBlock, queryResolver],
   );
@@ -421,17 +431,20 @@ export function ComponentTreeRenderer({
       <PulpProvider tree={tree} config={config} mutations={mutations}>
         <SurfaceFocusProvider coordinator={focusCoordinator}>
           <SurfaceUndoProvider coordinator={undoCoordinator}>
-            <div ref={editorContainerRef} className="relative">
-              <BlockEditor />
-              {onOpenThread && (
-                <BlockThreadGutter
-                  containerRef={editorContainerRef}
-                  pageId={surfaceId}
-                  onOpenThread={onOpenThread}
-                  onCreateThread={handleCommentBlock}
-                />
-              )}
-            </div>
+            <PageComposition layout={layout} onLayoutChange={onLayoutChange}
+              pageLabel={pages.find(page => page.id === surfaceId)?.title || "Untitled"}>
+              <div ref={editorContainerRef} className="relative">
+                <BlockEditor />
+                {onOpenThread && (
+                  <BlockThreadGutter
+                    containerRef={editorContainerRef}
+                    pageId={surfaceId}
+                    onOpenThread={onOpenThread}
+                    onCreateThread={handleCommentBlock}
+                  />
+                )}
+              </div>
+            </PageComposition>
           </SurfaceUndoProvider>
         </SurfaceFocusProvider>
       </PulpProvider>

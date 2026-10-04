@@ -1,0 +1,228 @@
+/* Reference framing is presentation only; editor nodes remain mounted. */
+.pulp-view-switch {
+  display: flex;
+  padding: 2px;
+  border-radius: 7px;
+  background: #f1f5f9;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.pulp-view-switch button {
+  flex: 1;
+  white-space: nowrap;
+  padding: 4px 9px;
+  border-radius: 5px;
+  color: #64748b;
+}
+
+.pulp-view-switch button[aria-pressed=true] {
+  background: white;
+  color: #334155;
+  box-shadow: 0 1px 3px #0f172a12;
+}
+
+.pulp-view-switch button:focus-visible {
+  outline: 2px solid #94a3b8;
+  outline-offset: 1px;
+}
+
+.pulp-composition-context {
+  height: 2.75rem;
+  display: flex;
+  align-items: flex-start;
+  padding-top: 7px;
+  gap: 6px;
+  font-size: 11px;
+  color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pulp-composition-context strong {
+  font-weight: 500;
+  color: #64748b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pulp-composition-editor {
+  position: relative;
+  padding-left: 5rem;
+}
+
+[data-composition-layout="continuous"] [data-reference-block] {
+  position: relative;
+  margin: 0!important;
+  border: 0!important;
+  background: transparent!important;
+  box-shadow: none!important;
+  border-radius: 0!important;
+}
+
+[data-composition-layout="continuous"] [data-reference-content] {
+  padding: 0!important;
+  border: 0!important;
+}
+
+[data-composition-layout="continuous"] [data-reference-block]:not([data-reference-choosing]):has(>[data-reference-content]:not([data-reference-empty]))>[data-reference-header] {
+  display: none;
+}
+
+[data-composition-layout="continuous"] [data-reference-block]:not(:has(>[data-reference-content])) {
+  color: #94a3b8;
+}
+
+[data-composition-layout="continuous"] [data-reference-block]:not(:has(>[data-reference-content]))>[data-reference-header] {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+[data-composition-layout="continuous"] [data-reference-block]:not(:has(>[data-reference-content]))>[data-reference-header]>div:first-child {
+  display: none;
+}
+
+[data-composition-layout="continuous"] [data-reference-block]>p {
+  padding: 0 0 8px 0;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+[data-composition-layout="continuous"] [data-block-gutter] {
+  align-items: flex-start;
+  padding-top: 6px;
+}
+
+[data-composition-layout="continuous"] [data-source-current]::after {
+  content: '';
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: -7px;
+  width: 1px;
+  background: #94a3b866;
+  pointer-events: none;
+}
+
+.pulp-source-overlay {
+  position: absolute;
+  z-index: 30;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.pulp-source-marker {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  border-radius: 5px;
+  background: transparent;
+}
+
+.pulp-source-marker:hover,.pulp-source-marker:focus-visible,.pulp-source-marker[aria-expanded="true"] {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.pulp-source-marker:focus-visible {
+  outline: 2px solid #94a3b8;
+  outline-offset: 2px;
+}
+
+.pulp-source-popover {
+  position: absolute;
+  top: 30px;
+  left: 0;
+  width: min(260px,calc(100vw - 5rem));
+  padding: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: 0 8px 30px #0f172a14;
+  color: #334155;
+}
+
+.pulp-source-eyebrow {
+  font-size: 10px;
+  color: #94a3b8;
+}
+
+.pulp-source-name {
+  margin-top: 4px;
+  font-weight: 600;
+}
+
+.pulp-source-path {
+  margin-top: 5px;
+  font-size: 10px;
+  color: #94a3b8;
+  overflow-wrap: anywhere;
+}
+
+.pulp-source-explanation {
+  margin-top: 10px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.pulp-source-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 13px;
+  padding-top: 10px;
+  border-top: 1px solid #f1f5f9;
+  font-size: 11px;
+}
+
+.pulp-source-actions a,.pulp-source-actions button {
+  color: #475569;
+}
+
+.pulp-source-actions a:hover,.pulp-source-actions button:hover {
+  text-decoration: underline;
+}
+
+.dark .pulp-view-switch {
+  background: #1e293b;
+}
+
+.dark .pulp-view-switch button {
+  color: #94a3b8;
+}
+
+.dark .pulp-view-switch button[aria-pressed=true] {
+  background: #334155;
+  color: #e2e8f0;
+}
+
+.dark .pulp-composition-context strong {
+  color: #cbd5e1;
+}
+
+.dark .pulp-source-marker:hover,.dark .pulp-source-marker:focus-visible,.dark .pulp-source-marker[aria-expanded="true"] {
+  background: #1e293b;
+  color: #cbd5e1;
+}
+
+.dark .pulp-source-popover {
+  background: #1e293b;
+  border-color: #334155;
+  color: #e2e8f0;
+}
+
+.dark .pulp-source-explanation {
+  color: #94a3b8;
+}
+
+.dark .pulp-source-actions {
+  border-color: #334155;
+}
+
+.dark .pulp-source-actions a,.dark .pulp-source-actions button {
+  color: #cbd5e1;
+}

@@ -6,6 +6,8 @@ import { usePulpOptional } from "./context/PulpProvider";
 import { getRenderer } from "./registry";
 import { UnregisteredComponentFallback } from "./fallbacks";
 import { BlockChrome } from "./BlockChrome";
+import { useBlockSourceAttributes } from "./composition/BlockSource";
+import { BlockOccurrenceContext, sourceKey, useBlockOccurrence } from "./reference/BlockOccurrence";
 
 export const BlockNodeView = memo(function BlockNodeView({
   node,
@@ -15,6 +17,11 @@ export const BlockNodeView = memo(function BlockNodeView({
   tree: BlockTree;
 }) {
   const pulp = usePulpOptional();
+  const sourceAttributes = useBlockSourceAttributes(node);
+  const occurrence = useBlockOccurrence();
+  const childOccurrence = useMemo(() => ({ ...occurrence,
+    ancestors: [...occurrence.ancestors, sourceKey(node)],
+  }), [occurrence, node.id, node.surfaceId]);
   const def = tree.defs.get(node.componentType);
   const children = tree.byParent.get(node.id) ?? [];
 
@@ -49,15 +56,21 @@ export const BlockNodeView = memo(function BlockNodeView({
   );
   // Root never gets chrome; read-only mode gets no chrome anywhere (no drag
   // grip, insert +, or block menu) — the surface is structurally immutable.
-  if (node.parentId == null || pulp?.config.readOnly) return rendered;
+  if (node.parentId == null || pulp?.config.readOnly) return (
+    <BlockOccurrenceContext.Provider value={childOccurrence}>
+      {pulp?.config.readOnly && node.componentType !== "Container" && node.componentType !== "Reference"
+        ? <div {...sourceAttributes} className="relative">{rendered}</div>
+        : rendered}
+    </BlockOccurrenceContext.Provider>
+  );
 
   const gutterMode =
-    def.acceptsChildren && children.length > 0 ? "header" : "side";
+    node.componentType === "Reference" || (def.acceptsChildren && children.length > 0) ? "header" : "side";
 
   return (
-    <BlockChrome node={node} gutterMode={gutterMode}>
+    <BlockOccurrenceContext.Provider value={childOccurrence}><BlockChrome node={node} gutterMode={gutterMode}>
       {rendered}
-    </BlockChrome>
+    </BlockChrome></BlockOccurrenceContext.Provider>
   );
 });
 

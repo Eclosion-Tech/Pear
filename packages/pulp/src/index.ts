@@ -31,6 +31,7 @@ export { knownSiblingIdsForParent, siblingsForParent } from "./focus/insertFocus
 // Editor shell
 export { BlockEditor, ComponentTreeRenderer } from "./BlockEditor";
 export { BlockView } from "./BlockView";
+export { PageComposition, CompositionLayoutToggle, type CompositionLayout } from "./composition/PageComposition";
 export { BlockNodeView, ComponentNodeView } from "./BlockNodeView";
 export {
   registerRenderer,
@@ -239,3 +240,5 @@ export type {
   MigrationPayload,
   MigrationComponentWire,
 } from "./migration/buildMigrationPayload";
+export type { BlockReferenceTarget, ReferenceSource, ReferenceSourceProps, ReferenceAdapter } from "./reference/types";
+export { parseReferenceProps, referenceProps, referenceTree } from "./reference/types";

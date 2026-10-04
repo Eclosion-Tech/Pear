@@ -55,6 +55,9 @@ export function useSurfaceTextSelection(rootRef: RefObject<HTMLDivElement | null
   const onPointerDown = (event: ReactPointerEvent) => {
     const root = rootRef.current;
     if (!root || event.button !== 0) return;
+    if (event.target instanceof Element && event.target.closest("[data-selection-surface]") !== root) {
+      controller.clear(); text.clear(); drag.current = null; return;
+    }
     // Finger scrolling and native touch-selection handles belong to the browser.
     if (event.pointerType === "touch") {
       text.clear();
@@ -121,6 +124,7 @@ export function useSurfaceTextSelection(rootRef: RefObject<HTMLDivElement | null
       if (event.target instanceof Element && event.target.closest("[data-text-selection-toolbar]")) return;
       drag.current = null;
       text.clear();
+      controller.clear();
     };
     const copy = (event: ClipboardEvent) => {
       if (!inTextEditor(event.target) || !text.getSnapshot()) return;

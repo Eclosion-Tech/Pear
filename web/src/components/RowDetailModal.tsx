@@ -15,6 +15,8 @@ import {
   usePropertyDefinitions,
 } from "@/src/hooks/useDatabase";
 import { PagePropertiesPanel } from "./PagePropertiesPanel";
+import { useWorkspace } from "@/src/providers/WorkspaceProvider";
+import { usePageCompositionLayout } from "@/src/hooks/usePageCompositionLayout";
 
 interface RowDetailModalProps {
   page: PageRow;
@@ -24,6 +26,8 @@ interface RowDetailModalProps {
 }
 
 export function RowDetailModal({ page, parentPage, onClose }: RowDetailModalProps) {
+  const { idbNamespace } = useWorkspace();
+  const [layout, onLayoutChange] = usePageCompositionLayout(idbNamespace, page.id);
   const router = useRouter();
   // Scoped by raw SQL (14384): SpacetimeDB 2.0.3 emits the generated client
   // key `pageId` in typed SQL instead of the real server column `page_id`,
@@ -124,6 +128,7 @@ export function RowDetailModal({ page, parentPage, onClose }: RowDetailModalProp
             </svg>
           </button>
           <PageMoreMenu
+            compositionLayout={{ layout, onLayoutChange }}
             items={[
               {
                 label: "Move to trash",
@@ -157,6 +162,8 @@ export function RowDetailModal({ page, parentPage, onClose }: RowDetailModalProp
             <div className="px-6 py-4">
               <PageEditorSurface
                 page={page}
+                layout={layout}
+                onLayoutChange={onLayoutChange}
                 content={content}
                 editorKeySuffix={
                   content?.updatedAt?.microsSinceUnixEpoch != null

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
 export interface ContextMenuItem {
@@ -14,17 +14,22 @@ interface ContextMenuProps {
   y: number;
   items: ContextMenuItem[];
   onClose: () => void;
+  /** Persistent controls above the one-shot actions. Interacting here keeps the menu open. */
+  header?: ReactNode;
+  align?: "left" | "right";
+  anchorRef?: RefObject<HTMLElement | null>;
+  focusOnOpen?: boolean;
 }
 
-export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
+export function ContextMenu({ x, y, items, onClose, header, align = "left", anchorRef, focusOnOpen }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+      if (ref.current && !ref.current.contains(e.target as Node) && !anchorRef?.current?.contains(e.target as Node)) onClose();
     }
     function handleEscape(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") { e.stopPropagation(); onClose(); anchorRef?.current?.focus(); }
     }
     // Defer to avoid closing immediately from the same click that opened
     const t = requestAnimationFrame(() => {
@@ -36,14 +41,23 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
       document.removeEventListener("mousedown", handleClickOutside);
       document.removeEventListener("keydown", handleEscape);
     };
-  }, [onClose]);
+  }, [onClose, anchorRef]);
+
+  useEffect(() => {
+    if (focusOnOpen) {
+      const initial = ref.current?.querySelector<HTMLButtonElement>("button[aria-pressed='true']")
+        ?? ref.current?.querySelector<HTMLButtonElement>("button");
+      initial?.focus();
+    }
+  }, [focusOnOpen]);
 
   return createPortal(
     <div
       ref={ref}
       className="fixed z-50 min-w-[160px] py-1 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-xl overflow-hidden"
-      style={{ left: x, top: y }}
+      style={{ left: x, top: y, transform: align === "right" ? "translateX(-100%)" : undefined }}
     >
+      {header}
       {items.map((item, i) => (
         <button
           key={i}

@@ -103,6 +103,7 @@ function BlockSurface({ tree }: { tree: BlockTree }) {
     (e: ReactPointerEvent) => {
       if (e.button !== 0 || e.pointerType === "touch") return;
       const target = e.target as Element;
+      if (target.closest("[data-selection-surface]") !== surfaceRef.current) return;
       // Clicking into editable text resumes editing — drop any block selection.
       if (surfaceRef.current && textBodyAt(target, surfaceRef.current)) {
         if (selectedIds.length > 0) controller.clear();

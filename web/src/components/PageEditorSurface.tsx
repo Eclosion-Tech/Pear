@@ -1,5 +1,7 @@
 "use client";
 
+import type { CompositionLayout } from "@eclosion-tech/pulp";
+
 import type { PageContent } from "@/src/module_bindings/types";
 import type { PageRow } from "@/src/hooks/usePages";
 import { useMigrateBlockNotePageOnOpen } from "@/src/hooks/useMigrateBlockNotePageOnOpen";
@@ -8,6 +10,8 @@ import { PageMigratingShell } from "./PageMigratingShell";
 
 export type PageEditorSurfaceProps = {
   page: PageRow;
+  layout: CompositionLayout;
+  onLayoutChange: (layout: CompositionLayout) => void;
   content: PageContent | undefined;
   /** Open a block-anchored thread (from a gutter marker) in the AI panel. */
   onOpenThread?: (conversationId: bigint) => void;
@@ -22,6 +26,8 @@ export type PageEditorSurfaceProps = {
  */
 export function PageEditorSurface({
   page,
+  layout,
+  onLayoutChange,
   content,
   onOpenThread,
   editorKeySuffix = "",
@@ -38,6 +44,8 @@ export function PageEditorSurface({
       <ComponentTreeRenderer
         key={`${page.id}-${editorKeySuffix}`}
         surfaceId={page.id}
+        layout={layout}
+        onLayoutChange={onLayoutChange}
         onOpenThread={onOpenThread}
       />
     );

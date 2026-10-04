@@ -242,6 +242,13 @@ pub(crate) fn next_component_type_definition_id(ctx: &ReducerContext) -> u64 {
 /// prefixed extensions (e.g. `"$pear:propertyRef"`) can be added later
 /// without changing the storage format.
 mod prop_schemas {
+    pub const REFERENCE: &str = r#"{
+  "type": "object",
+  "properties": {
+    "surfaceId": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+    "blockId": { "type": "string", "pattern": "^[1-9][0-9]*$" }
+  }
+}"#;
     /// `style_v1` token block (PEAR_STYLE_VOCABULARY_ADR, S1).
     ///
     /// Inlined per component rather than shared, because `BuiltinSpec.prop_schema`
@@ -652,6 +659,15 @@ struct BuiltinSpec {
 fn builtin_specs() -> Vec<BuiltinSpec> {
     use ComponentCapability::*;
     vec![
+        BuiltinSpec {
+            component_type: "Reference",
+            display_name: "Reference",
+            description: "Editable reference to a page root or block subtree. Source blocks retain their identity and access rules.",
+            prop_schema: prop_schemas::REFERENCE,
+            capabilities: vec![],
+            has_yjs_state: false,
+            accepts_children: false,
+        },
         BuiltinSpec {
             component_type: "Container",
             display_name: "Container",

@@ -69,6 +69,7 @@ export function BlockMenu({
   }, [onClose, turnIntoOpen]);
 
   const pulpMutations = pulp;
+  const boundaryRoot = pulp.tree.root?.id === node.id && node.parentId != null;
 
   if (turnIntoOpen) {
     return (
@@ -98,21 +99,21 @@ export function BlockMenu({
       role="menu"
       aria-label="Block actions"
     >
-      <MenuItem
+      {!boundaryRoot && <MenuItem
         label="Duplicate"
         onSelect={() => {
           duplicateBlock(node, pulp.tree, pulpMutations, focus);
           onClose();
         }}
-      />
-      <MenuItem
+      />}
+      {!boundaryRoot && <MenuItem
         label="Turn into…"
         onSelect={() => setTurnIntoOpen(true)}
-      />
+      />}
       <MenuItem
         label={copyFeedback ? "Link copied" : "Copy link"}
         onSelect={async () => {
-          const ok = await copyBlockLink(node.id);
+          const ok = await copyBlockLink(node.id, pulp.config.references?.href({ surfaceId: node.surfaceId, blockId: node.id }));
           if (ok) {
             setCopyFeedback(true);
             window.setTimeout(onClose, 600);

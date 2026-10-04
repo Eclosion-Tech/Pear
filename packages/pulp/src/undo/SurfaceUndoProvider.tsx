@@ -51,6 +51,7 @@ export function SurfaceUndoProvider({
       if (!root) return;
       const target = e.target;
       if (!(target instanceof Node) || !root.contains(target)) return;
+      if (target instanceof Element && target.closest("[data-undo-surface]") !== root) return;
 
       const mod = e.metaKey || e.ctrlKey;
       if (!mod) return;
@@ -74,7 +75,7 @@ export function SurfaceUndoProvider({
 
   return (
     <SurfaceUndoContext.Provider value={value}>
-      <div ref={rootRef} className="contents">
+      <div ref={rootRef} className="contents" data-undo-surface>
         {children}
       </div>
     </SurfaceUndoContext.Provider>
