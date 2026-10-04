@@ -13,6 +13,7 @@ import type { EditorView } from "prosemirror-view";
 import { yDocToHtml } from "../rich-text/yjsToHtml";
 import { RichTextEditor, type EditorSurfaceMode } from "../rich-text/RichTextEditor";
 import { usePulp } from "../context/PulpProvider";
+import { useLocalTextDocument } from "../rich-text/localTextDocuments";
 import { useSurfaceFocus } from "../focus/SurfaceFocusProvider";
 import { useSurfaceSelectionOptional } from "../selection/SurfaceSelectionProvider";
 import type { BlockRendererProps } from "../registry";
@@ -177,7 +178,11 @@ function EditableHeading({ node, tree, children }: BlockRendererProps) {
 
   const [{ doc }] = useState(() => {
     const initial = focus.consumeInitialDoc(node.id);
-    return { doc: initial ?? new Y.Doc() };
+    const doc = initial ?? new Y.Doc();
+    if (state?.data?.byteLength) {
+      try { Y.applyUpdate(doc, state.data, "remote"); } catch { /* reconciler reports malformed state */ }
+    }
+    return { doc };
   });
 
   useLayoutEffect(() => {
@@ -199,6 +204,8 @@ function EditableHeading({ node, tree, children }: BlockRendererProps) {
       console.warn(`[HeadingRenderer] failed to apply Yjs for ${node.id}:`, err);
     }
   }, [doc, node.id, state?.data, state?.updatedAt?.microsSinceUnixEpoch]);
+
+  useLocalTextDocument(config.idbPrefix, node.id, doc);
 
   useEffect(() => {
     if (bootstrappedLegacyRef.current) return;
@@ -506,7 +513,7 @@ function EditableHeading({ node, tree, children }: BlockRendererProps) {
               shouldClaimFocus={claimInsertFocus}
               onFocus={() => setHasFocus(true)}
               onBlur={() => setHasFocus(false)}
-              onSplit={onSplit}
+              onSplit={tree.root?.id === node.id ? undefined : onSplit}
               onDeleteSelf={canBackspaceDeleteEmpty ? onDeleteSelf : undefined}
               onMergeWithPrev={onMergeWithPrev}
               suppressSaveRef={suppressSaveRef}
@@ -515,7 +522,7 @@ function EditableHeading({ node, tree, children }: BlockRendererProps) {
               onIndent={onIndent}
               onOutdent={onOutdent}
               bindFocus={bindFocus}
-              blockActions={blockActions}
+              blockActions={tree.root?.id === node.id ? undefined : blockActions}
               onEscape={onEscape}
             />
           ) : (

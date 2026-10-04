@@ -110,6 +110,8 @@ export type PulpConfig = {
    * failing — a host that doesn't do data binding still renders the tree.
    */
   queryResolver?: import("./repeater/dataSource").QueryResolver;
+  /** Host storage and URL adapter for editable references to source block subtrees. */
+  references?: import("./reference/types").ReferenceAdapter;
 };
 
 export type PulpContextValue = {

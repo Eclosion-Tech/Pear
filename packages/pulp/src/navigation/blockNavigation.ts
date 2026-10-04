@@ -27,6 +27,7 @@ export function flattenDocumentBlocks(tree: BlockTree): BlockNode[] {
     for (const child of tree.byParent.get(id) ?? []) walk(child.id);
   };
   if (!tree.root) return out;
+  if (tree.root.parentId != null) { walk(tree.root.id); return out; }
   for (const child of tree.byParent.get(tree.root.id) ?? []) walk(child.id);
   return out;
 }

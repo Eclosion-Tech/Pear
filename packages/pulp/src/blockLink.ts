@@ -12,9 +12,9 @@ export function buildBlockLink(componentId: BlockId): string {
   return `${window.location.origin}${window.location.pathname}${blockLinkHash(componentId)}`;
 }
 
-export async function copyBlockLink(componentId: BlockId): Promise<boolean> {
+export async function copyBlockLink(componentId: BlockId, href?: string): Promise<boolean> {
   try {
-    await navigator.clipboard.writeText(buildBlockLink(componentId));
+    await navigator.clipboard.writeText(href ? new URL(href, window.location.href).href : buildBlockLink(componentId));
     return true;
   } catch {
     return false;

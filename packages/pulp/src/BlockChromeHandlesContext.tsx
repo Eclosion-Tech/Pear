@@ -11,7 +11,7 @@ export type BlockChromeGripProps = Pick<
 export type BlockChromeHandles = {
   bindGrip: (el: HTMLButtonElement | null) => void;
   gripProps: BlockChromeGripProps;
-  insertSiblingBelow: () => void;
+  insertSiblingBelow?: () => void;
   openMenu: () => void;
 };
 

@@ -43,7 +43,38 @@ Vitest covers block navigation, structural actions (nest/merge/turn-into), headi
 
 `SurfaceUndoCoordinator` + `<SurfaceUndoProvider>` — document-wide Cmd-Z mixing Yjs text edits and structural ops. Host app wraps mutations via `coordinator.wrapMutations()` and wires `restoreBlock` for soft-delete undo (Pear: `restore_component`).
 
-## Selection
+## Editable references
+
+`Reference` stores `{ surfaceId: "…", blockId?: "…" }`. Omitting `blockId`
+includes the source page's root. A reference has no stored children: its framed
+contents are the original source subtree, rendered with separate occurrence IDs.
+The outer handle moves/removes the inclusion; inner handles edit the source.
+
+Hosts provide `PulpConfig.references`: a `Source` component that subscribes to
+the target surface and supplies its tree, raw mutations, and read-only status;
+plus link parsing and source-link generation. Pear wires this to the existing
+scoped component subscriptions and source-page access rules. `/Reference` offers
+a page picker or a pasted page/block link. The backend registry migration must
+be published before the new slash item appears in an existing workspace.
+
+Two reference levels expand automatically. Deeper references require explicit
+expansion; sources are subscribed when their frame approaches the viewport.
+Current-path cycle detection shows a source link instead of recursively expanding
+an ancestor. Reusing the same source in separate branches remains supported.
+Deeper frames stop adding indentation. Missing or inaccessible sources show a
+recoverable notice, and readable sources without write permission render statically.
+
+Each occurrence owns selection, focus, drag targets, and undo. Mounted text
+occurrences synchronize immediately within the same persistence namespace while
+retaining separate Yjs undo state. Saving still uses the host's normal persistence
+path. A reference to one text block keeps Enter/paste inside that document;
+structural operations cannot create siblings outside the included subtree.
+
+This first version contains selection and drag operations within each reference.
+Dragging across reference boundaries and continuous cross-reference selection
+remain follow-ups. Block links copied inside a reference point to the source.
+
+## Selection behavior
 
 Dragging from a text body (including its padding) selects characters across
 successive text blocks. Dragging from the outer margin selects whole blocks;

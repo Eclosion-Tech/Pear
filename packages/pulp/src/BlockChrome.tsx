@@ -16,6 +16,7 @@ import { useSurfaceSelectionOptional } from "./selection/SurfaceSelectionProvide
 import { knownSiblingIdsForParent } from "./focus/insertFocusHelpers";
 import type { BlockNode } from "./types";
 import { BlockMenu } from "./BlockMenu";
+import { useBlockDomId } from "./reference/BlockOccurrence";
 import {
   BlockChromeHandlesProvider,
   useBlockChromeHandles,
@@ -39,7 +40,9 @@ export function BlockChrome({
   gutterMode?: BlockChromeGutterMode;
 }) {
   const { insertBlock, tree } = usePulp();
+  const blockDomId = useBlockDomId();
   const focus = useSurfaceFocus();
+  const canInsertSibling = node.parentId != null && tree.root?.id !== node.id;
   const selection = useSurfaceSelectionOptional();
   const [menuRect, setMenuRect] = useState<DOMRect | null>(null);
   const gripRef = useRef<HTMLButtonElement | null>(null);
@@ -74,7 +77,7 @@ export function BlockChrome({
   };
 
   const insertSiblingBelow = useCallback(() => {
-    if (node.parentId == null) return;
+    if (node.parentId == null || tree.root?.id === node.id) return;
     focus.armForInsert(node.parentId, node.id, {
       knownSiblingIds: knownSiblingIdsForParent(tree, node.parentId),
     });
@@ -140,12 +143,13 @@ export function BlockChrome({
     <BlockChromeHandlesProvider
       value={
         gutterMode === "header"
-          ? { bindGrip, gripProps, insertSiblingBelow, openMenu }
+          ? { bindGrip, gripProps, insertSiblingBelow: canInsertSibling ? insertSiblingBelow : undefined, openMenu }
           : null
       }
     >
       <div
-        id={`block-${node.id}`}
+        id={blockDomId(node.id)}
+        data-source-block={String(node.id)}
         ref={bindWrapper}
         style={wrapperStyle}
         data-block-chrome
@@ -184,7 +188,7 @@ export function BlockChrome({
                           }`}
             >
               <SideGutterButtons
-                onInsert={insertSiblingBelow}
+                onInsert={canInsertSibling ? insertSiblingBelow : undefined}
                 bindGrip={bindGrip}
                 gripProps={gripProps}
                 onOpenMenu={openMenu}
@@ -211,14 +215,14 @@ function SideGutterButtons({
   gripProps,
   onOpenMenu,
 }: {
-  onInsert: () => void;
+  onInsert?: () => void;
   bindGrip: (el: HTMLButtonElement | null) => void;
   gripProps: BlockChromeGripProps;
   onOpenMenu: () => void;
 }) {
   return (
     <>
-      <button
+      {onInsert && <button
         type="button"
         onClick={onInsert}
         title="Insert a RichText block below"
@@ -234,7 +238,7 @@ function SideGutterButtons({
             strokeLinecap="round"
           />
         </svg>
-      </button>
+      </button>}
       <button
         ref={bindGrip}
         {...gripProps}
@@ -263,7 +267,7 @@ export function BlockChromeHeaderControls({
   if (!handles) return null;
   return (
     <div className={`flex items-center gap-0.5 pointer-events-auto ${className}`}>
-      <button
+      {handles.insertSiblingBelow && <button
         type="button"
         onClick={handles.insertSiblingBelow}
         title="Insert a RichText block below this container"
@@ -279,7 +283,7 @@ export function BlockChromeHeaderControls({
             strokeLinecap="round"
           />
         </svg>
-      </button>
+      </button>}
       <button
         ref={handles.bindGrip}
         {...handles.gripProps}

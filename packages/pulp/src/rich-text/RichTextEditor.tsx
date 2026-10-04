@@ -294,10 +294,10 @@ export function RichTextEditor({
         markdownShortcutPlugin({
           getShortcuts: () => markdownShortcutsRef.current ?? [],
           onConvert: (item) => onMarkdownShortcutRef.current?.(item),
-          isDisabled: () => surfaceModeRef.current.kind === "heading",
+          isDisabled: () => surfaceModeRef.current.kind === "heading" || !onMarkdownShortcutRef.current,
         }),
         slashMenuPlugin({
-          isDisabled: () => surfaceModeRef.current.kind === "heading",
+          isDisabled: () => surfaceModeRef.current.kind === "heading" || !onSlashSessionChangeRef.current,
           onSessionChange: (session: (SlashSession & { view: EditorView }) | null) => {
             slashActiveRef.current = session != null;
             if (!session) {

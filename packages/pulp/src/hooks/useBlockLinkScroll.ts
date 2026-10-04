@@ -4,15 +4,17 @@ import { useEffect, useRef } from "react";
 import { parseBlockLinkHash } from "../blockLink";
 import { useSurfaceFocus } from "../focus/SurfaceFocusProvider";
 import type { BlockTree } from "../types";
+import { useBlockOccurrence } from "../reference/BlockOccurrence";
 
 /** Scroll to and focus a block when the URL hash is `#c-{componentId}`. */
 export function useBlockLinkScroll(tree: BlockTree): void {
   const focus = useSurfaceFocus();
+  const { prefix } = useBlockOccurrence();
   const initialDoneRef = useRef(false);
 
   useEffect(() => {
     function goToHash(hash: string, isInitial: boolean) {
-      if (tree.loading) return;
+      if (tree.loading || prefix) return;
       const id = parseBlockLinkHash(hash);
       if (id == null || !tree.byId.has(id)) return;
       if (isInitial && initialDoneRef.current) return;
@@ -34,5 +36,5 @@ export function useBlockLinkScroll(tree: BlockTree): void {
     }
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
-  }, [tree.loading, tree.byId, focus]);
+  }, [tree.loading, tree.byId, focus, prefix]);
 }

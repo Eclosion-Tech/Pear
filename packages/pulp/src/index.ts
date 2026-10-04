@@ -239,3 +239,5 @@ export type {
   MigrationPayload,
   MigrationComponentWire,
 } from "./migration/buildMigrationPayload";
+export type { BlockReferenceTarget, ReferenceSource, ReferenceSourceProps, ReferenceAdapter } from "./reference/types";
+export { parseReferenceProps, referenceProps, referenceTree } from "./reference/types";

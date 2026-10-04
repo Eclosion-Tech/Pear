@@ -72,7 +72,7 @@ export function ContainerRenderer({ node, def, tree, children }: BlockRendererPr
   const theme = useMemo(() => parseTheme(props.theme), [props.theme]);
   const themeClassNames = themeClasses(theme);
   const themeInlineStyle = useMemo(() => themeStyle(theme, slug), [theme, slug]);
-  const { insertBlock } = usePulp();
+  const { insertBlock, config } = usePulp();
   const focus = useSurfaceFocus();
   const acceptsChildren = def.acceptsChildren;
 
@@ -137,7 +137,7 @@ export function ContainerRenderer({ node, def, tree, children }: BlockRendererPr
   // class here, which would bake one surface's layout policy into every
   // consumer of Container. A materialized container with no tokens occupies no
   // space at all, which is what leaf rows want.
-  if (isVirtualId(node.id)) {
+  if (isVirtualId(node.id) || config.readOnly) {
     return (
       <div
         className={`${layoutClass} ${directionClass} ${tokenClasses} ${themeClassNames}`}

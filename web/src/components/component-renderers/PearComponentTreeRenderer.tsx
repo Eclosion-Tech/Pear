@@ -41,6 +41,7 @@ import { useSpacetimeDB } from "spacetimedb/react";
 import { registerPearBuiltinRenderers } from "./built-in";
 import { PEAR_SLASH_ITEMS, slashItemsForDefs } from "./pearSlashItems";
 import { useQueryResolver } from "@/src/lib/repeater/queryResolver";
+import { pearReferences } from "./PearReferenceSource";
 
 registerCoreBlocks();
 registerPearBuiltinRenderers();
@@ -407,6 +408,7 @@ export function ComponentTreeRenderer({
       linkTargets,
       onCommentBlock: handleCommentBlock,
       queryResolver,
+      references: pearReferences,
     }),
     [idbNamespace, linkTargets, tree.defs, handleCommentBlock, queryResolver],
   );

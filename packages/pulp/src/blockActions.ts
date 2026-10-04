@@ -207,7 +207,7 @@ export function unnestBlock(
   if (node.parentId == null) return false;
 
   const parent = tree.byId.get(node.parentId);
-  if (!parent || parent.parentId == null) return false;
+  if (!parent || parent.parentId == null || !tree.byId.has(parent.parentId)) return false;
 
   mutations.moveBlock({
     componentId: node.id,
@@ -226,7 +226,7 @@ export function canNestBlock(node: BlockNode, tree: BlockTree): boolean {
 export function canUnnestBlock(node: BlockNode, tree: BlockTree): boolean {
   if (node.parentId == null) return false;
   const parent = tree.byId.get(node.parentId);
-  return Boolean(parent?.parentId != null);
+  return Boolean(parent?.parentId != null && tree.byId.has(parent.parentId));
 }
 
 /**
