@@ -2,9 +2,9 @@ import type { BlockId } from "../types";
 
 /**
  * Surface-scoped block selection. Character selection inside a block stays
- * with ProseMirror; this tracks **whole-block** selection (Notion / BlockNote)
- * — the state a drag flips into once it crosses a block boundary, plus marquee
- * and keyboard selection. Pure + framework-agnostic: the React provider
+ * with ProseMirror and SurfaceTextSelection; this tracks **whole-block**
+ * selection from the outer margin and explicit keyboard actions.
+ * Pure + framework-agnostic: the React provider
  * subscribes; document order for range math is supplied by the caller.
  */
 export class SurfaceSelectionController {
@@ -72,7 +72,7 @@ export class SurfaceSelectionController {
 
   /**
    * Select the inclusive document-order range between two endpoints (a
-   * cross-block text drag that crossed a boundary). The first endpoint becomes
+   * whole-block range). The first endpoint becomes
    * the anchor so a follow-up Shift extends from there.
    */
   selectBetween(

@@ -156,7 +156,7 @@ export function createMockFocus(
 }
 
 export type MockMutationsCalls = {
-  insertBlock: PulpMutations["insertBlock"] extends (...args: infer A) => unknown ? A[] : never;
+  insertBlock: Array<Parameters<PulpMutations["insertBlock"]>[0]>;
   deleteBlock: Array<{ componentId: BlockId }>;
   moveBlock: Array<{
     componentId: BlockId;

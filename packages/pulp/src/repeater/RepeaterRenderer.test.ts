@@ -143,8 +143,8 @@ function render(tree: BlockTree, config: PulpConfig) {
     root.render(
       createElement(
         PulpProvider,
-        { tree, config, mutations: NOOP_MUTATIONS },
-        createElement(BlockNodeView, { node: tree.root as BlockNode, tree }),
+        { tree, config, mutations: NOOP_MUTATIONS,
+          children: createElement(BlockNodeView, { node: tree.root as BlockNode, tree }) },
       ),
     );
   });

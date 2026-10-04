@@ -42,3 +42,22 @@ Vitest covers block navigation, structural actions (nest/merge/turn-into), headi
 ## Undo / redo
 
 `SurfaceUndoCoordinator` + `<SurfaceUndoProvider>` — document-wide Cmd-Z mixing Yjs text edits and structural ops. Host app wraps mutations via `coordinator.wrapMutations()` and wires `restoreBlock` for soft-delete undo (Pear: `restore_component`).
+
+## Selection
+
+Dragging from a text body (including its padding) selects characters across
+successive text blocks. Dragging from the outer margin selects whole blocks;
+drag handles still reorder blocks. The gesture keeps its original mode until
+release. Shift-click and Shift-arrow extend text selections. Cmd/Ctrl+A selects
+all text bodies on the surface, including off-screen text.
+
+Cross-block text ranges support copy/cut, rich-text paste, replacement typing,
+deletion, inline formatting, and grouped undo/redo. Adjacent leaf blocks join on
+replacement; ranges crossing nested structure or media edit only the selected
+text and preserve that structure. Block-type changes and link editing remain
+single-block actions.
+
+`SurfaceTextSelection` tracks Yjs-relative endpoints and pins selected editors
+while scrolling. ProseMirror decorations paint each portion because browser
+selections cannot reliably span separate editing hosts. Text undo managers live
+with their Y.Doc so viewport unmounts do not discard their history.

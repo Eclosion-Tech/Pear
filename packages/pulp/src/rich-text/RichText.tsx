@@ -708,7 +708,7 @@ function EditableRichText({
   // Focus preservation — if this block currently holds focus, stay live
   // even when scrolled out of the preload band. This avoids tearing down
   // the prosemirror view (and the user's IME / selection) on every scroll.
-  const live = inViewport || hasFocus;
+  const live = inViewport || hasFocus || !!selection?.textRange?.ids.includes(node.id);
 
   // Static-mode HTML. Only maintained while static: in live mode ProseMirror
   // renders the doc and `html` is unused, so serializing on every local
@@ -731,7 +731,7 @@ function EditableRichText({
     // `min-h-[1.5em]` keeps the wrapper non-zero-height even for empty
     // RichText nodes — required for IntersectionObserver to be able to
     // report intersection at all (zero-area elements never intersect).
-    <div ref={hostRef} className="min-h-[1.5em]">
+    <div ref={hostRef} data-text-block={String(node.id)} className="min-h-[1.5em]">
       {live ? (
         <RichTextEditor
           doc={doc}

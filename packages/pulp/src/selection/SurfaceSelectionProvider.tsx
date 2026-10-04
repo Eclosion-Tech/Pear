@@ -11,6 +11,7 @@ import {
 import type { BlockId } from "../types";
 import { SurfaceSelectionController } from "./SurfaceSelectionController";
 import type { Rect } from "./selectionGeometry";
+import { SurfaceTextSelection, type SurfaceTextRange } from "./SurfaceTextSelection";
 
 export type SurfaceSelectionValue = {
   controller: SurfaceSelectionController;
@@ -20,6 +21,8 @@ export type SurfaceSelectionValue = {
   registerRect: (id: BlockId, getRect: () => DOMRect | null) => () => void;
   /** Snapshot all registered block rects in viewport coordinates. */
   getRects: () => Map<BlockId, Rect>;
+  text: SurfaceTextSelection;
+  textRange: SurfaceTextRange | null;
 };
 
 const SurfaceSelectionContext = createContext<SurfaceSelectionValue | null>(null);
@@ -30,6 +33,8 @@ export function SurfaceSelectionProvider({ children }: { children: ReactNode }) 
     controllerRef.current = new SurfaceSelectionController();
   }
   const controller = controllerRef.current;
+  const text = useMemo(() => new SurfaceTextSelection(), []);
+  const textRange = useSyncExternalStore(text.subscribe, text.getSnapshot, text.getSnapshot);
 
   const rectsRef = useRef(new Map<BlockId, () => DOMRect | null>());
 
@@ -43,6 +48,8 @@ export function SurfaceSelectionProvider({ children }: { children: ReactNode }) 
     const selectedSet = new Set(selectedIds);
     return {
       controller,
+      text,
+      textRange,
       selectedIds,
       isSelected: (id) => selectedSet.has(id),
       registerRect: (id, getRect) => {
@@ -69,7 +76,7 @@ export function SurfaceSelectionProvider({ children }: { children: ReactNode }) 
         return out;
       },
     };
-  }, [controller, selectedIds]);
+  }, [controller, selectedIds, text, textRange]);
 
   return (
     <SurfaceSelectionContext.Provider value={value}>

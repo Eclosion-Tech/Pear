@@ -459,7 +459,7 @@ function EditableHeading({ node, tree, children }: BlockRendererProps) {
     return () => observer.disconnect();
   }, []);
 
-  const live = inViewport || hasFocus;
+  const live = inViewport || hasFocus || !!selection?.textRange?.ids.includes(node.id);
   // Static-mode HTML — only maintained while static; live mode renders
   // ProseMirror and never reads `html`, so a per-keystroke serialization
   // would be wasted work. See the matching comment in RichText.tsx.
@@ -493,6 +493,7 @@ function EditableHeading({ node, tree, children }: BlockRendererProps) {
         )}
         <div
           ref={hostRef}
+          data-text-block={String(node.id)}
           className="min-h-[1.5em] min-w-0 flex-1"
           style={alignStyle}
         >

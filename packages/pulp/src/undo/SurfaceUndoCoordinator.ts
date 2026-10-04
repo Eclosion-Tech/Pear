@@ -1,4 +1,4 @@
-import type * as Y from "yjs";
+import * as Y from "yjs";
 import type { BlockId, BlockTree, PulpMutations } from "../types";
 
 type InsertArgs = {
@@ -20,7 +20,8 @@ type StructuralUndoEntry = {
   redo: () => void | Promise<void>;
 };
 
-export type UndoEntry = YjsUndoEntry | StructuralUndoEntry;
+type GroupUndoEntry = { kind: "group"; entries: UndoEntry[] };
+export type UndoEntry = YjsUndoEntry | StructuralUndoEntry | GroupUndoEntry;
 
 /**
  * Surface-level undo / redo coordinator — one chronological timeline per
@@ -36,6 +37,21 @@ export class SurfaceUndoCoordinator {
   private pendingInsert: InsertArgs | null = null;
   private getTree: (() => BlockTree) | null = null;
   private baseMutations: PulpMutations | null = null;
+  private group: UndoEntry[] | null = null;
+  private managers = new Set<Y.UndoManager>();
+
+  /** One user action spanning several text documents and structural changes. */
+  transact(action: () => void): void {
+    if (this.group) { action(); return; }
+    for (const manager of this.managers) manager.stopCapturing();
+    const entries: UndoEntry[] = [];
+    this.group = entries;
+    try { action(); } finally {
+      this.group = null;
+      for (const manager of this.managers) manager.stopCapturing();
+      if (entries.length) this.undoStack.push({ kind: "group", entries });
+    }
+  }
 
   /** Bind tree accessor + base mutations before `wrapMutations`. */
   bind(getTree: () => BlockTree, base: PulpMutations): void {
@@ -100,14 +116,16 @@ export class SurfaceUndoCoordinator {
     componentId: BlockId,
     undoManager: Y.UndoManager,
   ): () => void {
+    this.managers.add(undoManager);
     const onAdded = () => {
       if (this.applying) return;
       this.clearRedo();
-      this.undoStack.push({ kind: "yjs", componentId, undoManager });
+      (this.group ?? this.undoStack).push({ kind: "yjs", componentId, undoManager });
     };
     undoManager.on("stack-item-added", onAdded);
     return () => {
       undoManager.off("stack-item-added", onAdded);
+      this.managers.delete(undoManager);
     };
   }
 
@@ -116,11 +134,7 @@ export class SurfaceUndoCoordinator {
     if (!entry) return false;
     this.applying = true;
     try {
-      if (entry.kind === "yjs") {
-        entry.undoManager.undo();
-      } else {
-        await entry.undo();
-      }
+      await this.applyEntry(entry, "undo");
       this.redoStack.push(entry);
       return true;
     } catch (err) {
@@ -138,11 +152,7 @@ export class SurfaceUndoCoordinator {
     if (!entry) return false;
     this.applying = true;
     try {
-      if (entry.kind === "yjs") {
-        entry.undoManager.redo();
-      } else {
-        await entry.redo();
-      }
+      await this.applyEntry(entry, "redo");
       this.undoStack.push(entry);
       return true;
     } catch (err) {
@@ -157,6 +167,25 @@ export class SurfaceUndoCoordinator {
 
   canUndo(): boolean {
     return this.undoStack.length > 0;
+  }
+
+  private async applyEntry(entry: UndoEntry, direction: "undo" | "redo"): Promise<void> {
+    if (entry.kind === "group") {
+      const entries = direction === "undo" ? [...entry.entries].reverse() : entry.entries;
+      for (const child of entries) await this.applyEntry(child, direction);
+    } else if (entry.kind === "yjs") {
+      entry.undoManager[direction]();
+      // A selected editor may have scrolled out of view since this action.
+      // Its live-editor save loop is absent, so persist undo/redo here too.
+      if (this.getTree?.().byId.has(entry.componentId) && this.baseMutations) {
+        void Promise.resolve(this.baseMutations.saveYjsState({
+          componentId: entry.componentId,
+          data: Y.encodeStateAsUpdate(entry.undoManager.doc),
+        })).catch((error) => console.warn("[pulp/undo] failed to save text history change:", error));
+      }
+    } else {
+      await entry[direction]();
+    }
   }
 
   canRedo(): boolean {
@@ -253,7 +282,7 @@ export class SurfaceUndoCoordinator {
   }
 
   private pushStructural(entry: Omit<StructuralUndoEntry, "kind">): void {
-    this.undoStack.push({ kind: "structural", ...entry });
+    (this.group ?? this.undoStack).push({ kind: "structural", ...entry });
   }
 
   private clearRedo(): void {
@@ -262,6 +291,7 @@ export class SurfaceUndoCoordinator {
 }
 
 export const NOOP_UNDO_COORDINATOR = {
+  transact: (action: () => void) => action(),
   registerYjsUndoManager: () => () => {},
   undo: async () => false,
   redo: async () => false,
