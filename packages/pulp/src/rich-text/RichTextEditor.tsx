@@ -9,6 +9,8 @@ import {
 } from "react";
 import * as Y from "yjs";
 import { IndexeddbPersistence } from "y-indexeddb";
+import { useSurfaceSelectionOptional } from "../selection/SurfaceSelectionProvider";
+import { textSelectionPlugin } from "../selection/textSelectionPlugin";
 import { EditorState } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 import { keymap } from "prosemirror-keymap";
@@ -20,10 +22,8 @@ import {
 } from "prosemirror-commands";
 import {
   ySyncPlugin,
-  yUndoPlugin,
-  ySyncPluginKey,
 } from "y-prosemirror";
-import { UndoManager } from "yjs";
+import { textUndoManager, textUndoPlugin } from "../undo/textUndo";
 import {
   richTextSchema,
   PROSEMIRROR_FRAGMENT_KEY,
@@ -219,6 +219,7 @@ export function RichTextEditor({
   const idbRef = useRef<IndexeddbPersistence | null>(null);
   const { saveYjsState, config, tree } = usePulp();
   const focus = useSurfaceFocus();
+  const textSelection = useSurfaceSelectionOptional()?.text;
   const { registerYjsUndoManager } = useSurfaceUndo();
   const idbPrefix = config.idbPrefix;
   const treeRef = useRef(tree);
@@ -282,15 +283,14 @@ export function RichTextEditor({
 
     const fragment = doc.getXmlFragment(PROSEMIRROR_FRAGMENT_KEY);
 
-    const undoManager = new UndoManager(fragment, {
-      trackedOrigins: new Set([ySyncPluginKey, null]),
-    });
+    const undoManager = textUndoManager(doc);
 
     const state = EditorState.create({
       schema: richTextSchema,
       plugins: [
         ySyncPlugin(fragment),
-        yUndoPlugin({ undoManager }),
+        textUndoPlugin(undoManager),
+        textSelectionPlugin(componentId, textSelection),
         markdownShortcutPlugin({
           getShortcuts: () => markdownShortcutsRef.current ?? [],
           onConvert: (item) => onMarkdownShortcutRef.current?.(item),
@@ -419,6 +419,10 @@ export function RichTextEditor({
 
     const editorView = new EditorView(hostRef.current, {
       state,
+      dispatchTransaction(this: EditorView, tr) {
+        this.updateState(this.state.apply(tr));
+        textSelection?.onTransaction(componentId, tr);
+      },
       attributes: {
         class:
           "outline-none min-h-[1.5em] " +
@@ -489,6 +493,7 @@ export function RichTextEditor({
     // Also register the live EditorView so sibling Backspace-merge
     // gestures can reach in and append content.
     const unregisterEditor = focus.registerEditor(componentId, editorView);
+    const unregisterText = textSelection?.register(componentId, editorView);
     const unregisterUndo = registerYjsUndoManager(componentId, undoManager);
 
     const tryClaimAutofocus = () => {
@@ -588,6 +593,7 @@ export function RichTextEditor({
       for (const id of focusRetryTimeouts) window.clearTimeout(id);
       unregisterBindFocus?.();
       unregisterEditor();
+      unregisterText?.();
       unregisterUndo();
       doc.off("update", onUpdate);
       window.clearInterval(interval);
@@ -614,7 +620,7 @@ export function RichTextEditor({
   return (
     <>
       <div ref={hostRef} className={proseClass} />
-      <FormattingToolbar view={view} linkRequest={linkRequest} blockActions={blockActions} />
+      <FormattingToolbar view={view} componentId={componentId} linkRequest={linkRequest} blockActions={blockActions} />
     </>
   );
 }

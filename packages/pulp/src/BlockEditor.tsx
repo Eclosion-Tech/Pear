@@ -35,6 +35,7 @@ import {
   type Rect,
 } from "./selection/selectionGeometry";
 import type { BlockId, BlockTree } from "./types";
+import { textBodyAt, useSurfaceTextSelection } from "./selection/useSurfaceTextSelection";
 
 /**
  * Top-level block tree editor shell. Consumes tree + mutations from
@@ -71,6 +72,8 @@ function BlockSurface({ tree }: { tree: BlockTree }) {
   const { moveBlock, deleteBlock } = usePulp();
   const selection = useSurfaceSelection();
   const { controller, selectedIds, getRects } = selection;
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const onTextPointerDown = useSurfaceTextSelection(surfaceRef);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -89,7 +92,7 @@ function BlockSurface({ tree }: { tree: BlockTree }) {
     [tree, moveBlock],
   );
 
-  // --- Block selection: marquee + cross-block drag + keyboard ---
+  // Margin-origin drags select blocks; text-origin drags stay text selections.
   const startRef = useRef<{ x: number; y: number } | null>(null);
   const movedRef = useRef(false);
   const [marquee, setMarquee] = useState<Rect | null>(null);
@@ -98,10 +101,10 @@ function BlockSurface({ tree }: { tree: BlockTree }) {
 
   const onPointerDown = useCallback(
     (e: ReactPointerEvent) => {
-      if (e.button !== 0) return;
+      if (e.button !== 0 || e.pointerType === "touch") return;
       const target = e.target as Element;
       // Clicking into editable text resumes editing — drop any block selection.
-      if (target.closest(".ProseMirror")) {
+      if (surfaceRef.current && textBodyAt(target, surfaceRef.current)) {
         if (selectedIds.length > 0) controller.clear();
         return;
       }
@@ -113,6 +116,11 @@ function BlockSurface({ tree }: { tree: BlockTree }) {
       ) {
         return;
       }
+      e.preventDefault();
+      if (document.activeElement instanceof HTMLElement && document.activeElement.closest(".ProseMirror")) {
+        document.activeElement.blur();
+      }
+      window.getSelection()?.removeAllRanges();
       startRef.current = { x: e.clientX, y: e.clientY };
       movedRef.current = false;
     },
@@ -124,6 +132,9 @@ function BlockSurface({ tree }: { tree: BlockTree }) {
     function onMove(e: PointerEvent) {
       const start = startRef.current;
       if (!start) return;
+      if (!movedRef.current && Math.hypot(e.clientX - start.x, e.clientY - start.y) < 4) return;
+      e.preventDefault();
+      window.getSelection()?.removeAllRanges();
       movedRef.current = true;
       const rect = rectFromPoints(start.x, start.y, e.clientX, e.clientY);
       setMarquee(rect);
@@ -140,23 +151,14 @@ function BlockSurface({ tree }: { tree: BlockTree }) {
         setMarquee(null);
         return;
       }
-      // Not a marquee — a text drag that may have crossed block boundaries.
-      convertCrossBlockTextSelection();
-    }
-    function convertCrossBlockTextSelection() {
-      const sel = typeof window !== "undefined" ? window.getSelection() : null;
-      if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
-      const a = blockIdOfNode(sel.anchorNode);
-      const f = blockIdOfNode(sel.focusNode);
-      if (a == null || f == null || a === f) return;
-      controller.selectBetween(a, f, orderedIdsRef.current);
-      sel.removeAllRanges();
     }
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
     return () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
     };
   }, [controller, getRects]);
 
@@ -166,6 +168,9 @@ function BlockSurface({ tree }: { tree: BlockTree }) {
   useEffect(() => {
     if (selectedIds.length === 0) return;
     function onKey(e: KeyboardEvent) {
+      const root = surfaceRef.current;
+      if (!root || (e.target instanceof Element && e.target.closest("input,textarea,select,[contenteditable='true']"))) return;
+      if (e.target instanceof Node && !root.contains(e.target) && e.target !== document.body) return;
       if (e.key === "Escape") {
         controller.clear();
       } else if (e.key === "Backspace" || e.key === "Delete") {
@@ -179,7 +184,8 @@ function BlockSurface({ tree }: { tree: BlockTree }) {
   }, [selectedIds, controller, deleteBlock]);
 
   return (
-    <div onPointerDown={onPointerDown} data-selection-surface>
+    <div ref={surfaceRef} onPointerDownCapture={onTextPointerDown}
+      onPointerDown={onPointerDown} data-selection-surface>
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -190,16 +196,6 @@ function BlockSurface({ tree }: { tree: BlockTree }) {
       {marquee != null && <SelectionMarquee rect={marquee} />}
     </div>
   );
-}
-
-/** Nearest enclosing block id from a DOM node, via the `block-<id>` chrome wrapper. */
-function blockIdOfNode(node: Node | null): BlockId | null {
-  const el =
-    node instanceof Element ? node : (node?.parentElement ?? null);
-  const chrome = el?.closest?.("[data-block-chrome]");
-  if (!chrome) return null;
-  const match = /^block-(\d+)$/.exec(chrome.id);
-  return match ? BigInt(match[1]) : null;
 }
 
 /** @deprecated Pear alias — prefer `BlockEditor`. */

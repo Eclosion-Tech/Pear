@@ -19,6 +19,8 @@ import {
 } from "./richTextFormatting";
 import { AlignToolbarControls } from "./AlignToolbarControls";
 import { richTextSchema } from "./richTextSchema";
+import { useSurfaceSelectionOptional } from "../selection/SurfaceSelectionProvider";
+import { useSurfaceUndo } from "../undo/SurfaceUndoProvider";
 
 export type BlockToolbarActions = {
   componentType: string;
@@ -68,14 +70,20 @@ const VIEWPORT_EDGE_PADDING = 8;
 
 export function FormattingToolbar({
   view,
+  componentId,
   linkRequest,
   blockActions,
 }: {
   view: EditorView | null;
+  componentId?: bigint;
   linkRequest?: number;
   blockActions?: BlockToolbarActions;
 }) {
   const { config } = usePulp();
+  const selection = useSurfaceSelectionOptional();
+  const text = selection?.text;
+  const textRange = selection?.textRange;
+  const { coordinator: undo } = useSurfaceUndo();
   const [coords, setCoords] = useState<
     | {
         top: number;
@@ -100,14 +108,17 @@ export function FormattingToolbar({
       const state = view.state;
       const { from, to, empty } = state.selection;
       const openLinkEditor = linkEditorRef.current;
-      if ((empty && !openLinkEditor) || (!view.hasFocus() && !openLinkEditor)) {
+      if (textRange ? textRange.anchor.id !== componentId :
+        ((empty && !openLinkEditor) || (!view.hasFocus() && !openLinkEditor))) {
         setCoords(null);
         return;
       }
 
       const anchorFrom = openLinkEditor?.from ?? from;
       const anchorTo = openLinkEditor?.to ?? to;
-      const rect = selectionRect(view, anchorFrom, anchorTo);
+      const rect = textRange && text
+        ? text.selectionRect()
+        : selectionRect(view, anchorFrom, anchorTo);
       if (!rect) {
         setCoords(null);
         return;
@@ -118,7 +129,7 @@ export function FormattingToolbar({
       const marks: Record<string, boolean> = {};
       for (const name of MARK_ORDER) {
         const markType = richTextSchema.marks[name];
-        if (markType) marks[name] = markActive(state, markType, anchorFrom, anchorTo);
+        if (markType) marks[name] = textRange && text ? text.hasMark(markType) : markActive(state, markType, anchorFrom, anchorTo);
       }
 
       const textColorMark = richTextSchema.marks.textColor;
@@ -181,7 +192,7 @@ export function FormattingToolbar({
       window.removeEventListener("scroll", scheduleCompute, true);
       if (frame != null) cancelAnimationFrame(frame);
     };
-  }, [view]);
+  }, [view, componentId, text, textRange]);
 
   useEffect(() => {
     if (!view || !linkRequest) return;
@@ -191,12 +202,13 @@ export function FormattingToolbar({
 
   if (!coords || !view) return null;
 
-  const isHeading = blockActions?.componentType === "Heading";
+  const isHeading = !textRange && blockActions?.componentType === "Heading";
   const blockAlign = blockActions?.textAlign ?? coords.textAlign;
 
   return createPortal(
     <>
       <div
+        data-text-selection-toolbar
         ref={toolbarRef}
         style={{ top: coords.top, left: coords.left, transform: "translateX(-50%)" }}
         className="fixed z-50 flex max-w-[min(100vw-16px,720px)] items-center gap-0.5 overflow-x-auto rounded-md border
@@ -211,7 +223,7 @@ export function FormattingToolbar({
           e.stopPropagation();
         }}
       >
-        {blockActions && blockActions.turnIntoItems.length > 0 && (
+        {!textRange && blockActions && blockActions.turnIntoItems.length > 0 && (
           <>
             <BlockTypeDropdown
               label={labelForBlock(
@@ -254,7 +266,7 @@ export function FormattingToolbar({
           </>
         )}
         {!isHeading &&
-          MARK_ORDER.map((name) => (
+          MARK_ORDER.filter((name) => !textRange || name !== "link").map((name) => (
             <ToolbarButton
               key={name}
               label={MARK_LABEL[name]}
@@ -268,6 +280,10 @@ export function FormattingToolbar({
                 }
                 const markType = richTextSchema.marks[name];
                 if (!markType) return;
+                if (textRange && text) {
+                  text.format(markType, undo);
+                  return;
+                }
                 toggleMark(markType)(view.state, view.dispatch);
                 view.focus();
               }}
@@ -277,6 +293,10 @@ export function FormattingToolbar({
         <AlignToolbarControls
           align={blockAlign}
           onAlignChange={(align) => {
+            if (textRange && text) {
+              text.align(align, undo);
+              return;
+            }
             if (isHeading && blockActions?.onTextAlignChange) {
               blockActions.onTextAlignChange(align);
             } else {
@@ -303,11 +323,13 @@ export function FormattingToolbar({
           textColor={coords.textColor}
           backgroundColor={coords.backgroundColor}
           onSelectText={(color) => {
-            applyColorMark(view, "textColor", color);
+            if (textRange && text) text.format(richTextSchema.marks.textColor, undo, color ? { color } : null);
+            else applyColorMark(view, "textColor", color);
             setColorEditorOpen(false);
           }}
           onSelectBackground={(color) => {
-            applyColorMark(view, "backgroundColor", color);
+            if (textRange && text) text.format(richTextSchema.marks.backgroundColor, undo, color ? { backgroundColor: color } : null);
+            else applyColorMark(view, "backgroundColor", color);
             setColorEditorOpen(false);
           }}
           onClose={() => setColorEditorOpen(false)}
@@ -562,6 +584,7 @@ function ColorPickerPopover({
   return (
     <div
       ref={rootRef}
+      data-text-selection-toolbar
       style={{ top, left, transform: "translateX(-50%)" }}
       className="fixed z-[60] w-[220px] rounded-md border border-neutral-200 bg-white p-2 shadow-xl dark:border-neutral-700 dark:bg-neutral-900"
       onMouseDown={(e) => e.stopPropagation()}

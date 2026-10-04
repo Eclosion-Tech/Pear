@@ -36,7 +36,7 @@ async function main() {
         .onConnect(conn => {
           conn.subscriptionBuilder()
             .onApplied(() => { clearTimeout(timer); resolve(conn); })
-            .onError((_ctx, error) => { clearTimeout(timer); reject(error); })
+            .onError(ctx => { clearTimeout(timer); reject(ctx.event); })
             .subscribe(['SELECT * FROM human_input_request', 'SELECT * FROM conversation_message']);
         })
         .onConnectError((_ctx, error) => { clearTimeout(timer); reject(error); })

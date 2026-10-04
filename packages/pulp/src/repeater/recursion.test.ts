@@ -130,8 +130,8 @@ function renderWith(rows: RepeaterRow[]): { container: HTMLDivElement; root: Roo
           tree: t,
           config: { idbPrefix: "", readOnly: true, queryResolver: resolver },
           mutations: NOOP,
+          children: createElement(BlockNodeView, { node: t.root as BlockNode, tree: t }),
         },
-        createElement(BlockNodeView, { node: t.root as BlockNode, tree: t }),
       ),
     );
   });
