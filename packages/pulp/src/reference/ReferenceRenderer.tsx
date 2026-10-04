@@ -13,6 +13,8 @@ import { BlockOccurrenceContext, sourceKey, useBlockOccurrence } from "./BlockOc
 import { parseReferenceProps, referenceProps, referenceTree,
   type BlockReferenceTarget, type ReferenceSource } from "./types";
 
+const sourceActionClass = "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-500 transition-colors hover:bg-black/5 hover:text-neutral-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-neutral-400 dark:text-neutral-400 dark:hover:bg-white/5 dark:hover:text-neutral-100";
+
 export function ReferenceRenderer({ node }: BlockRendererProps) {
   const { config, updateBlockProps } = usePulp();
   const occurrence = useBlockOccurrence();
@@ -42,18 +44,33 @@ export function ReferenceRenderer({ node }: BlockRendererProps) {
   const childOccurrence = useMemo(() => ({ ...occurrence,
     prefix: `${occurrence.prefix}ref-${node.id}-`, referenceDepth: occurrence.referenceDepth + 1,
   }), [occurrence, node.id]);
+  const tint = occurrence.referenceDepth % 2 === 0
+    ? "bg-slate-50/80 ring-slate-200/60 dark:bg-slate-800/40 dark:ring-slate-700/40"
+    : "bg-amber-50/60 ring-stone-200/60 dark:bg-stone-800/60 dark:ring-stone-700/40";
 
   return <section ref={frameRef} data-reference-block={String(node.id)}
-    className={`my-2 min-w-0 rounded-md border border-neutral-200 dark:border-neutral-700 focus-within:border-neutral-400 dark:focus-within:border-neutral-500 ${occurrence.referenceDepth >= 2 ? "-ml-12 -mr-2" : ""}`}>
-    <div className="flex flex-wrap items-center gap-2 px-2 py-1.5 text-xs text-neutral-500 dark:text-neutral-400">
+    className={`my-2 min-w-0 rounded-md ring-1 ring-inset ${tint} focus-within:ring-neutral-300 dark:focus-within:ring-neutral-600 ${occurrence.referenceDepth >= 2 ? "-ml-12 -mr-2" : ""}`}>
+    <div className="flex items-center gap-1 px-1.5 py-0.5 text-xs text-neutral-500 dark:text-neutral-400">
       {!config.readOnly && <BlockChromeHeaderControls />}
       {target && <button type="button" aria-label={expanded ? "Collapse reference" : "Expand reference"}
-        aria-expanded={expanded} onClick={() => setExpanded(!expanded)} className="rounded px-1 hover:bg-neutral-100 dark:hover:bg-neutral-800">
-        {expanded ? "▾" : "▸"}
+        title={expanded ? "Collapse reference" : "Expand reference"}
+        aria-expanded={expanded} onClick={() => setExpanded(!expanded)} className={sourceActionClass}>
+        <svg aria-hidden="true" width="12" height="12" viewBox="0 0 16 16" fill="none">
+          <path d={expanded ? "m4 6 4 4 4-4" : "m6 4 4 4-4 4"} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
       </button>}
-      <span className="min-w-0 grow basis-24 truncate" title={target ? title : "Reference"}>{target ? title : "Reference"}</span>
-      {target && adapter && <a href={adapter.href(target)} className="shrink-0 underline" title="Open original content">Open source</a>}
-      {!config.readOnly && target && <button type="button" onClick={() => setChoosing(!choosing)} className="shrink-0">Change source</button>}
+      <span className="min-w-0 flex-1 truncate" title={target ? title : "Reference"}>{target ? title : "Reference"}</span>
+      {target && adapter && <a href={adapter.href(target)} className={sourceActionClass} title="Open source" aria-label="Open source">
+        <svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M9 3h4v4M13 3 7 9M6 3H3v10h10v-3" />
+        </svg>
+      </a>}
+      {!config.readOnly && target && <button type="button" onClick={() => setChoosing(!choosing)} className={sourceActionClass}
+        title="Change source" aria-label="Change source" aria-expanded={choosing}>
+        <svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round">
+          <path d="m6.5 5 2-2a3.18 3.18 0 0 1 4.5 4.5l-2 2M5 6.5l-2 2a3.18 3.18 0 0 0 4.5 4.5l2-2M5.5 10.5l5-5" />
+        </svg>
+      </button>}
     </div>
     {(!target || choosing) && !config.readOnly && <div className="space-y-2 border-t border-neutral-100 p-3 dark:border-neutral-800">
       {!adapter ? <p className="text-sm text-neutral-500">References are not available in this workspace.</p> : <>
@@ -82,7 +99,6 @@ export function ReferenceRenderer({ node }: BlockRendererProps) {
         {(source) => <ReferenceContents source={source} target={target} />}
       </Source>
     </BlockOccurrenceContext.Provider> : <p className="p-3 text-sm text-neutral-500">Open the source to view this content.</p>)}
-    {target && !expanded && <p className="px-3 pb-2 text-xs text-neutral-500">Referenced content is collapsed.</p>}
   </section>;
 }
 
@@ -95,7 +111,7 @@ function ReferenceContents({ source, target }: { source: ReferenceSource; target
   if (occurrence.ancestors.includes(sourceKey(tree.root))) {
     return <p role="status" className="p-3 text-sm text-neutral-500">Circular reference — use Open source to view it.</p>;
   }
-  return <div className="border-t border-neutral-100 py-2 pl-12 pr-2 dark:border-neutral-800"
+  return <div className="pb-2 pl-12 pr-2"
     data-reference-content>
     <BlockChromeHandlesProvider value={null}>
       <ReferenceEditor source={{ ...source, tree }} config={config} />
