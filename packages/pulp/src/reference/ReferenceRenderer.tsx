@@ -46,7 +46,7 @@ export function ReferenceRenderer({ node }: BlockRendererProps) {
   }), [occurrence, node.id]);
   const tint = occurrence.referenceDepth % 2 === 0
     ? "bg-slate-50/80 ring-slate-200/60 dark:bg-slate-800/40 dark:ring-slate-700/40"
-    : "bg-amber-50/60 ring-stone-200/60 dark:bg-stone-800/60 dark:ring-stone-700/40";
+    : "bg-slate-100/80 ring-slate-200/70 dark:bg-slate-700/30 dark:ring-slate-600/40";
 
   return <section ref={frameRef} data-reference-block={String(node.id)}
     className={`my-2 min-w-0 rounded-md ring-1 ring-inset ${tint} focus-within:ring-neutral-300 dark:focus-within:ring-neutral-600 ${occurrence.referenceDepth >= 2 ? "-ml-12 -mr-2" : ""}`}>
