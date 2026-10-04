@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, createElement as h, useSyncExternalStore } from "react";
+import { act, createElement as h, useState, useSyncExternalStore } from "react";
+import { PageComposition, type CompositionLayout } from "../composition/PageComposition";
 import { createRoot, type Root } from "react-dom/client";
 import * as Y from "yjs";
 import { BlockEditor } from "../BlockEditor";
@@ -33,8 +34,10 @@ function page(surface: number, blocks: FlatBlockSpec[]) {
   const tree = makeTree([{ id: surface * 10, type: "Container", parent: null }, ...blocks], {
     surfaceId: surface, extraDefs: { Reference: { componentType: "Reference", propSchema: "{}", acceptsChildren: false } },
   });
-  for (const type of ["Heading", "BulletListItem", "NumberedListItem"]) tree.defs.delete(type);
-  for (const node of tree.byId.values()) if (node.componentType === "RichText") {
+  for (const type of ["Heading", "BulletListItem", "NumberedListItem"]) {
+    if (!blocks.some(block => block.type === type)) tree.defs.delete(type);
+  }
+  for (const node of tree.byId.values()) if (node.componentType === "RichText" || node.componentType === "Heading") {
     const doc = plainTextToYDoc(`Text ${node.id}`);
     tree.yjs.set(node.id, { componentNodeId: node.id, data: Y.encodeStateAsUpdate(doc) }); doc.destroy();
   }
@@ -44,7 +47,7 @@ const ref = (id: number, parent: number, surfaceId: number, blockId?: number): F
   id, parent, type: "Reference", props: referenceProps({ surfaceId: BigInt(surfaceId), blockId: blockId == null ? undefined : BigInt(blockId) }),
 });
 
-async function fixture(trees: BlockTree[], readOnly = false) {
+async function fixture(trees: BlockTree[], readOnly = false, composition = false) {
   registerCoreBlocks();
   const listeners = new Set<() => void>();
   const store = new Map(trees.map((tree) => [tree.root!.surfaceId, tree]));
@@ -82,7 +85,7 @@ async function fixture(trees: BlockTree[], readOnly = false) {
   function Source({ target, children }: ReferenceSourceProps) {
     const tree = useSyncExternalStore(subscribe, () => store.get(target.surfaceId)!);
     subscriptions.set(target.surfaceId, (subscriptions.get(target.surfaceId) ?? 0) + 1);
-    return children({ tree, mutations: mutations.get(target.surfaceId)!, readOnly });
+    return children({ tree, mutations: mutations.get(target.surfaceId)!, readOnly, label: `Page ${target.surfaceId}` });
   }
   registerRenderer("Container", ({ node, tree, children }) => h(ContainerDropZone, {
     containerId: node.id, tree, acceptsChildren: true, children,
@@ -102,9 +105,11 @@ async function fixture(trees: BlockTree[], readOnly = false) {
   const outerMutations = undo.wrapMutations(mutations.get(1n)!, () => store.get(1n)!);
   function App() {
     const tree = useSyncExternalStore(subscribe, () => store.get(1n)!);
-    return h(PulpProvider, { tree, config, mutations: outerMutations,
+    const [layout, setLayout] = useState<CompositionLayout>("structured");
+    const editor = h(PulpProvider, { tree, config, mutations: outerMutations,
       children: h(SurfaceFocusProvider, { coordinator: focus,
         children: h(SurfaceUndoProvider, { coordinator: undo, children: h(BlockEditor) }) }) });
+    return composition ? h(PageComposition, { layout, onLayoutChange: setLayout, pageLabel: "Composition", children: editor }) : editor;
   }
   root = createRoot(document.body.appendChild(document.createElement("div")));
   await act(() => root!.render(h(App)));
@@ -112,6 +117,64 @@ async function fixture(trees: BlockTree[], readOnly = false) {
 }
 
 describe("editable reference containers", () => {
+  it("preserves mounted editors, source sync, selection and undo across page layouts", async () => {
+    const { scopes } = await fixture([page(1, [ref(11, 10, 2), ref(12, 10, 2)]),
+      page(2, [{ id: 21, parent: 20, type: "RichText" }])], false, true);
+    const view = scopes.get("ref-11-")!.focus.getEditor(21n)!;
+    await act(() => { view.focus(); view.dispatch(view.state.tr.insertText("Draft ", 1)); });
+    const selection = view.state.selection.toJSON();
+    const continuous = [...document.querySelectorAll("button")].find(button => button.textContent === "Continuous")!;
+    const down = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    await act(() => { continuous.dispatchEvent(down); continuous.click(); });
+    expect(down.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(view.dom);
+    expect(scopes.get("ref-11-")!.focus.getEditor(21n)).toBe(view);
+    expect(view.state.selection.toJSON()).toEqual(selection);
+    expect(scopes.get("ref-12-")!.focus.getEditor(21n)!.state.doc.textContent).toBe("Draft Text 21");
+    await act(() => view.dom.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true })));
+    expect(view.state.doc.textContent).toBe("Text 21");
+    expect(scopes.get("ref-12-")!.focus.getEditor(21n)!.state.doc.textContent).toBe("Text 21");
+    const structured = [...document.querySelectorAll("button")].find(button => button.textContent === "Structured")!;
+    await act(() => structured.click());
+    expect(scopes.get("ref-11-")!.focus.getEditor(21n)).toBe(view);
+    expect(document.querySelector("[data-composition-layout]")?.getAttribute("data-composition-layout")).toBe("structured");
+  });
+
+  it("shows the actual nested source path and clears source context when that source disappears", async () => {
+    const source = page(3, [{ id: 31, parent: 30, type: "RichText" }]);
+    const { scopes, publish } = await fixture([page(1, [ref(11, 10, 2)]), page(2, [ref(21, 20, 3)]), source], false, true);
+    await act(() => [...document.querySelectorAll("button")].find(button => button.textContent === "Continuous")!.click());
+    const view = scopes.get("ref-11-ref-21-")!.focus.getEditor(31n)!;
+    await act(() => view.focus());
+    await act(() => document.querySelector<HTMLButtonElement>("[aria-label='Source details: Page 3']")!.click());
+    const popover = document.querySelector("[aria-label='Block source']")!;
+    expect(popover.textContent).toContain("Composition › Page 2 › Page 3");
+    expect(popover.querySelector("a")?.getAttribute("href")).toBe("/source/3#31");
+    expect(popover.textContent).toContain("Edits update the original");
+    await act(async () => {
+      publish(3n, { ...source, root: null, byId: new Map(), byParent: new Map() });
+    });
+    await act(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+    expect(document.querySelector("[aria-label='Block source']")).toBeNull();
+    expect(document.querySelector(".pulp-composition-context")?.textContent).not.toContain("Page 3");
+    expect(document.querySelector("[role='status']")?.textContent).toContain("Source unavailable");
+  });
+
+  it("provides honest source context for read-only references in continuous view", async () => {
+    await fixture([page(1, [ref(11, 10, 2)]), page(2, [{ id: 21, parent: 20, type: "Heading" }])], true, true);
+    await act(() => [...document.querySelectorAll("button")].find(button => button.textContent === "Continuous")!.click());
+    const source = document.querySelector<HTMLElement>("[data-source-readonly='true']")!;
+    expect(source.tabIndex).toBe(0);
+    await act(() => source.focus());
+    await act(() => document.querySelector<HTMLButtonElement>("[aria-label='Source details: Page 2']")!.click());
+    expect(document.querySelector(".pulp-composition-context")?.textContent).toContain("ViewingPage 2· read only");
+    expect(document.querySelector("[aria-label='Block source']")?.textContent).toContain("cannot edit it");
+    expect(source.querySelector(".ProseMirror")).toBeNull();
+    await act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(document.querySelector("[aria-label='Block source']")).toBeNull();
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Source details: Page 2");
+  });
+
   it("renders source gutters with independent occurrence IDs, and removes only the inclusion", async () => {
     const { changes, store } = await fixture([page(1, [ref(11, 10, 2), ref(12, 10, 2)]),
       page(2, [{ id: 21, parent: 20, type: "RichText" }])]);

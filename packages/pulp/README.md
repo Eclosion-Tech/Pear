@@ -74,6 +74,26 @@ This first version contains selection and drag operations within each reference.
 Dragging across reference boundaries and continuous cross-reference selection
 remain follow-ups. Block links copied inside a reference point to the source.
 
+## Page composition layout
+
+Import `@eclosion-tech/pulp/composition.css` and wrap a page's editor in
+`<PageComposition layout={layout} onLayoutChange={setLayout} pageLabel={title}>`.
+The host owns the `"structured" | "continuous"` preference; Pear remembers it
+per workspace and page in the current browser, defaulting to Structured.
+
+Continuous hides expanded reference frames and their extra indentation while
+preserving the underlying document hierarchy. Hovering or focusing a block
+reveals an absolute gutter source button; its popover identifies the owning
+page, inclusion path, read-only status, and source link. Hosts should supply
+`ReferenceSource.label` for titles that are absent from `config.linkTargets`.
+Collapsed, empty, loading, missing, and circular sources keep visible markers.
+Read-only source text remains keyboard-focusable in Continuous view.
+
+Both layouts keep the same editor instances, selection, source synchronization,
+and undo state. The layout does not change selection/drag boundaries and has no
+per-reference overrides. CSS affects only reference framing; list indentation,
+headings, and explicit layout containers retain their structure.
+
 ## Selection behavior
 
 Dragging from a text body (including its padding) selects characters across

@@ -53,7 +53,7 @@ function PearReferenceSource({ target, children }: ReferenceSourceProps) {
   // Source comments remain available via Open source.
   const config = useMemo(() => ({ onCommentBlock: undefined }), []);
   return <AudioAttachmentContext.Provider value={attachments}>
-    {children({ tree: sourceTree, mutations, readOnly: permission !== "Write", config })}
+    {children({ tree: sourceTree, mutations, label: sourcePage?.title || "Untitled", readOnly: permission !== "Write", config })}
   </AudioAttachmentContext.Provider>;
 }
 

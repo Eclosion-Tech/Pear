@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { BlockSourcePath } from "../composition/BlockSource";
 import type { BlockRendererProps } from "../registry";
 import { usePulp, PulpProvider } from "../context/PulpProvider";
 import { BlockEditor } from "../BlockEditor";
@@ -48,9 +49,9 @@ export function ReferenceRenderer({ node }: BlockRendererProps) {
     ? "bg-slate-50/80 ring-slate-200/60 dark:bg-slate-800/40 dark:ring-slate-700/40"
     : "bg-slate-100/80 ring-slate-200/70 dark:bg-slate-700/30 dark:ring-slate-600/40";
 
-  return <section ref={frameRef} data-reference-block={String(node.id)}
+  return <section ref={frameRef} data-reference-block={String(node.id)} data-reference-choosing={choosing || !target ? "" : undefined}
     className={`my-2 min-w-0 rounded-md ring-1 ring-inset ${tint} focus-within:ring-neutral-300 dark:focus-within:ring-neutral-600 ${occurrence.referenceDepth >= 2 ? "-ml-12 -mr-2" : ""}`}>
-    <div className="flex items-center gap-1 px-1.5 py-0.5 text-xs text-neutral-500 dark:text-neutral-400">
+    <div data-reference-header className="flex items-center gap-1 px-1.5 py-0.5 text-xs text-neutral-500 dark:text-neutral-400">
       {!config.readOnly && <BlockChromeHeaderControls />}
       {target && <button type="button" aria-label={expanded ? "Collapse reference" : "Expand reference"}
         title={expanded ? "Collapse reference" : "Expand reference"}
@@ -104,6 +105,9 @@ export function ReferenceRenderer({ node }: BlockRendererProps) {
 
 function ReferenceContents({ source, target }: { source: ReferenceSource; target: BlockReferenceTarget }) {
   const { config } = usePulp();
+  const parentPath = useContext(BlockSourcePath);
+  const label = source.label ?? config.linkTargets?.find(item => item.id === String(target.surfaceId))?.label ?? "Source page";
+  const path = useMemo(() => [...parentPath, label], [parentPath, label]);
   const occurrence = useBlockOccurrence();
   const tree = useMemo(() => referenceTree(source.tree, target), [source.tree, target]);
   if (tree.loading) return <p role="status" className="p-3 text-sm text-neutral-500">Loading source…</p>;
@@ -112,9 +116,11 @@ function ReferenceContents({ source, target }: { source: ReferenceSource; target
     return <p role="status" className="p-3 text-sm text-neutral-500">Circular reference — use Open source to view it.</p>;
   }
   return <div className="pb-2 pl-12 pr-2"
-    data-reference-content>
+    data-reference-content data-reference-empty={tree.defs.get(tree.root.componentType)?.acceptsChildren && !tree.byParent.get(tree.root.id)?.length ? "" : undefined}>
     <BlockChromeHandlesProvider value={null}>
-      <ReferenceEditor source={{ ...source, tree }} config={config} />
+      <BlockSourcePath.Provider value={path}>
+        <ReferenceEditor source={{ ...source, tree }} config={config} />
+      </BlockSourcePath.Provider>
     </BlockChromeHandlesProvider>
   </div>;
 }

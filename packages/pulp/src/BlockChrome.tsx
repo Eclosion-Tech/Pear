@@ -17,6 +17,7 @@ import { knownSiblingIdsForParent } from "./focus/insertFocusHelpers";
 import type { BlockNode } from "./types";
 import { BlockMenu } from "./BlockMenu";
 import { useBlockDomId } from "./reference/BlockOccurrence";
+import { useBlockSourceAttributes } from "./composition/BlockSource";
 import {
   BlockChromeHandlesProvider,
   useBlockChromeHandles,
@@ -40,6 +41,7 @@ export function BlockChrome({
   gutterMode?: BlockChromeGutterMode;
 }) {
   const { insertBlock, tree } = usePulp();
+  const sourceAttributes = useBlockSourceAttributes(node);
   const blockDomId = useBlockDomId();
   const focus = useSurfaceFocus();
   const canInsertSibling = node.parentId != null && tree.root?.id !== node.id;
@@ -148,6 +150,7 @@ export function BlockChrome({
       }
     >
       <div
+        {...sourceAttributes}
         id={blockDomId(node.id)}
         data-source-block={String(node.id)}
         ref={bindWrapper}

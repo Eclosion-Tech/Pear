@@ -1,9 +1,12 @@
 "use client";
 
+import "@eclosion-tech/pulp/composition.css";
+
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   BlockEditor,
+  PageComposition,
   PulpProvider,
   SurfaceFocusCoordinator,
   SurfaceFocusProvider,
@@ -42,6 +45,7 @@ import { registerPearBuiltinRenderers } from "./built-in";
 import { PEAR_SLASH_ITEMS, slashItemsForDefs } from "./pearSlashItems";
 import { useQueryResolver } from "@/src/lib/repeater/queryResolver";
 import { pearReferences } from "./PearReferenceSource";
+import { usePageCompositionLayout } from "@/src/hooks/usePageCompositionLayout";
 
 registerCoreBlocks();
 registerPearBuiltinRenderers();
@@ -103,6 +107,7 @@ export function ComponentTreeRenderer({
   onOpenThread?: (conversationId: bigint) => void;
 }) {
   const { idbNamespace } = useWorkspace();
+  const [layout, setLayout] = usePageCompositionLayout(idbNamespace, surfaceId);
   const { identity, getConnection } = useSpacetimeDB();
   const createConversation = useCreateConversation();
   // Cleanup for the click-time conversation onInsert listener armed by
@@ -423,17 +428,20 @@ export function ComponentTreeRenderer({
       <PulpProvider tree={tree} config={config} mutations={mutations}>
         <SurfaceFocusProvider coordinator={focusCoordinator}>
           <SurfaceUndoProvider coordinator={undoCoordinator}>
-            <div ref={editorContainerRef} className="relative">
-              <BlockEditor />
-              {onOpenThread && (
-                <BlockThreadGutter
-                  containerRef={editorContainerRef}
-                  pageId={surfaceId}
-                  onOpenThread={onOpenThread}
-                  onCreateThread={handleCommentBlock}
-                />
-              )}
-            </div>
+            <PageComposition layout={layout} onLayoutChange={setLayout}
+              pageLabel={pages.find(page => page.id === surfaceId)?.title || "Untitled"}>
+              <div ref={editorContainerRef} className="relative">
+                <BlockEditor />
+                {onOpenThread && (
+                  <BlockThreadGutter
+                    containerRef={editorContainerRef}
+                    pageId={surfaceId}
+                    onOpenThread={onOpenThread}
+                    onCreateThread={handleCommentBlock}
+                  />
+                )}
+              </div>
+            </PageComposition>
           </SurfaceUndoProvider>
         </SurfaceFocusProvider>
       </PulpProvider>
