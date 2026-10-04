@@ -20,6 +20,7 @@ import { clearIdbCache, clearIdbCacheForPage } from "@/src/lib/spacetime";
 import { useWorkspace } from "@/src/providers/WorkspaceProvider";
 import { usePageAncestors } from "@/src/hooks/usePages";
 import { useWorkspaceAiPanel } from "@/src/components/WorkspaceShell";
+import { usePageCompositionLayout } from "@/src/hooks/usePageCompositionLayout";
 
 interface DocPageProps {
   page: PageRow;
@@ -27,6 +28,7 @@ interface DocPageProps {
 
 export function DocPage({ page }: DocPageProps) {
   const { idbNamespace } = useWorkspace();
+  const [layout, onLayoutChange] = usePageCompositionLayout(idbNamespace, page.id);
   const aiPanel = useWorkspaceAiPanel();
   const router = useRouter();
   const updateTitle = useUpdatePageTitle();
@@ -156,6 +158,7 @@ export function DocPage({ page }: DocPageProps) {
           </button>
           <PageAccessMenu key={String(page.id)} pageId={page.id} />
           <PageMoreMenu
+            compositionLayout={{ layout, onLayoutChange }}
             items={[
               {
                 label: "Clear cache for this page",
@@ -193,6 +196,8 @@ export function DocPage({ page }: DocPageProps) {
         */}
         <PageEditorSurface
           page={page}
+          layout={layout}
+          onLayoutChange={onLayoutChange}
           content={content}
           onOpenThread={(conversationId) =>
             aiPanel.openPanel({ pageId: page.id, conversationId })

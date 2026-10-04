@@ -16,6 +16,7 @@ import {
   validateComponentProps,
   type BlockInsertEvent,
   type BlockTree,
+  type CompositionLayout,
 } from "@eclosion-tech/pulp";
 import type { ComponentNode, Conversation } from "@/src/module_bindings/types";
 import { BlockThreadGutter } from "@/src/components/BlockThreadGutter";
@@ -45,7 +46,6 @@ import { registerPearBuiltinRenderers } from "./built-in";
 import { PEAR_SLASH_ITEMS, slashItemsForDefs } from "./pearSlashItems";
 import { useQueryResolver } from "@/src/lib/repeater/queryResolver";
 import { pearReferences } from "./PearReferenceSource";
-import { usePageCompositionLayout } from "@/src/hooks/usePageCompositionLayout";
 
 registerCoreBlocks();
 registerPearBuiltinRenderers();
@@ -101,13 +101,16 @@ function useHighlightNodeFromUrl(surfaceId: bigint): void {
  */
 export function ComponentTreeRenderer({
   surfaceId,
+  layout,
+  onLayoutChange,
   onOpenThread,
 }: {
   surfaceId: bigint;
+  layout: CompositionLayout;
+  onLayoutChange: (layout: CompositionLayout) => void;
   onOpenThread?: (conversationId: bigint) => void;
 }) {
   const { idbNamespace } = useWorkspace();
-  const [layout, setLayout] = usePageCompositionLayout(idbNamespace, surfaceId);
   const { identity, getConnection } = useSpacetimeDB();
   const createConversation = useCreateConversation();
   // Cleanup for the click-time conversation onInsert listener armed by
@@ -428,7 +431,7 @@ export function ComponentTreeRenderer({
       <PulpProvider tree={tree} config={config} mutations={mutations}>
         <SurfaceFocusProvider coordinator={focusCoordinator}>
           <SurfaceUndoProvider coordinator={undoCoordinator}>
-            <PageComposition layout={layout} onLayoutChange={setLayout}
+            <PageComposition layout={layout} onLayoutChange={onLayoutChange}
               pageLabel={pages.find(page => page.id === surfaceId)?.title || "Untitled"}>
               <div ref={editorContainerRef} className="relative">
                 <BlockEditor />

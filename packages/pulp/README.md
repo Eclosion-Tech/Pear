@@ -80,6 +80,10 @@ Import `@eclosion-tech/pulp/composition.css` and wrap a page's editor in
 `<PageComposition layout={layout} onLayoutChange={setLayout} pageLabel={title}>`.
 The host owns the `"structured" | "continuous"` preference; Pear remembers it
 per workspace and page in the current browser, defaulting to Structured.
+Pear places the `CompositionLayoutToggle` in the page's More options menu,
+above the maintenance actions. It stays open while switching layouts; the
+editor itself has no persistent layout toggle. The source popover retains
+its Show structure shortcut.
 
 Continuous hides expanded reference frames and their extra indentation while
 preserving the underlying document hierarchy. Hovering or focusing a block

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, createElement as h, useState, useSyncExternalStore } from "react";
-import { PageComposition, type CompositionLayout } from "../composition/PageComposition";
+import { act, createElement as h, Fragment, useState, useSyncExternalStore } from "react";
+import { PageComposition, CompositionLayoutToggle, type CompositionLayout } from "../composition/PageComposition";
 import { createRoot, type Root } from "react-dom/client";
 import * as Y from "yjs";
 import { BlockEditor } from "../BlockEditor";
@@ -109,7 +109,9 @@ async function fixture(trees: BlockTree[], readOnly = false, composition = false
     const editor = h(PulpProvider, { tree, config, mutations: outerMutations,
       children: h(SurfaceFocusProvider, { coordinator: focus,
         children: h(SurfaceUndoProvider, { coordinator: undo, children: h(BlockEditor) }) }) });
-    return composition ? h(PageComposition, { layout, onLayoutChange: setLayout, pageLabel: "Composition", children: editor }) : editor;
+    return composition ? h(Fragment, null,
+      h(CompositionLayoutToggle, { layout, onLayoutChange: setLayout }),
+      h(PageComposition, { layout, onLayoutChange: setLayout, pageLabel: "Composition", children: editor })) : editor;
   }
   root = createRoot(document.body.appendChild(document.createElement("div")));
   await act(() => root!.render(h(App)));

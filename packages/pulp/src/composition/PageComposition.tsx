@@ -5,6 +5,17 @@ import { ContinuousCompositionContext } from "./BlockSource";
 
 export type CompositionLayout = "structured" | "continuous";
 
+/** Hosts can place the layout control in page-level chrome, outside the editor. */
+export function CompositionLayoutToggle({ layout, onLayoutChange }: {
+  layout: CompositionLayout;
+  onLayoutChange: (layout: CompositionLayout) => void;
+}) {
+  return <div className="pulp-view-switch" role="group" aria-label="Page layout">
+    <button type="button" aria-pressed={layout === "structured"} onMouseDown={event => event.preventDefault()} onClick={() => onLayoutChange("structured")}>Structured</button>
+    <button type="button" aria-pressed={layout === "continuous"} onMouseDown={event => event.preventDefault()} onClick={() => onLayoutChange("continuous")}>Continuous</button>
+  </div>;
+}
+
 function sourceInfo(element: HTMLElement | null, pageLabel: string) {
   if (!element?.isConnected || !element.hasAttribute("data-composition-source")) return null;
   const path: string[] = JSON.parse(element.dataset.sourcePath ?? "[]");
@@ -37,6 +48,8 @@ export function PageComposition({ children, layout, onLayoutChange, pageLabel }:
   const element = details ? active ?? hovered : hovered ?? active;
   const info = sourceInfo(element, pageLabel);
   const activeInfo = sourceInfo(active, pageLabel);
+
+  useLayoutEffect(() => { setDetails(false); setHovered(null); }, [layout]);
 
   function blockAt(target: EventTarget | null) {
     if (!(target instanceof Element) || target.closest("[data-source-overlay],[data-reference-header]")) return null;
@@ -98,12 +111,6 @@ export function PageComposition({ children, layout, onLayoutChange, pageLabel }:
   function changeView(value: CompositionLayout) { onLayoutChange(value); setDetails(false); setHovered(null); }
 
   return <section className="pulp-composition" data-composition-layout={layout}>
-    <div className="pulp-composition-toolbar">
-      <div className="pulp-view-switch" role="group" aria-label="Page layout">
-        <button type="button" aria-pressed={!continuous} onMouseDown={event => event.preventDefault()} onClick={() => changeView("structured")}>Structured</button>
-        <button type="button" aria-pressed={continuous} onMouseDown={event => event.preventDefault()} onClick={() => changeView("continuous")}>Continuous</button>
-      </div>
-    </div>
     <div className="pulp-composition-context" aria-live="polite">
       {continuous ? activeInfo
         ? <><span>{activeInfo.readOnly ? "Viewing" : "Editing"}</span><strong>{activeInfo.label}</strong><span>{activeInfo.readOnly ? "· read only" : activeInfo.linked ? "· shared source" : ""}</span></>
