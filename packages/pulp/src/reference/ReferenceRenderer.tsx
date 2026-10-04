@@ -45,13 +45,13 @@ export function ReferenceRenderer({ node }: BlockRendererProps) {
 
   return <section ref={frameRef} data-reference-block={String(node.id)}
     className={`my-2 min-w-0 rounded-md border border-neutral-200 dark:border-neutral-700 focus-within:border-neutral-400 dark:focus-within:border-neutral-500 ${occurrence.referenceDepth >= 2 ? "-ml-12 -mr-2" : ""}`}>
-    <div className="flex items-center gap-2 px-2 py-1.5 text-xs text-neutral-500 dark:text-neutral-400">
+    <div className="flex flex-wrap items-center gap-2 px-2 py-1.5 text-xs text-neutral-500 dark:text-neutral-400">
       {!config.readOnly && <BlockChromeHeaderControls />}
       {target && <button type="button" aria-label={expanded ? "Collapse reference" : "Expand reference"}
         aria-expanded={expanded} onClick={() => setExpanded(!expanded)} className="rounded px-1 hover:bg-neutral-100 dark:hover:bg-neutral-800">
         {expanded ? "▾" : "▸"}
       </button>}
-      <span className="min-w-0 flex-1 truncate">{target ? title : "Reference"}</span>
+      <span className="min-w-0 grow basis-24 truncate" title={target ? title : "Reference"}>{target ? title : "Reference"}</span>
       {target && adapter && <a href={adapter.href(target)} className="shrink-0 underline" title="Open original content">Open source</a>}
       {!config.readOnly && target && <button type="button" onClick={() => setChoosing(!choosing)} className="shrink-0">Change source</button>}
     </div>
