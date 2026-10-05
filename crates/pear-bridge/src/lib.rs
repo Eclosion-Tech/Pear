@@ -19,6 +19,7 @@
 pub mod acp;
 pub mod allowlist;
 pub mod audit;
+pub mod cli_auth;
 pub mod config;
 pub mod daemon;
 pub mod harness;

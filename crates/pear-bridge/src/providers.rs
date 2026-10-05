@@ -352,15 +352,16 @@ impl ProviderExecError {
 /// project context (CLAUDE.md / AGENTS.md); harness turns pass their
 /// jail-checked project directory — there the context is the point.
 pub(crate) async fn run_cli(
+    auth_provider: crate::cli_auth::CliProvider,
     bin: &str,
     args: &[String],
     stdin_body: &str,
     timeout: Duration,
     cwd: &std::path::Path,
 ) -> Result<std::process::Output, String> {
-    let mut child = Command::new(bin)
-        .args(args)
-        .current_dir(cwd)
+    let launch = crate::cli_auth::prepare(auth_provider, bin, args, cwd).await?;
+    let mut child = launch
+        .command(bin, cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -427,7 +428,10 @@ async fn run_claude(
         args.push("--append-system-prompt".into());
         args.push(system.to_string());
     }
-    let output = run_cli(&bin, &args, prompt, timeout, &std::env::temp_dir()).await?;
+    let output = run_cli(
+        crate::cli_auth::CliProvider::Claude,
+        &bin, &args, prompt, timeout, &std::env::temp_dir(),
+    ).await?;
     if !output.status.success() {
         return Err(format!(
             "claude exited with {}: {}",
@@ -489,7 +493,10 @@ async fn run_codex(
         Some(system) => format!("{system}\n\n{prompt}"),
         None => prompt.to_string(),
     };
-    let output = run_cli(&bin, &args, &body, timeout, &std::env::temp_dir()).await?;
+    let output = run_cli(
+        crate::cli_auth::CliProvider::Codex,
+        &bin, &args, &body, timeout, &std::env::temp_dir(),
+    ).await?;
     if !output.status.success() {
         return Err(format!(
             "codex exited with {}: {}",
