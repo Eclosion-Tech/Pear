@@ -323,9 +323,12 @@ async fn run_claude_turn(
         }
     }
 
-    let output = run_cli(&bin, &args, &payload.prompt, timeout, cwd)
-        .await
-        .map_err(ProviderExecError::Other)?;
+    let output = run_cli(
+        crate::cli_auth::CliProvider::Claude,
+        &bin, &args, &payload.prompt, timeout, cwd,
+    )
+    .await
+    .map_err(ProviderExecError::Other)?;
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     if !output.status.success() {
@@ -376,9 +379,11 @@ async fn run_claude_turn_streaming(
 ) -> Result<String, ProviderExecError> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-    let mut child = tokio::process::Command::new(bin)
-        .args(args)
-        .current_dir(cwd)
+    let launch = crate::cli_auth::prepare(crate::cli_auth::CliProvider::Claude, bin, args, cwd)
+        .await
+        .map_err(ProviderExecError::Other)?;
+    let mut child = launch
+        .command(bin, cwd)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

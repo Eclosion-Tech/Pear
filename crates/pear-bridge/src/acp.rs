@@ -120,6 +120,9 @@ pub(crate) fn permission_mode(provider: &str, requested: &str) -> Result<String,
 
 /// Run one ACP subprocess for one harness turn.
 pub(crate) async fn run_turn(request: TurnRequest<'_>) -> Result<TurnOutcome, String> {
+    if crate::cli_auth::current_policy()? == crate::cli_auth::CliAuthPolicy::SubscriptionOnly {
+        return Err("subscription-only auth refuses ACP adapters until their independent auth/config path is verified; use a direct CLI path".into());
+    }
     validate_extra_env(request.extra_env)?;
     let command = agent_command(request.provider)?;
     let map_path = session_map_path()?;
