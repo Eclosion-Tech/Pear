@@ -22,6 +22,7 @@ import {
   buildPageContext,
   serializeToolTrace,
   traceKeyForTask,
+  type TaskSpec,
 } from "./llm.js";
 import type { StoredToolCall } from "./tool-call-record.js";
 import { type ResolvedProvider, type TokenUsage } from "./providers.js";
@@ -32,6 +33,7 @@ import { subscribeToAvailableTables } from "./subscriptions.js";
 import { NotionImportJobRunner } from "./notion/import-job-runner.js";
 import type { ConnLike, ToolCallContext } from "./tools.js";
 import { probeMcpExtensions } from "./mcp-tool-executor.js";
+import { observeOrchaPlan, type OrchaAdvisoryHook } from "./orcha-routing.js";
 
 const CAPABILITIES = [
   "orchestrate",
@@ -86,6 +88,8 @@ export interface DatabaseWorkerOptions {
    * single-process deployments, where self-discovery is the only driver).
    */
   externalAiUserDiscovery?: boolean;
+  /** Explicit host opt-in; observes recommendations only, never changes execution. */
+  routingAdvisory?: OrchaAdvisoryHook;
 }
 
 /** AI user identity description supplied by the host (lifecycle in pear-cloud). */
@@ -189,6 +193,7 @@ export class DatabaseWorker {
   private token: string | undefined;
   /** See {@link DatabaseWorkerOptions.externalAiUserDiscovery}. */
   private readonly externalAiUserDiscovery: boolean;
+  private readonly routingAdvisory: OrchaAdvisoryHook | undefined;
 
   private notionImportRunner: NotionImportJobRunner | null = null;
 
@@ -198,6 +203,7 @@ export class DatabaseWorker {
     this.agentId = opts.agentId;
     this.token = opts.token;
     this.externalAiUserDiscovery = opts.externalAiUserDiscovery ?? false;
+    this.routingAdvisory = opts.routingAdvisory;
   }
 
   private clearReconnectTimer(): void {
@@ -888,6 +894,22 @@ export class DatabaseWorker {
     return row?.conversationId;
   }
 
+  private async observeRoutingForPlan(job: JobRow | undefined, task: TaskRow, specs: readonly TaskSpec[]): Promise<void> {
+    if (!this.routingAdvisory || job?.aiUserId === undefined) return;
+    const worker = this.aiUserWorkers.get(job.aiUserId);
+    const aiConn = worker?.getConnLike();
+    const principalId = worker?.identity?.toHexString();
+    // Never discover against the admin connection or another AI user's config.
+    if (!aiConn || !principalId) return;
+    try {
+      await observeOrchaPlan({ jobId: String(job.id), orchestrateTaskId: String(task.id),
+        aiUserId: job.aiUserId, principalId, connection: aiConn, nowMs: Date.now() }, specs, this.routingAdvisory);
+    } catch {
+      // No prompt, endpoint, secret-bearing callback error or raw provider error in logs.
+      console.warn(`[worker:${this.dbName}] Routing advice unavailable; existing execution unchanged`);
+    }
+  }
+
   private async handleOrchestrate(conn: DbConnection, task: TaskRow): Promise<string> {
     console.log(`[worker:${this.dbName}] Orchestrating job ${task.jobId}…`);
 
@@ -936,16 +958,14 @@ export class DatabaseWorker {
     }
 
     if (taskSpecs.length === 0) {
-      const taskGraphJson = JSON.stringify([
-        {
-          description: pageContext
-            ? `${task.description}\n\n---\n${pageContext}`
-            : task.description,
-          task_type: "llm",
-          depends_on: [],
-          required_capabilities: ["llm"],
-        },
-      ]);
+      const fallbackSpecs: TaskSpec[] = [{
+        description: pageContext
+          ? `${task.description}\n\n---\n${pageContext}`
+          : task.description,
+        task_type: "llm", depends_on: [], required_capabilities: ["llm"],
+      }];
+      const taskGraphJson = JSON.stringify(fallbackSpecs);
+      await this.observeRoutingForPlan(job, task, fallbackSpecs);
       await conn.reducers.addTasksToJob({ jobId: task.jobId, taskGraphJson });
       return "Decomposed into 1 task";
     }
@@ -959,6 +979,7 @@ export class DatabaseWorker {
     }
 
     const taskGraphJson = JSON.stringify(taskSpecs);
+    await this.observeRoutingForPlan(job, task, taskSpecs);
     await conn.reducers.addTasksToJob({ jobId: task.jobId, taskGraphJson });
 
     console.log(`[worker:${this.dbName}] Added ${taskSpecs.length} tasks to job ${task.jobId}`);
