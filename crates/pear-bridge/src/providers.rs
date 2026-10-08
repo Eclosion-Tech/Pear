@@ -436,7 +436,10 @@ async fn run_claude(
         return Err(format!(
             "claude exited with {}: {}",
             output.status,
-            stderr_excerpt(&output)
+            serde_json::from_slice::<serde_json::Value>(&output.stdout)
+                .ok()
+                .and_then(|v| claude_result_error(&v))
+                .unwrap_or_else(|| stderr_excerpt(&output))
         ));
     }
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -463,6 +466,25 @@ async fn run_claude(
         }
         Err(_) => Ok(AdapterOutput { output: stdout, ..Default::default() }),
     }
+}
+
+/// Read only documented error-result fields, never dump raw stdout or unrelated
+/// envelope fields. Bound the diagnostic forwarded to the requesting caller.
+fn claude_result_error(value: &serde_json::Value) -> Option<String> {
+    if value.get("type").and_then(|v| v.as_str()) != Some("result")
+        || value.get("is_error").and_then(|v| v.as_bool()) != Some(true)
+    {
+        return None;
+    }
+    if let Some(message) = value.get("result").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+        return Some(message.chars().take(4096).collect());
+    }
+    let messages = value.get("errors")?.as_array()?;
+    let message = messages.iter().filter_map(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty()).take(4)
+        .map(|s| s.chars().take(1024).collect::<String>())
+        .collect::<Vec<_>>().join("; ");
+    if message.is_empty() { None } else { Some(message.chars().take(4096).collect()) }
 }
 
 /// `codex exec --ephemeral --skip-git-repo-check -` — prompt via stdin, final
