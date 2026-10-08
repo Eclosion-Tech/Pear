@@ -86,6 +86,46 @@ fn canned_http_capture(
 // ── claude adapter ─────────────────────────────────────────────────────────
 
 #[tokio::test]
+async fn claude_nonzero_exit_surfaces_only_bounded_structured_error_fields() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let dir = temp_dir("claude-nonzero-json");
+    let cases = [
+        (serde_json::json!({"type":"result", "is_error":true, "result":"quota unavailable", "token":"SECRET"}), "quota unavailable"),
+        (serde_json::json!({"type":"result", "is_error":true, "errors":["model unavailable", "try later"], "metadata":"SECRET"}), "model unavailable; try later"),
+        (serde_json::json!({"type":"result", "is_error":true, "result":"é".repeat(10000)}), "é"),
+    ];
+    for (envelope, expected) in cases {
+        let bin = write_script(&dir, "claude", &format!("printf '%s' '{}'; exit 1", envelope));
+        std::env::set_var("PEAR_BRIDGE_CLAUDE_BIN", &bin);
+        let result = run_inference(&payload("claude-code", "mock only"), None).await;
+        std::env::remove_var("PEAR_BRIDGE_CLAUDE_BIN");
+        assert!(!result.ok);
+        let error = result.error.unwrap();
+        assert!(error.contains(expected));
+        assert!(error.contains("exit status: 1"));
+        assert!(!error.contains("SECRET"));
+        assert!(error.chars().count() < 4200);
+    }
+}
+
+#[tokio::test]
+async fn claude_nonzero_exit_does_not_export_raw_stdout_or_success_results() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let dir = temp_dir("claude-nonzero-unknown");
+    for stdout in ["SECRET non-JSON output", r#"{"type":"result","is_error":false,"result":"SECRET"}"#, r#"{"type":"auth_status","is_error":true,"result":"SECRET"}"#] {
+        let bin = write_script(&dir, "claude", &format!("printf '%s' '{}'; printf 'safe stderr' >&2; exit 1", stdout));
+        std::env::set_var("PEAR_BRIDGE_CLAUDE_BIN", &bin);
+        let result = run_inference(&payload("claude-code", "mock only"), None).await;
+        std::env::remove_var("PEAR_BRIDGE_CLAUDE_BIN");
+        assert!(!result.ok);
+        let error = result.error.unwrap();
+        assert!(error.contains("safe stderr"));
+        assert!(!error.contains("SECRET"));
+    }
+}
+
+
+#[tokio::test]
 async fn claude_adapter_parses_result_envelope_and_pipes_prompt_via_stdin() {
     let _guard = ENV_LOCK.lock().unwrap();
     let dir = temp_dir("claude-ok");
