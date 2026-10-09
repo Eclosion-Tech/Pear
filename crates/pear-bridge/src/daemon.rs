@@ -311,7 +311,9 @@ pub async fn process_incoming(
                 allowlist_result: "allowed".to_string(),
                 kind: Some("inference".to_string()),
             });
-            let result = if crate::routing_preflight::requested(cmd.payload_json.as_deref()) {
+            let result = if crate::system_one::requested(cmd.payload_json.as_deref()) {
+                crate::system_one::run(cmd).await
+            } else if crate::routing_preflight::requested(cmd.payload_json.as_deref()) {
                 crate::routing_preflight::run(cmd).await
             } else {
                 crate::providers::run_inference_json(cmd.payload_json.as_deref(), chunks).await
