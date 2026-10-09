@@ -111,6 +111,15 @@ test("sink failures, synchronous and asynchronous, never retry the classifier", 
   assert.equal(calls, 2);
 });
 
+test("fresh observer failures/timeouts discard historical evidence and never call classifier", async () => {
+  for (const collect of [async () => { throw new Error("SECRET"); }, () => new Promise<never>(() => {})]) {
+    const f = fixture(); let calls=0; const h=hook(()=>{},()=>calls++);
+    const reports=await observeOrchaPlan(context(f),[spec],{...h,observeBilling:{timeoutMs:20,collect}});
+    assert.equal(calls,0);assert.equal(reports[0].advice.status,"blocked");
+    assert.equal(JSON.stringify(reports).includes("SECRET"),false);
+  }
+});
+
 function workerFixture(advisory?: OrchaAdvisoryHook, emptyPlan = false) {
   const f = fixture();
   f.capabilities[0].detectedAt = { microsSinceUnixEpoch: BigInt(Date.now() - 100) * 1000n };

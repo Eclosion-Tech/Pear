@@ -28,5 +28,6 @@ pub mod pair;
 pub mod providers;
 pub mod pty;
 pub mod relay;
+pub mod routing_preflight;
 pub mod sandbox;
 pub mod transport;

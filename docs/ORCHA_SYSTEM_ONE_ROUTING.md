@@ -87,10 +87,11 @@ model lists and active model/binding changes invalidate the observation. The
 fingerprint is not a credential and is not forwarded to the model.
 
 Current database rows do not establish subscription billing or extra-usage state.
-Billing observations must come from a separate verified probe/host process;
-no live verification or observation producer was implemented here. The separately
-merged Bridge auth guard is documented in SUBSCRIPTION_CLI_GUARDS.md; it does not
-populate routing observations. Direct API configs have unknown health. Active
+Billing observations must come from an explicit trusted probe/host process.
+BRIDGE_ROUTING_PREFLIGHT.md documents the new prompt-free native CLI producer and
+optional Orcha collector. It verifies guard enforcement and login, retains the
+operator-attested nature of extra-usage settings, and is disabled in entry points.
+SUBSCRIPTION_CLI_GUARDS.md documents the separately merged launch guard. Direct API configs have unknown health. Active
 harness bindings have unknown adapter readiness: inference advertisements do not
 prove ACP or safe execution profiles. "llm"/"chat" here describe basic inference,
 not repo-editing authority or full Pear tool support. Dedicated packet review is
@@ -166,8 +167,10 @@ path could avoid unnecessary planning calls, but needs a separately evaluated
 ## Shared contract and future runtime integration
 
 The modules implement the in-process advisory/discovery contract described above.
-Subscription/health verification, durable execution routes, external API endpoints,
-UI, deployment and execution confirmation remain future work.
+Native chat preflight evidence is now available through the explicit collector
+in BRIDGE_ROUTING_PREFLIGHT.md, but provider billing/remaining quota and harness
+readiness remain unverified. Live hosting wiring, durable execution routes,
+external API endpoints, UI, deployment and execution confirmation remain future work.
 
 Trusted input assembled from authenticated context:
 - schema/policy version; job/task identity; origin and task/context fingerprint;
@@ -240,9 +243,10 @@ cancellation, not merely stopped polling.
    context approval, observable advice and provenance. Existing execution retained;
    no entry point enables it and no live model/worker run was made.
 3. Separate rollout demonstrated bounded direct Claude and Codex CLI runs with
-   strict authentication guards and operator-confirmed spending settings. Still
-   needed: a trustworthy, fresh observation producer tied to the exact identity,
-   configuration and execution profile. This is not independent invoice/remaining
+   strict authentication guards and operator-confirmed spending settings. Now
+   available locally: a prompt-free observation producer tied to exact identity,
+   configuration and native chat profile (BRIDGE_ROUTING_PREFLIGHT.md). Live host
+   wiring and deployment remain separate. This is not independent invoice/remaining
    quota verification, nor evidence of ACP/harness readiness.
 4. Add durable task-scoped profiles plus reducer/worker enforcement, idempotency
    and explicit backend confirmation. Enforce before automatically selecting.

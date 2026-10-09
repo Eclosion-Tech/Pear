@@ -106,6 +106,111 @@ impl Drop for Fixture {
         let _ = std::fs::remove_dir_all(&self.root);
     }
 }
+#[tokio::test]
+async fn routing_preflight_reports_scoped_evidence_without_launching_inference() {
+    use pear_bridge::allowlist::{AllowlistConfig, AllowlistEnforcer};
+    use pear_bridge::audit::AuditLog;
+    use pear_bridge::daemon::{process_incoming, ExecConfig, IncomingCommand, Outcome};
+    use pear_bridge::pty::PtyLimits;
+    let _lock = ENV_LOCK.lock().unwrap();
+    let f = Fixture::new("routing-preflight");
+    let marker = f.root.join("model-called");
+    let script = format!("case \"$*\" in\n *'auth --help'*) printf 'Usage: claude auth [command]\\nCommands:\\n status Read status\\n';;\n *'auth status'*) printf '%s' '{}';;\n '--version') printf 'fake-version';;\n *) touch '{}'; exit 42;;\nesac", CLAUDE_OK, marker.display());
+    std::env::set_var("PEAR_BRIDGE_CLAUDE_BIN", f.script("probe-cli", &script));
+    let principal = "a".repeat(64);
+    let payload = serde_json::json!({"operation":"subscription-preflight-v1", "provider":"claude-code",
+        "profile_id":"bridge_2_claude-code", "configuration_fingerprint":"b".repeat(64),
+        "principal_id":principal, "ai_user_id":"1", "request_nonce":"12345678-1234-1234-1234-123456789abc",
+        "expected_cli_version":"fake-version"});
+    let mut cmd: IncomingCommand =
+        serde_json::from_value(serde_json::json!({"command_id":9,"device_id":2,
+        "session_id":3,"conversation_id":0,"requested_by":principal,"command":"infer:claude-code",
+        "cwd":null,"confirmed":false,"kind":"inference","payload_json":payload.to_string()}))
+        .unwrap();
+    let enforcer = AllowlistEnforcer::new(AllowlistConfig::default());
+    let exec = ExecConfig {
+        shell: "sh".into(),
+        limits: PtyLimits::default(),
+        server_url: "test".into(),
+    };
+    let mut audit = AuditLog::open(f.root.join("audit.log")).unwrap();
+    let outcome = process_incoming(&cmd, &enforcer, &exec, &mut audit, None, None).await;
+    let Outcome::Completed {
+        stdout, exit_code, ..
+    } = outcome
+    else {
+        panic!("expected result");
+    };
+    assert_eq!(exit_code, Some(0));
+    let result: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let evidence: serde_json::Value =
+        serde_json::from_str(result["output"].as_str().unwrap()).unwrap();
+    assert_eq!(evidence["command_id"], "9");
+    assert_eq!(evidence["device_id"], "2");
+    assert_eq!(evidence["principal_id"], principal);
+    assert_eq!(evidence["no_inference"], true);
+    assert_eq!(evidence["extra_usage"], "operator_attested_disabled");
+    assert!(!stdout.contains("private@example.test"));
+    assert!(!marker.exists());
+    // The prior daemon's ordinary adapter rejects the prompt-free payload.
+    let legacy = run_inference_json(Some(&payload.to_string()), None).await;
+    assert!(!legacy.ok);
+    assert!(!marker.exists());
+    let codex_script = format!("case \"$*\" in\n *'login --help'*) printf 'Usage: codex login [COMMAND]\\nCommands:\\n status Read status\\n';;\n *'login status'*) printf 'Logged in using ChatGPT' >&2;;\n '--version') printf 'fake-version';;\n *) touch '{}'; exit 42;;\nesac", marker.display());
+    std::env::set_var(
+        "PEAR_BRIDGE_CODEX_BIN",
+        f.script("probe-codex", &codex_script),
+    );
+    let mut codex = payload.clone();
+    codex["provider"] = "codex".into();
+    codex["profile_id"] = "bridge_2_codex".into();
+    cmd.payload_json = Some(codex.to_string());
+    let outcome = process_incoming(&cmd, &enforcer, &exec, &mut audit, None, None).await;
+    assert!(matches!(
+        outcome,
+        Outcome::Completed {
+            exit_code: Some(0),
+            ..
+        }
+    ));
+    assert!(!marker.exists());
+    let mut changed = payload.clone();
+    changed["expected_cli_version"] = "changed".into();
+    cmd.payload_json = Some(changed.to_string());
+    let outcome = process_incoming(&cmd, &enforcer, &exec, &mut audit, None, None).await;
+    assert!(matches!(
+        outcome,
+        Outcome::Completed {
+            exit_code: Some(1),
+            ..
+        }
+    ));
+    assert!(!marker.exists());
+    let mut mixed = payload.clone();
+    mixed["prompt"] = "MUST NOT RUN".into();
+    cmd.payload_json = Some(mixed.to_string());
+    let outcome = process_incoming(&cmd, &enforcer, &exec, &mut audit, None, None).await;
+    assert!(matches!(
+        outcome,
+        Outcome::Completed {
+            exit_code: Some(1),
+            ..
+        }
+    ));
+    assert!(!marker.exists());
+    std::env::set_var("PEAR_BRIDGE_CLI_AUTH_POLICY", "configured");
+    cmd.payload_json = Some(payload.to_string());
+    let outcome = process_incoming(&cmd, &enforcer, &exec, &mut audit, None, None).await;
+    assert!(matches!(
+        outcome,
+        Outcome::Completed {
+            exit_code: Some(1),
+            ..
+        }
+    ));
+    assert!(!marker.exists());
+}
+
 const CLAUDE_OK: &str = r#"{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","subscriptionType":"max","email":"private@example.test"}"#;
 async fn inference(provider: &str) -> pear_bridge::providers::InferenceResult {
     let json =
