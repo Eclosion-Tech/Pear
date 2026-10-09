@@ -50,6 +50,11 @@ export interface OrchaAdvisoryHook {
   prepare(context: OrchaAdvisoryPreparation): OrchaAdvisoryConfig | undefined;
   /** Host must store/display only on an authorized surface; no public-table default. */
   onAdvice(report: OrchaAdviceReport): void | Promise<void>;
+  /** Explicit host opt-in for fresh, bounded read-only evidence. No default probe. */
+  observeBilling?: {
+    readonly timeoutMs: number;
+    collect(context: OrchaAdvisoryContext, config: OrchaAdvisoryConfig, signal: AbortSignal): Promise<readonly BillingObservation[]>;
+  };
   /** Bounds entries examined per plan, not an account-wide spending budget. Default 1. */
   readonly maxTasksPerPlan?: number;
 }
@@ -62,6 +67,30 @@ function freeze<T>(value: T): T {
     Object.freeze(value);
   }
   return value;
+}
+
+async function collectFreshBilling(context: OrchaAdvisoryContext, config: OrchaAdvisoryConfig,
+  observer: NonNullable<OrchaAdvisoryHook["observeBilling"]>): Promise<readonly BillingObservation[]> {
+  if (!Number.isInteger(observer.timeoutMs) || observer.timeoutMs < 1 || observer.timeoutMs > 30_000) return [];
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let stop: (() => void) | undefined;
+  try {
+    if (config.advisor.signal?.aborted) return [];
+    return await Promise.race([
+      Promise.resolve().then(() => controller.signal.aborted ? [] : observer.collect(context, config, controller.signal)).catch(() => []),
+      new Promise<readonly BillingObservation[]>(resolve => {
+        stop = () => { controller.abort(); resolve([]); };
+        timer = setTimeout(stop, observer.timeoutMs);
+        config.advisor.signal?.addEventListener("abort", stop, { once: true });
+        if (config.advisor.signal?.aborted) stop();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (stop) config.advisor.signal?.removeEventListener("abort", stop);
+    controller.abort();
+  }
 }
 
 export async function observeOrchaPlan(context: OrchaAdvisoryContext, specs: readonly TaskSpec[],
@@ -84,16 +113,24 @@ export async function observeOrchaPlan(context: OrchaAdvisoryContext, specs: rea
       description: spec.description, requiredCapabilities: [...spec.required_capabilities],
       profiles: preview.profiles.map(p => ({ ...p, capabilities: [...p.capabilities], taskProfiles: [...p.taskProfiles] })) }));
     if (!prepared) continue;
+    let billingObservations = prepared.billingObservations;
+    const observer = prepared.advisor.consent.enabled ? hook.observeBilling : undefined;
+    if (observer) {
+      billingObservations = await collectFreshBilling(context, prepared, observer);
+    }
+    // Probes take time: eligibility must be evaluated against the current host
+    // clock, not a pre-probe timestamp that makes new evidence look futuristic.
+    const nowMs = observer ? Date.now() : context.nowMs;
     const discovery = discoverExecutionProfiles(context.connection, {
-      principalId: context.principalId, aiUserId: context.aiUserId, nowMs: context.nowMs,
-      maxObservationAgeMs: prepared.policy.maxObservationAgeMs, billingObservations: prepared.billingObservations,
+      principalId: context.principalId, aiUserId: context.aiUserId, nowMs,
+      maxObservationAgeMs: prepared.policy.maxObservationAgeMs, billingObservations,
     });
     const task: RoutingTask = { id: `plan-${context.orchestrateTaskId}-${specIndex}`,
       principalId: context.principalId, aiUserId: String(context.aiUserId), summary: prepared.summary,
       artifacts: prepared.artifacts, taskProfile: prepared.taskProfile,
       requiredCapabilities: prepared.requiredCapabilities, pinnedProfileId: prepared.pinnedProfileId,
       contextFingerprint: hash({ planFingerprint, specIndex, summary: prepared.summary, artifacts: prepared.artifacts }) };
-    const advice = await recommendRoute(task, { ...prepared.policy, nowMs: context.nowMs }, discovery.profiles, prepared.advisor);
+    const advice = await recommendRoute(task, { ...prepared.policy, nowMs }, discovery.profiles, prepared.advisor);
     const report = freeze({ jobId: context.jobId, orchestrateTaskId: context.orchestrateTaskId,
       specIndex, planFingerprint, discoveryWarnings: [...discovery.warnings], advice });
     reports.push(report);

@@ -311,8 +311,11 @@ pub async fn process_incoming(
                 allowlist_result: "allowed".to_string(),
                 kind: Some("inference".to_string()),
             });
-            let result =
-                crate::providers::run_inference_json(cmd.payload_json.as_deref(), chunks).await;
+            let result = if crate::routing_preflight::requested(cmd.payload_json.as_deref()) {
+                crate::routing_preflight::run(cmd).await
+            } else {
+                crate::providers::run_inference_json(cmd.payload_json.as_deref(), chunks).await
+            };
             Outcome::Completed {
                 exit_code: Some(if result.ok { 0 } else { 1 }),
                 stdout: result.to_json(),

@@ -22,6 +22,9 @@ export interface BillingObservation {
   readonly configurationFingerprint: string;
   readonly billing: Exclude<Billing, "unknown">;
   readonly observedAtMs: number;
+  /** Explicit fresh native-chat auth preflight; never inferred from cache reads.
+   * This is not model availability, quota, repo tools or ACP/harness readiness. */
+  readonly nativeChatReadiness?: "auth_preflight_only";
 }
 export interface DiscoveryOptions {
   readonly aiUserId: bigint;
@@ -70,8 +73,12 @@ export function discoverExecutionProfiles(conn: DiscoveryConnection, options: Di
     const age = options.nowMs - o.observedAtMs;
     if (!Number.isFinite(age) || age < 0 || age > options.maxObservationAgeMs) return p;
     if (!["subscription", "local", "metered_api"].includes(o.billing)) return p;
+    const nativeChat = o.nativeChatReadiness === "auth_preflight_only" && o.billing === "subscription"
+      && (p.backend === "claude-code" || p.backend === "codex")
+      && p.id.startsWith("bridge_") && p.availability === "available"
+      && p.taskProfiles.includes("chat") && p.capabilities.includes("llm");
     return { ...p, billing: o.billing, billingVerified: true,
-      observedAtMs: Math.min(p.observedAtMs, o.observedAtMs) };
+      observedAtMs: nativeChat ? o.observedAtMs : Math.min(p.observedAtMs, o.observedAtMs) };
   }
 
   // Only the active direct config. A dormant API key behind a binding is not a candidate.

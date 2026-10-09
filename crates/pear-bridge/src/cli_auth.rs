@@ -397,6 +397,26 @@ async fn probe(
     validate_status(provider, &stdout, &stderr)
 }
 
+/// Bounded version check with the exact private environment already probed.
+pub(crate) async fn prepared_version(
+    launch: &PreparedCli,
+    bin: &str,
+    cwd: &Path,
+) -> Result<String, String> {
+    if policy(&launch.environment)? != CliAuthPolicy::SubscriptionOnly {
+        return Err("Preflight requires subscription-only snapshot".into());
+    }
+    let (stdout, stderr) =
+        probe_command(bin, &["--version".into()], cwd, &launch.environment).await?;
+    let version = std::str::from_utf8(&stdout)
+        .map_err(|_| "Unknown CLI version".to_string())?
+        .trim();
+    if version.is_empty() || version.len() > 256 || !stderr.is_empty() {
+        return Err("Unknown CLI version".into());
+    }
+    Ok(version.to_string())
+}
+
 pub(crate) async fn prepare(
     provider: CliProvider,
     bin: &str,
