@@ -3,6 +3,11 @@
 Status: local, opt-in implementation. No deployment, live preflight, classifier
 call or new model execution performed. Existing entry points remain disabled.
 
+Principal matching validates exactly 32 bytes of hex, accepts the relay's optional
+`0x` prefix, and compares canonical lower-case encodings. Receipts contain the
+canonical actual requester, not an unchecked caller label. Malformed or distinct
+identities still fail closed.
+
 ## What is observed
 
 The device performs the same subscription-only native CLI auth/config checks used

@@ -26,6 +26,7 @@ pub mod harness;
 pub mod keychain;
 pub mod pair;
 pub mod providers;
+mod principal;
 pub mod pty;
 pub mod relay;
 pub mod routing_preflight;

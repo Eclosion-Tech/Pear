@@ -22,6 +22,11 @@ rather than running a model through the ordinary generate/chat/CLI path. No sche
 reducer, generated binding or additional grant is installed. Existing device grants,
 command authorization and requester-scoped completion visibility still apply.
 
+Principal matching requires exactly 32 bytes of hex and canonicalizes the optional
+relay `0x` prefix and hex case. Receipts and nonce reservations use the canonical
+actual requester. Malformed or different identities remain refused; alternate
+encodings cannot create separate nonce allowances.
+
 The daemon verifies actual requester identity and scope, reserves the principal/nonce
 once, GETs the local `/api/tags` catalog, requires exactly one name/digest match with
 positive local size and no remote_host/remote_model fields, then POSTs once to the
