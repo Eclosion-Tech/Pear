@@ -36,7 +36,7 @@ pub(crate) async fn run(cmd: &IncomingCommand) -> InferenceResult {
         if raw.len() > 8192 { return Err("Preflight payload too large".to_string()); }
         let r: Request = serde_json::from_str(raw).map_err(|_| "Invalid preflight payload".to_string())?;
         if r.operation != OPERATION || !hex(&r.configuration_fingerprint)
-            || !hex(&r.principal_id) || r.principal_id != cmd.requested_by
+            || !crate::principal::matches(&r.principal_id, &cmd.requested_by)
             || r.ai_user_id.is_empty() || r.ai_user_id.len() > 20
             || !r.ai_user_id.bytes().all(|b| b.is_ascii_digit())
             || r.request_nonce.len() != 36 || !r.request_nonce.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
@@ -44,9 +44,11 @@ pub(crate) async fn run(cmd: &IncomingCommand) -> InferenceResult {
             || r.profile_id != format!("bridge_{}_{}", cmd.device_id, r.provider) {
             return Err("Preflight scope mismatch".to_string());
         }
+        let principal = crate::principal::canonical(&cmd.requested_by)
+            .ok_or("Preflight scope mismatch")?;
         failure_output = serde_json::json!({"schema":"bridge-subscription-evidence-v1",
             "request_nonce":r.request_nonce, "command_id":cmd.command_id.to_string(),
-            "device_id":cmd.device_id.to_string(), "principal_id":cmd.requested_by,
+            "device_id":cmd.device_id.to_string(), "principal_id":principal,
             "no_inference":true}).to_string();
         let (provider, bin, args) = match r.provider.as_str() {
             "claude-code" => (CliProvider::Claude, std::env::var("PEAR_BRIDGE_CLAUDE_BIN").unwrap_or_else(|_| "claude".into()),
@@ -67,7 +69,7 @@ pub(crate) async fn run(cmd: &IncomingCommand) -> InferenceResult {
         Ok(serde_json::json!({
             "schema":"bridge-subscription-evidence-v1", "no_inference":true,
             "device_id":cmd.device_id.to_string(), "command_id":cmd.command_id.to_string(),
-            "session_id":cmd.session_id.to_string(), "principal_id":cmd.requested_by,
+            "session_id":cmd.session_id.to_string(), "principal_id":principal,
             "ai_user_id":r.ai_user_id, "profile_id":r.profile_id,
             "configuration_fingerprint":r.configuration_fingerprint, "request_nonce":r.request_nonce,
             "provider":r.provider, "cli_version":version, "task_profile":"chat",

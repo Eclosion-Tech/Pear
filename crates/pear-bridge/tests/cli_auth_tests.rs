@@ -124,7 +124,7 @@ async fn routing_preflight_reports_scoped_evidence_without_launching_inference()
         "expected_cli_version":"fake-version"});
     let mut cmd: IncomingCommand =
         serde_json::from_value(serde_json::json!({"command_id":9,"device_id":2,
-        "session_id":3,"conversation_id":0,"requested_by":principal,"command":"infer:claude-code",
+        "session_id":3,"conversation_id":0,"requested_by":format!("0x{principal}"),"command":"infer:claude-code",
         "cwd":null,"confirmed":false,"kind":"inference","payload_json":payload.to_string()}))
         .unwrap();
     let enforcer = AllowlistEnforcer::new(AllowlistConfig::default());
@@ -152,6 +152,37 @@ async fn routing_preflight_reports_scoped_evidence_without_launching_inference()
     assert_eq!(evidence["extra_usage"], "operator_attested_disabled");
     assert!(!stdout.contains("private@example.test"));
     assert!(!marker.exists());
+    // Both SDK and relay encodings must yield the same canonical receipt.
+    for actual in [principal.clone(), format!("0x{}", principal.to_uppercase())] {
+        cmd.requested_by = actual;
+        let outcome = process_incoming(&cmd, &enforcer, &exec, &mut audit, None, None).await;
+        let Outcome::Completed {
+            stdout, exit_code, ..
+        } = outcome
+        else {
+            panic!("expected result");
+        };
+        assert_eq!(exit_code, Some(0));
+        let result: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        let evidence: serde_json::Value =
+            serde_json::from_str(result["output"].as_str().unwrap()).unwrap();
+        assert_eq!(evidence["principal_id"], principal);
+        assert!(!marker.exists());
+    }
+    cmd.requested_by = format!("0x{principal}");
+    // A different or malformed authenticated principal never passes this check.
+    for actual in [format!("0x{}", "c".repeat(64)), "0xinvalid".into()] {
+        cmd.requested_by = actual;
+        assert!(matches!(
+            process_incoming(&cmd, &enforcer, &exec, &mut audit, None, None).await,
+            Outcome::Completed {
+                exit_code: Some(1),
+                ..
+            }
+        ));
+        assert!(!marker.exists());
+    }
+    cmd.requested_by = format!("0x{principal}");
     // The prior daemon's ordinary adapter rejects the prompt-free payload.
     let legacy = run_inference_json(Some(&payload.to_string()), None).await;
     assert!(!legacy.ok);

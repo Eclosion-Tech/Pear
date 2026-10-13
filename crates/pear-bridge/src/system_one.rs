@@ -29,8 +29,7 @@ pub(crate) fn requested(raw: Option<&str>) -> bool {
 fn validate(r: &Request, cmd: &IncomingCommand) -> Result<reqwest::Url, &'static str> {
     let u = reqwest::Url::parse(&r.endpoint).map_err(|_| "Invalid local endpoint")?;
     if r.operation != OPERATION
-        || r.principal_id != cmd.requested_by
-        || !hex(&r.principal_id)
+        || !crate::principal::matches(&r.principal_id, &cmd.requested_by)
         || !hex(&r.configuration_fingerprint)
         || !hex(&r.model_digest)
         || r.ai_user_id
@@ -161,15 +160,17 @@ async fn run_with_reservation(cmd: &IncomingCommand, dir: &std::path::Path) -> I
             .ok_or("Invalid decision payload")?;
         let r: Request = serde_json::from_str(raw).map_err(|_| "Invalid decision payload")?;
         let endpoint = validate(&r, cmd)?;
+        let principal =
+            crate::principal::canonical(&cmd.requested_by).ok_or("Invalid principal")?;
         let metadata = json!({"schema":"bridge-local-system-one-v1", "request_nonce":r.request_nonce,
             "command_id":cmd.command_id.to_string(), "device_id":cmd.device_id.to_string(),
-            "session_id":cmd.session_id.to_string(), "principal_id":cmd.requested_by,
+            "session_id":cmd.session_id.to_string(), "principal_id":principal,
             "ai_user_id":r.ai_user_id, "configuration_fingerprint":r.configuration_fingerprint,
             "endpoint":r.endpoint, "model_digest":r.model_digest});
         correlation = metadata.to_string();
         // Fail closed across command redelivery/restart, including a crash after
         // POST but before completion. Failed reservations are never reclaimed.
-        reserve(dir, &r.principal_id, &r.request_nonce)?;
+        reserve(dir, &principal, &r.request_nonce)?;
         let client = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -399,10 +400,14 @@ mod tests {
         let (url, requests) = server(vec![(200, tags(false, &"c".repeat(64))), (200, response)]);
         let p = payload(&url);
         let d = dir("success");
-        let r = run_with_reservation(&cmd(p.clone()), &d).await;
+        let mut relay_cmd = cmd(p.clone());
+        relay_cmd.requested_by = format!("0x{}", relay_cmd.requested_by.to_uppercase());
+        let r = run_with_reservation(&relay_cmd, &d).await;
         assert!(r.ok, "{:?}", r.error);
         assert!(!r.output.contains("SECRET"));
         assert!(!r.output.contains("private"));
+        let evidence: Value = serde_json::from_str(&r.output).unwrap();
+        assert_eq!(evidence["principal_id"], "a".repeat(64));
         let reqs = requests.lock().unwrap();
         assert_eq!(reqs.len(), 2);
         assert!(reqs[0].starts_with("GET /api/tags"));
