@@ -124,7 +124,7 @@ async fn bounded_json(response: reqwest::Response, max: usize) -> Result<Value, 
     }
     serde_json::from_slice(&bytes).map_err(|_| "Invalid local response")
 }
-fn reserve(dir: &std::path::Path, principal: &str, nonce: &str) -> Result<(), &'static str> {
+pub(crate) fn reserve(dir: &std::path::Path, principal: &str, nonce: &str) -> Result<(), &'static str> {
     use sha2::{Digest, Sha256};
     use std::io::Write;
     #[cfg(not(unix))]
