@@ -46,6 +46,12 @@ fn now_ms() -> u64 {
 }
 fn validate(r: &Request, cmd: &IncomingCommand) -> Result<(), &'static str> {
     if r.operation != OPERATION
+        || cmd.kind.as_deref() != Some("inference")
+        || cmd.command != "infer:claude-code"
+        || cmd.cwd.is_some()
+        || cmd.conversation_id != 0
+        || cmd.device_id == 0
+        || cmd.session_id == 0
         || !crate::principal::matches(&r.principal_id, &cmd.requested_by)
         || !uuid(&r.approval_id)
         || !uuid(&r.request_nonce)
@@ -184,6 +190,12 @@ mod tests {
     }
     #[test]
     fn changed_scope_expiry_and_oversized_text_are_refused() {
+        for summary in ["infer:codex", "infer:ollama", "infer:claude-code:override"] {
+            let mut cmd = command();
+            cmd.command = summary.into();
+            let r: Request = serde_json::from_str(cmd.payload_json.as_ref().unwrap()).unwrap();
+            assert!(validate(&r, &cmd).is_err());
+        }
         for (field, value) in [
             ("principal_id", json!("d".repeat(64))),
             ("expires_at_ms", json!(0)),
