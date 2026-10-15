@@ -6,6 +6,22 @@ use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 
 pub const OPERATION: &str = "local-system-one-v1";
+// Catalog + cold-start classification fit inside the device budget, which is
+// itself shorter than the caller's transport/advisor deadlines. No retries.
+const CATALOG_TIMEOUT: Duration = Duration::from_secs(5);
+const DECISION_TIMEOUT: Duration = Duration::from_secs(45);
+const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(55);
+#[derive(Clone, Copy)]
+struct Timeouts {
+    catalog: Duration,
+    decision: Duration,
+    attempt: Duration,
+}
+const TIMEOUTS: Timeouts = Timeouts {
+    catalog: CATALOG_TIMEOUT,
+    decision: DECISION_TIMEOUT,
+    attempt: ATTEMPT_TIMEOUT,
+};
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Request {
@@ -150,6 +166,13 @@ pub(crate) async fn run(cmd: &IncomingCommand) -> InferenceResult {
     run_with_reservation(cmd, &dir).await
 }
 async fn run_with_reservation(cmd: &IncomingCommand, dir: &std::path::Path) -> InferenceResult {
+    run_with_timeouts(cmd, dir, TIMEOUTS).await
+}
+async fn run_with_timeouts(
+    cmd: &IncomingCommand,
+    dir: &std::path::Path,
+    timeouts: Timeouts,
+) -> InferenceResult {
     let started = Instant::now();
     let mut correlation = String::new();
     let work = async {
@@ -174,7 +197,7 @@ async fn run_with_reservation(cmd: &IncomingCommand, dir: &std::path::Path) -> I
         let client = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(20))
+            .timeout(timeouts.decision)
             .build()
             .map_err(|_| "Local client unavailable")?;
         // Verify the exact approved local weights before classification. Unknown
@@ -185,6 +208,7 @@ async fn run_with_reservation(cmd: &IncomingCommand, dir: &std::path::Path) -> I
         let tags = bounded_json(
             client
                 .get(tags_url)
+                .timeout(timeouts.catalog)
                 .send()
                 .await
                 .map_err(|_| "Local catalog unavailable")?,
@@ -218,7 +242,13 @@ async fn run_with_reservation(cmd: &IncomingCommand, dir: &std::path::Path) -> I
             "state":r.request["state"], "questions":r.request["questions"]}))
                 .send()
                 .await
-                .map_err(|_| "Local decision unavailable")?,
+                .map_err(|e| {
+                    if e.is_timeout() {
+                        "Local decision HTTP timed out"
+                    } else {
+                        "Local decision unavailable"
+                    }
+                })?,
             32768,
         )
         .await?;
@@ -271,7 +301,7 @@ async fn run_with_reservation(cmd: &IncomingCommand, dir: &std::path::Path) -> I
         output["decision"] = json!({"model":model, "answers":clean});
         Ok(output.to_string())
     };
-    let attempt = tokio::time::timeout(Duration::from_secs(25), work).await;
+    let attempt = tokio::time::timeout(timeouts.attempt, work).await;
     let (ok, output, error) = match attempt {
         Ok(Ok(output)) => (true, output, None),
         Ok(Err(e)) => (false, correlation, Some(e.to_string())),
@@ -322,6 +352,12 @@ mod tests {
         d
     }
     fn server(responses: Vec<(u16, Value)>) -> (String, Arc<Mutex<Vec<String>>>) {
+        server_with_post_delay(responses, Duration::ZERO)
+    }
+    fn server_with_post_delay(
+        responses: Vec<(u16, Value)>,
+        delay: Duration,
+    ) -> (String, Arc<Mutex<Vec<String>>>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/v1/systemone", listener.local_addr().unwrap());
         let captured = Arc::new(Mutex::new(Vec::new()));
@@ -355,9 +391,13 @@ mod tests {
                         }
                     }
                 }
+                let post = bytes.starts_with(b"POST ");
                 c.lock()
                     .unwrap()
                     .push(String::from_utf8_lossy(&bytes).to_string());
+                if post {
+                    std::thread::sleep(delay);
+                }
                 let body = body.to_string();
                 let _=write!(stream,"HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());
             }
@@ -370,6 +410,46 @@ mod tests {
             m["remote_host"] = json!("https://remote.invalid");
         }
         json!({"models":[m]})
+    }
+    #[test]
+    fn cold_start_budgets_are_finite_and_nested() {
+        assert_eq!(CATALOG_TIMEOUT.as_secs(), 5);
+        assert_eq!(DECISION_TIMEOUT.as_secs(), 45);
+        assert_eq!(ATTEMPT_TIMEOUT.as_secs(), 55);
+        assert!(CATALOG_TIMEOUT + DECISION_TIMEOUT < ATTEMPT_TIMEOUT);
+    }
+    #[tokio::test]
+    async fn delayed_post_succeeds_with_budget_but_timeout_consumes_allowance() {
+        for (tag, decision, expected_ok) in [("short", 20, false), ("long", 1000, true)] {
+            let response = json!({"model":"nimble:latest","answers":{"q":{"type":"choice","choice":"a",
+                "probabilities":{"a":0.8,"b":0.2}}}});
+            let (url, requests) = server_with_post_delay(
+                vec![(200, tags(false, &"c".repeat(64))), (200, response)],
+                Duration::from_millis(100),
+            );
+            let d = dir(tag);
+            let command = cmd(payload(&url));
+            let result = run_with_timeouts(
+                &command,
+                &d,
+                Timeouts {
+                    catalog: Duration::from_secs(1),
+                    decision: Duration::from_millis(decision),
+                    attempt: Duration::from_secs(3),
+                },
+            )
+            .await;
+            assert_eq!(result.ok, expected_ok, "{:?}", result.error);
+            if !expected_ok {
+                assert_eq!(
+                    result.error.as_deref(),
+                    Some("Local decision HTTP timed out")
+                );
+            }
+            assert!(!run_with_reservation(&command, &d).await.ok);
+            assert_eq!(requests.lock().unwrap().len(), 2);
+            std::fs::remove_dir_all(d).unwrap();
+        }
     }
     #[test]
     fn invalid_scopes_and_mixed_prompts_are_rejected() {

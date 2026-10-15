@@ -1,6 +1,7 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {createBridgeSystemOneClient} from "./bridge-system-one.js";
+import {readFileSync} from "node:fs";
+import {createBridgeSystemOneClient, BRIDGE_SYSTEM_ONE_MAX_TIMEOUT_MS} from "./bridge-system-one.js";
 
 function fixture(change:(e:any)=>void=()=>{}) {
   const principalId="a".repeat(64),identity={toHexString:()=>principalId};
@@ -28,6 +29,19 @@ test("one local decision, selected payload and no worker credential or fallback"
   assert.equal(JSON.stringify(f.payloads).includes("SECRET"),false);assert.equal(f.payloads[0].operation,"local-system-one-v1");
   assert.equal("prompt" in f.payloads[0],false);assert.equal("chat" in f.payloads[0],false);
   await assert.rejects(client.decide(request,signal),/budget exhausted/);assert.equal(f.calls(),1);
+});
+test("cold-start budget fits device and advisory deadlines and remains finite",async()=>{
+  const source=readFileSync(new URL("../../crates/pear-bridge/src/system_one.rs",import.meta.url),"utf8");
+  const deviceSeconds=Number(source.match(/const ATTEMPT_TIMEOUT: Duration = Duration::from_secs\((\d+)\)/)?.[1]);
+  assert.ok(deviceSeconds*1000<BRIDGE_SYSTEM_ONE_MAX_TIMEOUT_MS);
+  assert.ok(BRIDGE_SYSTEM_ONE_MAX_TIMEOUT_MS<60_000);
+  const f=fixture();f.options.timeoutMs=BRIDGE_SYSTEM_ONE_MAX_TIMEOUT_MS;
+  const client=createBridgeSystemOneClient(f.conn,f.options);
+  await client.decide(request,new AbortController().signal);
+  await assert.rejects(client.decide(request,new AbortController().signal),/budget exhausted/);
+  assert.equal(f.calls(),1);
+  for(const timeoutMs of [BRIDGE_SYSTEM_ONE_MAX_TIMEOUT_MS+1,Infinity,NaN,0,-1,1.5])
+    assert.throws(()=>createBridgeSystemOneClient(f.conn,{...f.options,timeoutMs}));
 });
 test("approval and loopback-only exact endpoint validation",()=>{
   for(const options of [{approved:false},{endpoint:"https://remote.invalid/v1/systemone"},{endpoint:"http://localhost:11434/v1/systemone"},

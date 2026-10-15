@@ -4,6 +4,9 @@ import { discoverExecutionProfiles } from "./routing-discovery.js";
 import type { PreflightConnection } from "./routing-preflight.js";
 import type { SystemOneClient, SystemOneRequest } from "./routing.js";
 
+/** Allows the device's 55s cold-start attempt plus bounded command-bus time.
+ * The advisory caller must allow 60s; abort never refunds this attempt. */
+export const BRIDGE_SYSTEM_ONE_MAX_TIMEOUT_MS = 58_000;
 export interface BridgeSystemOneOptions {
   readonly approved: boolean;
   readonly principalId: string;
@@ -22,7 +25,7 @@ export function createBridgeSystemOneClient(conn: PreflightConnection, input: Br
     || endpoint.protocol !== "http:" || endpoint.hostname !== "127.0.0.1" || endpoint.pathname !== "/v1/systemone"
     || endpoint.username || endpoint.password || endpoint.search || endpoint.hash || endpoint.href !== o.endpoint
     || !/^[a-f0-9]{64}$/.test(o.modelDigest) || !/^[a-zA-Z0-9_.:/-]{1,128}$/.test(o.model) || o.model.endsWith(":cloud")
-    || !Number.isInteger(o.timeoutMs) || o.timeoutMs < 1 || o.timeoutMs > 30_000) throw new Error("Invalid local decision approval");
+    || !Number.isInteger(o.timeoutMs) || o.timeoutMs < 1 || o.timeoutMs > BRIDGE_SYSTEM_ONE_MAX_TIMEOUT_MS) throw new Error("Invalid local decision approval");
   let used = false;
   const profile = () => discoverExecutionProfiles(conn, { principalId:o.principalId, aiUserId:o.aiUserId,
     nowMs:Date.now(), maxObservationAgeMs:30_000 }).profiles.find(p=>p.id===`bridge_${o.deviceId}_ollama`);
