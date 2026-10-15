@@ -32,9 +32,11 @@ once, GETs the local `/api/tags` catalog, requires exactly one name/digest match
 positive local size and no remote_host/remote_model fields, then POSTs once to the
 approved System One endpoint. No environment endpoint/proxy, redirect, HTTP retry,
 model download, chat/generate/CLI fallback or API credentials are used. Catalog
-responses are bounded to 256 KiB; decision responses to 32 KiB, whole operation to
-25 seconds. Response fields are selected: only model and choice/probability answers
-are returned in the scoped receipt. HTTP bodies/errors and extra answer fields are
+responses are bounded to 256 KiB; decision responses to 32 KiB. The catalog has a
+5-second HTTP deadline, classification (including cold loading) a 45-second HTTP
+deadline, and the whole device operation a 55-second deadline. HTTP timeout errors
+use a fixed diagnostic label, never raw upstream error text. Response fields are
+selected: only model and choice/probability answers are returned in the scoped receipt. HTTP bodies/errors and extra answer fields are
 not forwarded. The routing consumer validates normalized distributions separately.
 
 ## Once / trust / limits
@@ -53,7 +55,11 @@ weights/catalog check, not an invoice or remaining-quota audit.
 The worker factory `createBridgeSystemOneClient` requires explicit approval,
 AI-user-scoped discovery, connected/granted available Ollama capability, endpoint,
 model/digest and finite timeout. Each instance consumes one attempt, including
-failure/cancellation. Its single enqueue and wait are bounded together. It validates
+failure/cancellation. Its single enqueue and wait are bounded together, with a
+maximum 58-second transport budget. For cold starts the advisory caller must allow
+60 seconds and its enclosing request must allow discovery/preflight time as well.
+Shorter explicit caller budgets remain supported, but can end waiting before the
+device finishes; these deadlines never authorize a retry or a warmup. It validates
 nonce, actual command/device/session/principal, AI scope, source fingerprint,
 endpoint/digest/model and completion freshness; then rechecks scope/grants/config.
 No SQL/admin connection fallback, re-enqueue, raw row/error export or backend switch.
@@ -70,7 +76,8 @@ must still be confirmed, granted and guarded again.
 ## Validation
 
 Unit HTTP fixtures check exact catalog/decision endpoints, remote/digest mismatch,
-redirect/HTTP refusal, bounded output/privacy and crash/redelivery reservation.
+redirect/HTTP refusal, bounded output/privacy, delayed POST success, sanitized HTTP
+timeouts and crash/redelivery reservation (including after timeout).
 Worker fixtures check receipt/scope mismatches, grants/config invalidation, explicit
 approval, bounded hanging enqueue, replay, cancellation and the one-attempt budget.
 Tests do not call an installed model or a real account.
