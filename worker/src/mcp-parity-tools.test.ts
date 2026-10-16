@@ -78,9 +78,9 @@ test("the chat surface exposes them alongside its own tools", () => {
   assert.ok(chat.has("post_to_thread"));
 });
 
-test("every MCP tool is reachable from chat", () => {
-  // The actual parity property, stated directly: anything an MCP client can do
-  // to a workspace, an AI user in chat can do too. Asserted over the registry
+test("workspace tools retain parity, but explicit answer operations never become chat tools", () => {
+  // Workspace authoring/memory operations retain parity. Explicit execution
+  // operations are a separate human-frontend capability, never model tools. Asserted over the registry
   // rather than a hand-kept list, so a tool added to MCP alone fails here.
   //
   // This caught `remember`, `list_memory` and `set_row_properties` — chat could
@@ -90,7 +90,9 @@ test("every MCP tool is reachable from chat", () => {
   const missing = buildToolRegistry()
     .map((t: McpToolEntry) => t.name)
     .filter((n: string) => !chat.has(n));
-  assert.deepEqual(missing, [], `MCP tools unreachable from chat: ${missing.join(", ")}`);
+  const humanFrontendOnly = ['list_answer_workers','prepare_answer','run_answer','get_answer'];
+  for(const name of humanFrontendOnly){assert.equal(chat.has(name),false);assert.equal(isMcpParityTool(name),false);}
+  assert.deepEqual(missing.filter((n:string)=>!humanFrontendOnly.includes(n)), [], `Unexpected MCP tools unreachable from chat: ${missing.join(", ")}`);
 });
 
 test("no tool is defined twice", () => {

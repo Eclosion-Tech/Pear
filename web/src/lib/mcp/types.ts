@@ -17,6 +17,8 @@ export type { StdbTransport };
 /** Everything a tool needs to execute: a token-bound transport + identity. */
 export interface McpContext {
   transport: StdbTransport;
+  /** Opt-in host service, bound to a verified OAuth grant, never client-supplied scope. */
+  answers?: import('./answer-contract').AnswerApi;
   /** The AI user acting on this connection (resolved from ai_user_config). */
   aiUserId: bigint;
   /** Present for native chat turns; lets history search omit the current chat. */

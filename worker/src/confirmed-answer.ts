@@ -52,6 +52,17 @@ export function createAnswerOffer(conn:PreflightConnection,input:{workspace:stri
     configurationFingerprint:p.configurationFingerprint,cliVersion,text:input.text,expiresAtMs:Date.now()+300_000,
     requestFingerprint:a.provenance.requestFingerprint,contextFingerprint:a.provenance.contextFingerprint,tools:'disabled',model:'provider_default'});
 }
+/** Explicit human selection; this does not fabricate classifier advice. */
+export function createDirectAnswerOffer(conn:PreflightConnection,input:{workspace:string;principalId:string;aiUserId:bigint;profileId:string;text:string}):AnswerOffer {
+  const p=profile(conn,{...input,aiUserId:String(input.aiUserId)});if(!p?.configurationFingerprint)throw new Error('Selected profile unavailable');
+  const caps=(conn.db as any).bridge_device_capability??(conn.db as any).bridgeDeviceCapability;
+  const cliVersion=caps&&[...caps.iter()].find((c:any)=>c.deviceId===BigInt(input.profileId.split('_')[1])&&c.provider==='claude-code')?.version;
+  const digest=(v:unknown)=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
+  return validateAnswerOffer({schema:'pear-answer-offer-v1',approvalId:randomUUID(),workspace:input.workspace,principalId:input.principalId,
+    aiUserId:String(input.aiUserId),profileId:input.profileId,configurationFingerprint:p.configurationFingerprint,cliVersion,text:input.text,
+    expiresAtMs:Date.now()+300_000,requestFingerprint:digest(['human-explicit-v1',input.text]),
+    contextFingerprint:digest(['human-explicit-v1',input.workspace,input.principalId,String(input.aiUserId),input.profileId,p.configurationFingerprint,cliVersion]),tools:'disabled',model:'provider_default'});
+}
 export interface AnswerReservation {readonly offer:AnswerOffer;readonly fingerprint:string;readonly journalPath:string}
 const reservations=new WeakSet<object>();
 /** Human/operator-controlled private file: {schema, approved:true, offer, offerFingerprint}.
@@ -78,14 +89,26 @@ export type AnswerResult={status:'completed';commandId:string;answer:string;prof
   |{status:'refused'|'failed'|'unknown';reason:string;commandId?:string};
 /** Abort stops waiting, NOT a confirmed remote kill. After launch uncertainty
  * returns unknown; never refunds approval, changes worker or repeats enqueue. */
-export async function runConfirmedAnswer(conn:PreflightConnection,r:AnswerReservation,signal:AbortSignal):Promise<AnswerResult>{
+export async function runConfirmedAnswer(conn:PreflightConnection,r:AnswerReservation,signal:AbortSignal,options:{authorize?:()=>Promise<void>}={}):Promise<AnswerResult>{
   if(!reservations.delete(r))return {status:'refused',reason:'reservation_unavailable'};
   let launched=false,stopped=false,commandId:string|undefined;
   const stop=()=>stopped||signal.aborted||Date.now()>=r.offer.expiresAtMs;
+  const deadline=Date.now()+ANSWER_TIMING.overallMs;
+  const authorize=async()=>{
+    if(!options.authorize)return;
+    if(stop())throw new Error('authorization_stopped');
+    let timer:ReturnType<typeof setTimeout>|undefined,abort:(()=>void)|undefined;
+    try{await Promise.race([Promise.resolve().then(options.authorize),new Promise<never>((_,reject)=>{
+      abort=()=>reject(new Error('authorization_stopped'));
+      timer=setTimeout(abort,Math.max(0,Math.min(10_000,deadline-Date.now(),r.offer.expiresAtMs-Date.now())));
+      signal.addEventListener('abort',abort,{once:true});if(signal.aborted)abort();
+    })]);}finally{if(timer)clearTimeout(timer);if(abort)signal.removeEventListener('abort',abort);}
+  };
   try{
     const o=validateAnswerOffer(r.offer);if(stop())throw new Error('stopped');
     const current=()=>profile(conn,o)?.configurationFingerprint===o.configurationFingerprint;
-    if(!current())throw new Error('profile_changed');
+    await authorize();
+    if(stop()||!current())throw new Error('profile_changed');
     await record(r,'preflight');
     const probe=await probeBridgeRoutingProfile(conn,{principalId:o.principalId,aiUserId:BigInt(o.aiUserId),profileId:o.profileId,approved:true,timeoutMs:ANSWER_TIMING.preflightMs,signal});
     if(probe.status!=='observed'||stop()||!current())throw new Error('preflight_unavailable');
@@ -95,6 +118,7 @@ export async function runConfirmedAnswer(conn:PreflightConnection,r:AnswerReserv
       cli_version:o.cliVersion,expires_at_ms:o.expiresAtMs,text:o.text});
     const db=conn.db as any,results=db.bridge_command_result??db.bridgeCommandResult;
     if(typeof results?.iter!=='function'||typeof conn.reducers?.enqueueBridgeInference!=='function')throw new Error('transport_unavailable');
+    await authorize();
     await record(r,'launching');if(stop()||!current())throw new Error('stopped');
     const started=Date.now();launched=true; // Must precede any potentially accepted enqueue.
     const work=async():Promise<AnswerResult>=>{
@@ -116,6 +140,7 @@ export async function runConfirmedAnswer(conn:PreflightConnection,r:AnswerReserv
           if(row.rejectionReason||row.exitCode!==0||envelope.ok!==true){await record(r,'failed',commandId);return {status:'failed',reason:'device_refused_or_failed',commandId};}
           if(e.provider!=='claude-code'||e.auth!=='subscription_login'||e.extra_usage!=='operator_attested_disabled'||e.tools!=='disabled'
             ||envelope.tool_calls!=null||typeof e.answer!=='string'||!e.answer||Buffer.byteLength(e.answer)>32_768)throw new Error('invalid_answer');
+          await authorize();
           if(stop()||!current())throw new Error('scope_changed');
           await record(r,'completed',commandId);return {status:'completed',commandId,answer:e.answer,profileId:o.profileId};
         }
