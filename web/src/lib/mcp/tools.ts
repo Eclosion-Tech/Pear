@@ -58,6 +58,7 @@ import {
 } from "./conversation-history";
 import { encodeOption, encodeU64 } from "./encode";
 import { reducerErrorMessage } from "./errors";
+import { answerTools } from './answers';
 
 // ── Page tools ────────────────────────────────────────────────────────────────
 
@@ -1264,6 +1265,7 @@ const readConversationTool: McpToolEntry = {
 
 export function buildToolRegistry(): McpToolEntry[] {
   return [
+    ...answerTools(),
     requestHumanInputTool,
     rememberTool,
     listMemoryTool,

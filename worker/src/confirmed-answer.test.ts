@@ -4,7 +4,7 @@ const test=typeof process.getuid==='function'?platformTest:platformTest.skip;
 import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,readFile,rm,chmod} from 'node:fs/promises';
 import {join} from 'node:path';import {tmpdir} from 'node:os';
-import {createAnswerOffer,validateAnswerOffer,answerOfferFingerprint,reserveAnswerApproval,runConfirmedAnswer,ANSWER_TIMING} from './confirmed-answer.js';
+import {createAnswerOffer,createDirectAnswerOffer,validateAnswerOffer,answerOfferFingerprint,reserveAnswerApproval,runConfirmedAnswer,ANSWER_TIMING} from './confirmed-answer.js';
 function fixture(change:(e:any)=>void=()=>{}){
   const principalId='a'.repeat(64),identity={toHexString:()=>principalId},rows:any[]=[],payloads:any[]=[];
   let granted=true,connected=true,version='mock';
@@ -89,4 +89,30 @@ test('cancelled hanging inference enqueue is unknown, consumes approval and cann
     assert.equal(states.at(-1),'unknown');assert.equal(states.includes('submitted'),false);assert.equal(f.payloads.length,2);
     await assert.rejects(reserveAnswerApproval(a.path));
   }finally{await a.clean();}
+});
+test('direct human selection creates an offer without fabricating classifier advice',()=>{
+ const f=fixture();const offer=createDirectAnswerOffer(f.conn,{workspace:'test',principalId:f.offer.principalId,aiUserId:1n,profileId:'bridge_2_claude-code',text:'Direct choice.'});
+ assert.equal(f.payloads.length,0);assert.equal(offer.text,'Direct choice.');assert.notEqual(offer.requestFingerprint,f.offer.requestFingerprint);
+ assert.throws(()=>createDirectAnswerOffer(f.conn,{workspace:'test',principalId:f.offer.principalId,aiUserId:1n,profileId:'bridge_2_codex',text:'No switch.'}));
+});
+for(const boundary of [1,2,3])test(`fresh host authorization denial at boundary ${boundary} never retries`,async()=>{
+ const f=fixture(),a=await approval(f.offer);let checks=0;
+ try{const r=await reserveAnswerApproval(a.path);const result=await runConfirmedAnswer(f.conn,r,new AbortController().signal,{authorize:async()=>{if(++checks===boundary)throw new Error('REVOKED_SECRET');}});
+  assert.equal(result.status,boundary===3?'unknown':'refused');assert.equal(f.payloads.length,boundary===1?0:boundary===2?1:2);
+  assert.equal(JSON.stringify(result).includes('SECRET'),false);await assert.rejects(reserveAnswerApproval(a.path));
+ }finally{await a.clean();}
+});
+test('authorization that resolves after abort cannot overwrite unknown with completed',async()=>{
+ const f=fixture(),a=await approval(f.offer),controller=new AbortController();let checks=0,release:()=>void=()=>{};
+ try{const r=await reserveAnswerApproval(a.path);const pending=runConfirmedAnswer(f.conn,r,controller.signal,{authorize:async()=>{if(++checks===3){setTimeout(()=>controller.abort(),5);await new Promise<void>(resolve=>{release=resolve;});}}});
+  assert.equal((await pending).status,'unknown');release();await new Promise(resolve=>setTimeout(resolve,20));
+  const lines=(await readFile(r.journalPath,'utf8')).trim().split('\n').map(line=>JSON.parse(line).state);assert.equal(lines.at(-1),'unknown');assert.equal(lines.includes('completed'),false);
+ }finally{await a.clean();}
+});
+for(const boundary of [1,2])test(`hanging authorization at boundary ${boundary} aborts before inference, with no late continuation`,async()=>{
+ const f=fixture(),a=await approval(f.offer),controller=new AbortController();let checks=0,release:()=>void=()=>{};
+ try{const r=await reserveAnswerApproval(a.path);const result=await runConfirmedAnswer(f.conn,r,controller.signal,{authorize:async()=>{if(++checks===boundary){setTimeout(()=>controller.abort(),5);await new Promise<void>(resolve=>{release=resolve;});}}});
+  assert.equal(result.status,'refused');assert.equal(f.payloads.length,boundary-1);release();await new Promise(resolve=>setTimeout(resolve,15));assert.equal(f.payloads.length,boundary-1);
+  await assert.rejects(reserveAnswerApproval(a.path));
+ }finally{await a.clean();}
 });
