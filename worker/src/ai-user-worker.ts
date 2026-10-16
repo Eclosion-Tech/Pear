@@ -197,7 +197,7 @@ export class AiUserWorker {
           this.scheduleReconnect();
         }
       })
-      .onConnectError((_ctx: EventContext, err: Error) => {
+      .onConnectError((_ctx, err) => {
         console.error(
           `${this.logTag} connection error:`,
           err?.message ?? err,

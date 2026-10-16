@@ -158,7 +158,7 @@ async function main(): Promise<void> {
           })();
         });
       })
-      .onConnectError((_ctx: EventContext, err: Error) => {
+      .onConnectError((_ctx, err) => {
         clearTimeout(timeout);
         reject(new Error(`Connection failed: ${err?.message ?? err}`));
       })

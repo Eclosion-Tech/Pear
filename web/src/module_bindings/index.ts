@@ -43,8 +43,11 @@ import AddTasksToJobReducer from "./add_tasks_to_job_reducer";
 import AnswerHumanInputReducer from "./answer_human_input_reducer";
 import AppendBridgeCommandChunkReducer from "./append_bridge_command_chunk_reducer";
 import AppendPageDocReducer from "./append_page_doc_reducer";
+import AuthorizeMailTriageReducer from "./authorize_mail_triage_reducer";
 import AwaitBridgeCommandConfirmationReducer from "./await_bridge_command_confirmation_reducer";
 import CancelExtensionInstallReducer from "./cancel_extension_install_reducer";
+import CheckpointMailSyncReducer from "./checkpoint_mail_sync_reducer";
+import ClaimMailSyncReducer from "./claim_mail_sync_reducer";
 import ClaimNotionImportJobReducer from "./claim_notion_import_job_reducer";
 import ClaimTaskReducer from "./claim_task_reducer";
 import ClearBlockAccessRuleReducer from "./clear_block_access_rule_reducer";
@@ -72,6 +75,7 @@ import CreateDatabaseRowReducer from "./create_database_row_reducer";
 import CreateDatabaseSchemaReducer from "./create_database_schema_reducer";
 import CreateJobReducer from "./create_job_reducer";
 import CreateLocalUserReducer from "./create_local_user_reducer";
+import CreateMailConnectionReducer from "./create_mail_connection_reducer";
 import CreateMemoryConsolidationRoutineReducer from "./create_memory_consolidation_routine_reducer";
 import CreateNotionImportJobReducer from "./create_notion_import_job_reducer";
 import CreatePageReducer from "./create_page_reducer";
@@ -88,6 +92,7 @@ import DeleteAutomationActionReducer from "./delete_automation_action_reducer";
 import DeleteComponentReducer from "./delete_component_reducer";
 import DeleteDatabaseRowReducer from "./delete_database_row_reducer";
 import DeleteHarnessTemplateReducer from "./delete_harness_template_reducer";
+import DeleteMailConnectionReducer from "./delete_mail_connection_reducer";
 import DeletePageReducer from "./delete_page_reducer";
 import DeletePageSubtreeReducer from "./delete_page_subtree_reducer";
 import DeletePropertyReducer from "./delete_property_reducer";
@@ -106,11 +111,13 @@ import FailNotionImportJobReducer from "./fail_notion_import_job_reducer";
 import FailTaskReducer from "./fail_task_reducer";
 import FindOrCreateAiDmReducer from "./find_or_create_ai_dm_reducer";
 import FindOrCreateDmReducer from "./find_or_create_dm_reducer";
+import FinishMailSyncReducer from "./finish_mail_sync_reducer";
 import GrantAutoApplyReducer from "./grant_auto_apply_reducer";
 import GrantBridgeDeviceReducer from "./grant_bridge_device_reducer";
 import GrantExtensionPermissionReducer from "./grant_extension_permission_reducer";
 import HardenLocalPasswordsReducer from "./harden_local_passwords_reducer";
 import HeartbeatAgentReducer from "./heartbeat_agent_reducer";
+import ImportMailMessageReducer from "./import_mail_message_reducer";
 import ImportNotionReducer from "./import_notion_reducer";
 import ImportPearSnapshotV1Reducer from "./import_pear_snapshot_v_1_reducer";
 import ImportV2AbortReducer from "./import_v_2_abort_reducer";
@@ -138,6 +145,7 @@ import ProcessPendingAutomationEventsReducer from "./process_pending_automation_
 import PromoteToInstructionReducer from "./promote_to_instruction_reducer";
 import ProvisionAiUserMemoryReducer from "./provision_ai_user_memory_reducer";
 import PublishExtensionReducer from "./publish_extension_reducer";
+import PublishMailEncryptionKeyReducer from "./publish_mail_encryption_key_reducer";
 import PurgePageReducer from "./purge_page_reducer";
 import RecordAiEvaluationReducer from "./record_ai_evaluation_reducer";
 import RecordBridgeApprovalRequestReducer from "./record_bridge_approval_request_reducer";
@@ -154,6 +162,7 @@ import RemoveConversationParticipantReducer from "./remove_conversation_particip
 import RenameBridgeDeviceReducer from "./rename_bridge_device_reducer";
 import RenamePropertyReducer from "./rename_property_reducer";
 import RenameViewReducer from "./rename_view_reducer";
+import RenewMailSyncReducer from "./renew_mail_sync_reducer";
 import ReopenConversationReducer from "./reopen_conversation_reducer";
 import ReorderPropertyReducer from "./reorder_property_reducer";
 import ReplacePageDocReducer from "./replace_page_doc_reducer";
@@ -204,6 +213,7 @@ import SetConversationModelReducer from "./set_conversation_model_reducer";
 import SetConversationVisibilityReducer from "./set_conversation_visibility_reducer";
 import SetDefaultViewReducer from "./set_default_view_reducer";
 import SetExtensionEnabledReducer from "./set_extension_enabled_reducer";
+import SetMailConnectionEnabledReducer from "./set_mail_connection_enabled_reducer";
 import SetMcpServerApiKeyReducer from "./set_mcp_server_api_key_reducer";
 import SetMessageComponentTreeReducer from "./set_message_component_tree_reducer";
 import SetMessageFeedbackReducer from "./set_message_feedback_reducer";
@@ -235,6 +245,7 @@ import UpdateComponentTypeReducer from "./update_component_type_reducer";
 import UpdateDatabaseRowReducer from "./update_database_row_reducer";
 import UpdateDatabaseSchemaConfigReducer from "./update_database_schema_config_reducer";
 import UpdateExtensionReducer from "./update_extension_reducer";
+import UpdateMailConnectionPasswordReducer from "./update_mail_connection_password_reducer";
 import UpdateMessageReducer from "./update_message_reducer";
 import UpdateNotionImportJobReducer from "./update_notion_import_job_reducer";
 import UpdatePageBlocksReducer from "./update_page_blocks_reducer";
@@ -296,6 +307,9 @@ import HumanInputRequestRow from "./human_input_request_table";
 import IdCounterRow from "./id_counter_table";
 import InstalledExtensionRow from "./installed_extension_table";
 import LoginResultRow from "./login_result_table";
+import MailConnectionRow from "./mail_connection_table";
+import MailEncryptionKeyRow from "./mail_encryption_key_table";
+import MailImportReceiptRow from "./mail_import_receipt_table";
 import MessageFeedbackRow from "./message_feedback_table";
 import MigrationStateRow from "./migration_state_table";
 import ModuleInstallMetaRow from "./module_install_meta_table";
@@ -968,6 +982,42 @@ const tablesSchema = __schema({
       { name: 'login_result_identity_key', constraint: 'unique', columns: ['identity'] },
     ],
   }, LoginResultRow),
+  mail_connection: __table({
+    name: 'mail_connection',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'mail_connection_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, MailConnectionRow),
+  mail_encryption_key: __table({
+    name: 'mail_encryption_key',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'mail_encryption_key_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, MailEncryptionKeyRow),
+  mail_import_receipt: __table({
+    name: 'mail_import_receipt',
+    indexes: [
+      { name: 'id', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { name: 'root_page_id', algorithm: 'btree', columns: [
+        'rootPageId',
+      ] },
+    ],
+    constraints: [
+      { name: 'mail_import_receipt_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, MailImportReceiptRow),
   message_feedback: __table({
     name: 'message_feedback',
     indexes: [
@@ -1409,8 +1459,11 @@ const reducersSchema = __reducers(
   __reducerSchema("answer_human_input", AnswerHumanInputReducer),
   __reducerSchema("append_bridge_command_chunk", AppendBridgeCommandChunkReducer),
   __reducerSchema("append_page_doc", AppendPageDocReducer),
+  __reducerSchema("authorize_mail_triage", AuthorizeMailTriageReducer),
   __reducerSchema("await_bridge_command_confirmation", AwaitBridgeCommandConfirmationReducer),
   __reducerSchema("cancel_extension_install", CancelExtensionInstallReducer),
+  __reducerSchema("checkpoint_mail_sync", CheckpointMailSyncReducer),
+  __reducerSchema("claim_mail_sync", ClaimMailSyncReducer),
   __reducerSchema("claim_notion_import_job", ClaimNotionImportJobReducer),
   __reducerSchema("claim_task", ClaimTaskReducer),
   __reducerSchema("clear_block_access_rule", ClearBlockAccessRuleReducer),
@@ -1438,6 +1491,7 @@ const reducersSchema = __reducers(
   __reducerSchema("create_database_schema", CreateDatabaseSchemaReducer),
   __reducerSchema("create_job", CreateJobReducer),
   __reducerSchema("create_local_user", CreateLocalUserReducer),
+  __reducerSchema("create_mail_connection", CreateMailConnectionReducer),
   __reducerSchema("create_memory_consolidation_routine", CreateMemoryConsolidationRoutineReducer),
   __reducerSchema("create_notion_import_job", CreateNotionImportJobReducer),
   __reducerSchema("create_page", CreatePageReducer),
@@ -1454,6 +1508,7 @@ const reducersSchema = __reducers(
   __reducerSchema("delete_component", DeleteComponentReducer),
   __reducerSchema("delete_database_row", DeleteDatabaseRowReducer),
   __reducerSchema("delete_harness_template", DeleteHarnessTemplateReducer),
+  __reducerSchema("delete_mail_connection", DeleteMailConnectionReducer),
   __reducerSchema("delete_page", DeletePageReducer),
   __reducerSchema("delete_page_subtree", DeletePageSubtreeReducer),
   __reducerSchema("delete_property", DeletePropertyReducer),
@@ -1472,11 +1527,13 @@ const reducersSchema = __reducers(
   __reducerSchema("fail_task", FailTaskReducer),
   __reducerSchema("find_or_create_ai_dm", FindOrCreateAiDmReducer),
   __reducerSchema("find_or_create_dm", FindOrCreateDmReducer),
+  __reducerSchema("finish_mail_sync", FinishMailSyncReducer),
   __reducerSchema("grant_auto_apply", GrantAutoApplyReducer),
   __reducerSchema("grant_bridge_device", GrantBridgeDeviceReducer),
   __reducerSchema("grant_extension_permission", GrantExtensionPermissionReducer),
   __reducerSchema("harden_local_passwords", HardenLocalPasswordsReducer),
   __reducerSchema("heartbeat_agent", HeartbeatAgentReducer),
+  __reducerSchema("import_mail_message", ImportMailMessageReducer),
   __reducerSchema("import_notion", ImportNotionReducer),
   __reducerSchema("import_pear_snapshot_v_1", ImportPearSnapshotV1Reducer),
   __reducerSchema("import_v_2_abort", ImportV2AbortReducer),
@@ -1504,6 +1561,7 @@ const reducersSchema = __reducers(
   __reducerSchema("promote_to_instruction", PromoteToInstructionReducer),
   __reducerSchema("provision_ai_user_memory", ProvisionAiUserMemoryReducer),
   __reducerSchema("publish_extension", PublishExtensionReducer),
+  __reducerSchema("publish_mail_encryption_key", PublishMailEncryptionKeyReducer),
   __reducerSchema("purge_page", PurgePageReducer),
   __reducerSchema("record_ai_evaluation", RecordAiEvaluationReducer),
   __reducerSchema("record_bridge_approval_request", RecordBridgeApprovalRequestReducer),
@@ -1520,6 +1578,7 @@ const reducersSchema = __reducers(
   __reducerSchema("rename_bridge_device", RenameBridgeDeviceReducer),
   __reducerSchema("rename_property", RenamePropertyReducer),
   __reducerSchema("rename_view", RenameViewReducer),
+  __reducerSchema("renew_mail_sync", RenewMailSyncReducer),
   __reducerSchema("reopen_conversation", ReopenConversationReducer),
   __reducerSchema("reorder_property", ReorderPropertyReducer),
   __reducerSchema("replace_page_doc", ReplacePageDocReducer),
@@ -1570,6 +1629,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_conversation_visibility", SetConversationVisibilityReducer),
   __reducerSchema("set_default_view", SetDefaultViewReducer),
   __reducerSchema("set_extension_enabled", SetExtensionEnabledReducer),
+  __reducerSchema("set_mail_connection_enabled", SetMailConnectionEnabledReducer),
   __reducerSchema("set_mcp_server_api_key", SetMcpServerApiKeyReducer),
   __reducerSchema("set_message_component_tree", SetMessageComponentTreeReducer),
   __reducerSchema("set_message_feedback", SetMessageFeedbackReducer),
@@ -1601,6 +1661,7 @@ const reducersSchema = __reducers(
   __reducerSchema("update_database_row", UpdateDatabaseRowReducer),
   __reducerSchema("update_database_schema_config", UpdateDatabaseSchemaConfigReducer),
   __reducerSchema("update_extension", UpdateExtensionReducer),
+  __reducerSchema("update_mail_connection_password", UpdateMailConnectionPasswordReducer),
   __reducerSchema("update_message", UpdateMessageReducer),
   __reducerSchema("update_notion_import_job", UpdateNotionImportJobReducer),
   __reducerSchema("update_page_blocks", UpdatePageBlocksReducer),

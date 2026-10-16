@@ -429,16 +429,10 @@ function connectOnce(uri: string, dbName: string, token: string): Promise<DbConn
 function subscribeAllApplied(conn: DbConnection, dbName: string): Promise<void> {
   return withTimeout(
     new Promise<void>((resolve, reject) => {
-      (conn as unknown as {
-        subscriptionBuilder(): {
-          onApplied(cb: () => void): unknown;
-          onError(cb: (_ctx: unknown, err: unknown) => void): unknown;
-          subscribe(queries: string[]): unknown;
-        };
-      })
+      conn
         .subscriptionBuilder()
         .onApplied(() => resolve())
-        .onError((_ctx: unknown, err: unknown) =>
+        .onError(({ event: err }) =>
           reject(
             new Error(
               `snapshot subscription error on "${dbName}": ${err instanceof Error ? err.message : String(err)}`,

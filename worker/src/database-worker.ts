@@ -31,6 +31,7 @@ import { handleAiPrimitiveTask } from "./ai-primitive-task.js";
 import { StructuralSensorsScheduler } from "./structural-sensors.js";
 import { subscribeToAvailableTables } from "./subscriptions.js";
 import { NotionImportJobRunner } from "./notion/import-job-runner.js";
+import { MailMonitorRunner } from "./mail/runner.js";
 import type { ConnLike, ToolCallContext } from "./tools.js";
 import { probeMcpExtensions } from "./mcp-tool-executor.js";
 import { observeOrchaPlan, type OrchaAdvisoryHook } from "./orcha-routing.js";
@@ -196,6 +197,7 @@ export class DatabaseWorker {
   private readonly routingAdvisory: OrchaAdvisoryHook | undefined;
 
   private notionImportRunner: NotionImportJobRunner | null = null;
+  private mailMonitor: MailMonitorRunner | null = null;
 
   constructor(opts: DatabaseWorkerOptions) {
     this.uri = opts.uri;
@@ -278,6 +280,11 @@ export class DatabaseWorker {
   start(): void {
     if (this.stopped) return;
     this.reconnectAttempt = 0;
+    if (this.token && !this.mailMonitor) {
+      this.mailMonitor = new MailMonitorRunner({ uri: this.uri, dbName: this.dbName, token: this.token },
+        (id) => this.aiUserWorkers.get(id)?.getConnLike() ?? undefined);
+      this.mailMonitor.start();
+    }
     this.beginConnection();
   }
 
@@ -327,7 +334,7 @@ export class DatabaseWorker {
           this.scheduleReconnect();
         }
       })
-      .onConnectError((_ctx: EventContext, err: Error) => {
+      .onConnectError((_ctx, err) => {
         console.error(`[worker:${this.dbName}] Connection error:`, err?.message ?? err);
         if (!this.stopped) {
           this.scheduleReconnect();
@@ -338,6 +345,8 @@ export class DatabaseWorker {
 
   async stop(): Promise<void> {
     this.stopped = true;
+    this.mailMonitor?.stop();
+    this.mailMonitor = null;
     this.clearReconnectTimer();
     this.stopHeartbeat();
     this.clearMcpProbeTimer();

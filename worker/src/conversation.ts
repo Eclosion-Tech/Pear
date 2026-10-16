@@ -83,6 +83,7 @@ type ConversationRow = {
   updatedAt: { microsSinceUnixEpoch: bigint };
   blockAnchor: bigint | undefined;
   modelOverride: string | undefined;
+  effortOverride?: string;
 };
 
 type ConversationParticipantRow = {
@@ -787,7 +788,7 @@ async function handleConversationMessage(
       cacheReadInputTokens: undefined,
     });
 
-    aiMsgId = await findAiMessageId(conn, conv.id, selfHex, preMaxId);
+    aiMsgId = (await findAiMessageId(conn, conv.id, selfHex, preMaxId)) ?? undefined;
     if (!aiMsgId) {
       console.error(`${logTag} could not find placeholder AI message`);
       return;

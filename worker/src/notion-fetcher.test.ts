@@ -125,8 +125,12 @@ test("fetcher pages search results, completes 25-item properties, paginates comm
 
   // Property completion: p2's relation had 25 inline refs + has_more; the
   // property-item endpoint pages to the full 60.
-  const p2 = result.pages.get("p2") as { properties: { Links: { relation: unknown[] } } };
-  assert.equal(p2.properties.Links.relation.length, 60, "truncated relation completed");
+  const p2 = result.pages.get("p2");
+  assert.ok(p2 && "properties" in p2);
+  const links = p2.properties.Links;
+  assert.ok(links && "relation" in links);
+  assert.ok(Array.isArray(links.relation));
+  assert.equal(links.relation.length, 60, "truncated relation completed");
   assert.ok((calls["prop-item"] ?? 0) >= 2, "property-item endpoint paginated");
 
   // Comments pagination: all 150 comments survive.

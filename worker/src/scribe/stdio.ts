@@ -113,7 +113,7 @@ async function main(): Promise<void> {
   await new Promise<void>((resolve) => rl.once("close", resolve));
   // stdin EOF — session ended. Make sure a late init still settles, then
   // checkpoint whatever we have.
-  if (opening) await opening.catch(() => undefined);
+  await Promise.resolve(opening).catch(() => undefined);
   if (scribe !== null) await (scribe as TranscriptScribe).close();
   process.exit(0);
 }
