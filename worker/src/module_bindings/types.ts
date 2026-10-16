@@ -1077,6 +1077,60 @@ export const LoginResult = __t.object("LoginResult", {
 });
 export type LoginResult = __Infer<typeof LoginResult>;
 
+export const MailConnection = __t.object("MailConnection", {
+  id: __t.u64(),
+  owner: __t.identity(),
+  label: __t.string(),
+  host: __t.string(),
+  port: __t.u16(),
+  username: __t.string(),
+  inboxFolder: __t.string(),
+  sentFolder: __t.option(__t.string()),
+  aiUserId: __t.option(__t.u64()),
+  rootPageId: __t.u64(),
+  backfill: __t.u32(),
+  enabled: __t.bool(),
+  status: __t.string(),
+  lastSyncAt: __t.option(__t.timestamp()),
+  importedCount: __t.u64(),
+  lease: __t.string(),
+  leaseUntil: __t.option(__t.timestamp()),
+});
+export type MailConnection = __Infer<typeof MailConnection>;
+
+export const MailConnectionSecret = __t.object("MailConnectionSecret", {
+  connectionId: __t.u64(),
+  encryptedPassword: __t.string(),
+});
+export type MailConnectionSecret = __Infer<typeof MailConnectionSecret>;
+
+export const MailEncryptionKey = __t.object("MailEncryptionKey", {
+  id: __t.u8(),
+  publicKeyJwk: __t.string(),
+  keyId: __t.string(),
+});
+export type MailEncryptionKey = __Infer<typeof MailEncryptionKey>;
+
+export const MailImportReceipt = __t.object("MailImportReceipt", {
+  id: __t.string(),
+  importedBy: __t.identity(),
+  rootPageId: __t.u64(),
+  eventKey: __t.string(),
+  pageId: __t.u64(),
+  sourceJson: __t.string(),
+  importedAt: __t.timestamp(),
+});
+export type MailImportReceipt = __Infer<typeof MailImportReceipt>;
+
+export const MailSyncCursor = __t.object("MailSyncCursor", {
+  id: __t.string(),
+  connectionId: __t.u64(),
+  folder: __t.string(),
+  uidValidity: __t.string(),
+  lastUid: __t.u32(),
+});
+export type MailSyncCursor = __Infer<typeof MailSyncCursor>;
+
 export const MessageFeedback = __t.object("MessageFeedback", {
   id: __t.u64(),
   messageId: __t.u64(),

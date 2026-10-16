@@ -61,6 +61,9 @@
     "workspace_setting"
   ],
   "exclude": {
+    "mail_encryption_key": "Worker-managed public encryption key; republished by the configured mail worker after restore.",
+    "mail_connection": "Mailbox configuration and live sync leases. Reconnect mailboxes after a workspace snapshot restore; imported mail pages are ordinary exported pages.",
+    "mail_import_receipt": "Import deduplication state tied to the original mailbox connection and destination IDs; reconnect explicitly after snapshot restore.",
     "ai_extension_runtime": "Caller-scoped runtime view containing MCP endpoints and credentials. It is derived from installed extension configuration and must never be exported.",
     "ai_user_config": "Contains plaintext provider API keys and worker tokens. Never exported. Import restores stub configs from ai_user_profile rows (same behavior as v1); operators reconfigure keys post-restore.",
     "automation_primitive": "Seeded catalog of available primitives keyed by name (seed_automation_primitives_inner); module-defined, not user data.",

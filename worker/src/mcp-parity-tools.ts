@@ -200,6 +200,7 @@ function toChatSchema(schema: unknown): Anthropic.Messages.Tool["input_schema"] 
   };
   return {
     ...s,
+    type: "object",
     properties: {
       ...s.properties,
       conversation_id: {

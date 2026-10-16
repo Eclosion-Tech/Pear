@@ -79,6 +79,8 @@ All AI features are optional — Pear runs fully without the worker or any model
 
 ### Import & API
 
+- **IMAP mail monitoring** — Connect a TLS mailbox in workspace settings; import Inbox and Sent into a private mail page with optional AI priority and commitment suggestions. Requires worker key setup; see [`docs/MAIL_MONITOR.md`](./docs/MAIL_MONITOR.md).
+
 - **Custom API endpoints** — Expose any database as a versioned REST API (`/api/e/{slug}`) with field-level mappings, per-property type coercion, optional API-key auth, and an auto-generated OpenAPI 3.1 spec. See [`docs/API_ENDPOINTS.md`](./docs/API_ENDPOINTS.md).
 - **Notion import** — The `import_notion` reducer rebuilds a Notion workspace (pages, databases, properties, content) into an empty workspace; the bundled settings panel drives it through an external OAuth + transform service.
 

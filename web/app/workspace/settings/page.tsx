@@ -12,6 +12,7 @@ import { NotionImportPanel } from "@/src/components/NotionImportPanel";
 import { StorageUsagePanel } from "@/src/components/StorageUsagePanel";
 import { AutomationsSettings } from "@/src/components/AutomationsSettings";
 import { WorkspaceHealthSettings } from "@/src/components/WorkspaceHealthSettings";
+import { MailSettings } from "@/src/components/MailSettings";
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -62,6 +63,8 @@ export default function SettingsPage() {
         <MembersSettings />
 
         <AiUsersSettings />
+
+        <MailSettings />
 
         <WorkspaceHealthSettings />
 

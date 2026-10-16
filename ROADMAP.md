@@ -192,6 +192,8 @@
 
 *Goal: Let users connect Pear's data model to the outside world and to AI without writing code.*
 
+- 🔨 [IMAP mail monitor](./docs/MAIL_MONITOR.md) — implemented connection settings per workspace, Inbox/Sent ingestion, encrypted app passwords, durable checkpoints, and optional per-message AI suggestions. Deployment and real-mailbox verification pending. Thread-level follow-ups, digests, and mail-triggered actions remain planned.
+
 - ✅ Automation substrate (v0) — typed trigger/action graphs in the module (`PageCreated`, `PageUpdated`, `PropertyChanged`, `Scheduled`, …), event queue, scheduled routines (interval / one-shot / cron), and **dry-run execution** so rules can be drafted, validated, and simulated safely
 - 🔨 Live action execution — side effects stay behind the queue boundary in v0; live mode exists as a flag but actions are not yet executed for real
 - 📋 Action types (live):

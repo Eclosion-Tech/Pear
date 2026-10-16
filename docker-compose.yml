@@ -128,6 +128,9 @@ services:
       SPACETIMEDB_URI: ws://spacetimedb:3000
       SPACETIMEDB_DB_NAME: ${SPACETIMEDB_DB_NAME:-pear-dev}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      SPACETIMEDB_TOKEN: ${SPACETIMEDB_TOKEN:-}
+      PEAR_MAIL_PRIVATE_KEY_B64: ${PEAR_MAIL_PRIVATE_KEY_B64:-}
+      PEAR_MAIL_ALLOW_PRIVATE_HOSTS: ${PEAR_MAIL_ALLOW_PRIVATE_HOSTS:-false}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-4-5-20251001}
       ORCHA_AGENT_ID: ${ORCHA_AGENT_ID:-pear-llm-worker}
       # Same storage as the web service — the worker fetches image attachments

@@ -216,7 +216,7 @@ test("tool_bash reads its result via the registered HTTP /sql client (subscripti
       cmdReads += 1;
       if (cmdReads === 1) return [];
       return [
-        { id: "7", deviceId: "1", command: "echo hi", conversationId: "0", status: { tag: "Completed" } },
+        { id: "7", deviceId: "1", command: "echo hi", conversationId: "0", nonce: null, status: { tag: "Completed" } },
       ];
     },
     resultForCommand: async (commandId) => {
@@ -262,7 +262,7 @@ test("tool_bash via /sql does not surface a prior identical command's result", a
   // the loop must NOT fall back to the stale id-100 success.
   const client: BridgeSqlClient = {
     commandsForDevice: async () => [
-      { id: "100", deviceId: "1", command: "echo hi", conversationId: "0", status: { tag: "Completed" } },
+      { id: "100", deviceId: "1", command: "echo hi", conversationId: "0", nonce: null, status: { tag: "Completed" } },
     ],
     resultForCommand: async (commandId) =>
       String(commandId) === "100"

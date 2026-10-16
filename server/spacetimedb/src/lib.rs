@@ -22,6 +22,7 @@ mod harness;
 mod human_input;
 mod id_counters;
 mod import;
+mod mail;
 mod migrations;
 mod module_install;
 mod orcha;
