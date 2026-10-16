@@ -1,7 +1,8 @@
 # Explicitly confirmed subscription answer (manual, opt-in)
 
 This is a small confirmation-and-run library, not an automatic route or scheduler.
-No existing worker, MCP tool, job loop or planner imports it. Advice is not consent.
+No existing worker startup, job loop or planner launches it. Optional host-backed
+MCP answer tools are described below; they do not add autonomous dispatch. Advice is not consent.
 The initial supported execution is one Claude Code text answer: no tools, repository
 binding, agent session, delegation, model switch or fallback. Codex, ACP/harness,
 follow-up affinity and remote cancellation are deliberately out of scope.
@@ -100,3 +101,34 @@ Extra usage is **operator-attested disabled**. Native readiness is
 **auth_preflight_only**, not remaining quota, invoice verification, model access,
 repository permission or ACP readiness. No API or model call is made by tests;
 fixtures use local fake CLIs, receipts and caches.
+
+## Optional scoped human frontend
+
+`createDirectAnswerOffer` supports an explicitly human-selected, currently eligible
+Claude profile without classifier advice. Its request/context hashes are tagged
+`human-explicit-v1`; it does not manufacture a successful advisory. The original
+advisory-required preparation API remains supported. Both produce the same bounded
+immutable offer and require a separate explicit approval before native preflight.
+
+`runConfirmedAnswer` accepts an optional async host authorization hook. It is
+bounded by the existing overall deadline and runs before preflight and at dispatch
+and return boundaries. A denial or late response cannot turn unknown into completed
+or launch a second attempt. This supplements, not replaces, device grants and
+configuration/expiry checks.
+
+The portable MCP registry offers `list_answer_workers`, `prepare_answer`,
+`run_answer` and `get_answer` through an optional host-injected `McpContext.answers`
+capability. Without a host adapter it fails closed. `execution:read` covers
+listing/preparation/owned status, and `execution:answer` covers submission; defaults
+are unchanged. Hosts must authenticate the grant, bind actor/workspace server-side,
+perform fresh authorization and persist a once claim before child work. The generic
+library contains no deployment URL, host/admin credential, database configuration
+or process launcher. These tools intentionally do not join chat tool parity.
+
+`approved:true` is a trusted-client attestation, not cryptographic evidence of a
+physical human action. Keep execution-scoped credentials away from general agent
+tooling. A frontend should expose user commands, not model-callable execution tools,
+show the exact offer and expiry, reserve persistently before submission, and never
+refresh/replay an uncertain execution request. Status retrieval is read-only and
+must never resume the original operation. The host must not claim that aborting a
+client HTTP request cancels the remote CLI.

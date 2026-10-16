@@ -11,12 +11,16 @@ export const SCOPE_MEMORY = "memory";
 export const SCOPE_CONVERSATIONS_READ = "conversations:read";
 export const SCOPE_PAGES_READ = "pages:read";
 export const SCOPE_PAGES_WRITE = "pages:write";
+export const SCOPE_EXECUTION_READ = 'execution:read';
+export const SCOPE_EXECUTION_ANSWER = 'execution:answer';
 
 export const ALL_SCOPES = [
   SCOPE_MEMORY,
   SCOPE_CONVERSATIONS_READ,
   SCOPE_PAGES_READ,
   SCOPE_PAGES_WRITE,
+  SCOPE_EXECUTION_READ,
+  SCOPE_EXECUTION_ANSWER,
 ] as const;
 export type McpOauthScope = (typeof ALL_SCOPES)[number];
 
@@ -31,9 +35,13 @@ export const SCOPE_DESCRIPTIONS: Record<McpOauthScope, string> = {
     "Conversation history: search and read chats where this AI user is an active participant",
   [SCOPE_PAGES_READ]: "Read workspace pages and search their titles",
   [SCOPE_PAGES_WRITE]: "Create, edit, move, and delete workspace pages",
+  [SCOPE_EXECUTION_READ]: 'List eligible answer workers, prepare unapproved offers and read this connection’s results; no inference',
+  [SCOPE_EXECUTION_ANSWER]: 'Consume explicitly confirmed offers for one bounded tool-less Claude answer; device grants still required',
 };
 
 const SCOPE_TOOLS: Record<McpOauthScope, readonly string[]> = {
+  [SCOPE_EXECUTION_READ]: ['list_answer_workers', 'prepare_answer', 'get_answer'],
+  [SCOPE_EXECUTION_ANSWER]: ['run_answer'],
   [SCOPE_MEMORY]: ["remember", "list_memory", "read_memory", "search_memory"],
   [SCOPE_CONVERSATIONS_READ]: ["search_conversations", "read_conversation"],
   [SCOPE_PAGES_READ]: [

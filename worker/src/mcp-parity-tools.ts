@@ -7,6 +7,10 @@
  * AI, not an external client. Page authoring, theming and thread management all
  * shipped on the MCP registry first, which left Kira unable to do any of it.
  *
+ * Explicit answer operations are intentionally NOT workspace-authoring tools:
+ * they require a separate host-backed OAuth capability and a human frontend.
+ * Never add list_answer_workers/prepare_answer/run_answer/get_answer to parity.
+ *
  * ## One implementation, two surfaces
  *
  * These are NOT reimplemented against `conn.reducers`. The worker registers an
