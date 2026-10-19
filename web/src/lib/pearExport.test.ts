@@ -65,7 +65,7 @@ describe("snapshot_tables_v2.json drift", () => {
     const queries = snapshotExportQueriesV2();
     expect(queries).toEqual(tablePolicy.include.map(name => `SELECT * FROM ${name}`));
     expect(queries).toContain("SELECT * FROM page");
-    for (const name of ["my_protected_mail", "my_protected_mail_collections", "ai_user_config", "ai_extension_runtime"]) {
+    for (const name of ["my_protected_mail", "my_protected_mail_collections", "my_protected_mail_instructions", "ai_user_config", "ai_extension_runtime"]) {
       expect(queries).not.toContain(`SELECT * FROM ${name}`);
     }
   });

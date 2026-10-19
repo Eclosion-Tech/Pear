@@ -79,7 +79,8 @@ exposure snapshot contains the preceding context membership union new sources
 and inherited snapshots. The server canonicalizes complete references and
 their ancestor closure. There is no replace/remove operation or truncation.
 A new event with a stale expected generation fails; exact replay of an old event
-never rewinds the context head. Terminal context blocking prevents reuse after uncertain input.
+never rewinds the context head. Terminal context blocking prevents reuse after
+uncertain input.
 An empty exposure record authorizes nothing and cannot support a derivation.
 
 Source identity is the complete ID/revision/digest tuple. Canonical ordering
@@ -113,6 +114,10 @@ still trusted to describe the inputs and output truthfully. All new metadata
 and derived content remain in private tables, without a new owner view, model
 reader, native/MCP tool, CRUD mapping or ordinary page projection.
 
+Exact reviewed instruction revisions and owner decisions are staged separately
+in the [S1c instruction store](PROTECTED_MAIL_INSTRUCTIONS.md). Approval does
+not override source ceilings or remove registered ancestry.
+
 ## Lifecycle and retention
 
 Creating a collection fences the existing page-writing sync path for that
@@ -138,6 +143,7 @@ same WASM. Start an in-memory SpacetimeDB 2.0.3 server bound to localhost, then:
 cd worker
 node --import tsx/esm scripts/protected-mail-e2e.ts http://127.0.0.1:3099
 node --import tsx/esm scripts/protected-mail-state-e2e.ts http://127.0.0.1:3099
+node --import tsx/esm scripts/protected-mail-instructions-e2e.ts http://127.0.0.1:3099
 ```
 
 Set `PEAR_UPGRADE_FROM_WASM` to an absolute path to the pre-S1 module to include
@@ -152,10 +158,9 @@ path to the merged S1a module. It populates private records before upgrading,
 then checks unchanged source identities and owner reads, absent automatic
 policy, policy narrowing/revocation, cumulative exposures and derivation.
 
-The Cloud conformance wrapper builds pinned pre-S1a and S1a baselines plus the
-current module in independent Cargo target directories, rejects identical
-upgrade artifacts,
-starts a disposable Docker server on a random loopback port and cleans it up.
+The Cloud conformance wrapper builds pinned pre-S1a, S1a and S1b baselines plus
+the current module in independent Cargo target directories, rejects identical
+upgrade artifacts, starts a disposable Docker server on a random loopback port and cleans it up.
 It runs in PR checks. The coordinated release also runs the live harness against
 its exact release WASM. Neither test establishes runtime admission, credential
 isolation, full backup/restore support or host egress containment.

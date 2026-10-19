@@ -76,6 +76,7 @@
     "my_extension_permissions": "Caller-scoped #[view] projection over the private extension_permission table for the Settings UI; derived per-sender at read time, nothing to export or restore.",
     "my_protected_mail_collections": "Owner-only projection over private protected mail storage; not part of ordinary workspace JSON exports or restores.",
     "my_protected_mail": "Owner-only protected mail content and source association; requires a separate protected export/restore contract, never ordinary workspace JSON.",
+    "my_protected_mail_instructions": "Owner-only exact instruction review and approval state over private protected mail records; requires separate protected backup/restore, never ordinary workspace JSON.",
     "notion_import_job": "Transient background-import queue (carries Notion token ciphertexts, blanked on completion); jobs are meaningless on a restore target and must never ride along in backups.",
     "sensor_registry": "Fully seeded at init (seed_sensor_registry_inner); findings reference sensors by string (sensor_kind, code), never by id, so re-seeded rows are equivalent.",
     "readable_pages": "Derived caller-scoped access projection. Recomputed by the module; never restore cached grants.",
