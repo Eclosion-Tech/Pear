@@ -123,16 +123,14 @@ export class McpToolExecutor {
         for (const tool of client.getTools()) {
           if (!/^[A-Za-z0-9_-]{1,64}$/.test(tool.name)) {
             console.error(
-              `[mcp] Skipping invalid tool name from "${row.name}": ${JSON.stringify(tool.name)}`,
+              `[mcp] server=${row.serverId} event=invalid_tool_name`,
             );
             continue;
           }
           if (executor.toolMap.has(tool.name)) {
             const existing = executor.toolMap.get(tool.name)!.client;
             console.error(
-              `[mcp] Tool name collision: "${tool.name}" declared by ` +
-                `server "${row.name}" conflicts with server "${existing.config.name}". ` +
-                `First-registered (${existing.config.name}) wins — "${row.name}" tool is skipped.`,
+              `[mcp] server=${row.serverId} event=tool_name_collision winner=${existing.config.serverId}`,
             );
           } else {
             executor.toolMap.set(tool.name, {
@@ -150,15 +148,15 @@ export class McpToolExecutor {
           registeredToolCount,
         );
         console.log(
-          `[mcp] Connected to "${row.name}" (${registeredToolCount} tools available)`,
+          `[mcp] server=${row.serverId} event=connected tools=${registeredToolCount}`,
         );
-      } catch (err) {
+      } catch {
         await client.disconnect().catch(() => undefined);
-        const detail = err instanceof Error ? err.message : String(err);
-        await reportHealth(conn, row.installedExtensionId, "Error", 0, detail);
+        // Handshake errors can contain endpoints, credentials, and response
+        // bodies. Persist a host-owned code rather than remote diagnostic text.
+        await reportHealth(conn, row.installedExtensionId, "Error", 0, "mcp_handshake_failed");
         console.error(
-          `[mcp] Failed to connect to server "${row.name}" at ${row.endpoint}: ` +
-            detail,
+          `[mcp] server=${row.serverId} event=mcp_handshake_failed`,
         );
       }
     }
@@ -234,7 +232,7 @@ async function reportHealth(
   installedExtensionId: bigint,
   status: "Connecting" | "Connected" | "Error",
   toolCount: number,
-  detail?: string,
+  detail?: "mcp_handshake_failed",
 ): Promise<void> {
   try {
     await conn.reducers.reportExtensionRuntimeHealth({
@@ -243,10 +241,9 @@ async function reportHealth(
       toolCount,
       detail,
     });
-  } catch (err) {
+  } catch {
     console.warn(
-      `[mcp] Failed to report ${status.toLowerCase()} health for extension ${installedExtensionId}:`,
-      err instanceof Error ? err.message : String(err),
+      `[mcp] extension=${installedExtensionId} event=health_report_failed status=${status}`,
     );
   }
 }

@@ -501,11 +501,8 @@ async function flushMessage(
         : undefined,
       cacheReadInputTokens: usage ? u32(usage.cacheReadInputTokens) : undefined,
     });
-  } catch (err) {
-    console.warn(
-      `[conversation] flush failed:`,
-      err instanceof Error ? err.message : err,
-    );
+  } catch {
+    console.warn("[conversation] message_flush_failed");
   }
 }
 
@@ -699,6 +696,9 @@ async function handleConversationMessage(
     getMcpRuntimeConn?: () => ConnLike | undefined;
   } = {},
 ): Promise<void> {
+  // Legacy caller labels can contain workspace or assistant names. Keep them
+  // out of operational diagnostics, including attachment-reader diagnostics.
+  logTag = "[conversation]";
   // Per-conversation turn lock. The dedup key intentionally OMITS the message
   // id: only one turn may run per (responder, conversation) at a time. A
   // message that arrives while a turn is in flight must NOT spawn a second
@@ -767,8 +767,7 @@ async function handleConversationMessage(
     }
 
     console.log(
-      `${logTag} responding as "${aiProfile.displayName}" in conversation ${conv.id}` +
-        (conv.pageId !== undefined ? ` (page ${conv.pageId})` : ""),
+      `${logTag} response_started conversation_id=${conv.id} ai_user_id=${aiProfile.aiUserId}`,
     );
 
     // Step 1: placeholder message (Thinking). Capture the id boundary first so
@@ -1120,7 +1119,7 @@ async function handleConversationMessage(
           recoveryRequest = answerRecoveryRequest(streamReq, providerTag);
           if (recoveryRequest) {
             recoveryAttempted = true;
-            console.warn(`${logTag} thinking-only max_tokens in conversation ${conv.id}; retrying once with reduced reasoning (model=${model}, maxTokens=${streamReq.maxTokens})`);
+            console.warn(`${logTag} reasoning_budget_exhausted conversation_id=${conv.id}; retrying once with reduced reasoning`);
             continue;
           }
         }
@@ -1161,11 +1160,7 @@ async function handleConversationMessage(
         for (const block of toolBlocks) {
           const idx = allToolCalls.findIndex((tc) => tc.id === block.id);
 
-          console.log(
-            `${logTag} tool call [${block.name}]: ${JSON.stringify(block.input).slice(0, 200)}`,
-          );
           const result = await toolExecutor.execute(block.name, block.input);
-          console.log(`${logTag} tool result [${block.name}]: ${result.slice(0, 200)}`);
           toolResultLog.push(result);
 
           const ok = toolResultWasOk(result);
@@ -1260,11 +1255,7 @@ async function handleConversationMessage(
             status: "executing",
           });
           const tcIdx = allToolCalls.length - 1;
-          console.log(
-            `${logTag} tool call [${block.name}]: ${JSON.stringify(block.input).slice(0, 200)}`,
-          );
           const result = await toolExecutor.execute(block.name, block.input);
-          console.log(`${logTag} tool result [${block.name}]: ${result.slice(0, 200)}`);
           toolResultLog.push(result);
           const ok = toolResultWasOk(result);
           allToolCalls[tcIdx] = {
@@ -1316,7 +1307,7 @@ async function handleConversationMessage(
 
     if (responseText === "(No response generated)") {
       console.warn(
-        `${logTag} no answer in conversation ${conv.id} (model=${model}, stop=${lastStopReason}, truncated=${truncated}, recovery=${recoveryAttempted}, thinking=${thinkingText.length} chars, tokens: in=${turnUsage.inputTokens} out=${turnUsage.outputTokens} cacheRead=${turnUsage.cacheReadInputTokens})`,
+        `${logTag} answer_unavailable conversation_id=${conv.id} truncated=${truncated} recovery=${recoveryAttempted} input_tokens=${turnUsage.inputTokens} output_tokens=${turnUsage.outputTokens}`,
       );
       const failure = emptyAnswerMessage(truncated);
       timeline.push({ t: "text", text: failure });
@@ -1390,8 +1381,7 @@ async function handleConversationMessage(
     );
   } catch (err) {
     console.error(
-      `${logTag} failed to respond in conversation ${msg.conversationId}:`,
-      err instanceof Error ? err.message : err,
+      `${logTag} response_failed conversation_id=${msg.conversationId}`,
     );
     if (aiMsgId !== undefined) {
       const failure = userVisibleTurnFailure(err);
@@ -1412,10 +1402,9 @@ async function handleConversationMessage(
     if (toolExecutor) {
       try {
         await toolExecutor.disconnect();
-      } catch (err) {
+      } catch {
         console.warn(
-          `${logTag} failed to disconnect MCP clients:`,
-          err instanceof Error ? err.message : String(err),
+          `${logTag} mcp_disconnect_failed`,
         );
       }
     }
@@ -1439,7 +1428,7 @@ async function handleConversationMessage(
  *
  * @param conn          Connection authenticated as the AI user
  * @param selfIdentity  The AI user's Identity (used to filter own messages)
- * @param logTag        Prefix for log lines (e.g. `[ai:eclosion/Kira]`)
+ * @param logTag        Legacy caller label; diagnostics use a fixed host prefix.
  */
 export function registerConversationHandlers(
   conn: ConnLike,
@@ -1460,7 +1449,7 @@ export function registerConversationHandlers(
     },
   );
 
-  console.log(`${logTag} handlers registered (self=${selfHex.slice(0, 12)}…)`);
+  console.log("[conversation] handlers_registered");
 }
 
 /**
@@ -1498,7 +1487,7 @@ export async function processRecentConversationMessages(
   if (latestByConv.size === 0) return;
 
   console.log(
-    `${logTag} catch-up: ${latestByConv.size} conversation(s) with a pending trigger`,
+    `[conversation] catch_up_started conversation_count=${latestByConv.size}`,
   );
   for (const msg of latestByConv.values()) {
     await handleConversationMessage(conn, msg, selfHex, logTag, { getMcpRuntimeConn });

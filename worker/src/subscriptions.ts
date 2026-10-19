@@ -64,6 +64,7 @@ export function subscribeToAvailableTables(
   logTag: string,
   onApplied: () => void,
 ): void {
+  logTag = "[subscriptions]";
   const connection = conn as ConnectionLike;
   const skipped = new Set<string>();
 
@@ -84,7 +85,7 @@ export function subscribeToAvailableTables(
       .onApplied(onApplied)
       .onError((_ctx: unknown, err: unknown) => {
         const missing = missingTableName(err);
-        if (missing && !skipped.has(missing)) {
+        if (missing && ALL_TABLE_NAMES.includes(missing) && !skipped.has(missing)) {
           skipped.add(missing);
           console.warn(
             `${logTag} subscription skipped missing table "${missing}" and is retrying`,
@@ -93,7 +94,7 @@ export function subscribeToAvailableTables(
           return;
         }
 
-        console.error(`${logTag} subscription error:`, errorMessage(err));
+        console.error(`${logTag} subscription error: subscription_failed`);
       })
       .subscribe(queries);
   };
@@ -129,12 +130,12 @@ function subscribeIsolatedTables(
       .onApplied(() => console.log(`${logTag} ${label} subscription ready`))
       .onError((_ctx: unknown, err: unknown) => {
         const missing = missingTableName(err);
-        if (missing && !skipped.has(missing)) {
+        if (missing && present.has(missing) && !skipped.has(missing)) {
           skipped.add(missing);
           subscribe();
           return;
         }
-        console.error(`${logTag} ${label} subscription error:`, errorMessage(err));
+        console.error(`${logTag} ${label} subscription error: subscription_failed`);
       })
       .subscribe(queries);
   };

@@ -4,3 +4,4 @@ packages:
   - worker
   - packages/pulp
   - packages/snapshot-core
+  - packages/sentinel

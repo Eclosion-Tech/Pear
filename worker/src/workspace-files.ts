@@ -78,10 +78,10 @@ async function lifecycleWorkspaceId(dbName: string): Promise<string | null> {
         const body = (await res.json()) as { workspace_id?: string };
         id = typeof body.workspace_id === "string" && body.workspace_id ? body.workspace_id : null;
       } else {
-        console.warn(`[workspace-files] lifecycle blob-context ${res.status} for ${dbName}`);
+        console.warn(`[workspace-files] blob_context_unavailable status=${res.status}`);
       }
-    } catch (err) {
-      console.warn(`[workspace-files] lifecycle blob-context failed for ${dbName}:`, err);
+    } catch {
+      console.warn("[workspace-files] blob_context_lookup_failed");
     }
   }
   // Negative results are cached briefly too — a misconfigured lifecycle must

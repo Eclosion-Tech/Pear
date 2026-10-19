@@ -1,0 +1,13 @@
+{
+  "name": "@eclosion-tech/sentinel",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Portable Sentinel policy contracts and fail-closed eligibility checks. No runtime authority or dispatch.",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "npm run typecheck && node --import tsx/esm --test test/*.test.ts"
+  },
+  "devDependencies": { "@types/node": "^22.0.0", "tsx": "^4.19.0", "typescript": "^5.0.0" }
+}
