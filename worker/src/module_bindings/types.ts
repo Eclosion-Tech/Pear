@@ -1621,6 +1621,125 @@ export const ProtectedMailInput = __t.object("ProtectedMailInput", {
 });
 export type ProtectedMailInput = __Infer<typeof ProtectedMailInput>;
 
+export const ProtectedMailInstructionDecision = __t.object("ProtectedMailInstructionDecision", {
+  id: __t.string(),
+  headId: __t.string(),
+  owner: __t.identity(),
+  get scope() {
+    return ProtectedMailInstructionScope;
+  },
+  generation: __t.u64(),
+  get instruction() {
+    return ProtectedMailInstructionRef;
+  },
+  get kind() {
+    return ProtectedMailInstructionDecisionKind;
+  },
+  eventKey: __t.string(),
+  eventId: __t.string(),
+  requestDigest: __t.string(),
+  expectedGeneration: __t.u64(),
+  actor: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailInstructionDecision = __Infer<typeof ProtectedMailInstructionDecision>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailInstructionDecisionKind`.
+export const ProtectedMailInstructionDecisionKind = __t.enum("ProtectedMailInstructionDecisionKind", {
+  Approve: __t.unit(),
+  Revoke: __t.unit(),
+});
+export type ProtectedMailInstructionDecisionKind = __Infer<typeof ProtectedMailInstructionDecisionKind>;
+
+export const ProtectedMailInstructionHead = __t.object("ProtectedMailInstructionHead", {
+  id: __t.string(),
+  owner: __t.identity(),
+  get scope() {
+    return ProtectedMailInstructionScope;
+  },
+  generation: __t.u64(),
+  get currentRevision() {
+    return ProtectedMailInstructionRef;
+  },
+  get status() {
+    return ProtectedMailInstructionStatus;
+  },
+  decisionId: __t.option(__t.string()),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+});
+export type ProtectedMailInstructionHead = __Infer<typeof ProtectedMailInstructionHead>;
+
+export const ProtectedMailInstructionRef = __t.object("ProtectedMailInstructionRef", {
+  id: __t.string(),
+  revision: __t.u64(),
+  digest: __t.string(),
+});
+export type ProtectedMailInstructionRef = __Infer<typeof ProtectedMailInstructionRef>;
+
+export const ProtectedMailInstructionRevision = __t.object("ProtectedMailInstructionRevision", {
+  id: __t.string(),
+  headId: __t.string(),
+  owner: __t.identity(),
+  get scope() {
+    return ProtectedMailInstructionScope;
+  },
+  revision: __t.u64(),
+  digest: __t.string(),
+  body: __t.string(),
+  origin: __t.string(),
+  get parents() {
+    return __t.array(ProtectedMailSourceRef);
+  },
+  get derivedSource() {
+    return __t.option(ProtectedMailSourceRef);
+  },
+  eventKey: __t.string(),
+  eventId: __t.string(),
+  requestDigest: __t.string(),
+  expectedGeneration: __t.u64(),
+  editor: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailInstructionRevision = __Infer<typeof ProtectedMailInstructionRevision>;
+
+export const ProtectedMailInstructionRow = __t.object("ProtectedMailInstructionRow", {
+  get scope() {
+    return ProtectedMailInstructionScope;
+  },
+  get reference() {
+    return ProtectedMailInstructionRef;
+  },
+  body: __t.string(),
+  origin: __t.string(),
+  get parents() {
+    return __t.array(ProtectedMailSourceRef);
+  },
+  generation: __t.u64(),
+  get status() {
+    return ProtectedMailInstructionStatus;
+  },
+  decisionId: __t.option(__t.string()),
+});
+export type ProtectedMailInstructionRow = __Infer<typeof ProtectedMailInstructionRow>;
+
+export const ProtectedMailInstructionScope = __t.object("ProtectedMailInstructionScope", {
+  formatVersion: __t.u32(),
+  scopeVersion: __t.u32(),
+  purpose: __t.string(),
+  collectionId: __t.u64(),
+  instructionKey: __t.string(),
+});
+export type ProtectedMailInstructionScope = __Infer<typeof ProtectedMailInstructionScope>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailInstructionStatus`.
+export const ProtectedMailInstructionStatus = __t.enum("ProtectedMailInstructionStatus", {
+  Draft: __t.unit(),
+  InstructionApproved: __t.unit(),
+  InstructionRevoked: __t.unit(),
+});
+export type ProtectedMailInstructionStatus = __Infer<typeof ProtectedMailInstructionStatus>;
+
 export const ProtectedMailProcessor = __t.object("ProtectedMailProcessor", {
   profileId: __t.string(),
   revision: __t.string(),
