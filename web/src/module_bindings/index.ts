@@ -43,9 +43,11 @@ import AddTasksToJobReducer from "./add_tasks_to_job_reducer";
 import AnswerHumanInputReducer from "./answer_human_input_reducer";
 import AppendBridgeCommandChunkReducer from "./append_bridge_command_chunk_reducer";
 import AppendPageDocReducer from "./append_page_doc_reducer";
+import AppendProtectedMailDerivationReducer from "./append_protected_mail_derivation_reducer";
 import AppendProtectedMailMessageReducer from "./append_protected_mail_message_reducer";
 import AuthorizeMailTriageReducer from "./authorize_mail_triage_reducer";
 import AwaitBridgeCommandConfirmationReducer from "./await_bridge_command_confirmation_reducer";
+import BlockProtectedMailContextReducer from "./block_protected_mail_context_reducer";
 import CancelExtensionInstallReducer from "./cancel_extension_install_reducer";
 import CheckpointMailSyncReducer from "./checkpoint_mail_sync_reducer";
 import ClaimMailSyncReducer from "./claim_mail_sync_reducer";
@@ -126,6 +128,7 @@ import ImportV2AbortReducer from "./import_v_2_abort_reducer";
 import ImportV2BeginReducer from "./import_v_2_begin_reducer";
 import ImportV2ChunkReducer from "./import_v_2_chunk_reducer";
 import ImportV2CommitReducer from "./import_v_2_commit_reducer";
+import InitializeProtectedMailSourcePolicyReducer from "./initialize_protected_mail_source_policy_reducer";
 import InsertComponentReducer from "./insert_component_reducer";
 import InstallExtensionReducer from "./install_extension_reducer";
 import InvalidateAiEvaluationsForRowReducer from "./invalidate_ai_evaluations_for_row_reducer";
@@ -140,6 +143,7 @@ import MergeAiUsersReducer from "./merge_ai_users_reducer";
 import MigratePageToComponentTreeReducer from "./migrate_page_to_component_tree_reducer";
 import MoveComponentReducer from "./move_component_reducer";
 import MovePageReducer from "./move_page_reducer";
+import NarrowProtectedMailSourcePolicyReducer from "./narrow_protected_mail_source_policy_reducer";
 import OpenBridgeSessionReducer from "./open_bridge_session_reducer";
 import PairBridgeDeviceReducer from "./pair_bridge_device_reducer";
 import ProcessAutomationEventReducer from "./process_automation_event_reducer";
@@ -152,6 +156,7 @@ import PurgePageReducer from "./purge_page_reducer";
 import RecordAiEvaluationReducer from "./record_ai_evaluation_reducer";
 import RecordBridgeApprovalRequestReducer from "./record_bridge_approval_request_reducer";
 import RecordCompactionReducer from "./record_compaction_reducer";
+import RecordProtectedMailExposureReducer from "./record_protected_mail_exposure_reducer";
 import RecordReviewAnnotationReducer from "./record_review_annotation_reducer";
 import RecordToolCallAuditReducer from "./record_tool_call_audit_reducer";
 import RecordUsageEventReducer from "./record_usage_event_reducer";
@@ -1477,9 +1482,11 @@ const reducersSchema = __reducers(
   __reducerSchema("answer_human_input", AnswerHumanInputReducer),
   __reducerSchema("append_bridge_command_chunk", AppendBridgeCommandChunkReducer),
   __reducerSchema("append_page_doc", AppendPageDocReducer),
+  __reducerSchema("append_protected_mail_derivation", AppendProtectedMailDerivationReducer),
   __reducerSchema("append_protected_mail_message", AppendProtectedMailMessageReducer),
   __reducerSchema("authorize_mail_triage", AuthorizeMailTriageReducer),
   __reducerSchema("await_bridge_command_confirmation", AwaitBridgeCommandConfirmationReducer),
+  __reducerSchema("block_protected_mail_context", BlockProtectedMailContextReducer),
   __reducerSchema("cancel_extension_install", CancelExtensionInstallReducer),
   __reducerSchema("checkpoint_mail_sync", CheckpointMailSyncReducer),
   __reducerSchema("claim_mail_sync", ClaimMailSyncReducer),
@@ -1560,6 +1567,7 @@ const reducersSchema = __reducers(
   __reducerSchema("import_v_2_begin", ImportV2BeginReducer),
   __reducerSchema("import_v_2_chunk", ImportV2ChunkReducer),
   __reducerSchema("import_v_2_commit", ImportV2CommitReducer),
+  __reducerSchema("initialize_protected_mail_source_policy", InitializeProtectedMailSourcePolicyReducer),
   __reducerSchema("insert_component", InsertComponentReducer),
   __reducerSchema("install_extension", InstallExtensionReducer),
   __reducerSchema("invalidate_ai_evaluations_for_row", InvalidateAiEvaluationsForRowReducer),
@@ -1574,6 +1582,7 @@ const reducersSchema = __reducers(
   __reducerSchema("migrate_page_to_component_tree", MigratePageToComponentTreeReducer),
   __reducerSchema("move_component", MoveComponentReducer),
   __reducerSchema("move_page", MovePageReducer),
+  __reducerSchema("narrow_protected_mail_source_policy", NarrowProtectedMailSourcePolicyReducer),
   __reducerSchema("open_bridge_session", OpenBridgeSessionReducer),
   __reducerSchema("pair_bridge_device", PairBridgeDeviceReducer),
   __reducerSchema("process_automation_event", ProcessAutomationEventReducer),
@@ -1586,6 +1595,7 @@ const reducersSchema = __reducers(
   __reducerSchema("record_ai_evaluation", RecordAiEvaluationReducer),
   __reducerSchema("record_bridge_approval_request", RecordBridgeApprovalRequestReducer),
   __reducerSchema("record_compaction", RecordCompactionReducer),
+  __reducerSchema("record_protected_mail_exposure", RecordProtectedMailExposureReducer),
   __reducerSchema("record_review_annotation", RecordReviewAnnotationReducer),
   __reducerSchema("record_tool_call_audit", RecordToolCallAuditReducer),
   __reducerSchema("record_usage_event", RecordUsageEventReducer),

@@ -1,4 +1,4 @@
-# Private mail storage contract (S1a)
+# Private mail storage and provenance contract (S1a/S1b)
 
 This is a staged substrate, disconnected from the existing mail runner and
 settings UI. It does not enable protected monitoring or authorize a model call.
@@ -40,6 +40,79 @@ declarations. These checks do not prove that content came from IMAP or that all
 secrets were removed. Sanitization, derived summaries and model disclosure need
 their later reviewed adapters and admission rules.
 
+## Source ceilings and current generations
+
+S1b adds private source-policy history and current heads. Policy initialization
+is an explicit publisher management operation against an exact existing source
+reference. It accepts bounded exact processor tuples and derives the only
+permitted storage destination from the stored collection and human owner.
+It cannot change source origin, ownership, content, ancestry or sanitization.
+Existing S1a rows receive no automatic policy backfill; missing policy denies
+governed processing and derivation while existing human-owner history reads
+remain available.
+
+An initial ceiling is a trusted management declaration, **not human approval,
+a workflow grant or an admission**. Independent reviewed workflow authority
+must still permit an operation. There is no runtime consumer of this policy.
+Initial configuration is immutable: exact initialization retry cannot restore
+an older current head. The authenticated human owner or publisher may narrow
+the current processors/storage or revoke the source using its expected
+generation. Non-owner administrators and either AI identity representation
+have no override. Revocation cannot be undone and retained disconnected
+history can still be narrowed or revoked.
+
+Processor identity includes the exact profile, configuration revision, HTTPS
+endpoint and model. A rotated key/configuration revision or another endpoint
+is not interchangeable with an old tuple. Expanding a historical ceiling will
+need a separately reviewed authorization design; a new grant alone cannot
+silently expand it. Current policy is re-resolved across every ancestor when
+creating a derived record. Old exposure snapshots never preserve obsolete
+permissions. Generations and policy identifiers are private security records,
+not ordinary telemetry.
+
+## Registered exposure and derived records
+
+Publisher-only staging reducers register source references under a private
+collection/runtime/run context. Runtime and run strings describe host scope;
+they do not authenticate a runtime or establish run authority. Each immutable
+exposure snapshot contains the preceding context membership union new sources
+and inherited snapshots. The server canonicalizes complete references and
+their ancestor closure. There is no replace/remove operation or truncation.
+A new event with a stale expected generation fails; exact replay of an old event
+never rewinds the context head. Terminal context blocking prevents reuse after uncertain input.
+An empty exposure record authorizes nothing and cannot support a derivation.
+
+Source identity is the complete ID/revision/digest tuple. Canonical ordering
+uses UTF-8 IDs and numeric revisions, not digest-only deduplication. SDK `u64`
+values are big integers; future portable adapters must use canonical decimal
+strings without rounding through JavaScript `Number`.
+
+These are **durable host-registered exposures**, not automatic observation or
+proof of complete prompt assembly. A future adapter must register every input
+before disclosure, including prior history, errors, memory and child results.
+If unregistered content may already have reached a context, it must block that
+context. Registration is bookkeeping and may retain references whose current
+policy is missing or revoked; forgetting a restrictive exposure would be unsafe.
+
+A staged derivation is bounded literal text stored privately. Its complete
+parent set comes from a frozen exposure snapshot belonging to the exact
+context, rather than caller-selected citations. The server computes its
+content digest and initial policy intersection atomically. Missing/revoked
+ancestor policy or denied owner storage prevents a new derivation. Later
+narrowing of any ancestor also narrows every descendant's effective ceiling.
+A delayed result stays bound to its original input snapshot, and a blocked
+context cannot use an older snapshot to write a new result.
+
+Snapshots, references and digests are identifiers, never bearer capabilities.
+References and context IDs are database-local; future admission must also bind
+the authenticated workspace and transport.
+The original S1a digest identifies its typed mail representation, not exact
+model request bytes. A derived digest identifies stored text, not proof that a
+model produced it. No model or screening service runs here; the publisher is
+still trusted to describe the inputs and output truthfully. All new metadata
+and derived content remain in private tables, without a new owner view, model
+reader, native/MCP tool, CRUD mapping or ordinary page projection.
+
 ## Lifecycle and retention
 
 Creating a collection fences the existing page-writing sync path for that
@@ -64,6 +137,7 @@ same WASM. Start an in-memory SpacetimeDB 2.0.3 server bound to localhost, then:
 ```sh
 cd worker
 node --import tsx/esm scripts/protected-mail-e2e.ts http://127.0.0.1:3099
+node --import tsx/esm scripts/protected-mail-state-e2e.ts http://127.0.0.1:3099
 ```
 
 Set `PEAR_UPGRADE_FROM_WASM` to an absolute path to the pre-S1 module to include
@@ -73,7 +147,14 @@ refuses non-local origins, userinfo and redirects, creates a uniquely named
 database, uses synthetic credentials/content and deletes its fixture in
 `finally`. It never connects to an IMAP server or model provider.
 
-The Cloud conformance wrapper builds the pinned baseline and current module,
+For the state harness, set `PEAR_SOURCE_STATE_BASELINE_WASM` to an absolute
+path to the merged S1a module. It populates private records before upgrading,
+then checks unchanged source identities and owner reads, absent automatic
+policy, policy narrowing/revocation, cumulative exposures and derivation.
+
+The Cloud conformance wrapper builds pinned pre-S1a and S1a baselines plus the
+current module in independent Cargo target directories, rejects identical
+upgrade artifacts,
 starts a disposable Docker server on a random loopback port and cleans it up.
 It runs in PR checks. The coordinated release also runs the live harness against
 its exact release WASM. Neither test establishes runtime admission, credential

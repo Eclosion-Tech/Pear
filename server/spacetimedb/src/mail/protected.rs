@@ -130,7 +130,10 @@ pub(crate) fn require_no_protected_mail_collections(ctx: &ReducerContext) -> Res
     Ok(())
 }
 
-fn paused_human_connection(ctx: &ReducerContext, id: u64) -> Result<MailConnection, String> {
+pub(super) fn paused_human_connection(
+    ctx: &ReducerContext,
+    id: u64,
+) -> Result<MailConnection, String> {
     if !sender_is_module_publisher(ctx) {
         return Err("protected_mail_publisher_required".into());
     }
@@ -301,7 +304,7 @@ fn mailbox_event_id(connection_id: u64, message: &ProtectedMailInput) -> String 
     hex::encode(hash.finalize())
 }
 
-fn associated(
+pub(super) fn associated(
     collection: &ProtectedMailCollection,
     source: &ProtectedMailSource,
     record: &ProtectedMailRecord,
@@ -437,7 +440,7 @@ pub fn append_protected_mail_message(
     Ok(())
 }
 
-fn authenticated_owner(ctx: &ViewContext) -> bool {
+pub(super) fn authenticated_owner(ctx: &ViewContext) -> bool {
     let identity = ctx.sender();
     ctx.db
         .module_install_meta()
