@@ -109,6 +109,7 @@ export class DatabaseWorker {
   private conn: DbConnection | null = null;
   private inFlight = new Set<bigint>();
   private stopped = false;
+  private readonly logTag = `[worker:${crypto.randomUUID()}]`;
 
   /** AI-user-scoped sub-workers, keyed by aiUserId. */
   private aiUserWorkers = new Map<bigint, AiUserWorker>();
@@ -222,8 +223,8 @@ export class DatabaseWorker {
       if (this.stopped) return;
       void conn.reducers
         .heartbeatAgent({ agentId: this.agentId })
-        .catch((e: unknown) =>
-          console.warn(`[worker:${this.dbName}] heartbeat_agent:`, e),
+        .catch(() =>
+          console.warn(`${this.logTag} heartbeat_failed`),
         );
     };
     ping();
@@ -249,11 +250,8 @@ export class DatabaseWorker {
     this.clearMcpProbeTimer();
     this.mcpProbeTimer = setTimeout(() => {
       this.mcpProbeTimer = null;
-      void probeMcpExtensions(conn as unknown as ConnLike).catch((err: unknown) => {
-        console.warn(
-          `[worker:${this.dbName}] MCP health probe failed:`,
-          err instanceof Error ? err.message : String(err),
-        );
+      void probeMcpExtensions(conn as unknown as ConnLike).catch(() => {
+        console.warn(`${this.logTag} mcp_health_probe_failed`);
       });
     }, 250);
   }
@@ -269,7 +267,7 @@ export class DatabaseWorker {
     const delay = exp + jitter;
     this.reconnectAttempt = Math.min(this.reconnectAttempt + 1, 12);
     console.log(
-      `[worker:${this.dbName}] Will reconnect in ${delay}ms (attempt ${this.reconnectAttempt})`,
+      `${this.logTag} Will reconnect in ${delay}ms (attempt ${this.reconnectAttempt})`,
     );
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
@@ -292,7 +290,7 @@ export class DatabaseWorker {
   private beginConnection(): void {
     if (this.stopped) return;
 
-    console.log(`[worker:${this.dbName}] Connecting to ${this.uri} / ${this.dbName}`);
+    console.log(`${this.logTag} connection_started`);
 
     const builder = DbConnection.builder()
       .withUri(this.uri)
@@ -306,23 +304,23 @@ export class DatabaseWorker {
       .onConnect((conn, identity) => {
         this.reconnectAttempt = 0;
         this.conn = conn;
-        console.log(`[worker:${this.dbName}] Connected — identity: ${identity.toHexString()}`);
+        console.log(`${this.logTag} connected`);
         this.registerHandlers(conn);
         if (this.token) {
           this.sensors = new StructuralSensorsScheduler(conn, {
-            label: this.dbName,
+            label: this.logTag,
             intervalMs: parseIntervalEnv("STRUCTURAL_SENSORS_INTERVAL_MS"),
             initialDelayMs: parseIntervalEnv("STRUCTURAL_SENSORS_INITIAL_DELAY"),
           });
           this.sensors.start();
         } else {
           console.log(
-            `[worker:${this.dbName}] Skipping structural sensors (no admin token)`,
+            `${this.logTag} Skipping structural sensors (no admin token)`,
           );
         }
       })
       .onDisconnect(() => {
-        console.log(`[worker:${this.dbName}] Disconnected`);
+        console.log(`${this.logTag} Disconnected`);
         this.stopHeartbeat();
         this.clearMcpProbeTimer();
         if (this.sensors) {
@@ -334,8 +332,8 @@ export class DatabaseWorker {
           this.scheduleReconnect();
         }
       })
-      .onConnectError((_ctx, err) => {
-        console.error(`[worker:${this.dbName}] Connection error:`, err?.message ?? err);
+      .onConnectError(() => {
+        console.error(`${this.logTag} connection_failed`);
         if (!this.stopped) {
           this.scheduleReconnect();
         }
@@ -363,8 +361,8 @@ export class DatabaseWorker {
     // Tear down all per-AI-user connections first so they stop responding
     // to messages while we drain orcha tasks.
     const aiStops = [...this.aiUserWorkers.values()].map((w) =>
-      w.stop().catch((e: unknown) =>
-        console.warn(`[worker:${this.dbName}] AI worker stop failed:`, e),
+      w.stop().catch(() =>
+        console.warn(`${this.logTag} ai_worker_stop_failed`),
       ),
     );
     this.aiUserWorkers.clear();
@@ -373,7 +371,7 @@ export class DatabaseWorker {
 
     if (this.inFlight.size > 0) {
       console.log(
-        `[worker:${this.dbName}] Draining ${this.inFlight.size} in-flight tasks…`,
+        `${this.logTag} Draining ${this.inFlight.size} in-flight tasks…`,
       );
       const deadline = Date.now() + 30_000;
       while (this.inFlight.size > 0 && Date.now() < deadline) {
@@ -381,7 +379,7 @@ export class DatabaseWorker {
       }
       if (this.inFlight.size > 0) {
         console.warn(
-          `[worker:${this.dbName}] Timed out waiting for ${this.inFlight.size} tasks`,
+          `${this.logTag} Timed out waiting for ${this.inFlight.size} tasks`,
         );
       }
     }
@@ -391,11 +389,11 @@ export class DatabaseWorker {
     // "stopped" worker keeps reacting to row events.
     try {
       this.conn?.disconnect();
-    } catch (e) {
-      console.warn(`[worker:${this.dbName}] disconnect failed:`, e);
+    } catch {
+      console.warn(`${this.logTag} disconnect_failed`);
     }
     this.conn = null;
-    console.log(`[worker:${this.dbName}] Stopped`);
+    console.log(`${this.logTag} Stopped`);
   }
 
   /**
@@ -419,12 +417,12 @@ export class DatabaseWorker {
       const rotated = d !== undefined && d.token !== this.aiUserTokens.get(aiUserId);
       if (d === undefined || rotated) {
         console.log(
-          `[worker:${this.dbName}] ${rotated ? "Rotating" : "Removing"} AI user worker (id=${aiUserId})`,
+          `${this.logTag} ${rotated ? "Rotating" : "Removing"} AI user worker (id=${aiUserId})`,
         );
         this.aiUserWorkers.delete(aiUserId);
         this.aiUserTokens.delete(aiUserId);
-        await worker.stop().catch((e: unknown) =>
-          console.warn(`[worker:${this.dbName}] AI worker stop failed:`, e),
+        await worker.stop().catch(() =>
+          console.warn(`${this.logTag} ai_worker_stop_failed`),
         );
       }
     }
@@ -433,7 +431,7 @@ export class DatabaseWorker {
     for (const [aiUserId, d] of desired.entries()) {
       if (this.aiUserWorkers.has(aiUserId)) continue;
       console.log(
-        `[worker:${this.dbName}] Spawning AI user worker (id=${aiUserId}, label=${d.label ?? "?"})`,
+        `${this.logTag} ai_worker_started ai_user_id=${aiUserId}`,
       );
       const w = new AiUserWorker({
         uri: this.uri,
@@ -494,8 +492,7 @@ export class DatabaseWorker {
     this.aiUserReconcileTimer = setTimeout(() => {
       this.aiUserReconcileTimer = null;
       void this.reconcileAiUsers(this.collectAiUserDescriptors(conn)).catch(
-        (e: unknown) =>
-          console.warn(`[worker:${this.dbName}] AI-user reconcile failed:`, e),
+        () => console.warn(`${this.logTag} ai_user_reconcile_failed`),
       );
     }, 250);
   }
@@ -565,18 +562,18 @@ export class DatabaseWorker {
       },
     );
 
-    subscribeToAvailableTables(conn, `[worker:${this.dbName}]`, () => {
-      console.log(`[worker:${this.dbName}] Subscription ready`);
+    subscribeToAvailableTables(conn, `${this.logTag}`, () => {
+      console.log(`${this.logTag} Subscription ready`);
 
       void conn.reducers
         .registerAgent({ agentId: this.agentId, capabilities: CAPABILITIES })
         .then(() =>
           console.log(
-            `[worker:${this.dbName}] Registered — capabilities: ${CAPABILITIES.join(", ")}`,
+            `${this.logTag} Registered — capabilities: ${CAPABILITIES.join(", ")}`,
           ),
         )
-        .catch((e: unknown) =>
-          console.warn(`[worker:${this.dbName}] register_agent:`, e),
+        .catch(() =>
+          console.warn(`${this.logTag} agent_registration_failed`),
         );
 
       this.startHeartbeat(conn);
@@ -651,12 +648,9 @@ export class DatabaseWorker {
 
     try {
       await conn.reducers.claimTask({ agentId: this.agentId, taskId: task.id });
-      console.log(`[worker:${this.dbName}] Claimed ${task.taskType} task ${task.id}`);
-    } catch (err) {
-      console.warn(
-        `[worker:${this.dbName}] Failed to claim task ${task.id}:`,
-        err instanceof Error ? err.message : String(err),
-      );
+      console.log(`${this.logTag} task_claimed task_id=${task.id}`);
+    } catch {
+      console.warn(`${this.logTag} task_claim_failed task_id=${task.id}`);
       this.inFlight.delete(task.id);
       return;
     }
@@ -710,16 +704,16 @@ export class DatabaseWorker {
       }
 
       await conn.reducers.submitResult({ agentId: this.agentId, taskId: task.id, result });
-      console.log(`[worker:${this.dbName}] Completed task ${task.id} (${task.taskType})`);
+      console.log(`${this.logTag} task_completed task_id=${task.id}`);
 
       this.recordUsage(conn, task, startMs, usage);
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
-      console.error(`[worker:${this.dbName}] Task ${task.id} failed: ${error}`);
+      console.error(`${this.logTag} task_failed task_id=${task.id}`);
       try {
         await conn.reducers.failTask({ agentId: this.agentId, taskId: task.id, error });
-      } catch (innerErr) {
-        console.error(`[worker:${this.dbName}] fail_task also failed:`, innerErr);
+      } catch {
+        console.error(`${this.logTag} task_failure_record_failed task_id=${task.id}`);
       }
 
       this.recordUsage(conn, task, startMs);
@@ -887,10 +881,9 @@ export class DatabaseWorker {
         value: serializeToolTrace(toolCalls),
         createdBy: this.agentId,
       });
-    } catch (err) {
+    } catch {
       console.warn(
-        `[worker:${this.dbName}] Failed to persist tool trace for task ${task.id}:`,
-        err instanceof Error ? err.message : String(err),
+        `${this.logTag} tool_trace_write_failed task_id=${task.id}`,
       );
     }
   }
@@ -915,12 +908,12 @@ export class DatabaseWorker {
         aiUserId: job.aiUserId, principalId, connection: aiConn, nowMs: Date.now() }, specs, this.routingAdvisory);
     } catch {
       // No prompt, endpoint, secret-bearing callback error or raw provider error in logs.
-      console.warn(`[worker:${this.dbName}] Routing advice unavailable; existing execution unchanged`);
+      console.warn(`${this.logTag} Routing advice unavailable; existing execution unchanged`);
     }
   }
 
   private async handleOrchestrate(conn: DbConnection, task: TaskRow): Promise<string> {
-    console.log(`[worker:${this.dbName}] Orchestrating job ${task.jobId}…`);
+    console.log(`${this.logTag} Orchestrating job ${task.jobId}…`);
 
     const orchestrateCount = [...(conn.db.orcha_task.iter() as Iterable<TaskRow>)]
       .filter((t) => t.jobId === task.jobId && t.taskType === "orchestrate")
@@ -928,14 +921,14 @@ export class DatabaseWorker {
 
     const atMaxDepth = orchestrateCount >= MAX_ORCHESTRATE_DEPTH;
     if (atMaxDepth) {
-      console.log(`[worker:${this.dbName}] Max orchestrate depth reached for job ${task.jobId}`);
+      console.log(`${this.logTag} Max orchestrate depth reached for job ${task.jobId}`);
     }
 
     const job = conn.db.orcha_job.id.find(task.jobId) as JobRow | undefined;
     const pageContext = await buildPageContext(conn, job?.pageId);
 
     if (pageContext) {
-      console.log(`[worker:${this.dbName}] Page context: ${pageContext.slice(0, 80)}…`);
+      console.log(`${this.logTag} page_context_loaded job_id=${task.jobId}`);
     }
 
     const orchestrateOverrides = this.resolveProviderForJob(job);
@@ -959,7 +952,7 @@ export class DatabaseWorker {
       const missing = spec.required_capabilities.filter((c) => !known.has(c));
       if (missing.length > 0) {
         console.warn(
-          `[worker:${this.dbName}] job ${task.jobId}: subtask requires unsatisfiable capabilities [${missing.join(", ")}] — coercing to llm so the job can't hang (#6)`,
+          `${this.logTag} unsupported_plan_capabilities job_id=${task.jobId} count=${missing.length}; using llm`,
         );
         spec.task_type = "llm";
         spec.required_capabilities = ["llm"];
@@ -991,7 +984,7 @@ export class DatabaseWorker {
     await this.observeRoutingForPlan(job, task, taskSpecs);
     await conn.reducers.addTasksToJob({ jobId: task.jobId, taskGraphJson });
 
-    console.log(`[worker:${this.dbName}] Added ${taskSpecs.length} tasks to job ${task.jobId}`);
+    console.log(`${this.logTag} Added ${taskSpecs.length} tasks to job ${task.jobId}`);
     return `Decomposed into ${taskSpecs.length} task${taskSpecs.length !== 1 ? "s" : ""}`;
   }
 
@@ -1019,11 +1012,8 @@ export class DatabaseWorker {
         tokensOut,
         wallClockMs: BigInt(wallClockMs),
       })
-      .catch((err: unknown) => {
-        console.warn(
-          `[worker:${this.dbName}] Failed to record usage:`,
-          err instanceof Error ? err.message : err,
-        );
+      .catch(() => {
+        console.warn(`${this.logTag} usage_record_failed`);
       });
   }
 }

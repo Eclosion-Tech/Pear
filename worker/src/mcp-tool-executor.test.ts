@@ -139,7 +139,7 @@ test("a failed MCP handshake exposes no tools and reports the failure", async ()
 
   assert.equal(executor.getToolDefs().length, 0);
   assert.equal((health.at(-1)?.status as { tag: string }).tag, "Error");
-  assert.match(String(health.at(-1)?.detail), /401/);
+  assert.equal(health.at(-1)?.detail, "mcp_handshake_failed");
 });
 
 test("the composite runtime sends MCP definitions to the model path and routes calls", async () => {

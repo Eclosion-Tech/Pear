@@ -132,8 +132,8 @@ export async function resolveConversationAttachments(
           type: "image",
           source: { type: "base64", media_type: mediaType, data },
         });
-      } catch (err) {
-        console.error(`${logTag} failed to fetch image attachment ${objectKey}:`, err);
+      } catch {
+        console.error("[attachments] image_read_failed");
         appendContext(entry, `[Attached image "${fileName}" could not be loaded]`);
       }
       continue;
@@ -219,8 +219,8 @@ export async function renderAttachedFile(
   let file;
   try {
     file = await files.read(objectKey);
-  } catch (err) {
-    console.error(`${logTag} failed to read file attachment ${objectKey}:`, err);
+  } catch {
+    console.error("[attachments] file_read_failed");
     return `[Attached file "${fileName}"${typeNote} could not be loaded. storage_key=${objectKey}]`;
   }
   if (!file) {

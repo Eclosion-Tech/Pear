@@ -165,10 +165,7 @@ export class CompositeToolExecutor {
     const staticNames = staticExecutor.toolNames();
     for (const mcpToolDef of mcpExecutor.getToolDefs()) {
       if (staticNames.has(mcpToolDef.name)) {
-        console.error(
-          `[composite] Tool name collision: MCP tool "${mcpToolDef.name}" is shadowed by ` +
-            `a static native tool. Static tool wins — MCP tool will not be callable.`,
-        );
+        console.error("[composite] mcp_tool_shadowed_by_native");
       }
     }
 
@@ -299,11 +296,8 @@ export class CompositeToolExecutor {
       // subscription; the diff UI pairs Pre→Post by `snapshot_at` ordering
       // scoped to a page.
       void preSnapshotId;
-    } catch (err) {
-      console.warn(
-        `[composite] PreAgentEdit snapshot failed for ${toolName}:`,
-        err instanceof Error ? err.message : String(err),
-      );
+    } catch {
+      console.warn("[composite] pre_agent_edit_snapshot_failed");
     }
 
     const result = await run();
@@ -313,11 +307,8 @@ export class CompositeToolExecutor {
         pageId: targetPageId,
         snapshotType: { tag: "PostAgentEdit" } as never,
       });
-    } catch (err) {
-      console.warn(
-        `[composite] PostAgentEdit snapshot failed for ${toolName}:`,
-        err instanceof Error ? err.message : String(err),
-      );
+    } catch {
+      console.warn("[composite] post_agent_edit_snapshot_failed");
     }
 
     return result;
@@ -365,14 +356,12 @@ export class CompositeToolExecutor {
         rawInput,
         rawOutput: reason,
         outcome: "denied",
-        outcomeDetail: reason,
       });
       return JSON.stringify({ ok: false, error: `Permission denied: ${reason}` });
     }
 
     // Execute
     let outcome: AuditOutcome = "allowed";
-    let outcomeDetail: string | undefined;
     let rawOutput: string;
 
     try {
@@ -380,7 +369,6 @@ export class CompositeToolExecutor {
     } catch (err) {
       rawOutput = err instanceof Error ? err.message : String(err);
       outcome = "error";
-      outcomeDetail = rawOutput;
     }
 
     // Audit log — never throws
@@ -394,7 +382,6 @@ export class CompositeToolExecutor {
       rawInput,
       rawOutput,
       outcome,
-      outcomeDetail,
     });
 
     if (outcome === "error") {

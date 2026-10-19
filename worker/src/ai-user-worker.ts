@@ -53,7 +53,7 @@ export interface AiUserWorkerOptions {
    * Required — the whole point of this worker is to connect AS the AI user.
    */
   token: string;
-  /** Optional human label used in log lines (e.g. "eclosion/Kira"). */
+  /** Optional display label. It is not emitted into operational diagnostics. */
   label?: string;
   /** Current module-publisher connection for credential-bearing MCP runtime data. */
   getMcpRuntimeConn?: () => ConnLike | undefined;
@@ -78,7 +78,7 @@ export class AiUserWorker {
     this.dbName = opts.dbName;
     this.token = opts.token;
     this.label = opts.label ?? "ai-user";
-    this.logTag = `[ai:${opts.dbName}/${this.label}]`;
+    this.logTag = `[ai:${crypto.randomUUID()}]`;
     this.getMcpRuntimeConn = opts.getMcpRuntimeConn ?? (() => undefined);
   }
 
@@ -109,8 +109,8 @@ export class AiUserWorker {
     if (!this.conn) return undefined;
     try {
       return getProviderForAiUser(this.conn, aiUserId);
-    } catch (err) {
-      console.warn(`${this.logTag} resolveProvider(${aiUserId}) failed:`, err);
+    } catch {
+      console.warn(`${this.logTag} provider_resolution_failed ai_user_id=${aiUserId}`);
       return undefined;
     }
   }
@@ -150,7 +150,7 @@ export class AiUserWorker {
   private beginConnection(): void {
     if (this.stopped) return;
 
-    console.log(`${this.logTag} connecting to ${this.uri} / ${this.dbName}`);
+    console.log(`${this.logTag} connection_started`);
 
     DbConnection.builder()
       .withUri(this.uri)
@@ -197,11 +197,8 @@ export class AiUserWorker {
           this.scheduleReconnect();
         }
       })
-      .onConnectError((_ctx, err) => {
-        console.error(
-          `${this.logTag} connection error:`,
-          err?.message ?? err,
-        );
+      .onConnectError(() => {
+        console.error(`${this.logTag} connection_failed`);
         if (!this.stopped) {
           this.scheduleReconnect();
         }
@@ -221,8 +218,8 @@ export class AiUserWorker {
     // already true, so the onDisconnect handler won't schedule a reconnect.
     try {
       this.conn?.disconnect();
-    } catch (e) {
-      console.warn(`${this.logTag} disconnect failed:`, e);
+    } catch {
+      console.warn(`${this.logTag} disconnect_failed`);
     }
     this.conn = null;
     this.aiUserIdentity = null;
@@ -262,11 +259,8 @@ export class AiUserWorker {
         this.logTag,
         this.getMcpRuntimeConn,
       ).catch(
-        (err: unknown) => {
-          console.error(
-            `${this.logTag} recent message check failed:`,
-            err instanceof Error ? err.message : err,
-          );
+        () => {
+          console.error(`${this.logTag} recent_message_check_failed`);
         },
       );
     });

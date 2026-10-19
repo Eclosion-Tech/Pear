@@ -38,8 +38,7 @@ const SPACETIMEDB_URI = process.env.SPACETIMEDB_URI ?? "ws://localhost:3000";
 const DB_NAME = process.env.SPACETIMEDB_DB_NAME ?? "pear-dev";
 const TOKEN = process.env.SPACETIMEDB_TOKEN;
 
-console.log(`[worker] Pear LLM worker starting — agent: ${AGENT_ID}`);
-console.log(`[worker] Connecting to ${SPACETIMEDB_URI} / ${DB_NAME}`);
+console.log("[worker] startup");
 if (TOKEN) {
   console.log("[worker] Authenticated connection (admin token provided)");
 }
@@ -55,10 +54,10 @@ worker.start();
 
 process.on("SIGINT", () => { console.log("[worker] Shutting down"); void worker.stop().then(() => process.exit(0)); });
 process.on("SIGTERM", () => { console.log("[worker] Shutting down"); void worker.stop().then(() => process.exit(0)); });
-process.on("unhandledRejection", (reason) => {
-  console.error("[worker] Unhandled rejection:", reason);
+process.on("unhandledRejection", () => {
+  console.error("[worker] unhandled_rejection");
 });
-process.on("uncaughtException", (err) => {
-  console.error("[worker] Uncaught exception:", err);
+process.on("uncaughtException", () => {
+  console.error("[worker] uncaught_exception");
   process.exit(1);
 });

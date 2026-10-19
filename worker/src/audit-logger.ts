@@ -6,7 +6,9 @@
  *   - Audit failures are logged to console but NEVER propagate as errors.
  *     A broken audit trail must not block tool execution — the alternative
  *     (silently skipping audit) is worse than execution failure.
- *   - Input and output are SHA-256 hashed — raw content is never stored.
+ *   - Input and output are SHA-256 hashed in the private audit table. These
+ *     digests identify content; they are not anonymization or public telemetry.
+ *   - Outcome details are fixed host codes, never tool responses or errors.
  *   - All calls are logged, including denied ones (outcome="denied").
  */
 
@@ -27,8 +29,13 @@ export interface AuditEntry {
   rawInput: string;
   rawOutput: string;
   outcome: AuditOutcome;
-  outcomeDetail?: string;
 }
+
+const OUTCOME_DETAIL: Record<AuditOutcome, string> = {
+  allowed: "tool_allowed",
+  denied: "permission_denied",
+  error: "tool_execution_failed",
+};
 
 // ── AuditLogger ───────────────────────────────────────────────────────────────
 
@@ -58,13 +65,14 @@ export class AuditLogger {
         inputHash,
         outputHash,
         outcome: entry.outcome,
-        outcomeDetail: entry.outcomeDetail ?? undefined,
+        // Never accept a free-text detail, including from older JS callers.
+        // Error messages and denial reasons can contain URLs, credentials and
+        // tool-controlled response bodies.
+        outcomeDetail: OUTCOME_DETAIL[entry.outcome],
       });
-    } catch (err) {
-      console.error(
-        `[audit] Failed to write audit log for tool "${entry.toolName}": `,
-        err instanceof Error ? err.message : String(err),
-      );
+    } catch {
+      // The reducer/transport error may echo the entire audit request.
+      console.error("[audit] audit_write_failed");
     }
   }
 }

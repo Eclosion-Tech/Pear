@@ -457,7 +457,9 @@ export async function callLlm(
         (b): b is ToolUseBlock => b.type === "tool_use"
       );
 
-      console.log(`[worker] LLM response — stop_reason=${response.stopReason} tool_calls=${toolCalls.length} content_blocks=${response.content.map((b) => b.type).join(",")}`);
+      // Provider fields and model-generated tool names are content, not a safe
+      // diagnostic vocabulary. Keep only host-computed counts here.
+      console.log(`[worker] LLM response — tool_calls=${toolCalls.length} content_blocks=${response.content.length}`);
 
       if (toolCalls.length === 0 || response.stopReason === "end_turn") {
         const textBlock = response.content.find((b) => b.type === "text");
@@ -481,9 +483,7 @@ export async function callLlm(
 
       const toolResults: { type: "tool_result"; tool_use_id: string; content: string }[] = [];
       for (const block of toolCalls) {
-        console.log(`[worker] Tool call [${block.name}]: ${JSON.stringify(block.input)}`);
         const result = await toolExecutor.execute(block.name, block.input);
-        console.log(`[worker] Tool result [${block.name}]: ${result}`);
         const affected = extractAffected(result);
         if (affected?.pageId !== undefined) artifactPageIds.add(affected.pageId);
         if (
@@ -690,9 +690,9 @@ export async function planTasks(
       const rawJson = textBlock.text.replace(/```(?:json)?/gi, "").trim();
       const tasks = validateTaskSpecs(JSON.parse(rawJson));
       if (tasks.length > 0) return tasks;
-    } catch (err) {
-      console.warn("[worker] planTasks: failed to parse fallback task graph:", err);
-      console.warn("[worker] raw planner output:", textBlock.text.slice(0, 300));
+    } catch {
+      // JSON parse errors can quote the model output, including private data.
+      console.warn("[worker] planTasks: planner_fallback_invalid_json");
     }
   }
 

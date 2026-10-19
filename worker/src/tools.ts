@@ -1329,8 +1329,8 @@ async function applyDefaults(
         } else if (resolved.tag === "Checkbox") {
           siblingValues[prop.name] = String(resolved.value);
         }
-      } catch (err) {
-        console.warn(`[tools] applyDefaults: failed for ${prop.name}: ${err}`);
+      } catch {
+        console.warn("[tools] default_property_write_failed");
       }
     }
   }
@@ -1624,12 +1624,8 @@ async function maybeRequestWriteAccessAfterDenied(
       reason,
     });
     return { page_id: Number(pageId), permission: "Write" };
-  } catch (err) {
-    console.warn(
-      `[tools] request_page_access after ${toolName} denial failed: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
+  } catch {
+    console.warn("[tools] page_access_request_failed");
     return undefined;
   }
 }
@@ -1760,6 +1756,18 @@ function grantedBridgeDeviceIds(conn: ConnLike): Set<string> | undefined {
   return new Set([...rows].map((g) => String(g.deviceId)));
 }
 
+let nativeToolLogCodes: Set<string> | undefined;
+
+/** Diagnostic vocabulary only; this does not authorize or classify effects. */
+function nativeToolLogCode(name: string): string {
+  nativeToolLogCodes ??= new Set([
+    ...getConversationTools().map((tool) => tool.name),
+    "get_context",
+  ]);
+  // A requested name is model-controlled, even when it is not a real tool.
+  return nativeToolLogCodes.has(name) ? name : "unknown";
+}
+
 export async function executeTool(
   conn: ConnLike,
   toolName: string,
@@ -1767,7 +1775,7 @@ export async function executeTool(
   jobId: bigint,
   toolContext: ToolCallContext = {},
 ): Promise<string> {
-  console.log(`[tools] Executing ${toolName} — input: ${JSON.stringify(input)}`);
+  console.log(`[tools] execution_started tool=${nativeToolLogCode(toolName)}`);
   try {
     requireChatWriteGrant(conn, toolName, input, toolContext);
     // Parity tools run through the shared MCP implementation so chat and MCP
@@ -2356,17 +2364,10 @@ export async function executeTool(
           // RLS gap (zero/none-matching rows) from a genuine non-completion.
           try {
             const cacheResults = bridgeResultRows ? [...bridgeResultRows] : [];
-            const sample = cacheResults
-              .slice(-5)
-              .map(
-                (r) =>
-                  `cmd=${String(r.commandId)} by=${r.requestedBy?.toHexString?.()?.slice(0, 10) ?? "?"}`,
-              );
             console.warn(
-              `[tools] tool_bash no result for cmd=${enqueued.id} lastStatus=${lastTag ?? "?"} ` +
-                `aiIdentity=${toolContext.aiIdentityHex?.slice(0, 10) ?? "?"} ` +
+              `[tools] bridge_result_unavailable command_id=${enqueued.id} ` +
                 `source=${sqlClient ? "http-sql" : "subscription"} ` +
-                `cacheResultRows=${cacheResults.length} recent=[${sample.join(", ")}]`,
+                `cache_result_count=${cacheResults.length}`,
             );
           } catch {
             /* diagnostic only */
@@ -2821,7 +2822,7 @@ export async function executeTool(
         const existingIds = new Set(
           [...(conn.db.page.iter() as Iterable<AnyRow>)].map((p) => p.id as bigint)
         );
-        console.log(`[tools] create_row: parent=${dbPageId} title="${title}"`);
+        console.log(`[tools] row_create_dispatched parent_id=${dbPageId}`);
         await conn.reducers.createPage({
           parentId: dbPageId,
           pageType: { tag: "Doc" },
@@ -2834,7 +2835,7 @@ export async function executeTool(
         );
         if (!newRow) return JSON.stringify({ ok: false, error: "Row created but could not read back ID" });
         const newPageId = newRow.id as bigint;
-        console.log(`[tools] create_row: row page_id=${newPageId}`);
+        console.log(`[tools] row_created page_id=${newPageId}`);
 
         // Apply column defaults
         const workerIdentity = conn.db.user?.iter
@@ -2842,7 +2843,7 @@ export async function executeTool(
           : "";
         const defaultsApplied = await applyDefaults(conn, dbPageId, newPageId, workerIdentity);
         if (defaultsApplied.length > 0) {
-          console.log(`[tools] create_row: applied defaults for: ${defaultsApplied.join(", ")}`);
+          console.log(`[tools] row_defaults_applied count=${defaultsApplied.length}`);
         }
 
         return JSON.stringify({ ok: true, page_id: Number(newPageId), title, defaults_applied: defaultsApplied });
@@ -2858,7 +2859,7 @@ export async function executeTool(
         if (!built.ok) return JSON.stringify({ ok: false, error: built.error });
         const value = built.value as { tag: string; value: unknown };
 
-        console.log(`[tools] set_property_value: page=${pageId} prop=${propDefId} type=${valueType} value=${JSON.stringify(rawValue)}`);
+        console.log(`[tools] property_write_dispatched page_id=${pageId} property_id=${propDefId}`);
         await conn.reducers.setPropertyValue({
           pageId,
           propertyDefinitionId: propDefId,
@@ -2905,7 +2906,7 @@ export async function executeTool(
           }
           const value = built.value as { tag: string; value: unknown };
           console.log(
-            `[tools] set_property_values: page=${pageId} prop=${propDefId} type=${e.value_type}`,
+            `[tools] property_write_dispatched page_id=${pageId} property_id=${propDefId}`,
           );
           await conn.reducers.setPropertyValue({
             pageId,
@@ -3136,7 +3137,7 @@ export async function executeTool(
       case "web_search": {
         const query = input.query as string;
         const via = resolveSerperApiKey(toolContext) ? "serper" : "duckduckgo";
-        console.log(`[tools] web_search: "${query}" (via ${via})`);
+        console.log(`[tools] web_search_dispatched provider=${via}`);
         return await webSearchWithContext(query, toolContext);
       }
 
@@ -3154,7 +3155,7 @@ export async function executeTool(
 
       case "fetch_url": {
         const url = input.url as string;
-        console.log(`[tools] fetch_url: "${url}"`);
+        console.log("[tools] fetch_url_dispatched");
         const content = await fetchUrlContent(url);
         return JSON.stringify({ ok: true, url, content });
       }
@@ -3179,9 +3180,7 @@ export async function executeTool(
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const stack = err instanceof Error ? err.stack : "";
-    console.error(`[tools] ${toolName} FAILED: ${message}`);
-    if (stack) console.error(`[tools] ${toolName} stack: ${stack}`);
+    console.error(`[tools] execution_failed tool=${nativeToolLogCode(toolName)}`);
     const accessRequest = await maybeRequestWriteAccessAfterDenied(
       conn,
       toolName,
