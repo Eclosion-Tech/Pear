@@ -2,9 +2,9 @@
 
 **Updated:** 2026-10-19
 
-**Status:** S0 offline containment, S1a private mail storage and staged S1b
-source policy/exposure provenance, plus staged S1c exact instruction revisions
-and owner decisions. The policy package and private stores are
+**Status:** Merged S0 containment, S1a private mail storage, S1b
+source policy/exposure provenance and S1c exact instruction revisions/owner
+decisions, plus staged S2a retained epochs and frozen processor declarations. The policy package and private stores are
 not connected to a mail runtime.
 Durable admissions, isolated credential brokers, redaction enforcement and host
 egress controls remain unimplemented; the protected mail profile is disabled.
@@ -139,6 +139,23 @@ approval grants no disclosure or effect authority. Mutable prompts, page flags,
 publisher configuration and conversation answers receive no automatic approval.
 See the [storage contract and fixture commands](PROTECTED_MAIL_STORAGE.md).
 
+## Staged authority state
+
+[S2a authority records](PROTECTED_MAIL_AUTHORITY.md) add explicitly enrolled
+connection epochs/tombstones and immutable processor revisions. Existing owner
+pause, password and delete reducers invalidate enrolled epochs atomically;
+exact public-key descriptor changes invalidate all live enrolled connections.
+Repeated or reverted configuration cannot restore an older generation.
+Publisher config declarations and terminal retirement use immutable history,
+CAS and effect-free replay; they grant no processing permission.
+
+The five new tables are private with no new view or runtime consumer. Ordinary
+restore also rejects processor-only private state, and new profile configuration
+cannot run during v2 import. The persistence fixture restarts a disk-backed
+server and compares retained state without republishing it. Grants/shared
+budgets, governed instruction sources, durable admission and dispatch remain
+unimplemented; configuration records do not establish those guarantees.
+
 ## Coverage inventory and release gates
 
 The [entry-point inventory and next storage design](SENTINEL_COVERAGE.md) map
@@ -150,7 +167,7 @@ the existing identities, read paths and effect paths to their remaining gates.
 | Source/exposure graph | Private source ceilings/current generations, cumulative registered exposure snapshots and immutable derived ancestry | Reviewed registration adapter, authenticated run binding, fresh admission/dispatch policy checks and complete actual exposure coverage |
 | Mail destination/readers | Separate private tables and explicit owner views, excluded from ordinary page readers/caches/exports | Reviewed owner UI, safe connection migration and admitted runtime use; legacy mail pages remain legacy |
 | Reviewed instructions | Private exact revisions, owner review projection, scoped owner decisions and edit-to-draft | Reviewed human UI/recipe, governed instruction-source adapter, current source restrictions and independent admission |
-| Authority/dispatch | Frozen operation/payload preparation; in-memory synthetic dispatch tests | Current epoch/rights and shared budgets checked transactionally; one-use admission, dispatch-time recheck, conservative unknown outcomes |
+| Authority/dispatch | Retained connection epochs and frozen processor declarations; frozen operation/payload preparation; in-memory synthetic dispatch tests | Current epoch/rights and shared budgets checked transactionally; one-use admission, dispatch-time recheck, conservative unknown outcomes |
 | IMAP, model and classifier credentials | Existing worker custody unchanged | Isolated roles with minimal environment/mounts, authenticated RPC and host-enforced network policy |
 | Mail settings/lifecycle | Existing monitor unchanged | Draft/test/preview/enable, frozen processor approval, authentication-message suppression, cancellation and accurate terminal/backoff states |
 | Normal chat, APIs, MCP and output streams | Existing controls unchanged | Shared authorization across reads, writes, inference, responses, exports, notifications and sharing |
@@ -188,6 +205,9 @@ accuracy results.
 - `worker/scripts/protected-mail-instructions-e2e.ts`: populated S1b upgrade,
   private review/identity boundaries, exact decisions, edit/revoke/replay CAS,
   retained ancestry and export exclusions.
+- `worker/scripts/protected-mail-authority-e2e.ts`: populated S1c upgrade,
+  epoch/configuration edit–revert and replay, tombstones, processor-only restore
+  fences, private protocol boundaries and controlled disk-backed restart.
 
 Tests cover forged approvals, unknown effects, scope/epoch/time mismatches,
 destination substitution, changed processors, malformed JSON-like objects,

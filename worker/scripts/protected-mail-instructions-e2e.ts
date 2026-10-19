@@ -5,6 +5,7 @@
  * Output contains fixed stage codes only, never fixture values or raw errors.
  */
 import assert from "node:assert/strict";
+import { drainFixtureConnections, retainFixtureDatabaseUntilServerCleanup } from "./protected-mail-fixture-lifecycle.js";
 import { createHash, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { setGlobalLogLevel } from "spacetimedb";
@@ -137,6 +138,7 @@ function cache(connection: DbConnection, name: string): CachedTable {
 async function main(): Promise<void> {
   const base = localBase(process.argv[2] ?? "http://127.0.0.1:3099");
   assert.ok(process.argv.length <= 3, "unexpected_arguments");
+  const retainFixtureDatabase = retainFixtureDatabaseUntilServerCleanup();
   setGlobalLogLevel("error");
   const fixedLog = console.log.bind(console);
   console.log = (...args: unknown[]) => {
@@ -674,10 +676,13 @@ async function main(): Promise<void> {
     console.log("PASS protected_mail_instructions_no_ordinary_projection_or_runtime_activation");
     stage = "complete";
   } finally {
-    for (const live of connections) live.disconnect();
     if (publisherIdentity) {
-      const response = await localFetch(databaseUrl, { method: "DELETE", headers: { Authorization: `Bearer ${publisherIdentity.token}` } });
-      assert.ok(response.ok || response.status === 404, "fixture_cleanup_failed");
+      const cleanupTransport = new HttpStdbTransport({ baseUrl: base, dbName: name, token: publisherIdentity.token, fetchImpl: localFetch, timeoutMs: 15000 });
+      await drainFixtureConnections(connections, () => cleanupTransport.sql("SELECT * FROM st_client"));
+      if (!retainFixtureDatabase) {
+        const response = await localFetch(databaseUrl, { method: "DELETE", headers: { Authorization: `Bearer ${publisherIdentity.token}` } });
+        assert.ok(response.ok || response.status === 404, "fixture_cleanup_failed");
+      }
     }
   }
 }

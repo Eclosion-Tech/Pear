@@ -8,6 +8,7 @@
  * Logs deliberately contain only fixed stage codes, never tokens/fixtures.
  */
 import assert from "node:assert/strict";
+import { drainFixtureConnections, retainFixtureDatabaseUntilServerCleanup } from "./protected-mail-fixture-lifecycle.js";
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { setGlobalLogLevel } from "spacetimedb";
@@ -80,6 +81,7 @@ function cache(connection: DbConnection, name: string): CachedTable {
 
 async function main(): Promise<void> {
   const base = localBase(process.argv[2] ?? "http://127.0.0.1:3099");
+  const retainFixtureDatabase = retainFixtureDatabaseUntilServerCleanup();
   setGlobalLogLevel("error");
   // SDK 2.0.3 emits CSS-prefixed diagnostics through console.log, including
   // fixture row IDs and potentially transport error details. Keep errors
@@ -473,12 +475,15 @@ async function main(): Promise<void> {
     console.log("PASS protected_mail_ordinary_restore_fenced_with_retained_history");
     stage = "complete";
   } finally {
-    for (const connection of connections) connection.disconnect();
-    // The database name and token are generated inside this script; no option
-    // can retain or target an existing workspace. DELETE has no clear fallback.
+    // The name/token are generated here. Retention is only for a controller
+    // that owns and removes this entire disposable server and its storage.
     if (publisherIdentity) {
-      const response = await localFetch(databaseUrl, { method: "DELETE", headers: { Authorization: `Bearer ${publisherIdentity.token}` } });
-      assert.ok(response.ok || response.status === 404, "fixture_cleanup_failed");
+      const cleanupTransport = new HttpStdbTransport({ baseUrl: base, dbName: name, token: publisherIdentity.token, fetchImpl: localFetch, timeoutMs: 15000 });
+      await drainFixtureConnections(connections, () => cleanupTransport.sql("SELECT * FROM st_client"));
+      if (!retainFixtureDatabase) {
+        const response = await localFetch(databaseUrl, { method: "DELETE", headers: { Authorization: `Bearer ${publisherIdentity.token}` } });
+        assert.ok(response.ok || response.status === 404, "fixture_cleanup_failed");
+      }
     }
   }
 }

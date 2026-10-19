@@ -10,6 +10,7 @@ use spacetimedb::{
 };
 
 use super::accounts::{mail_connection, MailConnection};
+use super::processors::protected_mail_processor_head;
 use crate::ai::{ai_user_config, ai_user_config__view, ai_user_profile, ai_user_profile__view};
 use crate::auth::{user, user__view};
 use crate::module_install::{module_install_meta__view, sender_is_module_publisher};
@@ -124,7 +125,9 @@ pub(super) fn require_legacy_connection(ctx: &ReducerContext, id: u64) -> Result
 /// Ordinary snapshots cannot retain protected state while importing a new
 /// identity/source universe. A future protected restore needs its own contract.
 pub(crate) fn require_no_protected_mail_collections(ctx: &ReducerContext) -> Result<(), String> {
-    if ctx.db.protected_mail_collection().iter().next().is_some() {
+    if ctx.db.protected_mail_collection().iter().next().is_some()
+        || ctx.db.protected_mail_processor_head().iter().next().is_some()
+    {
         return Err("protected_mail_restore_not_supported".into());
     }
     Ok(())

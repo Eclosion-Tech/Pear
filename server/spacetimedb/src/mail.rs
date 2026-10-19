@@ -4,8 +4,10 @@
 use spacetimedb::{client_visibility_filter, reducer, table, Filter, Identity, ReducerContext, Table, Timestamp};
 
 mod accounts;
+mod authority;
 mod governance;
 mod instructions;
+mod processors;
 mod protected;
 mod provenance;
 pub(crate) use protected::require_no_protected_mail_collections;
