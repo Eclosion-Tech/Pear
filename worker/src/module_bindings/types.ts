@@ -1540,12 +1540,68 @@ export const ProtectedMailCollectionRow = __t.object("ProtectedMailCollectionRow
 });
 export type ProtectedMailCollectionRow = __Infer<typeof ProtectedMailCollectionRow>;
 
+export const ProtectedMailContext = __t.object("ProtectedMailContext", {
+  id: __t.string(),
+  owner: __t.identity(),
+  collectionId: __t.u64(),
+  runtimeId: __t.string(),
+  runId: __t.string(),
+  latestGeneration: __t.u64(),
+  latestExposureId: __t.option(__t.string()),
+  blocked: __t.bool(),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+});
+export type ProtectedMailContext = __Infer<typeof ProtectedMailContext>;
+
+export const ProtectedMailDerivation = __t.object("ProtectedMailDerivation", {
+  id: __t.string(),
+  sourceId: __t.string(),
+  owner: __t.identity(),
+  collectionId: __t.u64(),
+  contextId: __t.string(),
+  exposureId: __t.string(),
+  eventKey: __t.string(),
+  requestDigest: __t.string(),
+  revision: __t.u64(),
+  digest: __t.string(),
+  body: __t.string(),
+  sanitizationVersion: __t.string(),
+  get parents() {
+    return __t.array(ProtectedMailSourceRef);
+  },
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailDerivation = __Infer<typeof ProtectedMailDerivation>;
+
 // The tagged union or sum type for the algebraic type `ProtectedMailDirection`.
 export const ProtectedMailDirection = __t.enum("ProtectedMailDirection", {
   Received: __t.unit(),
   Sent: __t.unit(),
 });
 export type ProtectedMailDirection = __Infer<typeof ProtectedMailDirection>;
+
+export const ProtectedMailExposure = __t.object("ProtectedMailExposure", {
+  id: __t.string(),
+  owner: __t.identity(),
+  collectionId: __t.u64(),
+  contextId: __t.string(),
+  runtimeId: __t.string(),
+  runId: __t.string(),
+  eventKey: __t.string(),
+  requestDigest: __t.string(),
+  generation: __t.u64(),
+  previousId: __t.option(__t.string()),
+  get addedSources() {
+    return __t.array(ProtectedMailSourceRef);
+  },
+  inheritedExposureIds: __t.array(__t.string()),
+  get members() {
+    return __t.array(ProtectedMailSourceRef);
+  },
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailExposure = __Infer<typeof ProtectedMailExposure>;
 
 export const ProtectedMailInput = __t.object("ProtectedMailInput", {
   folder: __t.string(),
@@ -1564,6 +1620,14 @@ export const ProtectedMailInput = __t.object("ProtectedMailInput", {
   sanitizationVersion: __t.string(),
 });
 export type ProtectedMailInput = __Infer<typeof ProtectedMailInput>;
+
+export const ProtectedMailProcessor = __t.object("ProtectedMailProcessor", {
+  profileId: __t.string(),
+  revision: __t.string(),
+  endpoint: __t.string(),
+  model: __t.string(),
+});
+export type ProtectedMailProcessor = __Infer<typeof ProtectedMailProcessor>;
 
 export const ProtectedMailReceipt = __t.object("ProtectedMailReceipt", {
   id: __t.string(),
@@ -1616,6 +1680,43 @@ export const ProtectedMailSource = __t.object("ProtectedMailSource", {
   createdAt: __t.timestamp(),
 });
 export type ProtectedMailSource = __Infer<typeof ProtectedMailSource>;
+
+export const ProtectedMailSourcePolicyHead = __t.object("ProtectedMailSourcePolicyHead", {
+  id: __t.string(),
+  get source() {
+    return ProtectedMailSourceRef;
+  },
+  owner: __t.identity(),
+  collectionId: __t.u64(),
+  generation: __t.u64(),
+});
+export type ProtectedMailSourcePolicyHead = __Infer<typeof ProtectedMailSourcePolicyHead>;
+
+export const ProtectedMailSourcePolicyHistory = __t.object("ProtectedMailSourcePolicyHistory", {
+  id: __t.string(),
+  policyId: __t.string(),
+  get source() {
+    return ProtectedMailSourceRef;
+  },
+  owner: __t.identity(),
+  collectionId: __t.u64(),
+  generation: __t.u64(),
+  get processors() {
+    return __t.array(ProtectedMailProcessor);
+  },
+  allowOwnerStorage: __t.bool(),
+  revoked: __t.bool(),
+  changedBy: __t.identity(),
+  changedAt: __t.timestamp(),
+});
+export type ProtectedMailSourcePolicyHistory = __Infer<typeof ProtectedMailSourcePolicyHistory>;
+
+export const ProtectedMailSourceRef = __t.object("ProtectedMailSourceRef", {
+  id: __t.string(),
+  revision: __t.u64(),
+  digest: __t.string(),
+});
+export type ProtectedMailSourceRef = __Infer<typeof ProtectedMailSourceRef>;
 
 export const ReadableResource = __t.object("ReadableResource", {
   id: __t.u64(),
