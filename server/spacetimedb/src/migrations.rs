@@ -240,6 +240,10 @@ pub fn run_pending_migrations(ctx: &ReducerContext) -> Result<(), String> {
         seed_builtin_component_types(ctx);
         Ok::<(), String>(())
     });
+    run_step!(ctx, "component_type_trellis_panel_v1", |ctx: &ReducerContext| {
+        seed_builtin_component_types(ctx);
+        Ok::<(), String>(())
+    });
     Ok(())
 }
 

@@ -1,0 +1,236 @@
+{
+  "create": {
+    "v": "pear_trellis_ui_v1",
+    "document": {
+      "protocol": "trellis_ui_v1",
+      "documentId": "pear-message:123",
+      "revision": 0,
+      "catalogVersion": "trellis.baseline.v1",
+      "rootId": "pear-ui:123:root",
+      "nodes": [
+        {
+          "id": "pear-ui:123:root",
+          "key": "root",
+          "parentId": null,
+          "type": "Container",
+          "order": 0,
+          "props": {
+            "direction": "column"
+          }
+        },
+        {
+          "id": "pear-ui:123:title",
+          "key": "title",
+          "parentId": "pear-ui:123:root",
+          "type": "Heading",
+          "order": 0,
+          "props": {
+            "level": 2
+          },
+          "text": [
+            {
+              "text": "Run a command"
+            }
+          ]
+        },
+        {
+          "id": "pear-ui:123:body",
+          "key": "body",
+          "parentId": "pear-ui:123:root",
+          "type": "RichText",
+          "order": 1,
+          "props": {},
+          "text": [
+            {
+              "text": "Choose a value."
+            }
+          ]
+        },
+        {
+          "id": "pear-ui:123:field",
+          "key": "field",
+          "parentId": "pear-ui:123:root",
+          "type": "Input",
+          "order": 2,
+          "props": {
+            "name": "value",
+            "label": "Value",
+            "placeholder": "",
+            "defaultValue": "",
+            "required": true
+          }
+        },
+        {
+          "id": "pear-ui:123:submit",
+          "key": "submit",
+          "parentId": "pear-ui:123:root",
+          "type": "Button",
+          "order": 3,
+          "props": {
+            "label": "Run automation"
+          },
+          "action": {
+            "slot": "pear.manual-automation",
+            "input": {
+              "value": {
+                "field": "value"
+              }
+            }
+          }
+        }
+      ],
+      "retiredIds": [],
+      "template": {
+        "id": "pear.automation-form",
+        "version": "1.0.0",
+        "hash": "dbdf32fdef5372dbfbf0b30b2dbdfe89caecdb996ad170915d723c3830a1c0a6",
+        "instanceId": "pear-ui:123",
+        "parameters": {
+          "title": "Run a command",
+          "body": "Choose a value.",
+          "fieldLabel": "Value",
+          "placeholder": "",
+          "defaultValue": "",
+          "buttonLabel": "Run automation"
+        },
+        "mapping": {
+          "root": "pear-ui:123:root",
+          "title": "pear-ui:123:title",
+          "body": "pear-ui:123:body",
+          "field": "pear-ui:123:field",
+          "submit": "pear-ui:123:submit"
+        },
+        "actionBindings": {
+          "submit": "pear.manual-automation"
+        },
+        "state": "linked"
+      }
+    },
+    "bindings": {
+      "submit": {
+        "automationId": "17",
+        "confirmation": "Run this command?",
+        "input": {
+          "value": "$form.value"
+        }
+      }
+    }
+  },
+  "update": {
+    "v": "pear_trellis_ui_v1",
+    "document": {
+      "protocol": "trellis_ui_v1",
+      "documentId": "pear-message:123",
+      "revision": 1,
+      "catalogVersion": "trellis.baseline.v1",
+      "rootId": "pear-ui:123:root",
+      "nodes": [
+        {
+          "id": "pear-ui:123:root",
+          "key": "root",
+          "parentId": null,
+          "type": "Container",
+          "order": 0,
+          "props": {
+            "direction": "column"
+          }
+        },
+        {
+          "id": "pear-ui:123:title",
+          "key": "title",
+          "parentId": "pear-ui:123:root",
+          "type": "Heading",
+          "order": 0,
+          "props": {
+            "level": 2
+          },
+          "text": [
+            {
+              "text": "Updated command"
+            }
+          ]
+        },
+        {
+          "id": "pear-ui:123:body",
+          "key": "body",
+          "parentId": "pear-ui:123:root",
+          "type": "RichText",
+          "order": 1,
+          "props": {},
+          "text": [
+            {
+              "text": "Choose a value."
+            }
+          ]
+        },
+        {
+          "id": "pear-ui:123:field",
+          "key": "field",
+          "parentId": "pear-ui:123:root",
+          "type": "Input",
+          "order": 2,
+          "props": {
+            "name": "value",
+            "label": "Value",
+            "placeholder": "",
+            "defaultValue": "new default",
+            "required": true
+          }
+        },
+        {
+          "id": "pear-ui:123:submit",
+          "key": "submit",
+          "parentId": "pear-ui:123:root",
+          "type": "Button",
+          "order": 3,
+          "props": {
+            "label": "Run automation"
+          },
+          "action": {
+            "slot": "pear.manual-automation",
+            "input": {
+              "value": {
+                "field": "value"
+              }
+            }
+          }
+        }
+      ],
+      "retiredIds": [],
+      "template": {
+        "id": "pear.automation-form",
+        "version": "1.0.0",
+        "hash": "dbdf32fdef5372dbfbf0b30b2dbdfe89caecdb996ad170915d723c3830a1c0a6",
+        "instanceId": "pear-ui:123",
+        "parameters": {
+          "title": "Updated command",
+          "body": "Choose a value.",
+          "fieldLabel": "Value",
+          "placeholder": "",
+          "defaultValue": "new default",
+          "buttonLabel": "Run automation"
+        },
+        "mapping": {
+          "root": "pear-ui:123:root",
+          "title": "pear-ui:123:title",
+          "body": "pear-ui:123:body",
+          "field": "pear-ui:123:field",
+          "submit": "pear-ui:123:submit"
+        },
+        "actionBindings": {
+          "submit": "pear.manual-automation"
+        },
+        "state": "linked"
+      }
+    },
+    "bindings": {
+      "submit": {
+        "automationId": "17",
+        "confirmation": "Run this command?",
+        "input": {
+          "value": "$form.value"
+        }
+      }
+    }
+  }
+}

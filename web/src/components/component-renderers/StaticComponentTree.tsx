@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { useTable } from "spacetimedb/react";
+import { useSpacetimeDB, useTable } from "spacetimedb/react";
 import {
   BlockView,
   registerCoreBlocks,
@@ -12,6 +12,72 @@ import type { AutomationEventQueue } from "@/src/module_bindings/types";
 import { registerPearBuiltinRenderers } from "./built-in";
 import { parseComponentTreeBlob } from "@/src/lib/componentTreeBlob";
 import { GeneratedUiInteractionProvider } from "./GeneratedUiInteractionContext";
+import { preparePearTrellisUi } from "@/src/lib/trellisGeneratedUi";
+import { useTrellisGeneratedUiFlag } from "@/src/lib/trellisGeneratedUiFlag";
+import { TrellisGeneratedUi } from "./TrellisGeneratedUi";
+import { PageComponentReference } from "./PageComponentReference";
+
+type StaticTreeProps = {
+  json: string;
+  messageId: bigint;
+  automationEventsByKey?: ReadonlyMap<string, AutomationEventQueue>;
+};
+
+export function StaticComponentTree(props: StaticTreeProps) {
+  const enabled = useTrellisGeneratedUiFlag();
+  let retained = false;
+  let pageReference = false;
+  try {
+    pageReference = JSON.parse(props.json)?.v === "pear_page_component_v1";
+    retained = String(JSON.parse(props.json)?.v ?? "").startsWith(
+      "pear_trellis_ui_",
+    );
+  } catch {
+    /* Historical parser owns malformed legacy payloads. */
+  }
+  if (pageReference) return <PageComponentReference json={props.json} />;
+  return retained ? (
+    <TrellisStaticComponentTree {...props} retained />
+  ) : enabled ? (
+    <TrellisStaticComponentTree {...props} />
+  ) : (
+    <LegacyStaticComponentTree {...props} />
+  );
+}
+
+function TrellisStaticComponentTree(
+  props: StaticTreeProps & { retained?: boolean },
+) {
+  const { identity } = useSpacetimeDB();
+  const principalKey = identity?.toHexString() ?? "anonymous";
+  const prepared = useMemo(() => {
+    try {
+      return preparePearTrellisUi(props.json, props.messageId);
+    } catch {
+      return null;
+    }
+  }, [props.json, props.messageId]);
+  // Historical components outside the bounded shared catalog retain their
+  // existing renderer. Disabling the flag restores the original path entirely.
+  if (!prepared)
+    return props.retained ? (
+      <div role="alert">
+        This saved interface is unsupported or invalid. Its stored content has
+        been retained.
+      </div>
+    ) : (
+      <LegacyStaticComponentTree {...props} />
+    );
+  return (
+    <GeneratedUiInteractionProvider
+      key={`${principalKey}:${props.messageId}`}
+      messageId={props.messageId}
+      eventsByKey={props.automationEventsByKey}
+    >
+      <TrellisGeneratedUi prepared={prepared} principalKey={principalKey} />
+    </GeneratedUiInteractionProvider>
+  );
+}
 
 // The renderer registry is a module-level singleton; both calls are
 // idempotent. Registering here (not only in PearComponentTreeRenderer) lets a
@@ -31,7 +97,7 @@ registerPearBuiltinRenderers();
  * lets generated Input/Button leaves invoke an allowlisted Manual automation;
  * the server remains authoritative for identity, policy, ACLs, and audit rows.
  */
-export function StaticComponentTree({
+function LegacyStaticComponentTree({
   json,
   messageId,
   automationEventsByKey,
@@ -70,7 +136,10 @@ export function StaticComponentTree({
       messageId={messageId}
       eventsByKey={automationEventsByKey}
     >
-      <div className="pear-static-component-tree my-2">
+      <div
+        className="pear-static-component-tree my-2"
+        data-pear-ui-runtime="legacy"
+      >
         <BlockView tree={parsed.tree} />
       </div>
     </GeneratedUiInteractionProvider>

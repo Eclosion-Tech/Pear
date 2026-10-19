@@ -1,0 +1,224 @@
+[
+  {
+    "version": "1.0.0",
+    "catalogVersion": "trellis.baseline.v1",
+    "rootId": "root",
+    "id": "pear.summary",
+    "description": "A retained summary whose title and body can be updated without replacing it.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "body": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 4000
+        }
+      },
+      "required": [
+        "title",
+        "body"
+      ]
+    },
+    "requiredComponents": [
+      "Container",
+      "Heading",
+      "RichText"
+    ],
+    "actionSlots": [],
+    "nodes": [
+      {
+        "id": "root",
+        "key": "root",
+        "parentId": null,
+        "type": "Container",
+        "order": 0,
+        "props": {
+          "direction": "column"
+        }
+      },
+      {
+        "id": "title",
+        "key": "title",
+        "parentId": "root",
+        "type": "Heading",
+        "order": 0,
+        "props": {
+          "level": 2
+        },
+        "text": [
+          {
+            "text": {
+              "$param": "title"
+            }
+          }
+        ]
+      },
+      {
+        "id": "body",
+        "key": "body",
+        "parentId": "root",
+        "type": "RichText",
+        "order": 1,
+        "props": {},
+        "text": [
+          {
+            "text": {
+              "$param": "body"
+            }
+          }
+        ]
+      }
+    ],
+    "hash": "8b039f684b5355e2e9a3b57d93effc4f1b0f7411b3d84f3f66a5d876e292d9fa"
+  },
+  {
+    "version": "1.0.0",
+    "catalogVersion": "trellis.baseline.v1",
+    "rootId": "root",
+    "id": "pear.automation-form",
+    "description": "A retained one-field command form bound by Pear to an existing Manual automation.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "body": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 4000
+        },
+        "fieldLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "placeholder": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 160
+        },
+        "defaultValue": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 4000
+        },
+        "buttonLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        }
+      },
+      "required": [
+        "title",
+        "body",
+        "fieldLabel",
+        "placeholder",
+        "defaultValue",
+        "buttonLabel"
+      ]
+    },
+    "requiredComponents": [
+      "Container",
+      "Heading",
+      "RichText",
+      "Input",
+      "Button"
+    ],
+    "actionSlots": [
+      "submit"
+    ],
+    "nodes": [
+      {
+        "id": "root",
+        "key": "root",
+        "parentId": null,
+        "type": "Container",
+        "order": 0,
+        "props": {
+          "direction": "column"
+        }
+      },
+      {
+        "id": "title",
+        "key": "title",
+        "parentId": "root",
+        "type": "Heading",
+        "order": 0,
+        "props": {
+          "level": 2
+        },
+        "text": [
+          {
+            "text": {
+              "$param": "title"
+            }
+          }
+        ]
+      },
+      {
+        "id": "body",
+        "key": "body",
+        "parentId": "root",
+        "type": "RichText",
+        "order": 1,
+        "props": {},
+        "text": [
+          {
+            "text": {
+              "$param": "body"
+            }
+          }
+        ]
+      },
+      {
+        "id": "field",
+        "key": "field",
+        "parentId": "root",
+        "type": "Input",
+        "order": 2,
+        "props": {
+          "name": "value",
+          "label": {
+            "$param": "fieldLabel"
+          },
+          "placeholder": {
+            "$param": "placeholder"
+          },
+          "defaultValue": {
+            "$param": "defaultValue"
+          },
+          "required": true
+        }
+      },
+      {
+        "id": "submit",
+        "key": "submit",
+        "parentId": "root",
+        "type": "Button",
+        "order": 3,
+        "props": {
+          "label": {
+            "$param": "buttonLabel"
+          }
+        },
+        "action": {
+          "slot": "submit",
+          "input": {
+            "value": {
+              "field": "value"
+            }
+          }
+        }
+      }
+    ],
+    "hash": "dbdf32fdef5372dbfbf0b30b2dbdfe89caecdb996ad170915d723c3830a1c0a6"
+  }
+]

@@ -60,6 +60,8 @@ import ClearPropertyValueReducer from "./clear_property_value_reducer";
 import CloseBridgeDeviceSessionsReducer from "./close_bridge_device_sessions_reducer";
 import CloseBridgeSessionReducer from "./close_bridge_session_reducer";
 import CloseConversationReducer from "./close_conversation_reducer";
+import CommitMessageTrellisReducer from "./commit_message_trellis_reducer";
+import CommitTrellisPanelReducer from "./commit_trellis_panel_reducer";
 import CompleteBridgeCommandReducer from "./complete_bridge_command_reducer";
 import CompleteNotionImportJobReducer from "./complete_notion_import_job_reducer";
 import ConfirmBridgeCommandReducer from "./confirm_bridge_command_reducer";
@@ -85,6 +87,7 @@ import CreatePageReducer from "./create_page_reducer";
 import CreateProtectedMailCollectionReducer from "./create_protected_mail_collection_reducer";
 import CreateReviewAgentBindingReducer from "./create_review_agent_binding_reducer";
 import CreateSensorTriageRoutineReducer from "./create_sensor_triage_routine_reducer";
+import CreateTrellisPanelReducer from "./create_trellis_panel_reducer";
 import CreateViewReducer from "./create_view_reducer";
 import DeleteAiUserReducer from "./delete_ai_user_reducer";
 import DeleteAiUserRoutineReducer from "./delete_ai_user_routine_reducer";
@@ -224,6 +227,7 @@ import SetMailConnectionEnabledReducer from "./set_mail_connection_enabled_reduc
 import SetMcpServerApiKeyReducer from "./set_mcp_server_api_key_reducer";
 import SetMessageComponentTreeReducer from "./set_message_component_tree_reducer";
 import SetMessageFeedbackReducer from "./set_message_feedback_reducer";
+import SetMessagePageComponentReducer from "./set_message_page_component_reducer";
 import SetOidcTrustPolicyReducer from "./set_oidc_trust_policy_reducer";
 import SetPageAccessRuleReducer from "./set_page_access_rule_reducer";
 import SetPageEmbeddingReducer from "./set_page_embedding_reducer";
@@ -1499,6 +1503,8 @@ const reducersSchema = __reducers(
   __reducerSchema("close_bridge_device_sessions", CloseBridgeDeviceSessionsReducer),
   __reducerSchema("close_bridge_session", CloseBridgeSessionReducer),
   __reducerSchema("close_conversation", CloseConversationReducer),
+  __reducerSchema("commit_message_trellis", CommitMessageTrellisReducer),
+  __reducerSchema("commit_trellis_panel", CommitTrellisPanelReducer),
   __reducerSchema("complete_bridge_command", CompleteBridgeCommandReducer),
   __reducerSchema("complete_notion_import_job", CompleteNotionImportJobReducer),
   __reducerSchema("confirm_bridge_command", ConfirmBridgeCommandReducer),
@@ -1524,6 +1530,7 @@ const reducersSchema = __reducers(
   __reducerSchema("create_protected_mail_collection", CreateProtectedMailCollectionReducer),
   __reducerSchema("create_review_agent_binding", CreateReviewAgentBindingReducer),
   __reducerSchema("create_sensor_triage_routine", CreateSensorTriageRoutineReducer),
+  __reducerSchema("create_trellis_panel", CreateTrellisPanelReducer),
   __reducerSchema("create_view", CreateViewReducer),
   __reducerSchema("delete_ai_user", DeleteAiUserReducer),
   __reducerSchema("delete_ai_user_routine", DeleteAiUserRoutineReducer),
@@ -1663,6 +1670,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_mcp_server_api_key", SetMcpServerApiKeyReducer),
   __reducerSchema("set_message_component_tree", SetMessageComponentTreeReducer),
   __reducerSchema("set_message_feedback", SetMessageFeedbackReducer),
+  __reducerSchema("set_message_page_component", SetMessagePageComponentReducer),
   __reducerSchema("set_oidc_trust_policy", SetOidcTrustPolicyReducer),
   __reducerSchema("set_page_access_rule", SetPageAccessRuleReducer),
   __reducerSchema("set_page_embedding", SetPageEmbeddingReducer),

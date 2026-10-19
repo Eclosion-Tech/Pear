@@ -7,6 +7,8 @@
  */
 
 import type Anthropic from "@anthropic-ai/sdk";
+import { TRELLIS_TOOLS, isTrellisTool, executeTrellisTool } from "./trellis-tools.js";
+import { showPagePanel } from "./page-panel-reference.js";
 import {
   appendPanelToBlob,
   specHasContent,
@@ -20,6 +22,7 @@ import {
   executeMcpParityTool,
   getMcpParityToolDefs,
   isMcpParityTool,
+  mcpTransportFor,
 } from "./mcp-parity-tools.js";
 // ConnLike avoids importing the full generated DbConnection class (whose
 // db/reducers properties are only resolved in the generated bindings context).
@@ -147,6 +150,7 @@ export function getConversationTools(): Anthropic.Messages.Tool[] {
     ...SANDBOX_TOOLS,
     ...MEMORY_TOOLS,
     ...UI_TOOLS,
+    ...(process.env.PEAR_TRELLIS_UI === "1" ? TRELLIS_TOOLS : []),
     ...THREAD_TOOLS,
   ];
 }
@@ -182,6 +186,11 @@ const THREAD_TOOLS: Anthropic.Messages.Tool[] = [
 // ── Generative UI tool (custom-view runtime, M1b-lite) ────────────────────────
 
 const UI_TOOLS: Anthropic.Messages.Tool[] = [
+  {
+    name: "show_page_panel",
+    description: "Display a live reference to an existing page-owned panel in this assistant message. Use a TrellisPanel component_id from get_page_components, create_page_panel or get_page_panel. The source stays on its page; edits in the page and chat use the same saved state. No page content is copied into this message. Use a fresh message if another interface occupies this one.",
+    input_schema: { type: "object", properties: { component_id: { type: "string" } }, required: ["component_id"], additionalProperties: false },
+  },
   {
     name: "render_ui",
     description:
@@ -1474,6 +1483,11 @@ function targetPageForAccessRequest(
   input: Record<string, unknown>,
   ctx: ToolCallContext,
 ): bigint | undefined {
+  if (toolName === "create_page_panel" || toolName === "update_page_panel") {
+    const id = numericInputToBigInt(toolName === "create_page_panel" ? input.parent_id : input.component_id);
+    const node = id ? conn.db.component_node?.id?.find?.(id) as { surfaceId?: bigint } | undefined : undefined;
+    return node?.surfaceId ?? ctx.currentPageId;
+  }
   if (toolName === "create_page") {
     return numericInputToBigInt(input.parent_id);
   }
@@ -1506,6 +1520,8 @@ function targetPageForAccessRequest(
 
 function isPageWriteTool(toolName: string): boolean {
   return [
+    "create_page_panel",
+    "update_page_panel",
     "create_page",
     "add_property",
     "delete_property",
@@ -1793,7 +1809,13 @@ export async function executeTool(
         input,
       );
     }
+    if (isTrellisTool(toolName)) {
+      return JSON.stringify(await executeTrellisTool(conn, toolName, input, toolContext, { enabled: process.env.PEAR_TRELLIS_UI === "1" }));
+    }
     switch (toolName) {
+      case "show_page_panel":
+        return await showPagePanel(conn, input, toolContext,
+          toolContext.aiIdentityHex ? mcpTransportFor(toolContext.aiIdentityHex) : undefined);
       case "render_ui": {
         // Emits a structurally read-only component_tree_v1 onto the current
         // assistant message. Generated controls can only cross the boundary by
@@ -1826,6 +1848,11 @@ export async function executeTool(
         const existing = existingRow
           ? readOptionStringFromRow(existingRow.componentTreeJson)
           : null;
+        let retainedInterface = false;
+        try { retainedInterface = existing != null && String(JSON.parse(existing)?.v ?? "").startsWith("pear_trellis_ui_"); } catch { /* Keep the legacy builder's malformed-payload recovery. */ }
+        if (retainedInterface) {
+          return JSON.stringify({ ok: false, error: "This message has a retained interface. Use update_ui to update it, or render a new panel on a fresh message." });
+        }
         const blob = appendPanelToBlob(existing, spec);
         await conn.reducers.setMessageComponentTree({
           messageId: toolContext.messageId,

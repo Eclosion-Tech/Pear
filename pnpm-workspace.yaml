@@ -5,3 +5,4 @@ packages:
   - packages/pulp
   - packages/snapshot-core
   - packages/sentinel
+  - packages/trellis-ui

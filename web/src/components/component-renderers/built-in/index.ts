@@ -13,6 +13,7 @@ import { ConversationRenderer } from "./Conversation";
 import { AudioRenderer } from "./Audio";
 import { FormRenderer } from "./Form";
 import { DataBoundPlaceholder } from "./DataBoundPlaceholder";
+import { TrellisPagePanelRenderer } from "../TrellisPagePanel";
 import { MarkdownTableRenderer } from "./MarkdownTable";
 import {
   BulletListItemRenderer,
@@ -29,6 +30,8 @@ let registered = false;
 export function registerPearBuiltinRenderers(): void {
   if (registered) return;
   registered = true;
+
+  registerRenderer("TrellisPanel", TrellisPagePanelRenderer);
 
   registerRenderer("Container", ContainerRenderer);
   registerRenderer("Image", ImageRenderer);

@@ -46,6 +46,7 @@ import {
   updatePropertyType,
 } from "./database-schema";
 import { writePageContent } from "./write-content";
+import { PAGE_PANEL_TOOLS } from "./page-panels";
 import {
   executeListMemory,
   executeReadMemory,
@@ -1266,6 +1267,7 @@ const readConversationTool: McpToolEntry = {
 export function buildToolRegistry(): McpToolEntry[] {
   return [
     ...answerTools(),
+    ...PAGE_PANEL_TOOLS,
     requestHumanInputTool,
     rememberTool,
     listMemoryTool,
