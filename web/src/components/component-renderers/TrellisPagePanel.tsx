@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { useSpacetimeDB, useTable } from "spacetimedb/react";
+import { useSpacetimeDB } from "spacetimedb/react";
 import { useParams } from "next/navigation";
 import {
   usePulpOptional,
@@ -39,9 +39,8 @@ import {
   type PanelParameters,
   type PanelCommit,
 } from "@pear/trellis-ui";
-import { tables, type DbConnection } from "@/src/module_bindings";
-import { usePages } from "@/src/hooks/usePages";
-import { effectivePagePermission, pageAccessScope } from "@/src/lib/pageAccess";
+import type { DbConnection } from "@/src/module_bindings";
+import { usePageAccess } from "@/src/hooks/usePageAccess";
 import { blockReferenceHref } from "@/src/lib/blockReferenceLink";
 
 const Editable = createContext(false);
@@ -95,38 +94,8 @@ function Button({ node }: BlockRendererProps) {
 }
 const renderers: RendererCatalog = { ...defaultRenderers, Input, Button };
 
-/** Page ACLs authorize both the settings editor and the component's action. */
-function usePanelAccess(surfaceId: bigint) {
-  const { identity } = useSpacetimeDB();
-  const { pages, isReady } = usePages();
-  const [rules, rulesReady] = useTable(tables.page_access_rule);
-  const [users, usersReady] = useTable(tables.user);
-  const [install, installReady] = useTable(tables.module_install_meta);
-  const principal = identity?.toHexString() ?? "anonymous";
-  const privileged =
-    install[0]?.publisherIdentity.toHexString() === principal ||
-    users.some(
-      (user) =>
-        user.identity.toHexString() === principal &&
-        user.isAuthenticated &&
-        user.isAdmin,
-    );
-  const ready = isReady && rulesReady && usersReady && installReady;
-  return {
-    principal,
-    canEdit:
-      ready &&
-      principal !== "anonymous" &&
-      pages.some((page) => page.id === surfaceId) &&
-      effectivePagePermission(
-        pageAccessScope(surfaceId, pages, rules),
-        principal,
-        privileged,
-      ) === "Write",
-  };
-}
 export function TrellisPagePanelRenderer({ node }: PulpProps) {
-  const access = usePanelAccess(node.surfaceId);
+  const access = usePageAccess(node.surfaceId);
   const parsed = useMemo(() => {
     try {
       return { saved: readPagePanel(node.props), error: "" };

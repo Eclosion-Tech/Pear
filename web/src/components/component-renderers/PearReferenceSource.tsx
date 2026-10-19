@@ -1,15 +1,13 @@
 "use client";
 
 import { useCallback, useMemo } from "react";
-import { useSpacetimeDB, useTable } from "spacetimedb/react";
 import type { PulpMutations, ReferenceAdapter, ReferenceSourceProps } from "@eclosion-tech/pulp";
-import { tables } from "@/src/module_bindings";
 import { useComponentTree } from "@/src/hooks/useComponentTree";
-import { useCreateAttachment, useDeleteComponent, useInsertComponent, useMoveComponent, usePages,
+import { useCreateAttachment, useDeleteComponent, useInsertComponent, useMoveComponent,
   useRestoreComponent, useSaveComponentYjsState, useUpdateComponentProps } from "@/src/hooks/usePages";
 import { AudioAttachmentContext } from "@/src/components/AudioAttachmentContext";
 import { useWorkspace } from "@/src/providers/WorkspaceProvider";
-import { effectivePagePermission, pageAccessScope } from "@/src/lib/pageAccess";
+import { usePageAccess } from "@/src/hooks/usePageAccess";
 import { blockReferenceHref, parseBlockReferenceLink } from "@/src/lib/blockReferenceLink";
 
 function PearReferenceSource({ target, children }: ReferenceSourceProps) {
@@ -32,16 +30,7 @@ function PearReferenceSource({ target, children }: ReferenceSourceProps) {
     moveBlock: (args) => moveBlock({ ...args, afterSiblingId: args.afterSiblingId }),
     deleteBlock, restoreBlock, updateBlockProps, saveYjsState }),
   [insertBlock, deleteBlock, restoreBlock, moveBlock, updateBlockProps, saveYjsState]);
-  const { pages, isReady: pagesReady } = usePages();
-  const { identity } = useSpacetimeDB();
-  const [rules, rulesReady] = useTable(tables.page_access_rule);
-  const [users, usersReady] = useTable(tables.user);
-  const [install, installReady] = useTable(tables.module_install_meta);
-  const me = identity?.toHexString();
-  const privileged = me != null && (install[0]?.publisherIdentity.toHexString() === me
-    || users.some((user) => user.identity.toHexString() === me && user.isAuthenticated && user.isAdmin));
-  const ready = pagesReady && rulesReady && usersReady && installReady;
-  const permission = me ? effectivePagePermission(pageAccessScope(target.surfaceId, pages, rules), me, privileged) : null;
+  const { pages, ready, permission } = usePageAccess(target.surfaceId);
   const sourcePage = pages.find((page) => page.id === target.surfaceId);
   const sourceTree = useMemo(() => ({ ...tree, loading: tree.loading || !ready,
     root: sourcePage ? tree.root : null,
