@@ -1,0 +1,168 @@
+{
+  "template": {
+    "id": "pear.note-panel",
+    "version": "1.0.0",
+    "catalogVersion": "trellis.baseline.v1",
+    "description": "A page-owned note panel with editable settings and a host-owned save action.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "body": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 4000
+        },
+        "savedNote": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 4000
+        },
+        "fieldLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "placeholder": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 160
+        },
+        "defaultValue": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 4000
+        }
+      },
+      "required": [
+        "title",
+        "body",
+        "savedNote",
+        "fieldLabel",
+        "placeholder",
+        "defaultValue"
+      ]
+    },
+    "rootId": "root",
+    "requiredComponents": [
+      "Container",
+      "Heading",
+      "RichText",
+      "Input",
+      "Button"
+    ],
+    "actionSlots": [
+      "save"
+    ],
+    "nodes": [
+      {
+        "id": "root",
+        "key": "root",
+        "parentId": null,
+        "type": "Container",
+        "order": 0,
+        "props": {
+          "direction": "column"
+        }
+      },
+      {
+        "id": "title",
+        "key": "title",
+        "parentId": "root",
+        "type": "Heading",
+        "order": 0,
+        "props": {
+          "level": 2
+        },
+        "text": [
+          {
+            "text": {
+              "$param": "title"
+            }
+          }
+        ]
+      },
+      {
+        "id": "body",
+        "key": "body",
+        "parentId": "root",
+        "type": "RichText",
+        "order": 1,
+        "props": {},
+        "text": [
+          {
+            "text": {
+              "$param": "body"
+            }
+          }
+        ]
+      },
+      {
+        "id": "saved",
+        "key": "saved",
+        "parentId": "root",
+        "type": "RichText",
+        "order": 2,
+        "props": {},
+        "text": [
+          {
+            "text": {
+              "$param": "savedNote"
+            }
+          }
+        ]
+      },
+      {
+        "id": "field",
+        "key": "field",
+        "parentId": "root",
+        "type": "Input",
+        "order": 3,
+        "props": {
+          "name": "value",
+          "label": {
+            "$param": "fieldLabel"
+          },
+          "placeholder": {
+            "$param": "placeholder"
+          },
+          "defaultValue": {
+            "$param": "defaultValue"
+          },
+          "required": true
+        }
+      },
+      {
+        "id": "save",
+        "key": "save",
+        "parentId": "root",
+        "type": "Button",
+        "order": 4,
+        "props": {
+          "label": "Save note"
+        },
+        "action": {
+          "slot": "save",
+          "input": {
+            "value": {
+              "field": "value"
+            }
+          }
+        }
+      }
+    ],
+    "hash": "9c982a1ad8e276c1d865f2e9907ccc7726ce90733109b138458d90cf7c4365ae"
+  },
+  "defaults": {
+    "title": "Notes",
+    "body": "Keep a thought here.",
+    "savedNote": "",
+    "fieldLabel": "Note",
+    "placeholder": "Write a note…",
+    "defaultValue": ""
+  }
+}

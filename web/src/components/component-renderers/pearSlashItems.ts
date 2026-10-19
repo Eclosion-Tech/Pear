@@ -24,11 +24,17 @@ export const PEAR_REGISTRY_REQUIRED_TYPES = [
   // component with no path to recovery.
   "Repeater",
   "Reference",
+  "TrellisPanel",
 ] as const;
 
 /** Pear sprint-4 slash / turn-into items — extends pulp's curated set. */
 export const PEAR_SLASH_ITEMS: SlashMenuItem[] = [
   ...SPRINT_3B_SLASH_ITEMS,
+  {
+    id: "trellis-note-panel", section: "Data", label: "Note panel",
+    description: "A saved panel you and your AI can adjust together.",
+    componentType: "TrellisPanel", defaultProps: {}, searchTokens: ["panel", "notes", "trellis", "adjustable"],
+  },
   {
     id: "reference", section: "Pages", label: "Reference",
     description: "Include and edit a page or block from elsewhere.",

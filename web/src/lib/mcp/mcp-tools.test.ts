@@ -1307,10 +1307,11 @@ describe("conversation history", () => {
 // ── Registry shape ─────────────────────────────────────────────────────────────
 
 describe("registry", () => {
-  test("exposes exactly the v1 tool surface", () => {
+  test("exposes the page, page-panel, memory and conversation surface", () => {
     expect([...tools.keys()].sort()).toEqual([
       "add_property",
       "create_page",
+      "create_page_panel",
       "create_thread",
       "delete_component",
       "delete_page",
@@ -1319,12 +1320,14 @@ describe("registry", () => {
       "get_answer",
       "get_page",
       "get_page_components",
+      "get_page_panel",
       "get_page_theme",
       "get_schema_id",
       "insert_component",
       "list_answer_workers",
       "list_child_pages",
       "list_memory",
+      "list_page_panel_templates",
       "list_page_threads",
       "list_properties",
       "move_page",
@@ -1350,6 +1353,7 @@ describe("registry", () => {
       "update_block_content",
       "update_component_props",
       "update_page_content",
+      "update_page_panel",
       "update_page_title",
       "update_property_config",
       "update_property_type",

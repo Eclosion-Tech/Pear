@@ -17,8 +17,8 @@
  * external API contract.
  */
 
-import { ApiEndpointError } from "./types";
-import type { PropertyTypeName, SatsPropertyValue } from "./types";
+import { ApiEndpointError } from "./types.js";
+import type { PropertyTypeName, SatsPropertyValue } from "./types.js";
 
 interface PropertyConfigShape {
   options?: string[];

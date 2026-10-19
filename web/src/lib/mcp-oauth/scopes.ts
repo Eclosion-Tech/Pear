@@ -45,6 +45,8 @@ const SCOPE_TOOLS: Record<McpOauthScope, readonly string[]> = {
   [SCOPE_MEMORY]: ["remember", "list_memory", "read_memory", "search_memory"],
   [SCOPE_CONVERSATIONS_READ]: ["search_conversations", "read_conversation"],
   [SCOPE_PAGES_READ]: [
+    "list_page_panel_templates",
+    "get_page_panel",
     "get_page",
     "read_file",
     "get_page_theme",
@@ -58,6 +60,8 @@ const SCOPE_TOOLS: Record<McpOauthScope, readonly string[]> = {
     "query_database",
   ],
   [SCOPE_PAGES_WRITE]: [
+    "create_page_panel",
+    "update_page_panel",
     "create_page",
     "add_property",
     "rename_property",

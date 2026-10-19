@@ -6,6 +6,7 @@ settings:
 
 overrides:
   sharp: ^0.34.5
+  '@eclosion-tech/trellis': file:vendor/trellis/eclosion-tech-trellis-0.1.0-alpha.1.tgz
 
 importers:
 
@@ -96,6 +97,16 @@ importers:
         specifier: ^5
         version: 5.9.3
 
+  packages/trellis-ui:
+    dependencies:
+      '@eclosion-tech/trellis':
+        specifier: file:../../vendor/trellis/eclosion-tech-trellis-0.1.0-alpha.1.tgz
+        version: file:vendor/trellis/eclosion-tech-trellis-0.1.0-alpha.1.tgz(prosemirror-state@1.4.4)(prosemirror-view@1.41.8)(y-protocols@1.0.7(yjs@13.6.29))
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   web:
     dependencies:
       '@aws-sdk/client-s3':
@@ -122,9 +133,18 @@ importers:
       '@eclosion-tech/snapshot-core':
         specifier: workspace:*
         version: link:../packages/snapshot-core
+      '@eclosion-tech/trellis':
+        specifier: file:../vendor/trellis/eclosion-tech-trellis-0.1.0-alpha.1.tgz
+        version: file:vendor/trellis/eclosion-tech-trellis-0.1.0-alpha.1.tgz(prosemirror-state@1.4.4)(prosemirror-view@1.41.8)(y-protocols@1.0.7(yjs@13.6.29))
+      '@eclosion-tech/trellis-react':
+        specifier: file:../vendor/trellis/eclosion-tech-trellis-react-0.1.0-alpha.1.tgz
+        version: file:vendor/trellis/eclosion-tech-trellis-react-0.1.0-alpha.1.tgz(prosemirror-state@1.4.4)(prosemirror-view@1.41.8)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)(y-protocols@1.0.7(yjs@13.6.29))
       '@modelcontextprotocol/server':
         specifier: ^2.0.0
         version: 2.0.0
+      '@pear/trellis-ui':
+        specifier: workspace:*
+        version: link:../packages/trellis-ui
       '@stoplight/elements':
         specifier: ^9.0.19
         version: 9.0.19(@babel/core@7.29.0)(@babel/template@7.28.6)(@react-spectrum/provider@3.11.0(react-dom@19.2.3(react@19.2.3))(react@19.2.3))(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
@@ -234,6 +254,9 @@ importers:
       '@eclosion-tech/pulp':
         specifier: workspace:*
         version: link:../packages/pulp
+      '@eclosion-tech/trellis':
+        specifier: file:../vendor/trellis/eclosion-tech-trellis-0.1.0-alpha.1.tgz
+        version: file:vendor/trellis/eclosion-tech-trellis-0.1.0-alpha.1.tgz(prosemirror-state@1.4.4)(prosemirror-view@1.41.8)(y-protocols@1.0.7(yjs@13.6.29))
       '@modelcontextprotocol/node':
         specifier: ^2.0.0
         version: 2.0.0(@modelcontextprotocol/server@2.0.0)(hono@4.12.9)
@@ -246,6 +269,9 @@ importers:
       '@notionhq/client':
         specifier: ^5.20.0
         version: 5.23.0
+      '@pear/trellis-ui':
+        specifier: workspace:*
+        version: link:../packages/trellis-ui
       imapflow:
         specifier: ^2.5.2
         version: 2.5.2
@@ -698,6 +724,17 @@ packages:
     peerDependencies:
       react: ^18 || ^19
       react-dom: ^18 || ^19
+
+  '@eclosion-tech/trellis-react@file:vendor/trellis/eclosion-tech-trellis-react-0.1.0-alpha.1.tgz':
+    resolution: {integrity: sha512-keaYIRmDXUdYh9i8Ovmmy0HAzBEt+t8qkzi0EUozsZcYKU3Owwqf9PfYTP1NwvDTzBe/OpBQJJqjcJC6D1mbCg==, tarball: file:vendor/trellis/eclosion-tech-trellis-react-0.1.0-alpha.1.tgz}
+    version: 0.1.0-alpha.1
+    peerDependencies:
+      react: ^18.2.0 || ^19.0.0
+      react-dom: ^18.2.0 || ^19.0.0
+
+  '@eclosion-tech/trellis@file:vendor/trellis/eclosion-tech-trellis-0.1.0-alpha.1.tgz':
+    resolution: {integrity: sha512-9Nd1AaSatqO9ppNCxM27W/BXJlHlTB4tUNsA/o1yCmscq/KaPPFgwF7MCdohJQxC/LAeaUWoL0xq6CPePsDFkg==, tarball: file:vendor/trellis/eclosion-tech-trellis-0.1.0-alpha.1.tgz}
+    version: 0.1.0-alpha.1
 
   '@emnapi/runtime@1.8.1':
     resolution: {integrity: sha512-mehfKSMWjjNol8659Z8KxEMrdSJDDot5SXMq00dM8BN4o+CLNXQ0xH2V7EchNHV4RmbZLmmPdEaXZc5H2FXmDg==}
@@ -6600,6 +6637,26 @@ snapshots:
       - supports-color
       - use-sync-external-store
       - zod
+
+  '@eclosion-tech/trellis-react@file:vendor/trellis/eclosion-tech-trellis-react-0.1.0-alpha.1.tgz(prosemirror-state@1.4.4)(prosemirror-view@1.41.8)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)(y-protocols@1.0.7(yjs@13.6.29))':
+    dependencies:
+      '@eclosion-tech/trellis': file:vendor/trellis/eclosion-tech-trellis-0.1.0-alpha.1.tgz(prosemirror-state@1.4.4)(prosemirror-view@1.41.8)(y-protocols@1.0.7(yjs@13.6.29))
+      react: 19.2.3
+      react-dom: 19.2.3(react@19.2.3)
+    transitivePeerDependencies:
+      - prosemirror-state
+      - prosemirror-view
+      - y-protocols
+
+  '@eclosion-tech/trellis@file:vendor/trellis/eclosion-tech-trellis-0.1.0-alpha.1.tgz(prosemirror-state@1.4.4)(prosemirror-view@1.41.8)(y-protocols@1.0.7(yjs@13.6.29))':
+    dependencies:
+      prosemirror-model: 1.25.7
+      y-prosemirror: 1.3.7(prosemirror-model@1.25.7)(prosemirror-state@1.4.4)(prosemirror-view@1.41.8)(y-protocols@1.0.7(yjs@13.6.29))(yjs@13.6.29)
+      yjs: 13.6.29
+    transitivePeerDependencies:
+      - prosemirror-state
+      - prosemirror-view
+      - y-protocols
 
   '@emnapi/runtime@1.8.1':
     dependencies:
