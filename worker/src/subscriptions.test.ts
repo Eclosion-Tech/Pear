@@ -5,7 +5,7 @@ import { tables } from "./module_bindings/index.js";
 
 test("general worker subscriptions never load private mail owner views", () => {
   const names: string[] = Object.values(tables).map(table => table.sourceName);
-  for (const name of ["my_protected_mail", "my_protected_mail_collections"]) assert.ok(names.includes(name), `missing generated view ${name}`);
+  for (const name of ["my_protected_mail", "my_protected_mail_collections", "my_protected_mail_instructions"]) assert.ok(names.includes(name), `missing generated view ${name}`);
   const queries: string[] = [];
   const connection = {
     subscriptionBuilder() {

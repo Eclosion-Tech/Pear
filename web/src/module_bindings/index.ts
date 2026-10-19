@@ -45,6 +45,7 @@ import AppendBridgeCommandChunkReducer from "./append_bridge_command_chunk_reduc
 import AppendPageDocReducer from "./append_page_doc_reducer";
 import AppendProtectedMailDerivationReducer from "./append_protected_mail_derivation_reducer";
 import AppendProtectedMailMessageReducer from "./append_protected_mail_message_reducer";
+import ApproveProtectedMailInstructionReducer from "./approve_protected_mail_instruction_reducer";
 import AuthorizeMailTriageReducer from "./authorize_mail_triage_reducer";
 import AwaitBridgeCommandConfirmationReducer from "./await_bridge_command_confirmation_reducer";
 import BlockProtectedMailContextReducer from "./block_protected_mail_context_reducer";
@@ -105,6 +106,8 @@ import DeleteViewReducer from "./delete_view_reducer";
 import DenyBridgeCommandReducer from "./deny_bridge_command_reducer";
 import DisableAiUserMemoryReducer from "./disable_ai_user_memory_reducer";
 import DisableAutomationReducer from "./disable_automation_reducer";
+import DraftProtectedMailInstructionReducer from "./draft_protected_mail_instruction_reducer";
+import DraftProtectedMailInstructionFromDerivationReducer from "./draft_protected_mail_instruction_from_derivation_reducer";
 import EmptyTrashReducer from "./empty_trash_reducer";
 import EnableAutomationReducer from "./enable_automation_reducer";
 import EnqueueBridgeCommandReducer from "./enqueue_bridge_command_reducer";
@@ -188,6 +191,7 @@ import RevokeAutoApplyReducer from "./revoke_auto_apply_reducer";
 import RevokeBridgeDeviceReducer from "./revoke_bridge_device_reducer";
 import RevokeBridgeDeviceGrantReducer from "./revoke_bridge_device_grant_reducer";
 import RevokeExtensionPermissionReducer from "./revoke_extension_permission_reducer";
+import RevokeProtectedMailInstructionReducer from "./revoke_protected_mail_instruction_reducer";
 import RunConventionSensorReducer from "./run_convention_sensor_reducer";
 import RunDeniedToolCallsSensorReducer from "./run_denied_tool_calls_sensor_reducer";
 import RunOrphanDetectorReducer from "./run_orphan_detector_reducer";
@@ -323,6 +327,7 @@ import ModuleInstallMetaRow from "./module_install_meta_table";
 import MyExtensionPermissionsRow from "./my_extension_permissions_table";
 import MyProtectedMailRow from "./my_protected_mail_table";
 import MyProtectedMailCollectionsRow from "./my_protected_mail_collections_table";
+import MyProtectedMailInstructionsRow from "./my_protected_mail_instructions_table";
 import NotionImportJobRow from "./notion_import_job_table";
 import OrchaAgentRow from "./orcha_agent_table";
 import OrchaJobRow from "./orcha_job_table";
@@ -1413,6 +1418,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, MyProtectedMailCollectionsRow),
+  my_protected_mail_instructions: __table({
+    name: 'my_protected_mail_instructions',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, MyProtectedMailInstructionsRow),
   readable_automation_events: __table({
     name: 'readable_automation_events',
     indexes: [
@@ -1484,6 +1496,7 @@ const reducersSchema = __reducers(
   __reducerSchema("append_page_doc", AppendPageDocReducer),
   __reducerSchema("append_protected_mail_derivation", AppendProtectedMailDerivationReducer),
   __reducerSchema("append_protected_mail_message", AppendProtectedMailMessageReducer),
+  __reducerSchema("approve_protected_mail_instruction", ApproveProtectedMailInstructionReducer),
   __reducerSchema("authorize_mail_triage", AuthorizeMailTriageReducer),
   __reducerSchema("await_bridge_command_confirmation", AwaitBridgeCommandConfirmationReducer),
   __reducerSchema("block_protected_mail_context", BlockProtectedMailContextReducer),
@@ -1544,6 +1557,8 @@ const reducersSchema = __reducers(
   __reducerSchema("deny_bridge_command", DenyBridgeCommandReducer),
   __reducerSchema("disable_ai_user_memory", DisableAiUserMemoryReducer),
   __reducerSchema("disable_automation", DisableAutomationReducer),
+  __reducerSchema("draft_protected_mail_instruction", DraftProtectedMailInstructionReducer),
+  __reducerSchema("draft_protected_mail_instruction_from_derivation", DraftProtectedMailInstructionFromDerivationReducer),
   __reducerSchema("empty_trash", EmptyTrashReducer),
   __reducerSchema("enable_automation", EnableAutomationReducer),
   __reducerSchema("enqueue_bridge_command", EnqueueBridgeCommandReducer),
@@ -1627,6 +1642,7 @@ const reducersSchema = __reducers(
   __reducerSchema("revoke_bridge_device", RevokeBridgeDeviceReducer),
   __reducerSchema("revoke_bridge_device_grant", RevokeBridgeDeviceGrantReducer),
   __reducerSchema("revoke_extension_permission", RevokeExtensionPermissionReducer),
+  __reducerSchema("revoke_protected_mail_instruction", RevokeProtectedMailInstructionReducer),
   __reducerSchema("run_convention_sensor", RunConventionSensorReducer),
   __reducerSchema("run_denied_tool_calls_sensor", RunDeniedToolCallsSensorReducer),
   __reducerSchema("run_orphan_detector", RunOrphanDetectorReducer),

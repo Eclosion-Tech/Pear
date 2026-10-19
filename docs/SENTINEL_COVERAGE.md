@@ -1,6 +1,6 @@
 # Sentinel coverage inventory and staged storage boundary
 
-**Status: staged S1a/S1b storage and provenance, October 19, 2026.** Private mail storage, source ceilings/current generations, registered exposure snapshots and derived ancestry are implemented. These remain disconnected from the runner, prompt assembly and UI. The policy package and synthetic sinks do not mediate production effects; human approval, authoritative admission, credential/network isolation and protected monitoring remain disabled.
+**Status: staged S1a/S1b storage/provenance and S1c instruction decisions, October 19, 2026.** Private mail storage, source ceilings/current generations, registered exposure snapshots and derived ancestry and exact instruction revisions/owner decisions are implemented. These remain disconnected from the runner, prompt assembly and UI. The policy package and synthetic sinks do not mediate production effects; a trusted review UI, authoritative admission, credential/network isolation and protected monitoring remain disabled.
 
 See [current implementation](SENTINEL.md), the Cloud [implementation plan](https://forge.syntropy.chat/Eclosion-Tech/pear-cloud/src/branch/main/docs/PEAR_SENTINEL_PLAN.md) and [research proposal](https://forge.syntropy.chat/Eclosion-Tech/pear-cloud/src/branch/main/docs/UNTRUSTED_CONTENT_SPIKE.md). Cloud links refer to that host repository; Pear OSS does not require its implementation. Source references identify the audited seams, not evidence that their remaining gates pass.
 
@@ -40,9 +40,9 @@ The audited MCP registry and custom CRUD dispatcher query fixed structures; neit
 
 S1 tests must exercise ordinary token protocol access and existing publisher-backed application readers. They must also document that explicit trusted publisher access succeeds. These are separate expectations. Future governed runtimes require broker custody of privileged credentials and substrate authorization; S0 does not provide that custody.
 
-## Implemented staged private storage and provenance (S1a/S1b)
+## Implemented staged private storage and instruction decisions (S1a–S1c)
 
-The [storage contract](PROTECTED_MAIL_STORAGE.md) documents private mail records, source-policy generations and exposure/derived provenance. Only the original mail records have owner views. These APIs are not connected to a runner, prompt builder or settings UI, and do not perform admission or certify sanitization.
+The [storage contract](PROTECTED_MAIL_STORAGE.md) documents private mail records, source-policy generations and exposure/derived provenance. Original mail records and exact instruction review have explicit owner views; derived records and policy history have no new read projection. These APIs are not connected to a runner, prompt builder or settings UI, and do not perform admission or certify sanitization.
 
 The private collection binds an authenticated human owner to an existing paused connection. A record binds its immutable external-mail source and collection; a receipt binds both the supplied event key and a server-derived mailbox UID tuple to that record. Staging accepts bounded typed literal text and a trusted importer sanitization declaration, without executable components, arbitrary source JSON or caller-supplied authority. Actual mailbox authenticity, sanitization and admission remain later adapter gates.
 
@@ -53,6 +53,15 @@ Staging reducers derive ownership from the connection/collection, fix external-m
 Private contexts accumulate registered sources and inherited snapshots without removal. A frozen invocation supplies every parent of its derived output; model citations cannot replace that set. New writes recheck current ancestor policy, including revocation, even when using an older input snapshot. Source and exposure identifiers do not prove which bytes reached a model or authenticate a runtime. A future adapter must register all inputs before disclosure and block uncertain contexts; no existing prompt or model path does so yet.
 
 Explicit caller-dependent views require authenticated human ownership, reject both AI identity representations and publisher identity, and provide no service/admin override. Content includes its exact source association. An owner using publisher identity receives no view rows; a separate owner channel is required. Trusted raw-table management access remains separate.
+
+The [instruction contract](PROTECTED_MAIL_INSTRUCTIONS.md) adds immutable exact
+revisions and owner approval/revocation decisions. Edits clear approval and keep
+all known parents; publisher drafts copy a validated derivation's frozen body
+and complete graph. Fresh manual roots have unknown provenance. Decisions prove
+the authenticated owner credential, not physical human presence or display.
+They do not initialize source policy, authorize processing or integrate with
+ordinary mutable prompts. Trusted review UI/recipe, governed instruction-source
+registration and durable admission are still required before runtime use.
 
 No native/MCP tool or custom CRUD mapping registers these reads. Owner views are excluded from broad worker subscriptions and `snapshot_tables_v2.json`; browser export hydration now uses only that policy's include list. Private backing tables are already outside generated public-table bindings and that policy's exact public-surface equality check. Keep them outside ordinary snapshot/import include lists. A dedicated protected export/restore path must preserve restrictions and invalidate old execution authority; it is not supplied by excluding the views.
 

@@ -3,7 +3,8 @@
 **Updated:** 2026-10-19
 
 **Status:** S0 offline containment, S1a private mail storage and staged S1b
-source policy/exposure provenance. The policy package and private store are
+source policy/exposure provenance, plus staged S1c exact instruction revisions
+and owner decisions. The policy package and private stores are
 not connected to a mail runtime.
 Durable admissions, isolated credential brokers, redaction enforcement and host
 egress controls remain unimplemented; the protected mail profile is disabled.
@@ -122,11 +123,21 @@ citations. These are host-registered declarations, not proof that every actual
 prompt byte was observed; adapter integration and admission are still absent.
 All new rows are private, with no new read projection or ordinary page fields.
 
-Approved instruction revisions, inference admission, the owner UI and a
-protected mail runner remain later changes. Publisher configuration and
-conversation answers cannot stand in for direct authenticated human approval.
-See the
-[storage contract and fixture commands](PROTECTED_MAIL_STORAGE.md).
+[S1c reviewed instructions](PROTECTED_MAIL_INSTRUCTIONS.md) add private immutable
+revisions, draft heads and approval/revocation history. Owner decisions bind
+exact frozen text, scope/version and expected generation; edits clear approval,
+and replay cannot reactivate an old decision. Publisher-staged drafts copy an
+existing derivation's exact body and complete ancestry; manual edits cannot
+remove known parents. A fresh manual paste has unknown provenance.
+
+The explicit owner review view is excluded from broad worker subscriptions and
+ordinary exports. Authentication identifies the owner credential, not physical
+human presence or proof of display. No review UI or runtime consumer is added;
+source registration for instruction revisions, trusted UI/recipe authorization,
+inference admission and protected runner integration remain gates. An instruction
+approval grants no disclosure or effect authority. Mutable prompts, page flags,
+publisher configuration and conversation answers receive no automatic approval.
+See the [storage contract and fixture commands](PROTECTED_MAIL_STORAGE.md).
 
 ## Coverage inventory and release gates
 
@@ -138,6 +149,7 @@ the existing identities, read paths and effect paths to their remaining gates.
 | Fixed mail operations | Offline validation and eligibility contracts | Trusted adapter, authenticated approval, durable atomic admission |
 | Source/exposure graph | Private source ceilings/current generations, cumulative registered exposure snapshots and immutable derived ancestry | Reviewed registration adapter, authenticated run binding, fresh admission/dispatch policy checks and complete actual exposure coverage |
 | Mail destination/readers | Separate private tables and explicit owner views, excluded from ordinary page readers/caches/exports | Reviewed owner UI, safe connection migration and admitted runtime use; legacy mail pages remain legacy |
+| Reviewed instructions | Private exact revisions, owner review projection, scoped owner decisions and edit-to-draft | Reviewed human UI/recipe, governed instruction-source adapter, current source restrictions and independent admission |
 | Authority/dispatch | Frozen operation/payload preparation; in-memory synthetic dispatch tests | Current epoch/rights and shared budgets checked transactionally; one-use admission, dispatch-time recheck, conservative unknown outcomes |
 | IMAP, model and classifier credentials | Existing worker custody unchanged | Isolated roles with minimal environment/mounts, authenticated RPC and host-enforced network policy |
 | Mail settings/lifecycle | Existing monitor unchanged | Draft/test/preview/enable, frozen processor approval, authentication-message suppression, cancellation and accurate terminal/backoff states |
@@ -173,6 +185,9 @@ accuracy results.
 - `worker/scripts/protected-mail-state-e2e.ts`: populated S1a upgrade, no policy
   backfill, current-ceiling narrowing/revocation, cumulative exposure and derived
   ancestry, replay and private protocol boundaries.
+- `worker/scripts/protected-mail-instructions-e2e.ts`: populated S1b upgrade,
+  private review/identity boundaries, exact decisions, edit/revoke/replay CAS,
+  retained ancestry and export exclusions.
 
 Tests cover forged approvals, unknown effects, scope/epoch/time mismatches,
 destination substitution, changed processors, malformed JSON-like objects,
