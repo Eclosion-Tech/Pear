@@ -44,7 +44,7 @@ removed from these diagnostics:
 | Paths | Covered behavior |
 |---|---|
 | `tools.ts`, `llm.ts` | Native-tool diagnostics and model tool-call logging |
-| `conversation.ts` | Conversation execution, parsing, compaction and stream failure diagnostics |
+| `conversation.ts` | Conversation tool loops, message flushes and turn/stream failure diagnostics |
 | `composite-tool-executor.ts`, `mcp-tool-executor.ts`, `audit-logger.ts` | Dispatch/collision/snapshot/handshake failures and fixed audit outcome details |
 | `database-worker.ts`, `ai-user-worker.ts`, `index.ts` | Workspace/AI worker lifecycle and global failure handlers |
 | `attachments.ts`, `workspace-files.ts`, `subscriptions.ts` | Attachment/blob and subscription failure diagnostics |
