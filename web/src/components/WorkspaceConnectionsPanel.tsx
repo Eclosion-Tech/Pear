@@ -15,6 +15,7 @@ import {
   chunkSnapshotV2,
   downloadPearSnapshotJson,
   parsePearSnapshotJson,
+  snapshotExportQueriesV2,
   type PearSnapshotV2,
 } from "@/src/lib/pearExport";
 import { clearIdbCache } from "@/src/lib/spacetime";
@@ -139,7 +140,8 @@ export function WorkspaceConnectionsPanel() {
     setMsg(null);
     // The export reads the client cache, but the app only subscribes to what
     // the UI needs (no subscribeToAllTables since 14384) — so hydrate the
-    // full cache on demand and release it after the snapshot is built.
+    // export allowlist on demand and release it after the snapshot is built.
+    // Caller-private views and credentials must not enter this generic cache.
     let exportSub: { unsubscribe: () => void } | null = null;
     try {
       await new Promise<void>((resolve, reject) => {
@@ -150,11 +152,7 @@ export function WorkspaceConnectionsPanel() {
             const err = (ctx as { event?: unknown }).event;
             reject(err instanceof Error ? err : new Error("Export subscription failed"));
           })
-          .subscribe(
-            Object.values(tables).map(
-              (t) => `SELECT * FROM ${(t as { sourceName: string }).sourceName}`,
-            ),
-          );
+          .subscribe(snapshotExportQueriesV2());
       });
       const snap = buildPearSnapshotV2(conn.db, {
         wsUri: resolveWorkspaceWsUri(activeWorkspace.wsUri),
@@ -404,8 +402,8 @@ export function WorkspaceConnectionsPanel() {
       <div className="space-y-3">
         <p className="text-xs font-medium text-neutral-600 dark:text-neutral-400">Backup & restore</p>
         <p className="text-neutral-600 dark:text-neutral-400 text-sm">
-          Export uses the <code className="text-xs bg-neutral-100 dark:bg-neutral-800 px-1 rounded">pear-snapshot-v2</code> JSON format and now includes all workspace tables. Import accepts
-          v1 and v2 files and only works on an empty database (no pages). AI users get stub server
+          Export uses the <code className="text-xs bg-neutral-100 dark:bg-neutral-800 px-1 rounded">pear-snapshot-v2</code> JSON format for pages and other exportable workspace data. Private mail storage and credentials are excluded. Import accepts
+          v1 and v2 files and requires a database with no pages or private mail collections. AI users get stub server
           configs (re-enter API keys after import).
         </p>
         <div className="flex flex-wrap gap-2 items-center">

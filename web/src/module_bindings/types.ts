@@ -1526,6 +1526,97 @@ export const PropertyValueInput = __t.object("PropertyValueInput", {
 });
 export type PropertyValueInput = __Infer<typeof PropertyValueInput>;
 
+export const ProtectedMailCollection = __t.object("ProtectedMailCollection", {
+  id: __t.u64(),
+  owner: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailCollection = __Infer<typeof ProtectedMailCollection>;
+
+export const ProtectedMailCollectionRow = __t.object("ProtectedMailCollectionRow", {
+  id: __t.u64(),
+  owner: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailCollectionRow = __Infer<typeof ProtectedMailCollectionRow>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailDirection`.
+export const ProtectedMailDirection = __t.enum("ProtectedMailDirection", {
+  Received: __t.unit(),
+  Sent: __t.unit(),
+});
+export type ProtectedMailDirection = __Infer<typeof ProtectedMailDirection>;
+
+export const ProtectedMailInput = __t.object("ProtectedMailInput", {
+  folder: __t.string(),
+  uidValidity: __t.string(),
+  uid: __t.u32(),
+  get direction() {
+    return ProtectedMailDirection;
+  },
+  messageDate: __t.string(),
+  from: __t.string(),
+  to: __t.string(),
+  cc: __t.string(),
+  subject: __t.string(),
+  body: __t.string(),
+  note: __t.string(),
+  sanitizationVersion: __t.string(),
+});
+export type ProtectedMailInput = __Infer<typeof ProtectedMailInput>;
+
+export const ProtectedMailReceipt = __t.object("ProtectedMailReceipt", {
+  id: __t.string(),
+  owner: __t.identity(),
+  collectionId: __t.u64(),
+  eventKey: __t.string(),
+  mailboxEventId: __t.string(),
+  recordId: __t.string(),
+  sourceId: __t.string(),
+  digest: __t.string(),
+});
+export type ProtectedMailReceipt = __Infer<typeof ProtectedMailReceipt>;
+
+export const ProtectedMailRecord = __t.object("ProtectedMailRecord", {
+  id: __t.string(),
+  owner: __t.identity(),
+  collectionId: __t.u64(),
+  sourceId: __t.string(),
+  sourceRevision: __t.u64(),
+  get message() {
+    return ProtectedMailInput;
+  },
+  importedAt: __t.timestamp(),
+});
+export type ProtectedMailRecord = __Infer<typeof ProtectedMailRecord>;
+
+export const ProtectedMailRow = __t.object("ProtectedMailRow", {
+  id: __t.string(),
+  collectionId: __t.u64(),
+  sourceId: __t.string(),
+  sourceRevision: __t.u64(),
+  digest: __t.string(),
+  sanitizationVersion: __t.string(),
+  origin: __t.string(),
+  importedAt: __t.timestamp(),
+  get message() {
+    return ProtectedMailInput;
+  },
+});
+export type ProtectedMailRow = __Infer<typeof ProtectedMailRow>;
+
+export const ProtectedMailSource = __t.object("ProtectedMailSource", {
+  id: __t.string(),
+  owner: __t.identity(),
+  collectionId: __t.u64(),
+  revision: __t.u64(),
+  digest: __t.string(),
+  origin: __t.string(),
+  sanitizationVersion: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailSource = __Infer<typeof ProtectedMailSource>;
+
 export const ReadableResource = __t.object("ReadableResource", {
   id: __t.u64(),
 });

@@ -20,6 +20,7 @@ export {
   buildPearSnapshotV2,
   chunkSnapshotV2,
   resolveSnapshotTableAccessors,
+  snapshotExportQueriesV2,
   parsePearSnapshotJson,
 } from "@eclosion-tech/snapshot-core";
 export type {

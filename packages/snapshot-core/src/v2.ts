@@ -4,6 +4,12 @@ import { SNAPSHOT_TABLES_V2 } from "./tablePolicy";
 /** Pear portable snapshot format (JSON). Version 2. */
 export const PEAR_SNAPSHOT_FORMAT_V2 = "pear-snapshot-v2" as const;
 
+/** Hydrate only exportable tables. Subscribing to the entire public registry
+ * would also load caller-private views and credential/configuration tables. */
+export function snapshotExportQueriesV2(): string[] {
+  return SNAPSHOT_TABLES_V2.map(name => `SELECT * FROM ${name}`);
+}
+
 export type PearSnapshotV2 = {
   format: typeof PEAR_SNAPSHOT_FORMAT_V2;
   exportedAt: string;

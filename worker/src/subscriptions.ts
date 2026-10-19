@@ -19,7 +19,12 @@ type TableRefLike = {
 
 const ALL_TABLE_NAMES = Object.values(tables as Record<string, TableRefLike>)
   .map((table) => table.sourceName ?? table.tableDef?.sourceName)
-  .filter((name): name is string => Boolean(name));
+  .filter((name): name is string => Boolean(name))
+  // These views are for explicit human reads, never general AI/manager caches.
+  // Backing-table names are excluded defensively if private bindings are ever
+  // generated accidentally. The module's private tables/views enforce access.
+  .filter(name => name !== "my_protected_mail" && !name.startsWith("my_protected_mail_")
+    && !name.startsWith("protected_mail_"));
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);

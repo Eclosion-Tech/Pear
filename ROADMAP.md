@@ -146,7 +146,8 @@
 ### Sentinel and untrusted content
 
 - 🔨 [Sentinel foundation](./docs/SENTINEL.md) — fixed mail operation/grant/exposure contracts, strict offline eligibility checks, canonical operation fingerprints, frozen byte-bound requests, synthetic containment tests, an entry-point inventory, and covered worker diagnostic privacy regressions. The package is not connected to a runtime and grants no execution authority.
-- 📋 Protected mail — substrate-owned sources and owner-only resources, durable admission/shared budgets, isolated connector/inference brokers and host egress tests, then restricted workflow UI and a private canary. Ordinary assistant mail access waits for outgoing-path enforcement.
+- 🔨 [Private mail storage (S1a)](./docs/PROTECTED_MAIL_STORAGE.md) — private collection/source/record/receipt tables, explicit human owner views, atomic deduplication, legacy sync and ordinary-restore fences, and cache/export exclusions. No owner UI, runner or protected activation yet.
+- 📋 Protected mail runtime — durable policy/exposure state and admissions/shared budgets, isolated connector/inference brokers and host egress tests, then restricted workflow UI and a private canary. Ordinary assistant mail access waits for outgoing-path enforcement.
 - 📋 Governed assistants — extend enforcement to native/API/MCP paths, inference/output, memory/delegation/schedules, then separately constrained browser/remote execution. Prompt warnings and classifiers alone do not establish containment.
 
 ### Extensions & MCP tools
