@@ -2,7 +2,7 @@
 
 **Updated:** 2026-10-19
 
-**Status:** S0 foundation only. The shared policy package is not connected to a
+**Status:** S0 offline mail containment foundation. The shared package is not connected to a
 runtime. Protected mail, durable admissions, source storage, credential brokers,
 and host egress enforcement are not enabled by this change.
 
@@ -34,6 +34,21 @@ does not authenticate snapshots, consume a budget, store an admission, prevent
 replay, recheck live ACLs, or enforce network routing. Those remain separate
 requirements. Model output must never provide host-owned policy state.
 
+`prepareOperation` copies the operation and the complete serialized request
+before the first asynchronous boundary, verifies its actual byte count and
+digest, and retains a private payload buffer. Later edits to the proposal or
+caller-owned buffer cannot change the held request. It returns a frozen request,
+not an execution permit. Source-policy, grant, processor and epoch changes still
+require fresh admission/dispatch checks; an unchanged action hash supplies no
+evidence that current authority is unchanged. A future mail-read admission must
+also bind its concrete cursor/UID selection plan.
+
+The test-only containment driver records exact synthetic mailbox, classifier,
+inference and private-storage effects. Its in-memory authority and one-use test
+handles exercise policy and dispatch ordering. They are not production
+interfaces or evidence of durable transactions, crash recovery, process
+isolation, automatic exposure tracking or host network enforcement.
+
 ## Diagnostic privacy
 
 The worker now uses fixed event codes, counts, numeric record IDs and opaque
@@ -59,12 +74,15 @@ audit writer's failure behavior is unchanged and is not a durable admission log.
 
 ## Coverage inventory and release gates
 
+The [entry-point inventory and next storage design](SENTINEL_COVERAGE.md) map
+the existing identities, read paths and effect paths to their remaining gates.
+
 | Surface | Current implementation | Required before protected use |
 |---|---|---|
 | Fixed mail operations | Offline validation and eligibility contracts | Trusted adapter, authenticated approval, durable atomic admission |
 | Source/exposure graph | In-memory policy inputs with ancestral constraints | Substrate-owned revisions, atomic imports and complete host-observed exposure tracking |
 | Mail destination/readers | Existing mail/page ACL behavior unchanged | Owner-only protected resources; deny ordinary AI and publisher-backed projections through SQL, subscriptions, search, snapshots, blobs, API and MCP |
-| Authority/dispatch | Exact operation fingerprint only | Current epoch/rights and shared budgets checked transactionally; one-use admission, dispatch-time recheck, conservative unknown outcomes |
+| Authority/dispatch | Frozen operation/payload preparation; in-memory synthetic dispatch tests | Current epoch/rights and shared budgets checked transactionally; one-use admission, dispatch-time recheck, conservative unknown outcomes |
 | IMAP, model and classifier credentials | Existing worker custody unchanged | Isolated roles with minimal environment/mounts, authenticated RPC and host-enforced network policy |
 | Mail settings/lifecycle | Existing monitor unchanged | Draft/test/preview/enable, frozen processor approval, authentication-message suppression, cancellation and accurate terminal/backoff states |
 | Normal chat, APIs, MCP and output streams | Existing controls unchanged | Shared authorization across reads, writes, inference, responses, exports, notifications and sharing |
@@ -77,16 +95,19 @@ model profile only. General assistants must not receive protected mail until
 their outgoing paths are governed. Existing configurable IMAP support remains
 available; this foundation does not upgrade it to the protected profile.
 
-S0's fixed mail contracts, offline policy attacks and covered logging regression
-tests are implemented. The planned public-research recipe, synthetic transport
-sinks, full entry-point closure, and actual model/host attack evaluation remain
-later work. Do not interpret an offline policy test as a network containment
-test or a classifier accuracy result.
+S0's fixed mail contracts, offline policy attacks, synthetic sinks and covered
+logging regressions exercise the offline mail boundary. Application entry-point
+closure and actual model/host attack evaluation remain later gates. Public
+research stays at the design-contract stage until S8: current mail tests reject
+search/fetch proposals rather than expanding the active mail operation union.
+Do not interpret synthetic dispatch tests as network containment or classifier
+accuracy results.
 
 ## Validation
 
 - `pnpm --filter @eclosion-tech/sentinel test`: strict TypeScript check and
-  synthetic policy/validation/fingerprint attacks; no external services.
+  synthetic policy/validation/fingerprint/preparation attacks and observed
+  synthetic dispatches; no external services.
 - `pnpm --filter @pear/worker test`: worker TypeScript check and full unit suite,
   including 18 diagnostic privacy regressions with synthetic secret markers.
 

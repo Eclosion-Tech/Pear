@@ -5,6 +5,17 @@ fixed mail workflow. It exports strict operation/snapshot validators, a pure
 eligibility check, and canonical operation fingerprints. It uses Web Crypto
 without Node-specific runtime imports.
 
+`prepareOperation(proposal, serializedPayloadBytes)` makes a private copy of
+the operation and the exact outgoing bytes before awaiting hashing. It rejects
+a mismatched byte count or digest, deep-freezes the copied operation, and
+returns fresh payload copies on request. Supply the complete serialized request,
+including prompts and metadata; supplying only email text does not bind the
+eventual provider request. `mail.read` has no outgoing payload argument.
+The trusted adapter must construct a fixed request whose model, token limit,
+tools and metadata agree with the operation. Preparation checks bytes, not the
+meaning of a provider body. Bound payload size before calling it. Headers,
+credentials, DNS and redirects remain separate adapter constraints.
+
 The supported operations are `mail.read`, `content.screen`, `model.infer` for
 mail summaries, and `mail.append`. Unknown operations and extra fields are
 rejected. The policy checks exact scope, epoch, activation/expiry, mailbox,
@@ -29,6 +40,13 @@ state. Pass ordinary parsed JSON data, not executable objects or proxies.
 The host must compute `payloadDigest` from frozen request bytes. Operation
 fingerprints cover only the operation; a future admission also has to bind its
 current grant, authority, source revisions, budgets, expiry, and replay state.
+Preparation is neither eligibility nor admission. Its action fingerprint stays
+the same if a grant is revoked or a source policy changes; fresh host state must
+still be checked at admission and dispatch. IMAP selection/cursor bindings also
+belong in the future admission envelope rather than this action hash alone.
+`FrozenOperation` is a structural host interface, not an authenticated token.
+Never accept a prepared object from a model or client; keep it in trusted code
+and send its verified payload unchanged.
 Exact HTTPS endpoint matching does not enforce TLS, DNS, redirects, credentials,
 or network isolation. Those checks belong to the constrained dispatcher.
 
@@ -38,3 +56,6 @@ outside this contract. See [the implementation status](../../docs/SENTINEL.md).
 
 Run `pnpm --filter @eclosion-tech/sentinel test` from the Pear root. Tests use
 synthetic values and make no network, classifier, provider, or mailbox calls.
+The containment harness in `test/support/` observes synthetic sink destinations
+and bytes using an in-memory test authority. It is not exported as a runtime,
+durable store, credential broker, or network boundary.
