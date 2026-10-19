@@ -1540,6 +1540,32 @@ export const ProtectedMailCollectionRow = __t.object("ProtectedMailCollectionRow
 });
 export type ProtectedMailCollectionRow = __Infer<typeof ProtectedMailCollectionRow>;
 
+export const ProtectedMailConnectionAuthorityHead = __t.object("ProtectedMailConnectionAuthorityHead", {
+  connectionId: __t.u64(),
+  collectionId: __t.u64(),
+  owner: __t.identity(),
+  epoch: __t.u64(),
+  snapshotDigest: __t.string(),
+  tombstoned: __t.bool(),
+  initializedAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+});
+export type ProtectedMailConnectionAuthorityHead = __Infer<typeof ProtectedMailConnectionAuthorityHead>;
+
+export const ProtectedMailConnectionAuthorityHistory = __t.object("ProtectedMailConnectionAuthorityHistory", {
+  id: __t.string(),
+  connectionId: __t.u64(),
+  collectionId: __t.u64(),
+  owner: __t.identity(),
+  epoch: __t.u64(),
+  snapshotDigest: __t.string(),
+  tombstoned: __t.bool(),
+  reason: __t.string(),
+  actor: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailConnectionAuthorityHistory = __Infer<typeof ProtectedMailConnectionAuthorityHistory>;
+
 export const ProtectedMailContext = __t.object("ProtectedMailContext", {
   id: __t.string(),
   owner: __t.identity(),
@@ -1747,6 +1773,73 @@ export const ProtectedMailProcessor = __t.object("ProtectedMailProcessor", {
   model: __t.string(),
 });
 export type ProtectedMailProcessor = __Infer<typeof ProtectedMailProcessor>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailProcessorAdapter`.
+export const ProtectedMailProcessorAdapter = __t.enum("ProtectedMailProcessorAdapter", {
+  AnthropicMessagesV1: __t.unit(),
+  OpenAiChatCompletionsV1: __t.unit(),
+});
+export type ProtectedMailProcessorAdapter = __Infer<typeof ProtectedMailProcessorAdapter>;
+
+export const ProtectedMailProcessorConfig = __t.object("ProtectedMailProcessorConfig", {
+  formatVersion: __t.u32(),
+  get adapter() {
+    return ProtectedMailProcessorAdapter;
+  },
+  endpoint: __t.string(),
+  model: __t.string(),
+  credentialHandle: __t.string(),
+  credentialVersion: __t.string(),
+});
+export type ProtectedMailProcessorConfig = __Infer<typeof ProtectedMailProcessorConfig>;
+
+export const ProtectedMailProcessorEvent = __t.object("ProtectedMailProcessorEvent", {
+  id: __t.string(),
+  profileId: __t.string(),
+  eventKey: __t.string(),
+  get kind() {
+    return ProtectedMailProcessorEventKind;
+  },
+  expectedGeneration: __t.u64(),
+  generation: __t.u64(),
+  requestDigest: __t.string(),
+  revisionId: __t.string(),
+  actor: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailProcessorEvent = __Infer<typeof ProtectedMailProcessorEvent>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailProcessorEventKind`.
+export const ProtectedMailProcessorEventKind = __t.enum("ProtectedMailProcessorEventKind", {
+  Configure: __t.unit(),
+  Retire: __t.unit(),
+});
+export type ProtectedMailProcessorEventKind = __Infer<typeof ProtectedMailProcessorEventKind>;
+
+export const ProtectedMailProcessorHead = __t.object("ProtectedMailProcessorHead", {
+  profileId: __t.string(),
+  generation: __t.u64(),
+  currentRevisionId: __t.string(),
+  retired: __t.bool(),
+  lastEventId: __t.string(),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+});
+export type ProtectedMailProcessorHead = __Infer<typeof ProtectedMailProcessorHead>;
+
+export const ProtectedMailProcessorRevision = __t.object("ProtectedMailProcessorRevision", {
+  id: __t.string(),
+  profileId: __t.string(),
+  generation: __t.u64(),
+  digest: __t.string(),
+  get config() {
+    return ProtectedMailProcessorConfig;
+  },
+  eventId: __t.string(),
+  createdBy: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailProcessorRevision = __Infer<typeof ProtectedMailProcessorRevision>;
 
 export const ProtectedMailReceipt = __t.object("ProtectedMailReceipt", {
   id: __t.string(),

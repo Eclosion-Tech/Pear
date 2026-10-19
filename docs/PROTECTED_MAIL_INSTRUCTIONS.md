@@ -86,7 +86,8 @@ adds the decision substrate, not that interface.
 The owner projection is excluded from broad worker subscriptions, browser
 export hydration and ordinary workspace snapshots. No instruction text or
 decision is copied into ordinary pages, conversations or grant tables. The
-existing private-collection restore fence remains in force. Disconnect retains
+private-state restore fence remains in force, including processor-only state
+from [S2a](PROTECTED_MAIL_AUTHORITY.md). Disconnect retains
 the collection and its owner management history. Protected backup/restore is
 still required before a real-mail canary.
 
@@ -100,10 +101,12 @@ node --import tsx/esm scripts/protected-mail-instructions-e2e.ts http://127.0.0.
 
 `PEAR_PROTECTED_MAIL_WASM` optionally selects the exact current artifact.
 `PEAR_INSTRUCTION_BASELINE_WASM` adds a populated merged-S1b upgrade probe.
-The harness uses only synthetic data, refuses non-local origins and deletes
-its database in `finally`. It checks unchanged retained state, absent automatic
+The harness uses only synthetic data and refuses non-local origins. Normal
+runs delete their database in `finally`; owned disk-backed runs use the
+[authority fixture lifecycle](PROTECTED_MAIL_AUTHORITY.md) and remove retained
+synthetic databases with the whole disposable server. It checks unchanged retained state, absent automatic
 approval, private protocol boundaries, exact review, identity isolation,
 edit/revoke/replay races, ancestry retention and ordinary export exclusions.
-Cloud CI builds pinned pre-S1a, S1a, S1b and current modules in independent
-target directories, rejects current/baseline identity and runs all three mail
-harnesses. The release also tests its exact release WASM.
+Cloud CI builds pinned pre-S1a, S1a, S1b, S1c and current modules in independent
+target directories, rejects current/baseline identity and runs all four mail
+harnesses, including retained authority/configuration restart verification. The release also tests its exact release WASM.

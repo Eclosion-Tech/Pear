@@ -1,6 +1,6 @@
 # Sentinel coverage inventory and staged storage boundary
 
-**Status: staged S1a/S1b storage/provenance and S1c instruction decisions, October 19, 2026.** Private mail storage, source ceilings/current generations, registered exposure snapshots and derived ancestry and exact instruction revisions/owner decisions are implemented. These remain disconnected from the runner, prompt assembly and UI. The policy package and synthetic sinks do not mediate production effects; a trusted review UI, authoritative admission, credential/network isolation and protected monitoring remain disabled.
+**Status: S1a–S1c merged; S2a authority state staged, October 19, 2026.** Private mail storage, source ceilings/current generations, registered exposure snapshots and derived ancestry and exact instruction revisions/owner decisions are implemented. S2a adds retained connection epochs and immutable processor revisions. These remain disconnected from the runner, prompt assembly and UI. The policy package and synthetic sinks do not mediate production effects; a trusted review UI, authoritative admission, credential/network isolation and protected monitoring remain disabled.
 
 See [current implementation](SENTINEL.md), the Cloud [implementation plan](https://forge.syntropy.chat/Eclosion-Tech/pear-cloud/src/branch/main/docs/PEAR_SENTINEL_PLAN.md) and [research proposal](https://forge.syntropy.chat/Eclosion-Tech/pear-cloud/src/branch/main/docs/UNTRUSTED_CONTENT_SPIKE.md). Cloud links refer to that host repository; Pear OSS does not require its implementation. Source references identify the audited seams, not evidence that their remaining gates pass.
 
@@ -40,7 +40,7 @@ The audited MCP registry and custom CRUD dispatcher query fixed structures; neit
 
 S1 tests must exercise ordinary token protocol access and existing publisher-backed application readers. They must also document that explicit trusted publisher access succeeds. These are separate expectations. Future governed runtimes require broker custody of privileged credentials and substrate authorization; S0 does not provide that custody.
 
-## Implemented staged private storage and instruction decisions (S1a–S1c)
+## Implemented staged private storage and authority state (S1–S2a)
 
 The [storage contract](PROTECTED_MAIL_STORAGE.md) documents private mail records, source-policy generations and exposure/derived provenance. Original mail records and exact instruction review have explicit owner views; derived records and policy history have no new read projection. These APIs are not connected to a runner, prompt builder or settings UI, and do not perform admission or certify sanitization.
 
@@ -65,13 +65,23 @@ registration and durable admission are still required before runtime use.
 
 No native/MCP tool or custom CRUD mapping registers these reads. Owner views are excluded from broad worker subscriptions and `snapshot_tables_v2.json`; browser export hydration now uses only that policy's include list. Private backing tables are already outside generated public-table bindings and that policy's exact public-surface equality check. Keep them outside ordinary snapshot/import include lists. A dedicated protected export/restore path must preserve restrictions and invalidate old execution authority; it is not supplied by excluding the views.
 
+The [S2a authority contract](PROTECTED_MAIL_AUTHORITY.md) adds explicit private
+epoch enrollment, same-transaction invalidation on connection/key mutations and
+terminal tombstones. Frozen processor revisions and retirement retain exact
+configuration/credential-version declarations. These are not grants or
+admissions. Future use must bind current owner/epoch/configuration, governed
+instruction revisions, shared budgets and one-use admission. Controlled
+server restart tests persistence only; crash recovery and external dispatch
+remain separate gates. Ordinary restore also fences a processor-only workspace,
+and active v2 import blocks new processor configuration.
+
 Source, record and receipt commit together. Exact replay is a no-op; changed content or another request key for the same mailbox event is refused. Ordinary v1/v2 restore rejects any retained collection even if all pages have been purged; collection creation and an active v2 session are mutually exclusive, while abort stays available. When protected runtime integration is added, local append, receipt and applicable checkpoint must consume their admission together. Do not wire the existing page-writing runner into the private schema before its authority and lifecycle design is ready.
 
 Legacy mail pages remain legacy content. Do not relabel them protected or erase ambiguous historical sharing rules automatically. Protected connection migration must inventory existing destinations/grants, prevent the old runner from writing that connection, and leave recurring processing disabled until its release gate passes.
 
 ## S2 authoritative state placement
 
-**Design decision, not implemented code:** keep live mail authority in the same SpacetimeDB module as protected source/storage state. Co-locate owner/connection state, connection epochs, monotonic processor-config revisions, source generations, workflow authority, per-run grants, shared root budget pools and operation admissions. PostgreSQL mirrors or cached snapshots cannot supply an atomic check against a concurrent SpacetimeDB pause, ACL change or source update.
+**Placement decision; the admission transaction remains unimplemented:** keep live mail authority in the same SpacetimeDB module as protected source/storage state. S2a already retains connection epochs and immutable processor revisions here. Co-locate owner/connection state, connection epochs, monotonic processor-config revisions, source generations, workflow authority, per-run grants, shared root budget pools and operation admissions. PostgreSQL mirrors or cached snapshots cannot supply an atomic check against a concurrent SpacetimeDB pause, ACL change or source update.
 
 An atomic admission reducer must validate the exact authoritative state version, principal/runtime/run/parent scope, source versions/restrictions, canonical operation and frozen payload/config binding; debit the shared budget pool; and insert a unique admission/effect key. A TypeScript `eligible` result and fingerprint authenticate nothing and reserve nothing. Concurrent child runs reference the same budget pool rather than independent copies.
 
@@ -83,7 +93,7 @@ Preserve Cloud's PostgreSQL `mcp_answer_offers` ledger and device once markers f
 
 ## Remaining integration tests
 
-Offline S0 sinks test proposed operations and frozen payloads against synthetic authority. Live disposable tests additionally cover the staged storage and provenance subset: private protocol/read boundaries, populated S1a upgrade without policy backfill, ceilings/CAS/revocation, cumulative snapshots, derived ancestry, replay, legacy fences and restore refusal. The table below is the complete integration checklist; authority, actual exposure registration, connector, sanitization and host gates remain.
+Offline S0 sinks test proposed operations and frozen payloads against synthetic authority. Live disposable tests additionally cover staged storage, provenance and authority records: private protocol/read boundaries, populated upgrades without backfill, ceilings/CAS/revocation, cumulative snapshots, derived ancestry, epochs/configuration edit–revert, replay, tombstones, legacy fences, restore refusal and controlled restart. The table below is the complete integration checklist; durable admission, actual exposure registration, connector, sanitization and host gates remain.
 
 | Gate | Exact remaining evidence |
 |---|---|

@@ -130,7 +130,8 @@ Disconnect preserves private records and owner reads, while appending requires
 the live connection and therefore fails after deletion. Existing workspace JSON
 exports omit this store, and export hydration requests only exportable tables.
 Ordinary v1/v2 restore refuses a workspace containing any private collection,
-including one with no records and no ordinary pages. Chunk and commit paths
+including one with no records and no ordinary pages. S2a also fences any private
+processor head, even a retired profile with no mailbox collection. Chunk and commit paths
 recheck this condition; ordinary v2 abort remains available. A dedicated
 protected backup/restore path is required before real-mail activation.
 
@@ -144,23 +145,28 @@ cd worker
 node --import tsx/esm scripts/protected-mail-e2e.ts http://127.0.0.1:3099
 node --import tsx/esm scripts/protected-mail-state-e2e.ts http://127.0.0.1:3099
 node --import tsx/esm scripts/protected-mail-instructions-e2e.ts http://127.0.0.1:3099
+node --import tsx/esm scripts/protected-mail-authority-e2e.ts http://127.0.0.1:3099
 ```
 
 Set `PEAR_UPGRADE_FROM_WASM` to an absolute path to the pre-S1 module to include
 an additive upgrade probe. `PEAR_PROTECTED_MAIL_WASM` optionally selects the new
 WASM; by default the script uses the normal module build output. The script
 refuses non-local origins, userinfo and redirects, creates a uniquely named
-database, uses synthetic credentials/content and deletes its fixture in
-`finally`. It never connects to an IMAP server or model provider.
+database, uses synthetic credentials/content and normally deletes its fixture
+in `finally`. The owned-server mode described in the
+[authority contract](PROTECTED_MAIL_AUTHORITY.md) instead removes all retained
+synthetic databases with the disposable server. It never connects to an IMAP server or model provider.
 
 For the state harness, set `PEAR_SOURCE_STATE_BASELINE_WASM` to an absolute
 path to the merged S1a module. It populates private records before upgrading,
 then checks unchanged source identities and owner reads, absent automatic
 policy, policy narrowing/revocation, cumulative exposures and derivation.
 
-The Cloud conformance wrapper builds pinned pre-S1a, S1a and S1b baselines plus
-the current module in independent Cargo target directories, rejects identical
-upgrade artifacts, starts a disposable Docker server on a random loopback port and cleans it up.
+The Cloud conformance wrapper builds pinned pre-S1a, S1a, S1b and S1c baselines
+plus the current module in independent Cargo target directories, rejects identical
+upgrade artifacts, starts a disposable disk-backed Docker server on an available loopback port
+and cleans it up. The [S2a authority fixture](PROTECTED_MAIL_AUTHORITY.md) also
+checks retained epochs/configuration across a controlled restart.
 It runs in PR checks. The coordinated release also runs the live harness against
 its exact release WASM. Neither test establishes runtime admission, credential
 isolation, full backup/restore support or host egress containment.

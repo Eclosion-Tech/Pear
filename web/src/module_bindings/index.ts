@@ -63,6 +63,7 @@ import CloseBridgeSessionReducer from "./close_bridge_session_reducer";
 import CloseConversationReducer from "./close_conversation_reducer";
 import CompleteBridgeCommandReducer from "./complete_bridge_command_reducer";
 import CompleteNotionImportJobReducer from "./complete_notion_import_job_reducer";
+import ConfigureProtectedMailProcessorReducer from "./configure_protected_mail_processor_reducer";
 import ConfirmBridgeCommandReducer from "./confirm_bridge_command_reducer";
 import ConfirmExtensionInstallReducer from "./confirm_extension_install_reducer";
 import CreateAiUserReducer from "./create_ai_user_reducer";
@@ -131,6 +132,7 @@ import ImportV2AbortReducer from "./import_v_2_abort_reducer";
 import ImportV2BeginReducer from "./import_v_2_begin_reducer";
 import ImportV2ChunkReducer from "./import_v_2_chunk_reducer";
 import ImportV2CommitReducer from "./import_v_2_commit_reducer";
+import InitializeProtectedMailConnectionAuthorityReducer from "./initialize_protected_mail_connection_authority_reducer";
 import InitializeProtectedMailSourcePolicyReducer from "./initialize_protected_mail_source_policy_reducer";
 import InsertComponentReducer from "./insert_component_reducer";
 import InstallExtensionReducer from "./install_extension_reducer";
@@ -186,6 +188,7 @@ import ResolveStructuralFindingReducer from "./resolve_structural_finding_reduce
 import RestoreComponentReducer from "./restore_component_reducer";
 import RestorePageReducer from "./restore_page_reducer";
 import RestorePageToSnapshotReducer from "./restore_page_to_snapshot_reducer";
+import RetireProtectedMailProcessorReducer from "./retire_protected_mail_processor_reducer";
 import RevokeApiEndpointKeyReducer from "./revoke_api_endpoint_key_reducer";
 import RevokeAutoApplyReducer from "./revoke_auto_apply_reducer";
 import RevokeBridgeDeviceReducer from "./revoke_bridge_device_reducer";
@@ -1514,6 +1517,7 @@ const reducersSchema = __reducers(
   __reducerSchema("close_conversation", CloseConversationReducer),
   __reducerSchema("complete_bridge_command", CompleteBridgeCommandReducer),
   __reducerSchema("complete_notion_import_job", CompleteNotionImportJobReducer),
+  __reducerSchema("configure_protected_mail_processor", ConfigureProtectedMailProcessorReducer),
   __reducerSchema("confirm_bridge_command", ConfirmBridgeCommandReducer),
   __reducerSchema("confirm_extension_install", ConfirmExtensionInstallReducer),
   __reducerSchema("create_ai_user", CreateAiUserReducer),
@@ -1582,6 +1586,7 @@ const reducersSchema = __reducers(
   __reducerSchema("import_v_2_begin", ImportV2BeginReducer),
   __reducerSchema("import_v_2_chunk", ImportV2ChunkReducer),
   __reducerSchema("import_v_2_commit", ImportV2CommitReducer),
+  __reducerSchema("initialize_protected_mail_connection_authority", InitializeProtectedMailConnectionAuthorityReducer),
   __reducerSchema("initialize_protected_mail_source_policy", InitializeProtectedMailSourcePolicyReducer),
   __reducerSchema("insert_component", InsertComponentReducer),
   __reducerSchema("install_extension", InstallExtensionReducer),
@@ -1637,6 +1642,7 @@ const reducersSchema = __reducers(
   __reducerSchema("restore_component", RestoreComponentReducer),
   __reducerSchema("restore_page", RestorePageReducer),
   __reducerSchema("restore_page_to_snapshot", RestorePageToSnapshotReducer),
+  __reducerSchema("retire_protected_mail_processor", RetireProtectedMailProcessorReducer),
   __reducerSchema("revoke_api_endpoint_key", RevokeApiEndpointKeyReducer),
   __reducerSchema("revoke_auto_apply", RevokeAutoApplyReducer),
   __reducerSchema("revoke_bridge_device", RevokeBridgeDeviceReducer),

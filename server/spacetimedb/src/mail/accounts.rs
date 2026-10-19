@@ -50,12 +50,13 @@ pub fn publish_mail_encryption_key(ctx: &ReducerContext, public_key_jwk: String,
         return Err("Disconnect mailboxes before changing the mail encryption key".into());
     }
     let next = MailEncryptionKey { id: 0, public_key_jwk, key_id };
+    super::authority::advance_for_key_descriptor_change(ctx, &next)?;
     if ctx.db.mail_encryption_key().id().find(0).is_some() { ctx.db.mail_encryption_key().id().update(next); }
     else { ctx.db.mail_encryption_key().insert(next); }
     Ok(())
 }
 
-fn validate_credential(ctx: &ReducerContext, encrypted: &str) -> Result<(), String> {
+pub(super) fn validate_credential(ctx: &ReducerContext, encrypted: &str) -> Result<(), String> {
     if encrypted.len() > 16384 { return Err("Mail credential is too large".into()); }
     let value: serde_json::Value = serde_json::from_str(encrypted).map_err(|_| "Invalid encrypted mail credential")?;
     let key = ctx.db.mail_encryption_key().id().find(0).ok_or("Mail monitoring is not enabled on this host")?;
@@ -163,6 +164,7 @@ pub fn create_mail_connection(
 pub fn set_mail_connection_enabled(ctx: &ReducerContext, connection_id: u64, enabled: bool) -> Result<(), String> {
     let connection = owned(ctx, connection_id)?;
     if enabled { super::protected::require_legacy_connection(ctx, connection_id)?; }
+    else { super::authority::advance_for_pause(ctx, &connection)?; }
     ctx.db.mail_connection().id().update(MailConnection {
         enabled, lease: String::new(), lease_until: None,
         status: if enabled { "Waiting for worker" } else { "Paused" }.into(), ..connection
@@ -174,6 +176,7 @@ pub fn set_mail_connection_enabled(ctx: &ReducerContext, connection_id: u64, ena
 pub fn update_mail_connection_password(ctx: &ReducerContext, connection_id: u64, encrypted_password: String) -> Result<(), String> {
     let connection = owned(ctx, connection_id)?;
     validate_credential(ctx, &encrypted_password)?;
+    super::authority::advance_for_credential_change(ctx, &connection, &encrypted_password)?;
     ctx.db.mail_connection_secret().connection_id().update(MailConnectionSecret { connection_id, encrypted_password });
     ctx.db.mail_connection().id().update(MailConnection {
         lease: String::new(), lease_until: None,
@@ -184,7 +187,8 @@ pub fn update_mail_connection_password(ctx: &ReducerContext, connection_id: u64,
 
 #[reducer]
 pub fn delete_mail_connection(ctx: &ReducerContext, connection_id: u64) -> Result<(), String> {
-    owned(ctx, connection_id)?;
+    let connection = owned(ctx, connection_id)?;
+    super::authority::tombstone_for_deletion(ctx, &connection)?;
     ctx.db.mail_connection_secret().connection_id().delete(connection_id);
     for cursor in ctx.db.mail_sync_cursor().connection_id().filter(connection_id) {
         ctx.db.mail_sync_cursor().id().delete(cursor.id);
