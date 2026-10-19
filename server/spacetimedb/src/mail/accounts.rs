@@ -94,6 +94,7 @@ fn owned(ctx: &ReducerContext, id: u64) -> Result<MailConnection, String> {
 
 pub(super) fn leased(ctx: &ReducerContext, id: u64, lease: &str) -> Result<MailConnection, String> {
     if !sender_is_module_publisher(ctx) { return Err("Only the workspace worker can sync mail".into()); }
+    super::protected::require_legacy_connection(ctx, id)?;
     let connection = ctx.db.mail_connection().id().find(id).ok_or("Mail connection not found")?;
     if !connection.enabled || connection.lease != lease ||
         connection.lease_until.is_none_or(|until| until <= ctx.timestamp) {
@@ -161,6 +162,7 @@ pub fn create_mail_connection(
 #[reducer]
 pub fn set_mail_connection_enabled(ctx: &ReducerContext, connection_id: u64, enabled: bool) -> Result<(), String> {
     let connection = owned(ctx, connection_id)?;
+    if enabled { super::protected::require_legacy_connection(ctx, connection_id)?; }
     ctx.db.mail_connection().id().update(MailConnection {
         enabled, lease: String::new(), lease_until: None,
         status: if enabled { "Waiting for worker" } else { "Paused" }.into(), ..connection
@@ -195,6 +197,7 @@ pub fn delete_mail_connection(ctx: &ReducerContext, connection_id: u64) -> Resul
 #[reducer]
 pub fn claim_mail_sync(ctx: &ReducerContext, connection_id: u64, lease: String) -> Result<(), String> {
     if !sender_is_module_publisher(ctx) { return Err("Only the workspace worker can sync mail".into()); }
+    super::protected::require_legacy_connection(ctx, connection_id)?;
     let connection = ctx.db.mail_connection().id().find(connection_id).ok_or("Mail connection not found")?;
     if !connection.enabled || lease.is_empty() || lease.len() > 128 { return Err("Mail connection is paused or invalid lease".into()); }
     if connection.lease != lease && connection.lease_until.is_some_and(|until| until > ctx.timestamp) {

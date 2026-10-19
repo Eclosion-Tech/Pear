@@ -2,9 +2,10 @@
 
 **Updated:** 2026-10-19
 
-**Status:** S0 offline mail containment foundation. The shared package is not connected to a
-runtime. Protected mail, durable admissions, source storage, credential brokers,
-and host egress enforcement are not enabled by this change.
+**Status:** S0 offline containment plus the S1a private mail storage substrate.
+The policy package and private store are not connected to a mail runtime.
+Durable admissions, isolated credential brokers, redaction enforcement and host
+egress controls remain unimplemented; the protected mail profile is disabled.
 
 Sentinel will enforce authority and disclosure rules outside the model. Email,
 webpages, workspace content, tool output, and derived summaries cannot grant
@@ -72,6 +73,44 @@ records; tool audit hashes remain identifiers rather than anonymized telemetry.
 Their storage/read boundaries require later substrate enforcement. The current
 audit writer's failure behavior is unchanged and is not a durable admission log.
 
+## Private mail storage
+
+[`mail/protected.rs`](../server/spacetimedb/src/mail/protected.rs) now keeps
+collections, immutable sources, literal records and deduplication receipts in
+four private tables. An authenticated human owner can read the two explicit
+`my_protected_mail*` views, with the exact source reference, version, digest and
+origin returned alongside content. Other humans, administrators, AI identities
+(including authenticated human/AI hybrids), service identities and publisher
+projections receive no owner-view rows. The publisher retains trusted raw-table
+access as part of the platform's management authority.
+
+Only the publisher can create a collection or append bounded typed plaintext.
+The store derives ownership from a paused connection, matches the configured
+folder/direction, fixes external-mail origin and computes content digests on
+the server. Source, record and receipt commit together. Exact replay is a no-op;
+changed content or another request key for the same mailbox UID tuple fails.
+The importer's sanitization version is a declaration, not proof of redaction or
+mailbox authenticity. No arbitrary source JSON, page components, processor
+permissions or derived-source authority can be supplied.
+
+A staged connection cannot re-enter legacy enable, lease, checkpoint, triage or
+page-import paths. Disconnect removes its live credentials/connection while
+retaining private records; new appends then fail. Existing legacy root pages,
+mailbox labels, historical imports and sharing rules are unchanged. No private
+message title, body or metadata is copied into those ordinary structures.
+
+General worker subscriptions exclude the private owner views. Browser export
+hydration now requests only the snapshot allowlist, and ordinary JSON snapshots
+exclude private mail storage. Ordinary v1/v2 restore refuses even an empty
+retained private collection after all pages have been purged; collection
+creation also refuses an active v2 import session. Abort remains available.
+A separate protected backup/restore contract is required before a canary.
+
+This is a storage and read boundary, not all of S1. Durable exposure histories,
+approved instruction revisions, derived-source policies, inference admission,
+the owner UI and a protected mail runner remain later changes. See the
+[storage contract and fixture commands](PROTECTED_MAIL_STORAGE.md).
+
 ## Coverage inventory and release gates
 
 The [entry-point inventory and next storage design](SENTINEL_COVERAGE.md) map
@@ -80,8 +119,8 @@ the existing identities, read paths and effect paths to their remaining gates.
 | Surface | Current implementation | Required before protected use |
 |---|---|---|
 | Fixed mail operations | Offline validation and eligibility contracts | Trusted adapter, authenticated approval, durable atomic admission |
-| Source/exposure graph | In-memory policy inputs with ancestral constraints | Substrate-owned revisions, atomic imports and complete host-observed exposure tracking |
-| Mail destination/readers | Existing mail/page ACL behavior unchanged | Owner-only protected resources; deny ordinary AI and publisher-backed projections through SQL, subscriptions, search, snapshots, blobs, API and MCP |
+| Source/exposure graph | Durable initial external-mail source/record/receipt association; in-memory policy graph | Durable policy/exposure generations, derived sources and complete host-observed exposure tracking |
+| Mail destination/readers | Separate private tables and explicit owner views, excluded from ordinary page readers/caches/exports | Reviewed owner UI, safe connection migration and admitted runtime use; legacy mail pages remain legacy |
 | Authority/dispatch | Frozen operation/payload preparation; in-memory synthetic dispatch tests | Current epoch/rights and shared budgets checked transactionally; one-use admission, dispatch-time recheck, conservative unknown outcomes |
 | IMAP, model and classifier credentials | Existing worker custody unchanged | Isolated roles with minimal environment/mounts, authenticated RPC and host-enforced network policy |
 | Mail settings/lifecycle | Existing monitor unchanged | Draft/test/preview/enable, frozen processor approval, authentication-message suppression, cancellation and accurate terminal/backoff states |
@@ -110,6 +149,10 @@ accuracy results.
   synthetic dispatches; no external services.
 - `pnpm --filter @pear/worker test`: worker TypeScript check and full unit suite,
   including 18 diagnostic privacy regressions with synthetic secret markers.
+- Locked Rust module tests/WASM build and regenerated web/worker bindings.
+- `worker/scripts/protected-mail-e2e.ts`: disposable localhost SQL/subscription,
+  additive upgrade, identity isolation, atomic replay/conflict, legacy fencing,
+  fixed reader/export checks, logout/disconnect and ordinary-restore refusal.
 
 Tests cover forged approvals, unknown effects, scope/epoch/time mismatches,
 destination substitution, changed processors, malformed JSON-like objects,

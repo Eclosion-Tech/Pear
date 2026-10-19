@@ -43,6 +43,7 @@ import AddTasksToJobReducer from "./add_tasks_to_job_reducer";
 import AnswerHumanInputReducer from "./answer_human_input_reducer";
 import AppendBridgeCommandChunkReducer from "./append_bridge_command_chunk_reducer";
 import AppendPageDocReducer from "./append_page_doc_reducer";
+import AppendProtectedMailMessageReducer from "./append_protected_mail_message_reducer";
 import AuthorizeMailTriageReducer from "./authorize_mail_triage_reducer";
 import AwaitBridgeCommandConfirmationReducer from "./await_bridge_command_confirmation_reducer";
 import CancelExtensionInstallReducer from "./cancel_extension_install_reducer";
@@ -79,6 +80,7 @@ import CreateMailConnectionReducer from "./create_mail_connection_reducer";
 import CreateMemoryConsolidationRoutineReducer from "./create_memory_consolidation_routine_reducer";
 import CreateNotionImportJobReducer from "./create_notion_import_job_reducer";
 import CreatePageReducer from "./create_page_reducer";
+import CreateProtectedMailCollectionReducer from "./create_protected_mail_collection_reducer";
 import CreateReviewAgentBindingReducer from "./create_review_agent_binding_reducer";
 import CreateSensorTriageRoutineReducer from "./create_sensor_triage_routine_reducer";
 import CreateViewReducer from "./create_view_reducer";
@@ -314,6 +316,8 @@ import MessageFeedbackRow from "./message_feedback_table";
 import MigrationStateRow from "./migration_state_table";
 import ModuleInstallMetaRow from "./module_install_meta_table";
 import MyExtensionPermissionsRow from "./my_extension_permissions_table";
+import MyProtectedMailRow from "./my_protected_mail_table";
+import MyProtectedMailCollectionsRow from "./my_protected_mail_collections_table";
 import NotionImportJobRow from "./notion_import_job_table";
 import OrchaAgentRow from "./orcha_agent_table";
 import OrchaJobRow from "./orcha_job_table";
@@ -1390,6 +1394,20 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, MyExtensionPermissionsRow),
+  my_protected_mail: __table({
+    name: 'my_protected_mail',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, MyProtectedMailRow),
+  my_protected_mail_collections: __table({
+    name: 'my_protected_mail_collections',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, MyProtectedMailCollectionsRow),
   readable_automation_events: __table({
     name: 'readable_automation_events',
     indexes: [
@@ -1459,6 +1477,7 @@ const reducersSchema = __reducers(
   __reducerSchema("answer_human_input", AnswerHumanInputReducer),
   __reducerSchema("append_bridge_command_chunk", AppendBridgeCommandChunkReducer),
   __reducerSchema("append_page_doc", AppendPageDocReducer),
+  __reducerSchema("append_protected_mail_message", AppendProtectedMailMessageReducer),
   __reducerSchema("authorize_mail_triage", AuthorizeMailTriageReducer),
   __reducerSchema("await_bridge_command_confirmation", AwaitBridgeCommandConfirmationReducer),
   __reducerSchema("cancel_extension_install", CancelExtensionInstallReducer),
@@ -1495,6 +1514,7 @@ const reducersSchema = __reducers(
   __reducerSchema("create_memory_consolidation_routine", CreateMemoryConsolidationRoutineReducer),
   __reducerSchema("create_notion_import_job", CreateNotionImportJobReducer),
   __reducerSchema("create_page", CreatePageReducer),
+  __reducerSchema("create_protected_mail_collection", CreateProtectedMailCollectionReducer),
   __reducerSchema("create_review_agent_binding", CreateReviewAgentBindingReducer),
   __reducerSchema("create_sensor_triage_routine", CreateSensorTriageRoutineReducer),
   __reducerSchema("create_view", CreateViewReducer),

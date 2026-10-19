@@ -1,5 +1,10 @@
 # IMAP mail monitor
 
+This page describes the existing page-based monitor. The separate
+[private mail storage substrate](PROTECTED_MAIL_STORAGE.md) is staged and has
+no settings activation or runner integration yet. Sentinel's protected profile
+remains disabled; see [implementation status](SENTINEL.md).
+
 Mail monitoring is configured in **Workspace settings → Mail**. Each connection
 belongs to its creator in the currently selected Pear workspace. No provider,
 mailbox, domain, or workspace is built into the connector. Mailu and other IMAP

@@ -29,6 +29,7 @@ pub fn import_pear_snapshot_v1(ctx: &ReducerContext, snapshot_json: String) -> R
 }
 
 fn apply_snapshot(ctx: &ReducerContext, snapshot_json: &str) -> Result<(), String> {
+    crate::mail::require_no_protected_mail_collections(ctx)?;
     if ctx.db.page().iter().next().is_some() {
         return Err(
             "Import refused: database already has pages. Use an empty database (new module DB)."

@@ -19,6 +19,7 @@ export {
   buildPearSnapshotV2,
   chunkSnapshotV2,
   resolveSnapshotTableAccessors,
+  snapshotExportQueriesV2,
 } from "./v2";
 export type {
   ChunkedPearSnapshotV2,

@@ -10,6 +10,7 @@ import {
   encodePearValue,
   parsePearSnapshotJson,
   resolveSnapshotTableAccessors,
+  snapshotExportQueriesV2,
   type PearSnapshotV2,
   type SnapshotTableRegistry,
 } from "./pearExport";
@@ -60,6 +61,15 @@ const BASE_META = {
 };
 
 describe("snapshot_tables_v2.json drift", () => {
+  test("browser export hydration excludes protected mail views and credentials", () => {
+    const queries = snapshotExportQueriesV2();
+    expect(queries).toEqual(tablePolicy.include.map(name => `SELECT * FROM ${name}`));
+    expect(queries).toContain("SELECT * FROM page");
+    for (const name of ["my_protected_mail", "my_protected_mail_collections", "ai_user_config", "ai_extension_runtime"]) {
+      expect(queries).not.toContain(`SELECT * FROM ${name}`);
+    }
+  });
+
   test("KNOWN_VIEWS entries exist in bindings and are structurally views", () => {
     for (const view of KNOWN_VIEWS) {
       const entry = Object.values(registry).find(

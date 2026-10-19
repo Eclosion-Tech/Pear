@@ -169,6 +169,7 @@ pub struct ImportSessionCount {
 /// `{"format":"pear-snapshot-v2"}` from the export header.
 #[reducer]
 pub fn import_v2_begin(ctx: &ReducerContext, header_json: String) -> Result<(), String> {
+    crate::mail::require_no_protected_mail_collections(ctx)?;
     if ctx.db.page().iter().next().is_some() {
         return Err(
             "Import refused: database already has pages. Use an empty database (new module DB)."
@@ -239,6 +240,7 @@ pub fn import_v2_chunk(
     if ctx.sender() != session.created_by {
         return Err("Only the import session creator may send chunks.".to_string());
     }
+    crate::mail::require_no_protected_mail_collections(ctx)?;
     let expected = session.last_seq + 1;
     if seq != expected {
         return Err(format!(
@@ -287,6 +289,7 @@ pub fn import_v2_commit(ctx: &ReducerContext, manifest_json: String) -> Result<(
     if ctx.sender() != session.created_by {
         return Err("Only the import session creator may commit.".to_string());
     }
+    crate::mail::require_no_protected_mail_collections(ctx)?;
 
     let root: Value =
         serde_json::from_str(&manifest_json).map_err(|e| format!("JSON parse: {e}"))?;
@@ -345,6 +348,15 @@ pub fn import_v2_abort(ctx: &ReducerContext) -> Result<(), String> {
 }
 
 // ── Session helpers ───────────────────────────────────────────────────────────
+
+/// Do not bind a new private collection to identities while a chunked ordinary
+/// import is replacing that identity universe. Abort remains available.
+pub(crate) fn require_no_snapshot_import(ctx: &ReducerContext) -> Result<(), String> {
+    if ctx.db.import_session().id().find(IMPORT_SESSION_ID).is_some() {
+        return Err("protected_mail_restore_not_supported".into());
+    }
+    Ok(())
+}
 
 fn clear_session(ctx: &ReducerContext) {
     ctx.db.import_session().id().delete(IMPORT_SESSION_ID);

@@ -1,6 +1,26 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { subscribeToAvailableTables } from "./subscriptions.js";
+import { tables } from "./module_bindings/index.js";
+
+test("general worker subscriptions never load private mail owner views", () => {
+  const names: string[] = Object.values(tables).map(table => table.sourceName);
+  for (const name of ["my_protected_mail", "my_protected_mail_collections"]) assert.ok(names.includes(name), `missing generated view ${name}`);
+  const queries: string[] = [];
+  const connection = {
+    subscriptionBuilder() {
+      const builder = {
+        onApplied() { return builder; },
+        onError() { return builder; },
+        subscribe(value: string[]) { queries.push(...value); },
+      };
+      return builder;
+    },
+  };
+  subscribeToAvailableTables(connection, "[test]", () => undefined);
+  assert.ok(queries.includes("SELECT * FROM page"));
+  assert.equal(queries.some(query => /\b(?:my_protected_mail|protected_mail_)/.test(query)), false);
+});
 
 test("ai_user_config has a dedicated subscription for credential rotations", () => {
   const subscriptions: string[][] = [];
