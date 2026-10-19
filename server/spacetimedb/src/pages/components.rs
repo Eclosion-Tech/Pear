@@ -38,6 +38,8 @@ use crate::module_install::module_install_meta;
 use crate::pages::{page, Page};
 use crate::types::ActorType;
 
+pub(crate) mod trellis_panel;
+
 // ============================================================
 // Enums
 // ============================================================
@@ -669,6 +671,15 @@ fn builtin_specs() -> Vec<BuiltinSpec> {
             accepts_children: false,
         },
         BuiltinSpec {
+            component_type: "TrellisPanel",
+            display_name: "Note panel",
+            description: "A page-owned, versioned note panel. Human and agent settings use commit_trellis_panel.",
+            prop_schema: r#"{"type":"object"}"#,
+            capabilities: vec![],
+            has_yjs_state: false,
+            accepts_children: false,
+        },
+        BuiltinSpec {
             component_type: "Container",
             display_name: "Container",
             description: "Layout container with flex / grid / stack modes.",
@@ -1219,8 +1230,12 @@ pub fn insert_component(
     };
     let new_order = renumber_with_gap(ctx, siblings, insert_index);
 
+    let id = next_component_node_id(ctx);
+    let props_json = if component_type == trellis_panel::COMPONENT_TYPE {
+        trellis_panel::initialize(ctx, parent_id, id, &props_json)?
+    } else { props_json };
     ctx.db.component_node().insert(ComponentNode {
-        id: next_component_node_id(ctx),
+        id,
         surface_id,
         parent_id: Some(parent_id),
         component_type,
@@ -1251,6 +1266,10 @@ pub fn update_component_props(
     let node = require_live_node(ctx, component_id)?;
     let page = require_component_tree_page(ctx, node.surface_id)?;
     require_page_write(ctx, node.surface_id)?;
+
+    if node.component_type == trellis_panel::COMPONENT_TYPE {
+        return Err("Use commit_trellis_panel to update a versioned page panel".into());
+    }
 
     ctx.db.component_node().id().update(ComponentNode {
         props: props_json,
@@ -1842,12 +1861,17 @@ fn write_page_doc(
 
     for block in blocks {
         let id = next_component_node_id(ctx);
+        let props = if block.component_type == trellis_panel::COMPONENT_TYPE {
+            trellis_panel::initialize(ctx, root.id, id, &block.props_json)?
+        } else {
+            block.props_json
+        };
         ctx.db.component_node().insert(ComponentNode {
             id,
             surface_id: page_id,
             parent_id: Some(root.id),
             component_type: block.component_type,
-            props: block.props_json,
+            props,
             order: next_order,
             created_by: ActorType::Human,
             updated_by: ActorType::Human,

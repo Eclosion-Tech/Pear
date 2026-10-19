@@ -23,6 +23,10 @@ import {
 const EXPECTED = [
   "request_human_input",
   "create_page",
+  "list_page_panel_templates",
+  "get_page_panel",
+  "create_page_panel",
+  "update_page_panel",
   "query_database",
   "get_page_components",
   "insert_component",

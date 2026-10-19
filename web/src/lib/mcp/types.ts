@@ -10,7 +10,7 @@
  */
 
 import type { Tool } from "@modelcontextprotocol/server";
-import type { StdbTransport } from "../api-endpoint";
+import type { StdbTransport } from "../api-endpoint/types.js";
 
 export type { StdbTransport };
 

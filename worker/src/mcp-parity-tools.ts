@@ -53,6 +53,10 @@ const PARITY_TOOL_NAMES = new Set([
   "query_database",
   // Page UI authoring (M2/M4 — the reason a repeater can exist on a page)
   "get_page_components",
+  "list_page_panel_templates",
+  "create_page_panel",
+  "get_page_panel",
+  "update_page_panel",
   "insert_component",
   "update_block_content",
   "edit_page_content",
@@ -179,6 +183,11 @@ export function unregisterMcpTransport(identityHex: string): void {
 /** The module (workspace) an AI user's registered connection belongs to. */
 export function mcpDbNameFor(identityHex: string): string | undefined {
   return transports.get(identityHex)?.dbName;
+}
+
+/** The already-authenticated caller transport, shared with chat-only references. */
+export function mcpTransportFor(identityHex: string): HttpStdbTransport | undefined {
+  return transports.get(identityHex)?.transport;
 }
 
 let registry: Map<string, McpToolEntry> | null = null;

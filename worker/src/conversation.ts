@@ -799,6 +799,12 @@ async function handleConversationMessage(
     // Block-anchored ContextThread: surface the anchored component-tree node's
     // text as the primary focus, so the AI knows where the user pointed it.
     if (conv.pageId && conv.blockAnchor != null) {
+      const focusedNode = conn.db.component_node?.id?.find?.(conv.blockAnchor) as { componentType?: string } | undefined;
+      pageContext += `${pageContext ? "\n\n" : ""}Focused page component: ${JSON.stringify({ page_id: String(conv.pageId), component_id: String(conv.blockAnchor), component_type: focusedNode?.componentType ?? "unknown" })}. ` +
+        "The user placed this conversation on that component; keep edits scoped to it. " +
+        (focusedNode?.componentType === "TrellisPanel"
+          ? "Read it with get_page_panel before changing its declared settings with update_page_panel. Use show_page_panel to display the same live component in your reply. Unsent browser input is private."
+          : "Read get_page_components to inspect its current type and properties before editing. Do not replace the page to change this component.");
       const focusText = readComponentNodeText(conn, conv.blockAnchor).trim();
       if (focusText) {
         pageContext +=

@@ -44,7 +44,7 @@ import {
 import { usePearWorkspaceSlug } from "@/src/lib/blobUpload";
 import type { AttachmentSpec } from "@/src/module_bindings/types";
 import { OrchaJobCard } from "@/src/components/OrchaJobCard";
-import { StaticComponentTree } from "@/src/components/component-renderers/StaticComponentTree";
+import { ChatComponentTree, GeneratedUiEventsProvider } from "@/src/components/component-renderers/ChatComponentTree";
 
 /**
  * Conversation thread rendered by @eclosion-tech/chat over the SpacetimeDB
@@ -62,7 +62,7 @@ const ComponentTreeUI = makeAssistantDataUI<{
   name: "component-tree",
   render: ({ data }) => (
     <div className="my-2">
-      <StaticComponentTree json={data.json} messageId={data.messageId} />
+      <ChatComponentTree json={data.json} messageId={data.messageId} />
     </div>
   ),
 });
@@ -369,6 +369,7 @@ export function EclosionChatThread({
             .catch((error) => setError(String(error)));
       }}
     >
+      <GeneratedUiEventsProvider>
       <Chat runtime={runtime} className="h-full">
         <ComponentTreeUI />
         <OrchaJobUI />
@@ -403,6 +404,7 @@ export function EclosionChatThread({
           />
         </div>
       </Chat>
+      </GeneratedUiEventsProvider>
       {dragOver ? (
         <div className="pointer-events-none absolute inset-1 z-20 flex items-center justify-center rounded-xl border-2 border-dashed border-violet-500 bg-violet-50/90 text-sm font-medium text-violet-700 dark:bg-neutral-900/90 dark:text-violet-300">
           Drop pages, files, images or selected text

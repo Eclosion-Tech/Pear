@@ -13,6 +13,10 @@ use crate::auth::user;
 use crate::id_counters::alloc_id;
 use crate::pages::page;
 
+mod trellis;
+mod trellis_state;
+mod page_panel_reference;
+
 /// Resolve `@name` spans in `content` to AI-user and human identities.
 ///
 /// Server-side on purpose. Addressing drives AI-to-AI wake gating (and, later,
@@ -1219,17 +1223,8 @@ pub fn update_message(
     Ok(())
 }
 
-/// Set (or clear, with `None`) the inline `component_tree_v1` generative-UI
-/// payload on an assistant message. Same authority model as `update_message`
-/// (only the original AI sender may write it); kept separate so streaming
-/// `update_message` flushes don't have to thread the blob and so `..msg`
-/// preserves it across them. Idempotent; render-only per ADR D7.
-#[reducer]
-pub fn set_message_component_tree(
-    ctx: &ReducerContext,
-    message_id: u64,
-    component_tree_json: Option<String>,
-) -> Result<(), String> {
+/// Shared authority check for both historical panels and revisioned Trellis UI.
+fn require_message_ui_authority(ctx: &ReducerContext, message_id: u64) -> Result<ConversationMessage, String> {
     let msg = ctx
         .db
         .conversation_message()
@@ -1267,14 +1262,27 @@ pub fn set_message_component_tree(
         return Err("Conversation is closed".to_string());
     }
 
-    ctx.db
-        .conversation_message()
-        .id()
-        .update(ConversationMessage {
-            component_tree_json,
-            ..msg
-        });
+    Ok(msg)
+}
 
+/// Historical render_ui write path. Revisioned interfaces use their own atomic
+/// commit reducer and cannot be overwritten or cleared through this setter.
+#[reducer]
+pub fn set_message_component_tree(
+    ctx: &ReducerContext,
+    message_id: u64,
+    component_tree_json: Option<String>,
+) -> Result<(), String> {
+    let msg = require_message_ui_authority(ctx, message_id)?;
+    if msg.component_tree_json.as_deref().is_some_and(trellis_state::is_saved_ui)
+        || component_tree_json.as_deref().is_some_and(trellis_state::is_saved_ui) {
+        return Err("Use commit_message_trellis for retained interfaces".to_string());
+    }
+    if msg.component_tree_json.as_deref().is_some_and(page_panel_reference::is_reference)
+        || component_tree_json.as_deref().is_some_and(page_panel_reference::is_reference) {
+        return Err("Use set_message_page_component for a live page-panel reference".into());
+    }
+    ctx.db.conversation_message().id().update(ConversationMessage { component_tree_json, ..msg });
     Ok(())
 }
 

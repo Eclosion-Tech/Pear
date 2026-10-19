@@ -10,6 +10,7 @@ import {
   useConversationParticipants,
   useConversations,
   useCreateConversation,
+  useAddConversationParticipant,
   useDmConversation,
   useFindOrCreateDm,
   type ConversationMessageRow,
@@ -45,6 +46,9 @@ export function EclosionChatPanel({
   const allMessages = useConversationMessages();
   const { profiles } = useAiUserProfiles();
   const [selectedId, setSelectedId] = useState<bigint | null>(openConversationId ?? null);
+  const addParticipant = useAddConversationParticipant();
+  const [inviteError, setInviteError] = useState("");
+  const [inviting, setInviting] = useState(false);
 
   useEffect(() => {
     if (openConversationId != null) setSelectedId(openConversationId);
@@ -110,6 +114,26 @@ export function EclosionChatPanel({
         </div>
         <div className="flex items-center gap-2">
           <PageAccessMenu key={String(pageId)} pageId={pageId} />
+          {conversation?.blockAnchor != null && (
+            <label className="text-xs">
+              <span className="sr-only">Invite an AI to this component conversation</span>
+              <select aria-label="Invite an AI to this component conversation" value="" disabled={inviting}
+                className="max-w-40 rounded border border-neutral-200 bg-transparent p-1 dark:border-neutral-700"
+                onChange={async event => {
+                  const profile = profiles.find(p => p.identity.toHexString() === event.target.value);
+                  if (!profile) return;
+                  setInviting(true); setInviteError("");
+                  try { await addParticipant({ conversationId: conversation.id, identity: profile.identity }); }
+                  catch (error) { setInviteError(error instanceof Error ? error.message : "Could not invite the AI."); }
+                  finally { setInviting(false); }
+                }}>
+                <option value="">Invite AI…</option>
+                {profiles.filter(profile => !allParticipants.some(participant => participant.conversationId === conversation.id &&
+                  participant.leftAt == null && participant.identity.toHexString() === profile.identity.toHexString())).map(profile =>
+                    <option key={profile.identity.toHexString()} value={profile.identity.toHexString()}>{profile.displayName}</option>)}
+              </select>
+            </label>
+          )}
           {!conversation ? (
             <NewChatMenu
               pageId={pageId}
@@ -128,6 +152,7 @@ export function EclosionChatPanel({
           </button>
         </div>
       </header>
+      {inviteError && <p role="alert" className="px-3 py-2 text-sm text-red-600">{inviteError}</p>}
       {conversation ? (
         <div className="min-h-0 flex-1">
           <EclosionChatThread key={String(conversation.id)} conversation={conversation} activePageId={pageId} />
