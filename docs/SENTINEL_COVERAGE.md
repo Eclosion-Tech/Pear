@@ -1,6 +1,6 @@
 # Sentinel coverage inventory and staged storage boundary
 
-**Status: S1a–S1c merged; S2a authority state staged, October 19, 2026.** Private mail storage, source ceilings/current generations, registered exposure snapshots and derived ancestry and exact instruction revisions/owner decisions are implemented. S2a adds retained connection epochs and immutable processor revisions. These remain disconnected from the runner, prompt assembly and UI. The policy package and synthetic sinks do not mediate production effects; a trusted review UI, authoritative admission, credential/network isolation and protected monitoring remain disabled.
+**Status: S1a–S2a merged; S2b1 instruction sources staged, October 19, 2026.** Private mail storage, source ceilings/current generations, registered exposure snapshots and derived ancestry and exact instruction revisions/owner decisions are implemented. S2a adds retained connection epochs and immutable processor revisions. S2b1 adds exact instruction-source resolution, current-only first enrollment and retained predecessor ceilings. These remain disconnected from the runner, prompt assembly and UI. The policy package and synthetic sinks do not mediate production effects; a trusted review UI, authoritative admission, credential/network isolation and protected monitoring remain disabled.
 
 See [current implementation](SENTINEL.md), the Cloud [implementation plan](https://forge.syntropy.chat/Eclosion-Tech/pear-cloud/src/branch/main/docs/PEAR_SENTINEL_PLAN.md) and [research proposal](https://forge.syntropy.chat/Eclosion-Tech/pear-cloud/src/branch/main/docs/UNTRUSTED_CONTENT_SPIKE.md). Cloud links refer to that host repository; Pear OSS does not require its implementation. Source references identify the audited seams, not evidence that their remaining gates pass.
 
@@ -40,7 +40,7 @@ The audited MCP registry and custom CRUD dispatcher query fixed structures; neit
 
 S1 tests must exercise ordinary token protocol access and existing publisher-backed application readers. They must also document that explicit trusted publisher access succeeds. These are separate expectations. Future governed runtimes require broker custody of privileged credentials and substrate authorization; S0 does not provide that custody.
 
-## Implemented staged private storage and authority state (S1–S2a)
+## Implemented staged private storage and governed inputs (S1–S2b1)
 
 The [storage contract](PROTECTED_MAIL_STORAGE.md) documents private mail records, source-policy generations and exposure/derived provenance. Original mail records and exact instruction review have explicit owner views; derived records and policy history have no new read projection. These APIs are not connected to a runner, prompt builder or settings UI, and do not perform admission or certify sanitization.
 
@@ -61,7 +61,7 @@ and complete graph. Fresh manual roots have unknown provenance. Decisions prove
 the authenticated owner credential, not physical human presence or display.
 They do not initialize source policy, authorize processing or integrate with
 ordinary mutable prompts. Trusted review UI/recipe, governed instruction-source
-registration and durable admission are still required before runtime use.
+enrollment and current-decision checks inside durable admission are still required before runtime use.
 
 No native/MCP tool or custom CRUD mapping registers these reads. Owner views are excluded from broad worker subscriptions and `snapshot_tables_v2.json`; browser export hydration now uses only that policy's include list. Private backing tables are already outside generated public-table bindings and that policy's exact public-surface equality check. Keep them outside ordinary snapshot/import include lists. A dedicated protected export/restore path must preserve restrictions and invalidate old execution authority; it is not supplied by excluding the views.
 
@@ -74,6 +74,14 @@ instruction revisions, shared budgets and one-use admission. Controlled
 server restart tests persistence only; crash recovery and external dispatch
 remain separate gates. Ordinary restore also fences a processor-only workspace,
 and active v2 import blocks new processor configuration.
+
+S2b1 resolves exact immutable instruction revisions through the same source
+graph. Explicit first policy enrollment is current-only, while already enrolled
+historical retries remain inert. New edits retain prior enrolled instruction
+sources and all known parents. These are data ceilings; missing policy denies
+processing, and a current approved decision plus live restrictions must still
+be checked independently in admission. Historical resolution is deliberately
+available after edit/revoke/logout so lineage cannot disappear.
 
 Source, record and receipt commit together. Exact replay is a no-op; changed content or another request key for the same mailbox event is refused. Ordinary v1/v2 restore rejects any retained collection even if all pages have been purged; collection creation and an active v2 session are mutually exclusive, while abort stays available. When protected runtime integration is added, local append, receipt and applicable checkpoint must consume their admission together. Do not wire the existing page-writing runner into the private schema before its authority and lifecycle design is ready.
 

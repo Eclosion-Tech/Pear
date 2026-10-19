@@ -10,7 +10,8 @@ use spacetimedb::{
 };
 
 use super::governance::{
-    current_effective_policy, resolve_source_graph, validate_source_ref, ProtectedMailSourceRef,
+    current_effective_policy, resolve_source_graph, source_policy_enrolled, validate_source_ref,
+    ProtectedMailSourceRef, ResolvedProtectedMailSource,
 };
 use super::protected::{
     authenticated_owner, protected_mail_collection, protected_mail_collection__view,
@@ -429,6 +430,41 @@ fn instruction_ref(revision: &ProtectedMailInstructionRevision) -> ProtectedMail
     }
 }
 
+fn instruction_source_ref(revision: &ProtectedMailInstructionRevision) -> ProtectedMailSourceRef {
+    ProtectedMailSourceRef {
+        id: revision.head_id.clone(),
+        revision: revision.revision,
+        digest: revision.digest.clone(),
+    }
+}
+
+fn source_matches(
+    reference: &ProtectedMailSourceRef,
+    revision: &ProtectedMailInstructionRevision,
+    collection: &ProtectedMailCollection,
+    head: &ProtectedMailInstructionHead,
+) -> bool {
+    validate_source_ref(reference).is_ok()
+        && *reference == instruction_source_ref(revision)
+        && revision_matches(revision, collection)
+        && head.id == revision.head_id
+        && head.scope == revision.scope
+        && head.owner == collection.owner
+        && head.current_revision.revision >= revision.revision
+}
+
+fn derived_literal_matches(
+    revision: &ProtectedMailInstructionRevision,
+    source: &ResolvedProtectedMailSource,
+    body: &str,
+    collection: &ProtectedMailCollection,
+) -> bool {
+    revision.derived_source.as_ref() == Some(&source.reference)
+        && source.owner == collection.owner
+        && source.collection_id == collection.id
+        && body == revision.body
+}
+
 fn head_matches(
     head: &ProtectedMailInstructionHead,
     collection: &ProtectedMailCollection,
@@ -508,6 +544,83 @@ fn checked_head(
     Ok(Some((head, revision)))
 }
 
+/// An immutable instruction revision is trackable data regardless of its
+/// current decision or policy. Current instruction authority is a separate
+/// future admission check; old references must never lose their ancestry.
+pub(super) fn resolve_instruction_source(
+    ctx: &ReducerContext,
+    reference: &ProtectedMailSourceRef,
+) -> Result<Option<ResolvedProtectedMailSource>, String> {
+    if !reference.id.starts_with("mail-instruction-head:") {
+        return Ok(None);
+    }
+    let revision = ctx
+        .db
+        .protected_mail_instruction_revision()
+        .id()
+        .find(revision_id(&reference.id, reference.revision))
+        .ok_or("protected_mail_source_missing")?;
+    let collection = ctx
+        .db
+        .protected_mail_collection()
+        .id()
+        .find(revision.scope.collection_id)
+        .ok_or(INCONSISTENT)?;
+    let (head, _) = checked_head(ctx, &collection, &revision.scope)?.ok_or(INCONSISTENT)?;
+    if !source_matches(reference, &revision, &collection, &head) {
+        return Err("protected_mail_source_conflict".into());
+    }
+    if let Some(source) = &revision.derived_source {
+        let resolved = resolve_derived_source(ctx, source)?.ok_or(INCONSISTENT)?;
+        let derivation = ctx
+            .db
+            .protected_mail_derivation()
+            .source_id()
+            .find(source.id.clone())
+            .ok_or(INCONSISTENT)?;
+        if !derived_literal_matches(&revision, &resolved, &derivation.body, &collection) {
+            return Err(INCONSISTENT.into());
+        }
+    }
+    Ok(Some(ResolvedProtectedMailSource {
+        reference: reference.clone(),
+        owner: collection.owner,
+        collection_id: collection.id,
+        parents: revision.parents,
+    }))
+}
+
+fn require_current_source(
+    reference: &ProtectedMailSourceRef,
+    current: &ProtectedMailInstructionRevision,
+) -> Result<(), String> {
+    if *reference != instruction_source_ref(current) {
+        return Err("protected_mail_instruction_source_not_current".into());
+    }
+    Ok(())
+}
+
+/// First enrollment must serialize with edits. A historical unenrolled
+/// revision cannot acquire a ceiling after a successor omitted that edge.
+/// Existing-policy replay never calls this gate and never changes authority.
+pub(super) fn require_current_instruction_for_initial_policy(
+    ctx: &ReducerContext,
+    reference: &ProtectedMailSourceRef,
+) -> Result<(), String> {
+    if !reference.id.starts_with("mail-instruction-head:") {
+        return Ok(());
+    }
+    let head = ctx
+        .db
+        .protected_mail_instruction_head()
+        .id()
+        .find(reference.id.clone())
+        .ok_or(OWNER_REQUIRED)?;
+    let collection = publisher_collection(ctx, &head.scope)?;
+    let (_, current) = checked_head(ctx, &collection, &head.scope)?.ok_or(OWNER_REQUIRED)?;
+    require_current_source(reference, &current)
+}
+
 /// One namespace covers drafts and decisions. A historical replay validates
 /// its original immutable row, then returns without touching the current head.
 fn historical_replay(
@@ -579,10 +692,11 @@ fn retained_parents(
     previous: Option<&ProtectedMailInstructionRevision>,
     additional: &[ProtectedMailSourceRef],
 ) -> Result<Vec<ProtectedMailSourceRef>, String> {
-    let parents = merge_parent_refs(
-        previous.map_or(&[], |revision| revision.parents.as_slice()),
-        additional,
-    )?;
+    let enrolled = previous
+        .map(|revision| source_policy_enrolled(ctx, &instruction_source_ref(revision)))
+        .transpose()?
+        .unwrap_or(false);
+    let parents = draft_parent_refs(previous, additional, enrolled)?;
     if parents.is_empty() {
         return Ok(parents);
     }
@@ -596,6 +710,21 @@ fn retained_parents(
         return Err("protected_mail_source_disclosure_denied".into());
     }
     Ok(parents)
+}
+
+fn draft_parent_refs(
+    previous: Option<&ProtectedMailInstructionRevision>,
+    additional: &[ProtectedMailSourceRef],
+    previous_enrolled: bool,
+) -> Result<Vec<ProtectedMailSourceRef>, String> {
+    let mut additional = additional.to_vec();
+    if previous_enrolled {
+        additional.push(instruction_source_ref(previous.ok_or(INCONSISTENT)?));
+    }
+    merge_parent_refs(
+        previous.map_or(&[], |revision| revision.parents.as_slice()),
+        &additional,
+    )
 }
 
 fn merge_parent_refs(
@@ -647,6 +776,11 @@ fn insert_draft(
         revision: generation,
         digest: digest.clone(),
     };
+    let source = ProtectedMailSourceRef {
+        id: reference.id.clone(),
+        revision: reference.revision,
+        digest: reference.digest.clone(),
+    };
     let revision = ProtectedMailInstructionRevision {
         id: revision_id(&id, generation),
         head_id: id.clone(),
@@ -695,6 +829,9 @@ fn insert_draft(
     } else {
         ctx.db.protected_mail_instruction_head().insert(head);
     }
+    // Include this wrapper in both bounds, not just its parents. Any failure
+    // rolls back the new revision and head in the same reducer transaction.
+    resolve_source_graph(ctx, collection.id, std::slice::from_ref(&source))?;
     Ok(())
 }
 
@@ -1265,6 +1402,152 @@ mod tests {
         assert_eq!(
             canonical_parents(&too_many).unwrap_err(),
             "protected_mail_instruction_parent_limit"
+        );
+    }
+
+    #[test]
+    fn instruction_source_is_exact_immutable_data_across_later_edits_and_decisions() {
+        let old = revision(1);
+        let current = revision(3);
+        let approval = decision(&current, 4, ProtectedMailInstructionDecisionKind::Approve);
+        let current_head = head(
+            &current,
+            4,
+            ProtectedMailInstructionStatus::InstructionApproved,
+            Some(&approval),
+        );
+        let reference = instruction_source_ref(&old);
+        assert_eq!(reference.id, instruction_ref(&old).id);
+        assert_eq!(reference.revision, instruction_ref(&old).revision);
+        assert_eq!(reference.digest, instruction_ref(&old).digest);
+        assert!(source_matches(
+            &reference,
+            &old,
+            &collection(),
+            &current_head
+        ));
+        for field in 0..6 {
+            let mut reference = instruction_source_ref(&old);
+            let mut changed_collection = collection();
+            let mut changed_head = head(&current, 3, ProtectedMailInstructionStatus::Draft, None);
+            match field {
+                0 => reference.digest = "b".repeat(64),
+                1 => reference.revision += 1,
+                2 => reference.id.push('x'),
+                3 => changed_collection.owner = Identity::from_byte_array([2; 32]),
+                4 => changed_head.scope.instruction_key.push('x'),
+                _ => changed_head.current_revision.revision = 0,
+            }
+            assert!(!source_matches(
+                &reference,
+                &old,
+                &changed_collection,
+                &changed_head
+            ));
+        }
+    }
+
+    #[test]
+    fn derived_instruction_source_checks_literal_copy_even_with_a_self_consistent_digest() {
+        let mut derived = revision(1);
+        let parent = source("mail-derived-source:fixture");
+        derived.origin = "derived".into();
+        derived.derived_source = Some(parent.clone());
+        derived.parents = vec![parent.clone()];
+        derived.digest = content_digest(
+            &derived.scope,
+            &derived.body,
+            &derived.origin,
+            &derived.parents,
+            derived.derived_source.as_ref(),
+        );
+        derived.request_digest = request_digest(
+            &derived.scope,
+            derived.expected_generation,
+            &derived.event_key,
+            "draft-derived",
+            None,
+            Some(&parent),
+            None,
+        );
+        let resolved = ResolvedProtectedMailSource {
+            reference: parent,
+            owner: owner(),
+            collection_id: collection().id,
+            parents: vec![],
+        };
+        assert!(revision_matches(&derived, &collection()));
+        assert!(derived_literal_matches(
+            &derived,
+            &resolved,
+            &derived.body,
+            &collection()
+        ));
+        let exact = derived.body.clone();
+        derived.body.push('x');
+        derived.digest = content_digest(
+            &derived.scope,
+            &derived.body,
+            &derived.origin,
+            &derived.parents,
+            derived.derived_source.as_ref(),
+        );
+        assert!(revision_matches(&derived, &collection()));
+        assert!(!derived_literal_matches(
+            &derived,
+            &resolved,
+            &exact,
+            &collection()
+        ));
+    }
+
+    #[test]
+    fn enrollment_and_edit_order_cannot_add_a_late_ceiling_or_drop_an_existing_one() {
+        let first = revision(1);
+        let first_source = instruction_source_ref(&first);
+        assert!(require_current_source(&first_source, &first).is_ok());
+        // Enrollment wins first: the edit must retain this exact source.
+        let mut second = revision(2);
+        second.parents = draft_parent_refs(Some(&first), &[], true).unwrap();
+        assert_eq!(second.parents, vec![first_source.clone()]);
+        // Edit wins first: the now-historical first revision cannot enroll.
+        assert_eq!(
+            require_current_source(&first_source, &second),
+            Err("protected_mail_instruction_source_not_current".into())
+        );
+        assert!(draft_parent_refs(Some(&first), &[], false)
+            .unwrap()
+            .is_empty());
+        // Even an unenrolled intermediate edit cannot shed a prior ceiling.
+        assert_eq!(
+            draft_parent_refs(Some(&second), &[], false).unwrap(),
+            second.parents
+        );
+        assert_eq!(draft_parent_refs(None, &[], true), Err(INCONSISTENT.into()));
+    }
+
+    #[test]
+    fn enrolled_predecessor_and_known_ancestry_are_retained_for_every_edit_mode() {
+        let mut previous = revision(1);
+        let known = source("mail-source:known");
+        previous.parents = vec![known.clone()];
+        let additional = source("mail-derived-source:new");
+        let expected = canonical_parents(&[
+            known.clone(),
+            instruction_source_ref(&previous),
+            additional.clone(),
+        ])
+        .unwrap();
+        assert_eq!(
+            draft_parent_refs(Some(&previous), &[additional], true).unwrap(),
+            expected
+        );
+        let manual = draft_parent_refs(Some(&previous), &[], true).unwrap();
+        assert!(manual.contains(&known));
+        assert!(manual.contains(&instruction_source_ref(&previous)));
+        assert_eq!(
+            draft_parent_refs(Some(&previous), &manual, true).unwrap(),
+            manual
         );
     }
 

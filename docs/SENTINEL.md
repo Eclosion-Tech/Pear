@@ -4,7 +4,8 @@
 
 **Status:** Merged S0 containment, S1a private mail storage, S1b
 source policy/exposure provenance and S1c exact instruction revisions/owner
-decisions, plus staged S2a retained epochs and frozen processor declarations. The policy package and private stores are
+decisions and S2a retained epochs/frozen processor declarations, plus staged
+S2b1 governed instruction sources. The policy package and private stores are
 not connected to a mail runtime.
 Durable admissions, isolated credential brokers, redaction enforcement and host
 egress controls remain unimplemented; the protected mail profile is disabled.
@@ -133,7 +134,7 @@ remove known parents. A fresh manual paste has unknown provenance.
 The explicit owner review view is excluded from broad worker subscriptions and
 ordinary exports. Authentication identifies the owner credential, not physical
 human presence or proof of display. No review UI or runtime consumer is added;
-source registration for instruction revisions, trusted UI/recipe authorization,
+current governed-input checks, trusted UI/recipe authorization,
 inference admission and protected runner integration remain gates. An instruction
 approval grants no disclosure or effect authority. Mutable prompts, page flags,
 publisher configuration and conversation answers receive no automatic approval.
@@ -153,8 +154,23 @@ The five new tables are private with no new view or runtime consumer. Ordinary
 restore also rejects processor-only private state, and new profile configuration
 cannot run during v2 import. The persistence fixture restarts a disk-backed
 server and compares retained state without republishing it. Grants/shared
-budgets, governed instruction sources, durable admission and dispatch remain
-unimplemented; configuration records do not establish those guarantees.
+budgets, durable current-input admission and dispatch remain unimplemented;
+configuration records do not establish those guarantees.
+
+## Governed instruction inputs
+
+[S2b1 instruction sources](PROTECTED_MAIL_INSTRUCTIONS.md) reuse exact immutable
+instruction references and explicit source-policy enrollment. First enrollment
+requires the current checked revision and eligible owner; historical exact
+retries cannot reset ceilings. Edits retain an enrolled predecessor as a source
+parent, including through intermediate unenrolled edits. Current ancestor
+narrowing/revocation therefore remains binding. Missing policy denies processing;
+source resolution and exposure bookkeeping do not grant instruction authority.
+
+No tables, views, grants, budgets, admissions or runtime consumers are added.
+Future admission must bind the current approved revision, exact decision/head
+generation, all current source restrictions and actual frozen payload. Retained
+historical data and a publisher declaration cannot substitute for that check.
 
 ## Coverage inventory and release gates
 
@@ -166,7 +182,7 @@ the existing identities, read paths and effect paths to their remaining gates.
 | Fixed mail operations | Offline validation and eligibility contracts | Trusted adapter, authenticated approval, durable atomic admission |
 | Source/exposure graph | Private source ceilings/current generations, cumulative registered exposure snapshots and immutable derived ancestry | Reviewed registration adapter, authenticated run binding, fresh admission/dispatch policy checks and complete actual exposure coverage |
 | Mail destination/readers | Separate private tables and explicit owner views, excluded from ordinary page readers/caches/exports | Reviewed owner UI, safe connection migration and admitted runtime use; legacy mail pages remain legacy |
-| Reviewed instructions | Private exact revisions, owner review projection, scoped owner decisions and edit-to-draft | Reviewed human UI/recipe, governed instruction-source adapter, current source restrictions and independent admission |
+| Reviewed instructions | Private exact revisions, owner review projection, scoped owner decisions, edit-to-draft and governed source inheritance | Reviewed human UI/recipe, current decision/source restrictions bound to frozen payload and independent admission |
 | Authority/dispatch | Retained connection epochs and frozen processor declarations; frozen operation/payload preparation; in-memory synthetic dispatch tests | Current epoch/rights and shared budgets checked transactionally; one-use admission, dispatch-time recheck, conservative unknown outcomes |
 | IMAP, model and classifier credentials | Existing worker custody unchanged | Isolated roles with minimal environment/mounts, authenticated RPC and host-enforced network policy |
 | Mail settings/lifecycle | Existing monitor unchanged | Draft/test/preview/enable, frozen processor approval, authentication-message suppression, cancellation and accurate terminal/backoff states |
@@ -204,6 +220,7 @@ accuracy results.
   ancestry, replay and private protocol boundaries.
 - `worker/scripts/protected-mail-instructions-e2e.ts`: populated S1b upgrade,
   private review/identity boundaries, exact decisions, edit/revoke/replay CAS,
+  S2a upgrade, current-only source enrollment and inherited instruction ceilings,
   retained ancestry and export exclusions.
 - `worker/scripts/protected-mail-authority-e2e.ts`: populated S1c upgrade,
   epoch/configuration edit–revert and replay, tombstones, processor-only restore
