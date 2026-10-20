@@ -1,6 +1,6 @@
 # Sentinel coverage inventory and staged storage boundary
 
-**Status: S1a–S2a merged; S2b1 instruction sources staged, October 19, 2026.** Private mail storage, source ceilings/current generations, registered exposure snapshots and derived ancestry and exact instruction revisions/owner decisions are implemented. S2a adds retained connection epochs and immutable processor revisions. S2b1 adds exact instruction-source resolution, current-only first enrollment and retained predecessor ceilings. These remain disconnected from the runner, prompt assembly and UI. The policy package and synthetic sinks do not mediate production effects; a trusted review UI, authoritative admission, credential/network isolation and protected monitoring remain disabled.
+**Status: S1a–S2b1 merged; S2b2a local summary admission staged, October 20, 2026.** Private mail storage, source ceilings/generations, registered exposure/derived ancestry, exact instruction decisions and retained connection/processor state are implemented. S2b2a adds owner-issued exact-artifact grants, service-bound bounded runs, shared budgets and atomic private promotion receipts. These remain disconnected from the mail runner, prompt assembly and UI. External-operation admission, complete real exposure tracking, credential/network isolation and protected monitoring remain disabled.
 
 See [current implementation](SENTINEL.md), the Cloud [implementation plan](https://forge.syntropy.chat/Eclosion-Tech/pear-cloud/src/branch/main/docs/PEAR_SENTINEL_PLAN.md) and [research proposal](https://forge.syntropy.chat/Eclosion-Tech/pear-cloud/src/branch/main/docs/UNTRUSTED_CONTENT_SPIKE.md). Cloud links refer to that host repository; Pear OSS does not require its implementation. Source references identify the audited seams, not evidence that their remaining gates pass.
 
@@ -40,9 +40,9 @@ The audited MCP registry and custom CRUD dispatcher query fixed structures; neit
 
 S1 tests must exercise ordinary token protocol access and existing publisher-backed application readers. They must also document that explicit trusted publisher access succeeds. These are separate expectations. Future governed runtimes require broker custody of privileged credentials and substrate authorization; S0 does not provide that custody.
 
-## Implemented staged private storage and governed inputs (S1–S2b1)
+## Implemented private storage, governed inputs and local promotion
 
-The [storage contract](PROTECTED_MAIL_STORAGE.md) documents private mail records, source-policy generations and exposure/derived provenance. Original mail records and exact instruction review have explicit owner views; derived records and policy history have no new read projection. These APIs are not connected to a runner, prompt builder or settings UI, and do not perform admission or certify sanitization.
+The [storage contract](PROTECTED_MAIL_STORAGE.md) documents private mail records, source-policy generations and exposure/derived provenance. Original mail records and exact instruction review have explicit owner views; derived records and policy history have no new read projection. These staging APIs are not connected to a runner, prompt builder or settings UI and do not certify sanitization. Local promotion has its separate admission contract.
 
 The private collection binds an authenticated human owner to an existing paused connection. A record binds its immutable external-mail source and collection; a receipt binds both the supplied event key and a server-derived mailbox UID tuple to that record. Staging accepts bounded typed literal text and a trusted importer sanitization declaration, without executable components, arbitrary source JSON or caller-supplied authority. Actual mailbox authenticity, sanitization and admission remain later adapter gates.
 
@@ -60,8 +60,7 @@ all known parents; publisher drafts copy a validated derivation's frozen body
 and complete graph. Fresh manual roots have unknown provenance. Decisions prove
 the authenticated owner credential, not physical human presence or display.
 They do not initialize source policy, authorize processing or integrate with
-ordinary mutable prompts. Trusted review UI/recipe, governed instruction-source
-enrollment and current-decision checks inside durable admission are still required before runtime use.
+ordinary mutable prompts. Trusted review UI/recipe, complete actual prompt/input instrumentation and external-operation admission remain required before runtime use. Local promotion separately checks the exact current instruction decision and frozen ancestry.
 
 No native/MCP tool or custom CRUD mapping registers these reads. Owner views are excluded from broad worker subscriptions and `snapshot_tables_v2.json`; browser export hydration now uses only that policy's include list. Private backing tables are already outside generated public-table bindings and that policy's exact public-surface equality check. Keep them outside ordinary snapshot/import include lists. A dedicated protected export/restore path must preserve restrictions and invalidate old execution authority; it is not supplied by excluding the views.
 
@@ -89,9 +88,9 @@ Legacy mail pages remain legacy content. Do not relabel them protected or erase 
 
 ## S2 authoritative state placement
 
-**Placement decision; the admission transaction remains unimplemented:** keep live mail authority in the same SpacetimeDB module as protected source/storage state. S2a already retains connection epochs and immutable processor revisions here. Co-locate owner/connection state, connection epochs, monotonic processor-config revisions, source generations, workflow authority, per-run grants, shared root budget pools and operation admissions. PostgreSQL mirrors or cached snapshots cannot supply an atomic check against a concurrent SpacetimeDB pause, ACL change or source update.
+**Implemented for local summary promotion; external admission remains a gate:** keep live mail authority in the same SpacetimeDB module as protected source/storage state. S2a already retains connection epochs and immutable processor revisions here. Co-locate owner/connection state, connection epochs, monotonic processor-config revisions, source generations, workflow authority, per-run grants, shared root budget pools and operation admissions. PostgreSQL mirrors or cached snapshots cannot supply an atomic check against a concurrent SpacetimeDB pause, ACL change or source update.
 
-An atomic admission reducer must validate the exact authoritative state version, principal/runtime/run/parent scope, source versions/restrictions, canonical operation and frozen payload/config binding; debit the shared budget pool; and insert a unique admission/effect key. A TypeScript `eligible` result and fingerprint authenticate nothing and reserve nothing. Concurrent child runs reference the same budget pool rather than independent copies.
+The [local summary reducer](PROTECTED_MAIL_ADMISSION.md) validates the current owner/epoch/snapshot, bound service/run, exact current instruction approval, full stored ancestry and current source policies; computes the frozen append cost/hash; debits the shared grant pool; and inserts a unique private pointer/receipt in one transaction. It accepts no body/hash/byte-count/processor or cursor argument. The staged source itself remains an ancestor, so its later revocation still constrains future disclosure. Global once-per-stage identity excludes grants and runs; the separate request identity binds the original grant/run/nonce. A TypeScript `eligible` result and fingerprint authenticate nothing and reserve nothing. Concurrent child runs reference the same budget pool rather than independent copies.
 
 Admission rows contain opaque references, fingerprints/digests, costs, epochs and bounded states, not message bodies, prompts or raw errors. Treat these identifiers as access-controlled security records rather than ordinary telemetry. Pause/resume and credential changes increment the connection epoch; provider/model/endpoint/key/backend changes increment the processor configuration revision.
 
@@ -101,7 +100,7 @@ Preserve Cloud's PostgreSQL `mcp_answer_offers` ledger and device once markers f
 
 ## Remaining integration tests
 
-Offline S0 sinks test proposed operations and frozen payloads against synthetic authority. Live disposable tests additionally cover staged storage, provenance and authority records: private protocol/read boundaries, populated upgrades without backfill, ceilings/CAS/revocation, cumulative snapshots, derived ancestry, epochs/configuration edit–revert, replay, tombstones, legacy fences, restore refusal and controlled restart. The table below is the complete integration checklist; durable admission, actual exposure registration, connector, sanitization and host gates remain.
+Offline S0 sinks test proposed operations and frozen payloads against synthetic authority. Live disposable tests additionally cover staged storage, provenance and authority records: private protocol/read boundaries, populated upgrades without backfill, ceilings/CAS/revocation, cumulative snapshots, derived ancestry, epochs/configuration edit–revert, replay, tombstones, legacy fences, restore refusal and controlled restart. Local-promotion tests additionally cover exact-artifact grants, service-role changes, shared-budget/effect races and retained receipts/spending. The table below is the remaining full-workflow checklist; external-operation admission, actual exposure registration, connector, sanitization and host gates remain.
 
 | Gate | Exact remaining evidence |
 |---|---|

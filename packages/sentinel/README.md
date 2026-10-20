@@ -50,6 +50,18 @@ and send its verified payload unchanged.
 Exact HTTPS endpoint matching does not enforce TLS, DNS, redirects, credentials,
 or network isolation. Those checks belong to the constrained dispatcher.
 
+`canonicalAppendPayload` and `prepareMailAppend` define the closed local summary
+envelope: literal body, contract version, kind, complete source closure including
+the exact staged source, sanitization version and stage reference. References
+use decimal u64 revision strings and sort by UTF-8 ID/numeric revision. The
+builder measures and hashes the complete canonical UTF-8 envelope, constructs
+the existing `mail.append` operation, and freezes it with `prepareOperation`.
+It does not verify that an asserted closure is complete or that a model used an
+instruction. The [local promotion reducer](../../docs/PROTECTED_MAIL_ADMISSION.md)
+accepts identifiers only and independently reconstructs the envelope from
+stored state before checking current authority and consuming its shared budget.
+The portable helper itself still authenticates no caller and grants no permit.
+
 No production runtime imports this package yet. It does not change existing
 mail or assistant permissions. Public research and arbitrary tools remain
 outside this contract. See [the implementation status](../../docs/SENTINEL.md).

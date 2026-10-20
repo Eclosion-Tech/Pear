@@ -315,6 +315,23 @@ fn checked_live(
     Ok((collection, credential, key))
 }
 
+/// Internal authority projection. Credentials are validated transiently and
+/// never returned to an admission, receipt, service or ordinary read surface.
+pub(super) fn checked_current_authority(
+    ctx: &ReducerContext,
+    connection_id: u64,
+) -> Result<ProtectedMailConnectionAuthorityHead, String> {
+    let head = ctx.db.protected_mail_connection_authority_head().connection_id()
+        .find(connection_id).ok_or("protected_mail_connection_authority_required")?;
+    let connection = ctx.db.mail_connection().id().find(connection_id)
+        .ok_or("protected_mail_connection_authority_connection_required")?;
+    checked_live(ctx, &head, &connection)?;
+    if connection.enabled {
+        return Err("protected_mail_connection_authority_connection_not_paused".into());
+    }
+    Ok(head)
+}
+
 #[reducer]
 pub fn initialize_protected_mail_connection_authority(
     ctx: &ReducerContext,

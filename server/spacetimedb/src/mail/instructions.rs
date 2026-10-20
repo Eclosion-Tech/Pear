@@ -544,6 +544,33 @@ fn checked_head(
     Ok(Some((head, revision)))
 }
 
+/// Internal exact decision binding, not a read grant or evidence of display.
+/// The admission caller separately authenticates the owner or bound service.
+pub(super) fn checked_approved_instruction(
+    ctx: &ReducerContext,
+    collection_id: u64,
+    reference: &ProtectedMailInstructionRef,
+    generation: u64,
+    decision_id: &str,
+) -> Result<(), String> {
+    let collection = ctx.db.protected_mail_collection().id().find(collection_id)
+        .ok_or("protected_mail_summary_instruction_stale")?;
+    let head = ctx.db.protected_mail_instruction_head().id().find(reference.id.clone())
+        .ok_or("protected_mail_summary_instruction_stale")?;
+    let (current, _) = checked_head(ctx, &collection, &head.scope)
+        .map_err(|_| "protected_mail_summary_instruction_stale")?
+        .ok_or("protected_mail_summary_instruction_stale")?;
+    if current.scope.collection_id != collection_id
+        || current.current_revision != *reference
+        || current.generation != generation
+        || current.status != ProtectedMailInstructionStatus::InstructionApproved
+        || current.decision_id.as_deref() != Some(decision_id)
+    {
+        return Err("protected_mail_summary_instruction_stale".into());
+    }
+    Ok(())
+}
+
 /// An immutable instruction revision is trackable data regardless of its
 /// current decision or policy. Current instruction authority is a separate
 /// future admission check; old references must never lose their ancestry.

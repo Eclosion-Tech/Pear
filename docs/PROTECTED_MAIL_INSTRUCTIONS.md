@@ -109,8 +109,9 @@ revision and its parents, re-resolve current source
 restrictions, default missing source policy to deny, and obtain independent
 workflow authority and durable admission. It must recheck the current
 head/decision generation and owner eligibility; a historical approved revision
-can remain trackable data without being current instruction authority. No
-runtime currently consumes these decisions.
+can remain trackable data without being current instruction authority.
+[Local summary admission](PROTECTED_MAIL_ADMISSION.md) now performs this binding
+for an already-staged artifact; no prompt builder or mail runtime consumes it.
 
 Authentication establishes which owner credential submitted a decision. It
 does not attest physical human presence or prove that a UI displayed the text.

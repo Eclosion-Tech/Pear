@@ -1540,6 +1540,20 @@ export const ProtectedMailCollectionRow = __t.object("ProtectedMailCollectionRow
 });
 export type ProtectedMailCollectionRow = __Infer<typeof ProtectedMailCollectionRow>;
 
+export const ProtectedMailCommittedSummary = __t.object("ProtectedMailCommittedSummary", {
+  id: __t.string(),
+  owner: __t.identity(),
+  collectionId: __t.u64(),
+  get stage() {
+    return ProtectedMailSourceRef;
+  },
+  grantId: __t.string(),
+  runId: __t.string(),
+  receiptId: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailCommittedSummary = __Infer<typeof ProtectedMailCommittedSummary>;
+
 export const ProtectedMailConnectionAuthorityHead = __t.object("ProtectedMailConnectionAuthorityHead", {
   connectionId: __t.u64(),
   collectionId: __t.u64(),
@@ -1893,6 +1907,14 @@ export const ProtectedMailSource = __t.object("ProtectedMailSource", {
 });
 export type ProtectedMailSource = __Infer<typeof ProtectedMailSource>;
 
+export const ProtectedMailSourceGeneration = __t.object("ProtectedMailSourceGeneration", {
+  get source() {
+    return ProtectedMailSourceRef;
+  },
+  generation: __t.u64(),
+});
+export type ProtectedMailSourceGeneration = __Infer<typeof ProtectedMailSourceGeneration>;
+
 export const ProtectedMailSourcePolicyHead = __t.object("ProtectedMailSourcePolicyHead", {
   id: __t.string(),
   get source() {
@@ -1929,6 +1951,106 @@ export const ProtectedMailSourceRef = __t.object("ProtectedMailSourceRef", {
   digest: __t.string(),
 });
 export type ProtectedMailSourceRef = __Infer<typeof ProtectedMailSourceRef>;
+
+export const ProtectedMailSummaryAdmissionReceipt = __t.object("ProtectedMailSummaryAdmissionReceipt", {
+  id: __t.string(),
+  eventId: __t.string(),
+  grantId: __t.string(),
+  runId: __t.string(),
+  rootRunId: __t.string(),
+  owner: __t.identity(),
+  serviceIdentity: __t.identity(),
+  collectionId: __t.u64(),
+  get stage() {
+    return ProtectedMailSourceRef;
+  },
+  eventNonce: __t.string(),
+  requestDigest: __t.string(),
+  payloadDigest: __t.string(),
+  operationFingerprint: __t.string(),
+  appendBytes: __t.u64(),
+  budgetGeneration: __t.u64(),
+  remainingOperations: __t.u64(),
+  remainingAppendBytes: __t.u64(),
+  stagePolicyGeneration: __t.u64(),
+  get sourceBindings() {
+    return __t.array(ProtectedMailSourceGeneration);
+  },
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailSummaryAdmissionReceipt = __Infer<typeof ProtectedMailSummaryAdmissionReceipt>;
+
+export const ProtectedMailSummaryBudget = __t.object("ProtectedMailSummaryBudget", {
+  grantId: __t.string(),
+  generation: __t.u64(),
+  remainingOperations: __t.u64(),
+  remainingAppendBytes: __t.u64(),
+  lastReceiptId: __t.option(__t.string()),
+});
+export type ProtectedMailSummaryBudget = __Infer<typeof ProtectedMailSummaryBudget>;
+
+export const ProtectedMailSummaryGrant = __t.object("ProtectedMailSummaryGrant", {
+  id: __t.string(),
+  owner: __t.identity(),
+  collectionId: __t.u64(),
+  serviceIdentity: __t.identity(),
+  runtimeId: __t.string(),
+  connectionEpoch: __t.u64(),
+  snapshotDigest: __t.string(),
+  get instruction() {
+    return ProtectedMailInstructionRef;
+  },
+  instructionGeneration: __t.u64(),
+  decisionId: __t.string(),
+  get allowedStages() {
+    return __t.array(ProtectedMailSourceRef);
+  },
+  notBeforeMs: __t.u64(),
+  expiresAtMs: __t.u64(),
+  maxOperations: __t.u64(),
+  maxAppendBytes: __t.u64(),
+  maxAppendBytesPerOperation: __t.u64(),
+  requestDigest: __t.string(),
+  digest: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailSummaryGrant = __Infer<typeof ProtectedMailSummaryGrant>;
+
+export const ProtectedMailSummaryGrantEvent = __t.object("ProtectedMailSummaryGrantEvent", {
+  id: __t.string(),
+  grantId: __t.string(),
+  generation: __t.u64(),
+  get kind() {
+    return ProtectedMailSummaryGrantEventKind;
+  },
+  eventNonce: __t.string(),
+  requestDigest: __t.string(),
+  grantDigest: __t.string(),
+  actor: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailSummaryGrantEvent = __Infer<typeof ProtectedMailSummaryGrantEvent>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailSummaryGrantEventKind`.
+export const ProtectedMailSummaryGrantEventKind = __t.enum("ProtectedMailSummaryGrantEventKind", {
+  Issued: __t.unit(),
+  Revoked: __t.unit(),
+});
+export type ProtectedMailSummaryGrantEventKind = __Infer<typeof ProtectedMailSummaryGrantEventKind>;
+
+export const ProtectedMailSummaryRun = __t.object("ProtectedMailSummaryRun", {
+  id: __t.string(),
+  grantId: __t.string(),
+  runId: __t.string(),
+  parentRunId: __t.option(__t.string()),
+  rootRunId: __t.string(),
+  depth: __t.u32(),
+  serviceIdentity: __t.identity(),
+  runtimeId: __t.string(),
+  requestDigest: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailSummaryRun = __Infer<typeof ProtectedMailSummaryRun>;
 
 export const ReadableResource = __t.object("ReadableResource", {
   id: __t.u64(),

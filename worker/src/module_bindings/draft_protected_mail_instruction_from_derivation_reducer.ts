@@ -11,8 +11,8 @@ import {
 } from "spacetimedb";
 
 import {
-  ProtectedMailInstructionScope,
   ProtectedMailSourceRef,
+  ProtectedMailInstructionScope,
 } from "./types";
 
 export default {
