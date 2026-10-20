@@ -88,12 +88,13 @@ New processor configuration and active v2 restore are mutually exclusive;
 effect-free historical replay and restore abort remain available. A separate
 protected backup/restore contract is still required before canary use.
 
-The next admission slice must bind current epochs/configuration, authenticated
+The remaining admission slice must bind current epochs/configuration, authenticated
 workflow grants, shared budgets, exact frozen input/payload, source restrictions
 and instruction decision generations in one transaction. Governed instruction
-source registration must also preserve ceilings across edits: a new revision
-cannot escape an older enrolled revision's restrictions. This slice adds no
-instruction source adapter and changes no instruction approval semantics.
+source registration must preserve ceilings across edits: a new revision
+cannot escape an older enrolled revision's restrictions. The later
+[S2b1 adapter](PROTECTED_MAIL_INSTRUCTIONS.md) supplies that inheritance. S2a
+itself adds no instruction adapter or approval semantics.
 Credential brokers, dispatch claims, transport/egress enforcement, a reviewed
 human interface and protected activation remain later gates. The existing
 PostgreSQL answer ledger is unchanged.
@@ -134,7 +135,7 @@ remove owned data and anonymous volumes and surface cleanup failures. Without
 the flag, normal fixtures attempt database DELETE after draining; that mode is
 not the disk-backed lifecycle being certified here.
 
-Cloud PR CI builds pinned pre-S1a, S1a, S1b, S1c and current modules independently,
+Cloud PR CI builds pinned pre-S1a, S1a, S1b, S1c, S2a and current modules independently,
 rejects current/baseline identity, runs all four mail harnesses and restarts its
 disposable disk-backed Docker server for the seed/resume check. The release
 also runs fresh authority conformance against its exact release WASM. A clean

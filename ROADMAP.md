@@ -150,7 +150,8 @@
 - 🔨 Private policy and provenance (S1b) — source ceilings and current generations, narrowing/revocation, cumulative registered exposure snapshots and immutable derived ancestry. No model/prompt integration or approval authority.
 - 🔨 [Reviewed instructions (S1c)](./docs/PROTECTED_MAIL_INSTRUCTIONS.md) — immutable exact revisions, scoped owner decisions, edit-to-draft and retained ancestry. No trusted review UI or runtime use yet.
 - 🔨 [Authority state (S2a)](./docs/PROTECTED_MAIL_AUTHORITY.md) — retained epochs/tombstones, frozen processor revisions and controlled restart coverage. No grants, budgets, admission or runtime use yet.
-- 📋 Protected mail runtime — trusted UI/recipe authorization, governed instruction sources, admissions/shared budgets, isolated connector/inference brokers and host egress tests, then restricted workflow UI and a private canary. Ordinary assistant mail access waits for outgoing-path enforcement.
+- 🔨 [Governed instruction inputs (S2b1)](./docs/PROTECTED_MAIL_INSTRUCTIONS.md) — exact source references, current-only first enrollment and retained ceilings across edits. No grants or admission yet.
+- 📋 Protected mail runtime — trusted UI/recipe authorization, current governed-input checks, admissions/shared budgets, isolated connector/inference brokers and host egress tests, then restricted workflow UI and a private canary. Ordinary assistant mail access waits for outgoing-path enforcement.
 - 📋 Governed assistants — extend enforcement to native/API/MCP paths, inference/output, memory/delegation/schedules, then separately constrained browser/remote execution. Prompt warnings and classifiers alone do not establish containment.
 
 ### Extensions & MCP tools

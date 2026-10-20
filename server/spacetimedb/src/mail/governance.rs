@@ -177,7 +177,13 @@ fn resolve_source(
         .id()
         .find(reference.id.clone());
     let derived = super::provenance::resolve_derived_source(ctx, reference)?;
-    if external.is_some() && derived.is_some() {
+    let instruction = super::instructions::resolve_instruction_source(ctx, reference)?;
+    if [external.is_some(), derived.is_some(), instruction.is_some()]
+        .into_iter()
+        .filter(|present| *present)
+        .count()
+        > 1
+    {
         return Err("protected_mail_source_conflict".into());
     }
     if let Some(source) = external {
@@ -216,7 +222,9 @@ fn resolve_source(
             parents: vec![],
         });
     }
-    derived.ok_or_else(|| "protected_mail_source_missing".into())
+    derived
+        .or(instruction)
+        .ok_or_else(|| "protected_mail_source_missing".into())
 }
 
 /// The cached subtree height preserves the depth bound when a shared ancestor
@@ -362,6 +370,63 @@ fn current_policy(
     Ok(history)
 }
 
+fn enrollment_matches(
+    source: &ResolvedProtectedMailSource,
+    head: Option<&ProtectedMailSourcePolicyHead>,
+    initial: Option<&ProtectedMailSourcePolicyHistory>,
+) -> Result<bool, String> {
+    let (head, initial) = match (head, initial) {
+        (None, None) => return Ok(false),
+        (Some(head), Some(initial)) => (head, initial),
+        _ => return Err("protected_mail_source_policy_inconsistent".into()),
+    };
+    let id = policy_id(&source.reference);
+    if head.id != id
+        || head.source != source.reference
+        || head.owner != source.owner
+        || head.collection_id != source.collection_id
+        || head.generation == 0
+        || initial.id != history_id(&id, 1)
+        || initial.policy_id != id
+        || initial.source != source.reference
+        || initial.owner != source.owner
+        || initial.collection_id != source.collection_id
+        || initial.generation != 1
+        || initial.revoked
+        || canonical_processors(initial.processors.clone())? != initial.processors
+    {
+        return Err("protected_mail_source_policy_inconsistent".into());
+    }
+    Ok(true)
+}
+
+/// A policy head is the enrollment marker. Never treat a broken head or an
+/// orphaned initial history row as an unenrolled instruction that may shed its
+/// restrictions on the next edit. This reads metadata without widening it.
+pub(super) fn source_policy_enrolled(
+    ctx: &ReducerContext,
+    reference: &ProtectedMailSourceRef,
+) -> Result<bool, String> {
+    validate_source_ref(reference)?;
+    let id = policy_id(reference);
+    let head = ctx
+        .db
+        .protected_mail_source_policy_head()
+        .id()
+        .find(id.clone());
+    let initial = ctx
+        .db
+        .protected_mail_source_policy_history()
+        .id()
+        .find(history_id(&id, 1));
+    let resolved = resolve_source(ctx, reference)?;
+    if !enrollment_matches(&resolved, head.as_ref(), initial.as_ref())? {
+        return Ok(false);
+    }
+    current_policy(ctx, &resolved)?;
+    Ok(true)
+}
+
 pub(super) fn current_effective_policy(
     ctx: &ReducerContext,
     collection_id: u64,
@@ -495,6 +560,9 @@ pub fn initialize_protected_mail_source_policy(
         }
         return Ok(());
     }
+    // Only first enrollment is current-only. Historical exact initialization
+    // replay above remains read-only after edits, decisions or revocation.
+    super::instructions::require_current_instruction_for_initial_policy(ctx, &source)?;
     // An initialized derived source cannot exceed any ancestor's current
     // ceiling. Normally derivation installs its policy in the same transaction.
     if !resolved.parents.is_empty() {
@@ -758,6 +826,60 @@ mod tests {
     }
 
     #[test]
+    fn enrollment_marker_rejects_orphan_or_mismatched_policy_associations() {
+        let source = source("mail-instruction-head:fixture", &[]);
+        let fixture = || {
+            let id = policy_id(&source.reference);
+            (
+                ProtectedMailSourcePolicyHead {
+                    id: id.clone(),
+                    source: source.reference.clone(),
+                    owner: source.owner,
+                    collection_id: source.collection_id,
+                    generation: 2,
+                },
+                ProtectedMailSourcePolicyHistory {
+                    id: history_id(&id, 1),
+                    policy_id: id,
+                    source: source.reference.clone(),
+                    owner: source.owner,
+                    collection_id: source.collection_id,
+                    generation: 1,
+                    processors: vec![processor("a")],
+                    allow_owner_storage: true,
+                    revoked: false,
+                    changed_by: source.owner,
+                    changed_at: Timestamp::from_micros_since_unix_epoch(1),
+                },
+            )
+        };
+        let (head, initial) = fixture();
+        assert_eq!(enrollment_matches(&source, None, None), Ok(false));
+        assert_eq!(
+            enrollment_matches(&source, Some(&head), Some(&initial)),
+            Ok(true)
+        );
+        assert!(enrollment_matches(&source, Some(&head), None).is_err());
+        assert!(enrollment_matches(&source, None, Some(&initial)).is_err());
+        for field in 0..10 {
+            let (mut head, mut initial) = fixture();
+            match field {
+                0 => head.source.digest = "b".repeat(64),
+                1 => head.owner = Identity::from_byte_array([2; 32]),
+                2 => head.collection_id += 1,
+                3 => head.generation = 0,
+                4 => initial.id.push('x'),
+                5 => initial.policy_id.push('x'),
+                6 => initial.source.revision += 1,
+                7 => initial.generation += 1,
+                8 => initial.revoked = true,
+                _ => initial.processors.push(processor("a")),
+            }
+            assert!(enrollment_matches(&source, Some(&head), Some(&initial)).is_err());
+        }
+    }
+
+    #[test]
     fn narrowing_never_expands_or_rewinds_and_checks_cas_before_noop() {
         let a = processor("a");
         let b = processor("b");
@@ -940,6 +1062,60 @@ mod tests {
         nodes.push(wide);
         assert_eq!(
             resolve_fixture(&[reference("wide")], nodes),
+            Err("protected_mail_source_graph_bounds".into())
+        );
+    }
+
+    #[test]
+    fn prospective_instruction_wrapper_counts_against_depth_and_node_bounds() {
+        let mut chain = Vec::<ResolvedProtectedMailSource>::new();
+        for revision in 1..=32 {
+            chain.push(ResolvedProtectedMailSource {
+                reference: ProtectedMailSourceRef {
+                    id: "mail-instruction-head:one-family".into(),
+                    revision,
+                    digest: format!("{revision:064x}"),
+                },
+                owner: Identity::from_byte_array([1; 32]),
+                collection_id: 7,
+                parents: chain
+                    .last()
+                    .map(|source| vec![source.reference.clone()])
+                    .unwrap_or_default(),
+            });
+        }
+        let previous = chain.last().unwrap().reference.clone();
+        assert!(resolve_fixture(std::slice::from_ref(&previous), chain.clone()).is_ok());
+        let wrapper = ResolvedProtectedMailSource {
+            reference: ProtectedMailSourceRef {
+                revision: 33,
+                digest: format!("{:064x}", 33),
+                ..previous.clone()
+            },
+            parents: vec![previous],
+            ..chain.last().unwrap().clone()
+        };
+        let reference = wrapper.reference.clone();
+        chain.push(wrapper);
+        assert_eq!(
+            resolve_fixture(&[reference], chain),
+            Err("protected_mail_source_graph_bounds".into())
+        );
+
+        let mut leaves = (0..256)
+            .map(|i| source(&format!("mail-source:leaf-{i}"), &[]))
+            .collect::<Vec<_>>();
+        let parents = leaves
+            .iter()
+            .map(|source| source.reference.clone())
+            .collect::<Vec<_>>();
+        assert!(resolve_fixture(&parents, leaves.clone()).is_ok());
+        let mut wrapper = source("mail-instruction-head:wide-family", &[]);
+        wrapper.parents = parents;
+        let reference = wrapper.reference.clone();
+        leaves.push(wrapper);
+        assert_eq!(
+            resolve_fixture(&[reference], leaves),
             Err("protected_mail_source_graph_bounds".into())
         );
     }

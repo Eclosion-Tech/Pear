@@ -1,7 +1,9 @@
-/** Disposable staged S1c instruction review test against localhost SpacetimeDB 2.0.3.
+/** Disposable staged instruction/source test against localhost SpacetimeDB 2.0.3.
  * No mailbox, model, worker, real credentials or production workspace is used.
  * PEAR_INSTRUCTION_BASELINE_WASM optionally seeds retained S1b private records
  * before an additive upgrade to PEAR_PROTECTED_MAIL_WASM. The default is fresh.
+ * PEAR_INSTRUCTION_INPUT_BASELINE_WASM instead seeds populated S2a records;
+ * the two baseline options are mutually exclusive.
  * Output contains fixed stage codes only, never fixture values or raw errors.
  */
 import assert from "node:assert/strict";
@@ -34,6 +36,7 @@ const stateTables = ["protected_mail_source_policy_head", "protected_mail_source
 const legacyTables = [...mailTables, ...stateTables];
 const instructionTables = ["protected_mail_instruction_head", "protected_mail_instruction_revision", "protected_mail_instruction_decision"] as const;
 const privateTables = [...legacyTables, ...instructionTables];
+const authorityTables = ["protected_mail_connection_authority_head", "protected_mail_connection_authority_history", "protected_mail_processor_head", "protected_mail_processor_revision", "protected_mail_processor_event"] as const;
 const effectsTables = ["mail_connection", "page", "page_content", "component_node", "page_access_rule", "mail_import_receipt", "orcha_job", "orcha_task", "conversation", "conversation_message", "bridge_command", "automation_event_queue"] as const;
 let stage = "localhost_guard";
 
@@ -238,7 +241,10 @@ async function main(): Promise<void> {
     stage = "publish_fixture";
     const currentWasm = await readFile(process.env.PEAR_PROTECTED_MAIL_WASM
       ?? new URL("../../server/spacetimedb/target/wasm32-unknown-unknown/release/server.wasm", import.meta.url));
-    const baseline = process.env.PEAR_INSTRUCTION_BASELINE_WASM;
+    const inputBaseline = process.env.PEAR_INSTRUCTION_INPUT_BASELINE_WASM || undefined;
+    const legacyBaseline = process.env.PEAR_INSTRUCTION_BASELINE_WASM || undefined;
+    assert.ok(!(inputBaseline && legacyBaseline), "exclusive_instruction_baseline_required");
+    const baseline = inputBaseline ?? legacyBaseline;
     const baselineWasm = baseline ? await readFile(baseline) : undefined;
     assert.ok(currentWasm.length > 0 && (!baselineWasm || baselineWasm.length > 0), "module_artifact_required");
     assert.ok(!baselineWasm || !baselineWasm.equals(currentWasm), "distinct_upgrade_artifacts_required");
@@ -327,12 +333,42 @@ async function main(): Promise<void> {
     await seedDerivation(retainedConnection, "retained-disconnected", [history], key("3"), `${marker}_disconnected_derived`);
     const otherDerived = await seedDerivation(otherConnection, "other-owner-derived", [otherSource], key("4"), `${marker}_other_owner_derived`);
     await owner.transport.call("delete_mail_connection", [retainedConnection.id]);
+    if (inputBaseline) {
+      stage = "seed_retained_s2a_instruction_and_authority_state";
+      const upgradeScope: InstructionScope = [1, 1, "mail.summary", connection.id, "upgrade-input-literal"];
+      async function upgradeReference(s: InstructionScope): Promise<SourceRef> {
+        const row = (await owner.transport.sql<Row>("SELECT * FROM my_protected_mail_instructions"))
+          .find(value => JSON.stringify(scopeTuple(value.scope)) === JSON.stringify(s));
+        assert.ok(row, "upgrade_instruction_fixture_missing");
+        return sourceReference(row.reference);
+      }
+      await owner.transport.call("draft_protected_mail_instruction", [upgradeScope, 0, key("1"), `${marker}_upgrade_literal_a`]);
+      const initialUpgradeReference = await upgradeReference(upgradeScope);
+      await owner.transport.call("approve_protected_mail_instruction", [upgradeScope, 1, key("2"), initialUpgradeReference]);
+      await owner.transport.call("revoke_protected_mail_instruction", [upgradeScope, 2, key("3"), initialUpgradeReference]);
+      await owner.transport.call("draft_protected_mail_instruction", [upgradeScope, 3, key("4"), `${marker}_upgrade_literal_b\r\n`]);
+      await owner.transport.call("approve_protected_mail_instruction", [upgradeScope, 4, key("5"), await upgradeReference(upgradeScope)]);
+      const derivedUpgradeScope: InstructionScope = [1, 1, "mail.summary", retainedConnection.id, "upgrade-input-derived"];
+      const retainedDerived = (await publisher.transport.sql<Row>("SELECT * FROM protected_mail_derivation"))
+        .find(row => Number(row.collection_id) === Number(retainedConnection.id));
+      assert.ok(retainedDerived, "upgrade_retained_derivation_missing");
+      await publisher.transport.call("draft_protected_mail_instruction_from_derivation", [derivedUpgradeScope, 0, key("6"), [retainedDerived.source_id, retainedDerived.revision, retainedDerived.digest]]);
+      await owner.transport.call("approve_protected_mail_instruction", [derivedUpgradeScope, 1, key("7"), await upgradeReference(derivedUpgradeScope)]);
+      await publisher.transport.call("initialize_protected_mail_connection_authority", [connection.id]);
+      await owner.transport.call("update_mail_connection_password", [connection.id, ciphertext]);
+      const upgradeProcessor = [1, [0, []], "https://models.example.test/v1/messages", "fixture-upgrade-model", "fixture-upgrade-credential", "version-a"];
+      await publisher.transport.call("configure_protected_mail_processor", ["fixture-upgrade-profile", 0, key("8"), upgradeProcessor]);
+      await publisher.transport.call("configure_protected_mail_processor", ["fixture-upgrade-profile", 1, key("9"), [...upgradeProcessor.slice(0, 5), "version-b"]]);
+      await publisher.transport.call("retire_protected_mail_processor", ["fixture-upgrade-profile", 2, key("a")]);
+    }
     const retainedState = await state(legacyTables);
+    const inputUpgradeState = inputBaseline ? await state([...privateTables, ...authorityTables]) : undefined;
+    const inputUpgradeView = inputBaseline ? sorted(await owner.transport.sql<Row>("SELECT * FROM my_protected_mail_instructions")) : undefined;
     const retainedOwnerRows = sorted(await owner.transport.sql<Row>("SELECT * FROM my_protected_mail"));
     assert.equal(retainedOwnerRows.length, 4, "retained_owner_history_missing");
 
     if (baseline) {
-      stage = "additive_upgrade_retained_s1b_state";
+      stage = inputBaseline ? "additive_upgrade_retained_s2a_state" : "additive_upgrade_retained_s1b_state";
       for (const live of connections) live.disconnect();
       await publish(currentWasm, true);
       [publisher, admin, owner, other, ai, hybrid, anonymous, service] = await Promise.all(
@@ -340,12 +376,20 @@ async function main(): Promise<void> {
       );
       assert.deepEqual(await state(legacyTables), retainedState, "upgrade_changed_private_source_or_policy_state");
       assert.deepEqual(sorted(await owner.transport.sql<Row>("SELECT * FROM my_protected_mail")), retainedOwnerRows, "upgrade_changed_owner_history");
-      console.log("PASS protected_mail_instructions_retained_s1b_upgrade");
+      if (inputUpgradeState) {
+        assert.deepEqual(await state([...privateTables, ...authorityTables]), inputUpgradeState, "upgrade_changed_retained_s2a_private_state");
+        assert.deepEqual(sorted(await owner.transport.sql<Row>("SELECT * FROM my_protected_mail_instructions")), inputUpgradeView, "upgrade_changed_exact_instruction_history");
+      }
+      console.log(inputBaseline ? "PASS protected_mail_instructions_retained_s2a_upgrade" : "PASS protected_mail_instructions_retained_s1b_upgrade");
     }
 
     stage = "no_automatic_instruction_or_approval";
-    for (const rows of Object.values(await state(instructionTables))) assert.equal(rows.length, 0, "automatic_instruction_approval_backfill");
-    assert.equal((await owner.transport.sql("SELECT * FROM my_protected_mail_instructions")).length, 0, "automatic_instruction_review_row");
+    if (!inputBaseline) {
+      for (const rows of Object.values(await state(instructionTables))) assert.equal(rows.length, 0, "automatic_instruction_approval_backfill");
+      assert.equal((await owner.transport.sql("SELECT * FROM my_protected_mail_instructions")).length, 0, "automatic_instruction_review_row");
+    }
+    assert.ok((await publisher.transport.sql<Row>("SELECT * FROM protected_mail_source_policy_head"))
+      .every(row => !sourceReference(row.source)[0].startsWith("mail-instruction-head:")), "automatic_instruction_source_policy_backfill");
     console.log("PASS protected_mail_instructions_no_automatic_approval");
 
     const scope = (instructionKey: string, collectionId = Number(connection.id)): InstructionScope => [1, 1, "mail.summary", collectionId, instructionKey];
@@ -456,8 +500,10 @@ async function main(): Promise<void> {
     const approvedState = await state(instructionTables);
     await owner.transport.call("approve_protected_mail_instruction", originalApproveArgs);
     assert.deepEqual(await state(instructionTables), approvedState, "approval_replay_mutated_state");
-    // An instruction approval is not a source-policy or exposure adapter.
-    await atomicDenied(() => publisher.transport.call("record_protected_mail_exposure", [connection.id, "instruction-fixture-runtime", "instruction-ref-not-source", 0, key("0"), [originalRef], []]), "protected_mail_source_missing");
+    // Approval does not enroll a disclosure ceiling. Literal-main stays
+    // unenrolled so its later edit/logout/disconnect checks remain independent.
+    assert.ok((await publisher.transport.sql<Row>("SELECT * FROM protected_mail_source_policy_head"))
+      .every(row => JSON.stringify(sourceReference(row.source)) !== JSON.stringify(originalRef)), "approval_automatically_enrolled_instruction_source");
     for (const candidate of hidden) {
       assert.equal((await candidate.transport.sql("SELECT * FROM my_protected_mail_instructions")).length, 0, "approval_exposed_http_review_to_other_identity");
       assert.equal(cache(candidate.live, "my_protected_mail_instructions").count(), 0n, "approval_exposed_ws_review_to_other_identity");
@@ -626,6 +672,213 @@ async function main(): Promise<void> {
     await assertReview("revoked-source-candidate", `${marker}_revocation_candidate`, "InstructionApproved", references([ref(derivedC), ref(sourceC)]));
     await atomicDenied(() => sourceDraft(scope("still-revoked-after-approval"), 0, key("e"), derivedC));
     console.log("PASS protected_mail_instructions_current_ancestor_storage_and_revocation_fence");
+
+    const inputEffectsBefore = await state([...effectsTables, ...(inputBaseline ? authorityTables : [])]);
+    const initInput = (reference: SourceRef, processors: Processor[], account = publisher) =>
+      account.transport.call("initialize_protected_mail_source_policy", [reference, processors]);
+    const narrowInput = (reference: SourceRef, generation: number, processors: Processor[], storage: boolean, revoked: boolean, account = owner) =>
+      account.transport.call("narrow_protected_mail_source_policy", [reference, generation, processors, storage, revoked]);
+    async function inputHeads(reference: SourceRef): Promise<Row[]> {
+      return (await publisher.transport.sql<Row>("SELECT * FROM protected_mail_source_policy_head"))
+        .filter(row => JSON.stringify(sourceReference(row.source)) === JSON.stringify(reference));
+    }
+    async function inputPolicy(reference: SourceRef): Promise<Row> {
+      const heads = await inputHeads(reference);
+      assert.equal(heads.length, 1, "instruction_input_policy_missing_or_duplicated");
+      const history = await publisher.transport.sql<Row>("SELECT * FROM protected_mail_source_policy_history WHERE policy_id = ? AND generation = ?", [heads[0].id, Number(heads[0].generation)]);
+      assert.equal(history.length, 1, "instruction_input_policy_history_missing");
+      return history[0];
+    }
+    function policyProcessors(policy: Row): Processor[] {
+      assert.ok(Array.isArray(policy.processors), "instruction_input_processors_shape");
+      return policy.processors.map(value => {
+        if (Array.isArray(value)) return value.map(String) as Processor;
+        const row = value as Row;
+        return [String(row.profile_id), String(row.revision), String(row.endpoint), String(row.model)] as Processor;
+      });
+    }
+    async function inputSeal(run: string, inputs: SourceRef[], expectedMembers: SourceRef[]): Promise<Row> {
+      await publisher.transport.call("record_protected_mail_exposure", [connection.id, "instruction-input-runtime", run, 0, key("0"), inputs, []]);
+      const seal = (await publisher.transport.sql<Row>("SELECT * FROM protected_mail_exposure"))
+        .find(row => row.runtime_id === "instruction-input-runtime" && row.run_id === run);
+      assert.ok(seal, "instruction_input_seal_missing");
+      assert.deepEqual(references(seal.members), references(expectedMembers), "instruction_input_graph_not_exact");
+      return seal;
+    }
+    const appendInput = (seal: Row, event: string, body: string) => publisher.transport.call("append_protected_mail_derivation",
+      [connection.id, seal.runtime_id, seal.run_id, seal.id, event, body, "instruction-input-v1"]);
+    async function derivedInput(seal: Row, event: string, body: string): Promise<SourceRef> {
+      await appendInput(seal, event, body);
+      const row = (await publisher.transport.sql<Row>("SELECT * FROM protected_mail_derivation"))
+        .find(value => value.exposure_id === seal.id && value.event_key === event);
+      assert.ok(row, "instruction_input_derivation_missing");
+      assert.equal(row.body, body, "instruction_input_derivation_body_changed");
+      assert.deepEqual(references(row.parents), references(seal.members), "instruction_input_derivation_dropped_source");
+      return [String(row.source_id), Number(row.revision), String(row.digest)];
+    }
+
+    if (inputUpgradeView) {
+      stage = "instruction_input_explicit_adoption_of_retained_s2a_revisions";
+      const retainedLiteral = await assertReview("upgrade-input-literal", `${marker}_upgrade_literal_b\r\n`, "InstructionApproved", []);
+      const retainedLiteralReference = sourceReference(retainedLiteral.reference);
+      const retainedDerived = inputUpgradeView.find(row => scopeTuple(row.scope)[4] === "upgrade-input-derived");
+      assert.ok(retainedDerived, "retained_derived_instruction_missing_after_upgrade");
+      const unchangedDecisions = await state(instructionTables);
+      await initInput(retainedLiteralReference, [processorP, processorQ]);
+      await initInput(sourceReference(retainedDerived.reference), [processorP]);
+      assert.deepEqual(await state(instructionTables), unchangedDecisions, "source_adoption_changed_retained_instruction_decisions");
+      const firstLiteral = (await publisher.transport.sql<Row>("SELECT * FROM protected_mail_instruction_revision WHERE head_id = ?", [retainedLiteralReference[0]]))
+        .find(row => Number(row.revision) === 1);
+      assert.ok(firstLiteral, "retained_historical_instruction_missing");
+      await atomicDenied(() => initInput([retainedLiteralReference[0], 1, String(firstLiteral.digest)], [processorP]), "protected_mail_instruction_source_not_current");
+      const retainedSeal = await inputSeal("retained-s2a-current-input", [retainedLiteralReference], [retainedLiteralReference]);
+      await derivedInput(retainedSeal, key("1"), `${marker}_retained_instruction_output`);
+      console.log("PASS protected_mail_instructions_input_explicit_retained_s2a_adoption");
+    }
+
+    stage = "instruction_input_exact_refs_and_missing_policy_denial";
+    const inputScope = scope("governed-input-literal");
+    const inputBody = `\t${marker}_governed_literal\r\nexact bytes  \n`;
+    await draft(inputScope, 0, key("1"), inputBody);
+    const inputReview = await assertReview("governed-input-literal", inputBody, "Draft", []);
+    const inputReference = sourceReference(inputReview.reference);
+    assert.equal((await inputHeads(inputReference)).length, 0, "draft_automatically_enrolled_input");
+    const missingPolicySeal = await inputSeal("literal-missing-policy", [inputReference], [inputReference]);
+    await atomicDenied(() => appendInput(missingPolicySeal, key("1"), `${marker}_missing_policy_output`), "protected_mail_source_policy_required");
+    const inputDerivedBody = `${marker}_derived_instruction_input`;
+    const inputDerived = await seedDerivation(connection, "input-derived-a", [sourceA], key("b"), inputDerivedBody);
+    const derivedInputScope = scope("governed-input-derived");
+    await sourceDraft(derivedInputScope, 0, key("1"), inputDerived);
+    const derivedInputReview = await assertReview("governed-input-derived", inputDerivedBody, "Draft", references([ref(inputDerived), ref(sourceA)]));
+    const derivedInstructionReference = sourceReference(derivedInputReview.reference);
+    await initInput(derivedInstructionReference, [processorP, processorQ]);
+    const derivedInstructionSeal = await inputSeal("derived-exact-input", [derivedInstructionReference], [derivedInstructionReference, ref(inputDerived), ref(sourceA)]);
+    const derivedInstructionOutput = await derivedInput(derivedInstructionSeal, key("1"), `${marker}_derived_instruction_output`);
+    assert.deepEqual(policyProcessors(await inputPolicy(derivedInstructionOutput)), [processorP, processorQ], "derived_instruction_ceiling_not_inherited");
+    const foreignScope = scope("governed-input-foreign", otherConnection.id);
+    await draft(foreignScope, 0, key("1"), `${marker}_foreign_instruction`, other);
+    const foreignReview = (await other.transport.sql<Row>("SELECT * FROM my_protected_mail_instructions"))
+      .find(row => JSON.stringify(scopeTuple(row.scope)) === JSON.stringify(foreignScope));
+    assert.ok(foreignReview, "foreign_instruction_fixture_missing");
+    const foreignReference = sourceReference(foreignReview.reference);
+    await initInput(foreignReference, [processorP]);
+    await atomicDenied(() => publisher.transport.call("record_protected_mail_exposure", [connection.id, "instruction-input-runtime", "foreign-input-ref", 0, key("0"), [foreignReference], []]), "protected_mail_source_scope_mismatch");
+    await atomicDenied(() => narrowInput(foreignReference, 1, [], false, true), "protected_mail_source_policy_owner_required");
+    for (const malformed of [[inputReference[0], inputReference[1], key("0")], [inputReference[0], inputReference[1] + 1, inputReference[2]], ["", 0, "malformed"]] as SourceRef[]) {
+      await atomicDenied(() => publisher.transport.call("record_protected_mail_exposure", [connection.id, "instruction-input-runtime", "invalid-input-ref", 0, key("0"), [malformed], []]));
+    }
+    console.log("PASS protected_mail_instructions_input_exact_graph_and_missing_policy_denial");
+
+    stage = "instruction_input_current_only_first_enrollment_and_oracles";
+    const lateScope = scope("governed-input-edit-before-init");
+    await draft(lateScope, 0, key("1"), `${marker}_late_a`);
+    const lateA = sourceReference((await assertReview("governed-input-edit-before-init", `${marker}_late_a`, "Draft", [])).reference);
+    await approve(lateScope, 1, key("2"), lateA);
+    await draft(lateScope, 2, key("3"), `${marker}_late_b`);
+    const lateB = sourceReference((await assertReview("governed-input-edit-before-init", `${marker}_late_b`, "Draft", [])).reference);
+    await atomicDenied(() => initInput(lateA, [processorP, processorQ]), "protected_mail_instruction_source_not_current");
+    assert.equal((await inputHeads(lateA)).length, 0, "historical_first_init_created_policy");
+    await initInput(lateB, [processorP, processorQ]);
+    await initInput(inputReference, [processorP, processorQ]);
+    const oracleReferences: SourceRef[] = [inputReference, [inputReference[0], inputReference[1], key("0")], ["mail-instruction-head:" + key("0"), 1, key("0")], ["", 0, "malformed"]];
+    for (const account of [owner, ...hidden.filter(value => value !== publisher)]) {
+      const errors = [];
+      for (const reference of oracleReferences) errors.push(await denied(initInput(reference, [processorP], account), "protected_mail_publisher_required"));
+      assert.equal(new Set(errors).size, 1, "input_initialization_denial_reveals_metadata");
+    }
+    for (const account of hidden.filter(value => value !== publisher)) {
+      const errors = [];
+      for (const reference of oracleReferences) errors.push(await denied(narrowInput(reference, 1, [], false, true, account), "protected_mail_source_policy_owner_required"));
+      assert.equal(new Set(errors).size, 1, "input_narrowing_denial_reveals_metadata");
+    }
+    const eligibilityScope = scope("governed-input-owner-eligibility");
+    await draft(eligibilityScope, 0, key("1"), `${marker}_owner_eligibility`);
+    const eligibilityReference = sourceReference((await assertReview("governed-input-owner-eligibility", `${marker}_owner_eligibility`, "Draft", [])).reference);
+    await owner.transport.call("logout", []);
+    await atomicDenied(() => initInput(eligibilityReference, [processorP]), "protected_mail_instruction_owner_required");
+    await owner.transport.call("login", ["instruction-owner@example.test", password]);
+    await initInput(eligibilityReference, [processorP]);
+    console.log("PASS protected_mail_instructions_input_current_only_enrollment_and_uniform_oracles");
+
+    stage = "instruction_input_initialize_versus_edit_race";
+    const initRaceScope = scope("governed-input-init-edit-race");
+    await draft(initRaceScope, 0, key("1"), `${marker}_init_race_a`);
+    const initRaceA = sourceReference((await assertReview("governed-input-init-edit-race", `${marker}_init_race_a`, "Draft", [])).reference);
+    const initRace = await Promise.allSettled([initInput(initRaceA, [processorP, processorQ]), draft(initRaceScope, 1, key("2"), `${marker}_init_race_b`)]);
+    assert.equal(initRace[1].status, "fulfilled", "instruction_input_racing_edit_rejected");
+    const raceEnrolled = initRace[0].status === "fulfilled";
+    if (!raceEnrolled) {
+      const rejected = initRace[0] as PromiseRejectedResult;
+      assert.ok(rejected.reason instanceof Error && rejected.reason.message.includes("protected_mail_instruction_source_not_current")
+        && !containsMarker(rejected.reason.message), "instruction_input_racing_init_not_current_denial");
+    }
+    await assertReview("governed-input-init-edit-race", `${marker}_init_race_b`, "Draft", raceEnrolled ? [initRaceA] : []);
+    assert.equal((await inputHeads(initRaceA)).length, raceEnrolled ? 1 : 0, "instruction_input_race_policy_parent_mismatch");
+    console.log("PASS protected_mail_instructions_input_init_edit_atomic_race");
+
+    stage = "instruction_input_enrolled_ancestors_survive_unenrolled_edits";
+    const lineageScope = scope("governed-input-lineage");
+    const lineageDraftArgs = [lineageScope, 0, key("1"), `${marker}_lineage_a`];
+    await owner.transport.call("draft_protected_mail_instruction", lineageDraftArgs);
+    const lineageA = sourceReference((await assertReview("governed-input-lineage", `${marker}_lineage_a`, "Draft", [])).reference);
+    await initInput(lineageA, [processorP, processorQ]);
+    await draft(lineageScope, 1, key("2"), `${marker}_lineage_b`);
+    const lineageB = sourceReference((await assertReview("governed-input-lineage", `${marker}_lineage_b`, "Draft", [lineageA])).reference);
+    assert.equal((await inputHeads(lineageB)).length, 0, "edit_automatically_enrolled_input_revision");
+    await narrowInput(lineageA, 1, [processorP], true, false);
+    await atomicDenied(() => initInput(lineageB, [processorP, processorQ]), "protected_mail_source_policy_expansion");
+    await initInput(lineageB, [processorP]);
+    const lineageSeal = await inputSeal("lineage-b-input", [lineageB], [lineageA, lineageB]);
+    const lineageOutput = await derivedInput(lineageSeal, key("1"), `${marker}_lineage_output`);
+    assert.deepEqual(policyProcessors(await inputPolicy(lineageOutput)), [processorP], "lineage_parent_narrowing_ignored_before_child_init");
+    await narrowInput(lineageA, 2, [], true, false);
+    const afterNarrowOutput = await derivedInput(lineageSeal, key("2"), `${marker}_after_narrow_output`);
+    assert.deepEqual(policyProcessors(await inputPolicy(afterNarrowOutput)), [], "lineage_parent_narrowing_ignored_after_child_init");
+    await draft(lineageScope, 2, key("3"), `${marker}_lineage_c`);
+    const lineageC = sourceReference((await assertReview("governed-input-lineage", `${marker}_lineage_c`, "Draft", [lineageA, lineageB])).reference);
+    assert.equal((await inputHeads(lineageC)).length, 0, "intermediate_revision_auto_enrolled");
+    await draft(lineageScope, 3, key("4"), `${marker}_lineage_d`);
+    const lineageDReview = await assertReview("governed-input-lineage", `${marker}_lineage_d`, "Draft", [lineageA, lineageB]);
+    assert.ok(!references(lineageDReview.parents).some(reference => JSON.stringify(reference) === JSON.stringify(lineageC)), "unenrolled_intermediate_invented_policy_parent");
+    await atomicDenied(() => initInput(lineageC, []), "protected_mail_instruction_source_not_current");
+    console.log("PASS protected_mail_instructions_input_lineage_and_live_ancestor_intersection");
+
+    stage = "instruction_input_revocation_blocks_old_summary_and_new_revision";
+    await narrowInput(lineageA, 3, [], false, false);
+    await atomicDenied(() => draft(lineageScope, 4, key("5"), "attempted restriction removal"), "protected_mail_source_disclosure_denied");
+    const oldSummarySeal = await inputSeal("old-summary-after-storage-denial", [lineageOutput], [lineageOutput, lineageA, lineageB]);
+    await atomicDenied(() => appendInput(oldSummarySeal, key("1"), `${marker}_blocked_summary_output`), "protected_mail_source_disclosure_denied");
+    const lineageD = sourceReference(lineageDReview.reference);
+    await noAuthorityEffect(() => approve(lineageScope, 4, key("5"), lineageD));
+    await assertReview("governed-input-lineage", `${marker}_lineage_d`, "InstructionApproved", [lineageA, lineageB]);
+    await narrowInput(lineageA, 4, [], false, true);
+    await atomicDenied(() => draft(lineageScope, 5, key("6"), "attempted revoked-source edit"), "protected_mail_source_policy_revoked");
+    await atomicDenied(() => appendInput(oldSummarySeal, key("2"), `${marker}_revoked_summary_output`), "protected_mail_source_policy_revoked");
+    const beforeOldInputReplay = await state(privateTables);
+    await initInput(lineageA, [processorP, processorQ]);
+    await owner.transport.call("draft_protected_mail_instruction", lineageDraftArgs);
+    await appendInput(lineageSeal, key("1"), `${marker}_lineage_output`);
+    assert.deepEqual(await state(privateTables), beforeOldInputReplay, "historical_input_replay_rewound_policy_or_head");
+    await atomicDenied(() => initInput(lineageA, [processorP]), "protected_mail_source_policy_initialization_conflict");
+    await inputSeal("revoked-instruction-still-trackable", [lineageB], [lineageA, lineageB]);
+    console.log("PASS protected_mail_instructions_input_revocation_storage_and_inert_historical_replay");
+
+    stage = "instruction_input_prospective_graph_depth_is_bounded";
+    const boundedScope = scope("governed-input-depth-bound");
+    let boundedParents: SourceRef[] = [];
+    for (let generation = 1; generation <= 32; generation++) {
+      const event = createHash("sha256").update(`instruction-input-depth-${generation}`).digest("hex");
+      await draft(boundedScope, generation - 1, event, `${marker}_bounded_${generation}`);
+      const bounded = await assertReview("governed-input-depth-bound", `${marker}_bounded_${generation}`, "Draft", boundedParents);
+      const reference = sourceReference(bounded.reference);
+      await initInput(reference, [processorP]);
+      boundedParents = references([...boundedParents, reference]);
+    }
+    await atomicDenied(() => draft(boundedScope, 32, key("f"), `${marker}_depth_overflow`), "protected_mail_source_graph_bounds");
+    assert.equal(Number((await review("governed-input-depth-bound")).generation), 32, "depth_overflow_advanced_instruction_head");
+    assert.equal((await publisher.transport.sql<Row>("SELECT * FROM protected_mail_instruction_revision WHERE head_id = ?", [boundedParents[0][0]])).length, 32, "depth_overflow_truncated_or_inserted_revision");
+    assert.deepEqual(await state([...effectsTables, ...(inputBaseline ? authorityTables : [])]), inputEffectsBefore, "instruction_input_management_changed_runtime_or_authority");
+    console.log("PASS protected_mail_instructions_input_graph_bounds_and_no_runtime_effect");
 
     stage = "logout_view_fence_and_retained_disconnect_management";
     const currentLiteral = await review("literal-main");

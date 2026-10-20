@@ -116,7 +116,10 @@ reader, native/MCP tool, CRUD mapping or ordinary page projection.
 
 Exact reviewed instruction revisions and owner decisions are staged separately
 in the [S1c instruction store](PROTECTED_MAIL_INSTRUCTIONS.md). Approval does
-not override source ceilings or remove registered ancestry.
+not override source ceilings or remove registered ancestry. S2b1 makes those
+exact immutable revisions resolvable as governed sources. First enrollment is
+current-only; later edits retain enrolled predecessor restrictions. This adds
+no approval, exposure attestation or execution permission.
 
 ## Lifecycle and retention
 
@@ -162,7 +165,7 @@ path to the merged S1a module. It populates private records before upgrading,
 then checks unchanged source identities and owner reads, absent automatic
 policy, policy narrowing/revocation, cumulative exposures and derivation.
 
-The Cloud conformance wrapper builds pinned pre-S1a, S1a, S1b and S1c baselines
+The Cloud conformance wrapper builds pinned pre-S1a, S1a, S1b, S1c and S2a baselines
 plus the current module in independent Cargo target directories, rejects identical
 upgrade artifacts, starts a disposable disk-backed Docker server on an available loopback port
 and cleans it up. The [S2a authority fixture](PROTECTED_MAIL_AUTHORITY.md) also
