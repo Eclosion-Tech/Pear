@@ -1,14 +1,15 @@
 # Sentinel implementation status
 
-**Updated:** 2026-10-19
+**Updated:** 2026-10-20
 
 **Status:** Merged S0 containment, S1a private mail storage, S1b
 source policy/exposure provenance and S1c exact instruction revisions/owner
-decisions and S2a retained epochs/frozen processor declarations, plus staged
-S2b1 governed instruction sources. The policy package and private stores are
-not connected to a mail runtime.
-Durable admissions, isolated credential brokers, redaction enforcement and host
-egress controls remain unimplemented; the protected mail profile is disabled.
+decisions, S2a retained epochs/frozen processor declarations and S2b1 governed
+instruction sources, plus staged S2b2a local summary admission. The local facet
+uses owner-issued exact-artifact grants, service-bound runs, shared budgets and
+an atomic private promotion receipt. The stores are not connected to a mail
+runtime. External admissions/dispatch, isolated credential brokers, redaction
+enforcement and host egress controls remain gates; the protected profile is disabled.
 
 Sentinel will enforce authority and disclosure rules outside the model. Email,
 webpages, workspace content, tool output, and derived summaries cannot grant
@@ -121,7 +122,7 @@ immutable parent references; the server computes its digest and policy
 intersection. Current restrictions on every ancestor remain applicable after
 derivation, including revocation. No caller can replace ancestry with a model's
 citations. These are host-registered declarations, not proof that every actual
-prompt byte was observed; adapter integration and admission are still absent.
+prompt byte was observed; actual exposure instrumentation remains absent.
 All new rows are private, with no new read projection or ordinary page fields.
 
 [S1c reviewed instructions](PROTECTED_MAIL_INSTRUCTIONS.md) add private immutable
@@ -134,8 +135,9 @@ remove known parents. A fresh manual paste has unknown provenance.
 The explicit owner review view is excluded from broad worker subscriptions and
 ordinary exports. Authentication identifies the owner credential, not physical
 human presence or proof of display. No review UI or runtime consumer is added;
-current governed-input checks, trusted UI/recipe authorization,
-inference admission and protected runner integration remain gates. An instruction
+trusted UI/recipe authorization, inference admission and protected runner
+integration remain gates. Local summary admission separately checks the exact
+current instruction and its stored ancestry. An instruction
 approval grants no disclosure or effect authority. Mutable prompts, page flags,
 publisher configuration and conversation answers receive no automatic approval.
 See the [storage contract and fixture commands](PROTECTED_MAIL_STORAGE.md).
@@ -153,9 +155,9 @@ CAS and effect-free replay; they grant no processing permission.
 The five new tables are private with no new view or runtime consumer. Ordinary
 restore also rejects processor-only private state, and new profile configuration
 cannot run during v2 import. The persistence fixture restarts a disk-backed
-server and compares retained state without republishing it. Grants/shared
-budgets, durable current-input admission and dispatch remain unimplemented;
-configuration records do not establish those guarantees.
+server and compares retained state without republishing it. Configuration
+records alone establish no grant or dispatch authority. S2b2a consumes their
+current epoch/snapshot for its local summary facet; external dispatch remains a gate.
 
 ## Governed instruction inputs
 
@@ -167,10 +169,33 @@ parent, including through intermediate unenrolled edits. Current ancestor
 narrowing/revocation therefore remains binding. Missing policy denies processing;
 source resolution and exposure bookkeeping do not grant instruction authority.
 
-No tables, views, grants, budgets, admissions or runtime consumers are added.
-Future admission must bind the current approved revision, exact decision/head
-generation, all current source restrictions and actual frozen payload. Retained
-historical data and a publisher declaration cannot substitute for that check.
+S2b1 adds no tables, views, grants, budgets or runtime consumer. S2b2a binds its
+current approved revision, exact decision/head generation, current source
+restrictions and the actual frozen local append payload. Retained historical
+data and a publisher declaration cannot substitute for that check.
+
+## Local summary admission
+
+[S2b2a](PROTECTED_MAIL_ADMISSION.md) adds one fixed local effect: promote an
+already-staged summary into a private committed pointer and receipt. The owner
+freezes a bounded exact-artifact allowlist, current epoch/configuration,
+instruction approval, service identity, expiry and limits. Every service run
+and child uses the same grant budget. All new-effect checks, full envelope byte
+debit and unique effect/receipt commit in one transaction.
+
+The reducer reads the stored body and complete ancestry itself; callers supply
+no body, processor, exposure set, digest, byte count, clean verdict or cursor.
+The approved instruction must already occur in the frozen ancestry. Source
+restrictions are rechecked at use, including the staged source's own policy.
+Empty processor ceilings can permit this local storage effect without granting
+inference. Once-per-stage identity excludes grant/run/nonce; only the exact
+original authenticated completed request can replay without a new debit.
+
+Six new tables are private, without a body view, ordinary export or automatic
+subscription. No initial staging write, mailbox read, inference, external
+dispatch or checkpoint is admitted here. The portable append codec shares the
+server's canonical envelope/fingerprint contract; a prepared object remains
+unauthenticated. No trusted review UI, broker or protected runner is activated.
 
 ## Coverage inventory and release gates
 
@@ -179,11 +204,11 @@ the existing identities, read paths and effect paths to their remaining gates.
 
 | Surface | Current implementation | Required before protected use |
 |---|---|---|
-| Fixed mail operations | Offline validation and eligibility contracts | Trusted adapter, authenticated approval, durable atomic admission |
+| Fixed mail operations | Offline contracts and frozen append codec; atomic local staged-summary promotion | Trusted adapters, reviewed owner UI/recipe and admission for mailbox/inference effects |
 | Source/exposure graph | Private source ceilings/current generations, cumulative registered exposure snapshots and immutable derived ancestry | Reviewed registration adapter, authenticated run binding, fresh admission/dispatch policy checks and complete actual exposure coverage |
 | Mail destination/readers | Separate private tables and explicit owner views, excluded from ordinary page readers/caches/exports | Reviewed owner UI, safe connection migration and admitted runtime use; legacy mail pages remain legacy |
-| Reviewed instructions | Private exact revisions, owner review projection, scoped owner decisions, edit-to-draft and governed source inheritance | Reviewed human UI/recipe, current decision/source restrictions bound to frozen payload and independent admission |
-| Authority/dispatch | Retained connection epochs and frozen processor declarations; frozen operation/payload preparation; in-memory synthetic dispatch tests | Current epoch/rights and shared budgets checked transactionally; one-use admission, dispatch-time recheck, conservative unknown outcomes |
+| Reviewed instructions | Private exact revisions, scoped owner decisions, edit-to-draft, governed inheritance and current approval bound to local promotion | Reviewed human UI/recipe and complete actual prompt/input instrumentation |
+| Authority/dispatch | Retained epochs/configuration; owner-issued local grants, service runs, shared budgets, unique promotion receipts | External one-use dispatch claims, current provider/rights rechecks, conservative unknown outcomes and isolated transport |
 | IMAP, model and classifier credentials | Existing worker custody unchanged | Isolated roles with minimal environment/mounts, authenticated RPC and host-enforced network policy |
 | Mail settings/lifecycle | Existing monitor unchanged | Draft/test/preview/enable, frozen processor approval, authentication-message suppression, cancellation and accurate terminal/backoff states |
 | Normal chat, APIs, MCP and output streams | Existing controls unchanged | Shared authorization across reads, writes, inference, responses, exports, notifications and sharing |

@@ -40,6 +40,7 @@ import AddAutomationConditionReducer from "./add_automation_condition_reducer";
 import AddConversationParticipantReducer from "./add_conversation_participant_reducer";
 import AddPropertyReducer from "./add_property_reducer";
 import AddTasksToJobReducer from "./add_tasks_to_job_reducer";
+import AdmitAndPromoteProtectedMailDerivationReducer from "./admit_and_promote_protected_mail_derivation_reducer";
 import AnswerHumanInputReducer from "./answer_human_input_reducer";
 import AppendBridgeCommandChunkReducer from "./append_bridge_command_chunk_reducer";
 import AppendPageDocReducer from "./append_page_doc_reducer";
@@ -141,6 +142,7 @@ import InsertComponentReducer from "./insert_component_reducer";
 import InstallExtensionReducer from "./install_extension_reducer";
 import InvalidateAiEvaluationsForRowReducer from "./invalidate_ai_evaluations_for_row_reducer";
 import InvokeAutomationReducer from "./invoke_automation_reducer";
+import IssueProtectedMailSummaryGrantReducer from "./issue_protected_mail_summary_grant_reducer";
 import LogApiCallReducer from "./log_api_call_reducer";
 import LoginReducer from "./login_reducer";
 import LogoutReducer from "./logout_reducer";
@@ -198,6 +200,7 @@ import RevokeBridgeDeviceReducer from "./revoke_bridge_device_reducer";
 import RevokeBridgeDeviceGrantReducer from "./revoke_bridge_device_grant_reducer";
 import RevokeExtensionPermissionReducer from "./revoke_extension_permission_reducer";
 import RevokeProtectedMailInstructionReducer from "./revoke_protected_mail_instruction_reducer";
+import RevokeProtectedMailSummaryGrantReducer from "./revoke_protected_mail_summary_grant_reducer";
 import RunConventionSensorReducer from "./run_convention_sensor_reducer";
 import RunDeniedToolCallsSensorReducer from "./run_denied_tool_calls_sensor_reducer";
 import RunOrphanDetectorReducer from "./run_orphan_detector_reducer";
@@ -246,6 +249,7 @@ import SetUserAdminReducer from "./set_user_admin_reducer";
 import SetUserPreferenceReducer from "./set_user_preference_reducer";
 import SetUserProfileReducer from "./set_user_profile_reducer";
 import SetWorkspaceSettingReducer from "./set_workspace_setting_reducer";
+import StartProtectedMailSummaryRunReducer from "./start_protected_mail_summary_run_reducer";
 import SubmitResultReducer from "./submit_result_reducer";
 import TakeSnapshotReducer from "./take_snapshot_reducer";
 import TakeSnapshotWithContentReducer from "./take_snapshot_with_content_reducer";
@@ -1498,6 +1502,7 @@ const reducersSchema = __reducers(
   __reducerSchema("add_conversation_participant", AddConversationParticipantReducer),
   __reducerSchema("add_property", AddPropertyReducer),
   __reducerSchema("add_tasks_to_job", AddTasksToJobReducer),
+  __reducerSchema("admit_and_promote_protected_mail_derivation", AdmitAndPromoteProtectedMailDerivationReducer),
   __reducerSchema("answer_human_input", AnswerHumanInputReducer),
   __reducerSchema("append_bridge_command_chunk", AppendBridgeCommandChunkReducer),
   __reducerSchema("append_page_doc", AppendPageDocReducer),
@@ -1599,6 +1604,7 @@ const reducersSchema = __reducers(
   __reducerSchema("install_extension", InstallExtensionReducer),
   __reducerSchema("invalidate_ai_evaluations_for_row", InvalidateAiEvaluationsForRowReducer),
   __reducerSchema("invoke_automation", InvokeAutomationReducer),
+  __reducerSchema("issue_protected_mail_summary_grant", IssueProtectedMailSummaryGrantReducer),
   __reducerSchema("log_api_call", LogApiCallReducer),
   __reducerSchema("login", LoginReducer),
   __reducerSchema("logout", LogoutReducer),
@@ -1656,6 +1662,7 @@ const reducersSchema = __reducers(
   __reducerSchema("revoke_bridge_device_grant", RevokeBridgeDeviceGrantReducer),
   __reducerSchema("revoke_extension_permission", RevokeExtensionPermissionReducer),
   __reducerSchema("revoke_protected_mail_instruction", RevokeProtectedMailInstructionReducer),
+  __reducerSchema("revoke_protected_mail_summary_grant", RevokeProtectedMailSummaryGrantReducer),
   __reducerSchema("run_convention_sensor", RunConventionSensorReducer),
   __reducerSchema("run_denied_tool_calls_sensor", RunDeniedToolCallsSensorReducer),
   __reducerSchema("run_orphan_detector", RunOrphanDetectorReducer),
@@ -1704,6 +1711,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_user_preference", SetUserPreferenceReducer),
   __reducerSchema("set_user_profile", SetUserProfileReducer),
   __reducerSchema("set_workspace_setting", SetWorkspaceSettingReducer),
+  __reducerSchema("start_protected_mail_summary_run", StartProtectedMailSummaryRunReducer),
   __reducerSchema("submit_result", SubmitResultReducer),
   __reducerSchema("take_snapshot", TakeSnapshotReducer),
   __reducerSchema("take_snapshot_with_content", TakeSnapshotWithContentReducer),

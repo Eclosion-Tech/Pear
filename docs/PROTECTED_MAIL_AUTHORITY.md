@@ -88,9 +88,10 @@ New processor configuration and active v2 restore are mutually exclusive;
 effect-free historical replay and restore abort remain available. A separate
 protected backup/restore contract is still required before canary use.
 
-The remaining admission slice must bind current epochs/configuration, authenticated
-workflow grants, shared budgets, exact frozen input/payload, source restrictions
-and instruction decision generations in one transaction. Governed instruction
+The [local summary admission slice](PROTECTED_MAIL_ADMISSION.md) binds current
+epochs/configuration, owner-issued grants, shared budgets, the exact frozen
+append envelope, source restrictions and instruction decision generations in
+one transaction. It admits no mailbox or provider effect. Governed instruction
 source registration must preserve ceilings across edits: a new revision
 cannot escape an older enrolled revision's restrictions. The later
 [S2b1 adapter](PROTECTED_MAIL_INSTRUCTIONS.md) supplies that inheritance. S2a
