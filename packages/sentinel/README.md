@@ -62,7 +62,17 @@ accepts identifiers only and independently reconstructs the envelope from
 stored state before checking current authority and consuming its shared budget.
 The portable helper itself still authenticates no caller and grants no permit.
 
-No production runtime imports this package yet. It does not change existing
+`canonicalInferencePayload` and `prepareMailInference` define
+the closed Anthropic Messages recipe documented in the
+[inference contract](../../docs/PROTECTED_MAIL_INFERENCE.md). Full request bytes
+include the literal approved system instruction and canonical mail JSON string,
+with no tools/history/options. The server independently constructs those bytes
+from stored inputs; portable preparation grants no disclosure permission.
+`inferenceGrantId` computes the owner/collection-scoped ID for an issuance
+nonce. The server derives it independently from the authenticated owner;
+supplying an ID does not authenticate that owner or issue a grant.
+
+No production mail runtime imports this package yet. It does not change existing
 mail or assistant permissions. Public research and arbitrary tools remain
 outside this contract. See [the implementation status](../../docs/SENTINEL.md).
 

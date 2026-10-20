@@ -1643,6 +1643,202 @@ export const ProtectedMailExposure = __t.object("ProtectedMailExposure", {
 });
 export type ProtectedMailExposure = __Infer<typeof ProtectedMailExposure>;
 
+export const ProtectedMailInferenceAdmission = __t.object("ProtectedMailInferenceAdmission", {
+  id: __t.string(),
+  eventId: __t.string(),
+  grantId: __t.string(),
+  runId: __t.string(),
+  rootRunId: __t.string(),
+  owner: __t.identity(),
+  brokerIdentity: __t.identity(),
+  collectionId: __t.u64(),
+  get mailSource() {
+    return ProtectedMailSourceRef;
+  },
+  get instruction() {
+    return ProtectedMailInstructionRef;
+  },
+  get processor() {
+    return ProtectedMailInferenceProcessorRef;
+  },
+  eventNonce: __t.string(),
+  requestDigest: __t.string(),
+  grantDigest: __t.string(),
+  payloadDigest: __t.string(),
+  operationFingerprint: __t.string(),
+  inputBytes: __t.u64(),
+  outputTokens: __t.u64(),
+  budgetGeneration: __t.u64(),
+  remainingOperations: __t.u64(),
+  remainingInputBytes: __t.u64(),
+  remainingOutputTokens: __t.u64(),
+  get sourceBindings() {
+    return __t.array(ProtectedMailSourceGeneration);
+  },
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailInferenceAdmission = __Infer<typeof ProtectedMailInferenceAdmission>;
+
+export const ProtectedMailInferenceAdmissionResult = __t.object("ProtectedMailInferenceAdmissionResult", {
+  admissionId: __t.string(),
+});
+export type ProtectedMailInferenceAdmissionResult = __Infer<typeof ProtectedMailInferenceAdmissionResult>;
+
+export const ProtectedMailInferenceBudget = __t.object("ProtectedMailInferenceBudget", {
+  grantId: __t.string(),
+  generation: __t.u64(),
+  remainingOperations: __t.u64(),
+  remainingInputBytes: __t.u64(),
+  remainingOutputTokens: __t.u64(),
+  lastAdmissionId: __t.option(__t.string()),
+});
+export type ProtectedMailInferenceBudget = __Infer<typeof ProtectedMailInferenceBudget>;
+
+export const ProtectedMailInferenceDispatchPayload = __t.object("ProtectedMailInferenceDispatchPayload", {
+  formatVersion: __t.u32(),
+  admissionId: __t.string(),
+  get processor() {
+    return ProtectedMailInferenceProcessorRef;
+  },
+  get config() {
+    return ProtectedMailProcessorConfig;
+  },
+  method: __t.string(),
+  contentType: __t.string(),
+  anthropicVersion: __t.string(),
+  payload: __t.string(),
+  payloadDigest: __t.string(),
+  operationFingerprint: __t.string(),
+  inputBytes: __t.u64(),
+  outputTokens: __t.u64(),
+  expiresAtMs: __t.u64(),
+});
+export type ProtectedMailInferenceDispatchPayload = __Infer<typeof ProtectedMailInferenceDispatchPayload>;
+
+export const ProtectedMailInferenceEvent = __t.object("ProtectedMailInferenceEvent", {
+  id: __t.string(),
+  requestEventId: __t.string(),
+  admissionId: __t.string(),
+  generation: __t.u64(),
+  get status() {
+    return ProtectedMailInferenceStatus;
+  },
+  eventNonce: __t.string(),
+  requestDigest: __t.string(),
+  actor: __t.identity(),
+  get sourceBindings() {
+    return __t.array(ProtectedMailSourceGeneration);
+  },
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailInferenceEvent = __Infer<typeof ProtectedMailInferenceEvent>;
+
+export const ProtectedMailInferenceGrant = __t.object("ProtectedMailInferenceGrant", {
+  id: __t.string(),
+  owner: __t.identity(),
+  collectionId: __t.u64(),
+  brokerIdentity: __t.identity(),
+  runtimeId: __t.string(),
+  connectionEpoch: __t.u64(),
+  snapshotDigest: __t.string(),
+  get instruction() {
+    return ProtectedMailInstructionRef;
+  },
+  instructionGeneration: __t.u64(),
+  decisionId: __t.string(),
+  get processor() {
+    return ProtectedMailInferenceProcessorRef;
+  },
+  get allowedMailSources() {
+    return __t.array(ProtectedMailSourceRef);
+  },
+  notBeforeMs: __t.u64(),
+  expiresAtMs: __t.u64(),
+  maxOperations: __t.u64(),
+  maxInputBytes: __t.u64(),
+  maxOutputTokens: __t.u64(),
+  maxInputBytesPerOperation: __t.u64(),
+  outputTokensPerOperation: __t.u64(),
+  requestDigest: __t.string(),
+  digest: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailInferenceGrant = __Infer<typeof ProtectedMailInferenceGrant>;
+
+export const ProtectedMailInferenceGrantEvent = __t.object("ProtectedMailInferenceGrantEvent", {
+  id: __t.string(),
+  grantId: __t.string(),
+  generation: __t.u64(),
+  get kind() {
+    return ProtectedMailInferenceGrantEventKind;
+  },
+  eventNonce: __t.string(),
+  requestDigest: __t.string(),
+  grantDigest: __t.string(),
+  actor: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailInferenceGrantEvent = __Infer<typeof ProtectedMailInferenceGrantEvent>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailInferenceGrantEventKind`.
+export const ProtectedMailInferenceGrantEventKind = __t.enum("ProtectedMailInferenceGrantEventKind", {
+  Issued: __t.unit(),
+  Revoked: __t.unit(),
+});
+export type ProtectedMailInferenceGrantEventKind = __Infer<typeof ProtectedMailInferenceGrantEventKind>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailInferenceOutcome`.
+export const ProtectedMailInferenceOutcome = __t.enum("ProtectedMailInferenceOutcome", {
+  ResponseReceived: __t.unit(),
+  Failed: __t.unit(),
+  Unknown: __t.unit(),
+  CancelledBeforeDispatch: __t.unit(),
+});
+export type ProtectedMailInferenceOutcome = __Infer<typeof ProtectedMailInferenceOutcome>;
+
+export const ProtectedMailInferenceProcessorRef = __t.object("ProtectedMailInferenceProcessorRef", {
+  profileId: __t.string(),
+  generation: __t.u64(),
+  revisionId: __t.string(),
+  digest: __t.string(),
+});
+export type ProtectedMailInferenceProcessorRef = __Infer<typeof ProtectedMailInferenceProcessorRef>;
+
+export const ProtectedMailInferenceRun = __t.object("ProtectedMailInferenceRun", {
+  id: __t.string(),
+  grantId: __t.string(),
+  runId: __t.string(),
+  parentRunId: __t.option(__t.string()),
+  rootRunId: __t.string(),
+  depth: __t.u32(),
+  brokerIdentity: __t.identity(),
+  runtimeId: __t.string(),
+  requestDigest: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailInferenceRun = __Infer<typeof ProtectedMailInferenceRun>;
+
+export const ProtectedMailInferenceState = __t.object("ProtectedMailInferenceState", {
+  admissionId: __t.string(),
+  generation: __t.u64(),
+  get status() {
+    return ProtectedMailInferenceStatus;
+  },
+  lastEventId: __t.string(),
+});
+export type ProtectedMailInferenceState = __Infer<typeof ProtectedMailInferenceState>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailInferenceStatus`.
+export const ProtectedMailInferenceStatus = __t.enum("ProtectedMailInferenceStatus", {
+  Admitted: __t.unit(),
+  Dispatching: __t.unit(),
+  ResponseReceived: __t.unit(),
+  Failed: __t.unit(),
+  Unknown: __t.unit(),
+  CancelledBeforeDispatch: __t.unit(),
+});
+export type ProtectedMailInferenceStatus = __Infer<typeof ProtectedMailInferenceStatus>;
+
 export const ProtectedMailInput = __t.object("ProtectedMailInput", {
   folder: __t.string(),
   uidValidity: __t.string(),
