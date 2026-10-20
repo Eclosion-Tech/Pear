@@ -145,7 +145,7 @@ pub struct ProtectedMailSummaryAdmissionReceipt {
     pub created_at: Timestamp,
 }
 
-fn hash(domain: &str, fields: &[String]) -> String {
+pub(super) fn hash(domain: &str, fields: &[String]) -> String {
     let mut digest = Sha256::new();
     for value in std::iter::once(domain).chain(fields.iter().map(String::as_str)) {
         digest.update((value.len() as u64).to_be_bytes());
@@ -153,13 +153,13 @@ fn hash(domain: &str, fields: &[String]) -> String {
     }
     hex::encode(digest.finalize())
 }
-fn hex64(value: &str) -> bool {
+pub(super) fn hex64(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
             .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
 }
-fn opaque(value: &str) -> bool {
+pub(super) fn opaque(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
         && value
@@ -178,7 +178,7 @@ fn publisher(ctx: &ReducerContext, identity: Identity) -> bool {
         .find(0)
         .is_some_and(|m| m.publisher_identity == identity)
 }
-fn human(ctx: &ReducerContext, identity: Identity) -> bool {
+pub(super) fn human(ctx: &ReducerContext, identity: Identity) -> bool {
     !publisher(ctx, identity)
         && ctx.db.ai_user_config().identity().find(identity).is_none()
         && ctx.db.ai_user_profile().identity().find(identity).is_none()
@@ -189,7 +189,7 @@ fn human(ctx: &ReducerContext, identity: Identity) -> bool {
             .find(identity)
             .is_some_and(|u| u.is_authenticated)
 }
-fn service(ctx: &ReducerContext, identity: Identity, owner: Identity) -> bool {
+pub(super) fn service(ctx: &ReducerContext, identity: Identity, owner: Identity) -> bool {
     identity != owner
         && identity != Identity::from_byte_array([0; 32])
         && !publisher(ctx, identity)
@@ -202,7 +202,7 @@ fn service(ctx: &ReducerContext, identity: Identity, owner: Identity) -> bool {
             .find(identity)
             .is_some_and(|u| u.is_authenticated || u.is_admin)
 }
-fn now_ms(ctx: &ReducerContext) -> Result<u64, String> {
+pub(super) fn now_ms(ctx: &ReducerContext) -> Result<u64, String> {
     let value =
         u64::try_from(ctx.timestamp.to_micros_since_unix_epoch() / 1000).map_err(|_| INVALID)?;
     if value > SAFE {
@@ -348,7 +348,7 @@ fn budget_shape(grant: &ProtectedMailSummaryGrant, budget: &ProtectedMailSummary
 
 // Explicit recursive key sorting matches S0 canonicalOperation independent of
 // serde_json map feature unification. Arrays retain the authoritative order.
-fn canonical(value: &Value) -> Result<String, String> {
+pub(super) fn canonical(value: &Value) -> Result<String, String> {
     match value {
         Value::Object(values) => {
             let mut keys = values.keys().collect::<Vec<_>>();

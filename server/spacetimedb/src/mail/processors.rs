@@ -260,7 +260,7 @@ fn head_matches(
         && event_matches(latest_event, revision)
 }
 
-fn checked_revision(
+pub(super) fn checked_revision(
     ctx: &ReducerContext,
     id: &str,
 ) -> Result<ProtectedMailProcessorRevision, String> {
@@ -284,7 +284,7 @@ fn checked_revision(
     Ok(revision)
 }
 
-fn checked_head(
+pub(super) fn checked_head(
     ctx: &ReducerContext,
     profile_id: &str,
 ) -> Result<Option<(ProtectedMailProcessorHead, ProtectedMailProcessorRevision)>, String> {

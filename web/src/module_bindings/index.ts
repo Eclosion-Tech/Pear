@@ -142,6 +142,7 @@ import InsertComponentReducer from "./insert_component_reducer";
 import InstallExtensionReducer from "./install_extension_reducer";
 import InvalidateAiEvaluationsForRowReducer from "./invalidate_ai_evaluations_for_row_reducer";
 import InvokeAutomationReducer from "./invoke_automation_reducer";
+import IssueProtectedMailInferenceGrantReducer from "./issue_protected_mail_inference_grant_reducer";
 import IssueProtectedMailSummaryGrantReducer from "./issue_protected_mail_summary_grant_reducer";
 import LogApiCallReducer from "./log_api_call_reducer";
 import LoginReducer from "./login_reducer";
@@ -185,6 +186,7 @@ import ReorderPropertyReducer from "./reorder_property_reducer";
 import ReplacePageDocReducer from "./replace_page_doc_reducer";
 import ReportBridgeDeviceCapabilityReducer from "./report_bridge_device_capability_reducer";
 import ReportExtensionRuntimeHealthReducer from "./report_extension_runtime_health_reducer";
+import ReportProtectedMailInferenceOutcomeReducer from "./report_protected_mail_inference_outcome_reducer";
 import RequestHumanInputReducer from "./request_human_input_reducer";
 import RequestPageAccessReducer from "./request_page_access_reducer";
 import ResolveBridgeApprovalReducer from "./resolve_bridge_approval_reducer";
@@ -199,6 +201,7 @@ import RevokeAutoApplyReducer from "./revoke_auto_apply_reducer";
 import RevokeBridgeDeviceReducer from "./revoke_bridge_device_reducer";
 import RevokeBridgeDeviceGrantReducer from "./revoke_bridge_device_grant_reducer";
 import RevokeExtensionPermissionReducer from "./revoke_extension_permission_reducer";
+import RevokeProtectedMailInferenceGrantReducer from "./revoke_protected_mail_inference_grant_reducer";
 import RevokeProtectedMailInstructionReducer from "./revoke_protected_mail_instruction_reducer";
 import RevokeProtectedMailSummaryGrantReducer from "./revoke_protected_mail_summary_grant_reducer";
 import RunConventionSensorReducer from "./run_convention_sensor_reducer";
@@ -249,6 +252,7 @@ import SetUserAdminReducer from "./set_user_admin_reducer";
 import SetUserPreferenceReducer from "./set_user_preference_reducer";
 import SetUserProfileReducer from "./set_user_profile_reducer";
 import SetWorkspaceSettingReducer from "./set_workspace_setting_reducer";
+import StartProtectedMailInferenceRunReducer from "./start_protected_mail_inference_run_reducer";
 import StartProtectedMailSummaryRunReducer from "./start_protected_mail_summary_run_reducer";
 import SubmitResultReducer from "./submit_result_reducer";
 import TakeSnapshotReducer from "./take_snapshot_reducer";
@@ -281,6 +285,8 @@ import UpsertHarnessTemplateReducer from "./upsert_harness_template_reducer";
 import ValidateAutomationReducer from "./validate_automation_reducer";
 
 // Import all procedure arg schemas
+import * as AdmitProtectedMailInferenceProcedure from "./admit_protected_mail_inference_procedure";
+import * as BeginProtectedMailInferenceDispatchProcedure from "./begin_protected_mail_inference_dispatch_procedure";
 
 // Import all table schema definitions
 import AiEvaluationRow from "./ai_evaluation_table";
@@ -1604,6 +1610,7 @@ const reducersSchema = __reducers(
   __reducerSchema("install_extension", InstallExtensionReducer),
   __reducerSchema("invalidate_ai_evaluations_for_row", InvalidateAiEvaluationsForRowReducer),
   __reducerSchema("invoke_automation", InvokeAutomationReducer),
+  __reducerSchema("issue_protected_mail_inference_grant", IssueProtectedMailInferenceGrantReducer),
   __reducerSchema("issue_protected_mail_summary_grant", IssueProtectedMailSummaryGrantReducer),
   __reducerSchema("log_api_call", LogApiCallReducer),
   __reducerSchema("login", LoginReducer),
@@ -1647,6 +1654,7 @@ const reducersSchema = __reducers(
   __reducerSchema("replace_page_doc", ReplacePageDocReducer),
   __reducerSchema("report_bridge_device_capability", ReportBridgeDeviceCapabilityReducer),
   __reducerSchema("report_extension_runtime_health", ReportExtensionRuntimeHealthReducer),
+  __reducerSchema("report_protected_mail_inference_outcome", ReportProtectedMailInferenceOutcomeReducer),
   __reducerSchema("request_human_input", RequestHumanInputReducer),
   __reducerSchema("request_page_access", RequestPageAccessReducer),
   __reducerSchema("resolve_bridge_approval", ResolveBridgeApprovalReducer),
@@ -1661,6 +1669,7 @@ const reducersSchema = __reducers(
   __reducerSchema("revoke_bridge_device", RevokeBridgeDeviceReducer),
   __reducerSchema("revoke_bridge_device_grant", RevokeBridgeDeviceGrantReducer),
   __reducerSchema("revoke_extension_permission", RevokeExtensionPermissionReducer),
+  __reducerSchema("revoke_protected_mail_inference_grant", RevokeProtectedMailInferenceGrantReducer),
   __reducerSchema("revoke_protected_mail_instruction", RevokeProtectedMailInstructionReducer),
   __reducerSchema("revoke_protected_mail_summary_grant", RevokeProtectedMailSummaryGrantReducer),
   __reducerSchema("run_convention_sensor", RunConventionSensorReducer),
@@ -1711,6 +1720,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_user_preference", SetUserPreferenceReducer),
   __reducerSchema("set_user_profile", SetUserProfileReducer),
   __reducerSchema("set_workspace_setting", SetWorkspaceSettingReducer),
+  __reducerSchema("start_protected_mail_inference_run", StartProtectedMailInferenceRunReducer),
   __reducerSchema("start_protected_mail_summary_run", StartProtectedMailSummaryRunReducer),
   __reducerSchema("submit_result", SubmitResultReducer),
   __reducerSchema("take_snapshot", TakeSnapshotReducer),
@@ -1745,6 +1755,8 @@ const reducersSchema = __reducers(
 
 /** The schema information for all procedures in this module. This is defined the same way as the procedures would have been defined in the server. */
 const proceduresSchema = __procedures(
+  __procedureSchema("admit_protected_mail_inference", AdmitProtectedMailInferenceProcedure.params, AdmitProtectedMailInferenceProcedure.returnType),
+  __procedureSchema("begin_protected_mail_inference_dispatch", BeginProtectedMailInferenceDispatchProcedure.params, BeginProtectedMailInferenceDispatchProcedure.returnType),
 );
 
 /** The remote SpacetimeDB module schema, both runtime and type information. */

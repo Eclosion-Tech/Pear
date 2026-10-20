@@ -96,8 +96,10 @@ source registration must preserve ceilings across edits: a new revision
 cannot escape an older enrolled revision's restrictions. The later
 [S2b1 adapter](PROTECTED_MAIL_INSTRUCTIONS.md) supplies that inheritance. S2a
 itself adds no instruction adapter or approval semantics.
-Credential brokers, dispatch claims, transport/egress enforcement, a reviewed
-human interface and protected activation remain later gates. The existing
+[Fixed inference admission](PROTECTED_MAIL_INFERENCE.md) now resolves an exact
+current processor revision and rechecks it inside the one-use payload claim.
+Credential brokers, provider transport/egress enforcement, a reviewed human
+interface and protected activation remain later gates. The existing
 PostgreSQL answer ledger is unchanged.
 
 ## Disposable verification

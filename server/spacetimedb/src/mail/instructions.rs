@@ -179,7 +179,7 @@ fn head_id(scope: &ProtectedMailInstructionScope) -> String {
     )
 }
 
-fn revision_id(head: &str, revision: u64) -> String {
+pub(super) fn revision_id(head: &str, revision: u64) -> String {
     format!(
         "mail-instruction-revision:{}",
         hash_fields(
@@ -391,7 +391,7 @@ fn revision_matches(
             )
 }
 
-fn decision_matches(
+pub(super) fn decision_matches(
     decision: &ProtectedMailInstructionDecision,
     collection: &ProtectedMailCollection,
     revision: &ProtectedMailInstructionRevision,
@@ -553,11 +553,23 @@ pub(super) fn checked_approved_instruction(
     generation: u64,
     decision_id: &str,
 ) -> Result<(), String> {
+    checked_approved_instruction_revision(ctx, collection_id, reference, generation, decision_id).map(|_| ())
+}
+
+/// Return only the already-validated immutable literal revision. Callers must
+/// separately authorize the bound owner/broker and every source processor.
+pub(super) fn checked_approved_instruction_revision(
+    ctx: &ReducerContext,
+    collection_id: u64,
+    reference: &ProtectedMailInstructionRef,
+    generation: u64,
+    decision_id: &str,
+) -> Result<ProtectedMailInstructionRevision, String> {
     let collection = ctx.db.protected_mail_collection().id().find(collection_id)
         .ok_or("protected_mail_summary_instruction_stale")?;
     let head = ctx.db.protected_mail_instruction_head().id().find(reference.id.clone())
         .ok_or("protected_mail_summary_instruction_stale")?;
-    let (current, _) = checked_head(ctx, &collection, &head.scope)
+    let (current, revision) = checked_head(ctx, &collection, &head.scope)
         .map_err(|_| "protected_mail_summary_instruction_stale")?
         .ok_or("protected_mail_summary_instruction_stale")?;
     if current.scope.collection_id != collection_id
@@ -568,7 +580,7 @@ pub(super) fn checked_approved_instruction(
     {
         return Err("protected_mail_summary_instruction_stale".into());
     }
-    Ok(())
+    Ok(revision)
 }
 
 /// An immutable instruction revision is trackable data regardless of its

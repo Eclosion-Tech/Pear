@@ -5,11 +5,12 @@
 **Status:** Merged S0 containment, S1a private mail storage, S1b
 source policy/exposure provenance and S1c exact instruction revisions/owner
 decisions, S2a retained epochs/frozen processor declarations and S2b1 governed
-instruction sources, plus staged S2b2a local summary admission. The local facet
-uses owner-issued exact-artifact grants, service-bound runs, shared budgets and
-an atomic private promotion receipt. The stores are not connected to a mail
-runtime. External admissions/dispatch, isolated credential brokers, redaction
-enforcement and host egress controls remain gates; the protected profile is disabled.
+instruction sources and S2b2a local summary admission. This branch adds
+S2b2b1 fixed inference admission: a server-built exact request, shared-budget
+reservation and a one-use transactional payload release to the bound broker.
+The stores are not connected to a mail runtime. Provider execution, result-body
+acceptance, isolated credential brokers, redaction and host egress controls
+remain gates; the protected profile is disabled.
 
 Sentinel will enforce authority and disclosure rules outside the model. Email,
 webpages, workspace content, tool output, and derived summaries cannot grant
@@ -135,8 +136,8 @@ remove known parents. A fresh manual paste has unknown provenance.
 The explicit owner review view is excluded from broad worker subscriptions and
 ordinary exports. Authentication identifies the owner credential, not physical
 human presence or proof of display. No review UI or runtime consumer is added;
-trusted UI/recipe authorization, inference admission and protected runner
-integration remain gates. Local summary admission separately checks the exact
+trusted UI/recipe authorization and protected runner integration remain gates.
+Local summary admission and fixed inference admission separately check the exact
 current instruction and its stored ancestry. An instruction
 approval grants no disclosure or effect authority. Mutable prompts, page flags,
 publisher configuration and conversation answers receive no automatic approval.
@@ -157,7 +158,9 @@ restore also rejects processor-only private state, and new profile configuration
 cannot run during v2 import. The persistence fixture restarts a disk-backed
 server and compares retained state without republishing it. Configuration
 records alone establish no grant or dispatch authority. S2b2a consumes their
-current epoch/snapshot for its local summary facet; external dispatch remains a gate.
+current epoch/snapshot for its local summary facet. Fixed inference admission
+also binds the current registry revision and rechecks it before payload release;
+provider transport remains a gate.
 
 ## Governed instruction inputs
 
@@ -197,6 +200,28 @@ dispatch or checkpoint is admitted here. The portable append codec shares the
 server's canonical envelope/fingerprint contract; a prepared object remains
 unauthenticated. No trusted review UI, broker or protected runner is activated.
 
+## Fixed inference admission
+
+[S2b2b1](PROTECTED_MAIL_INFERENCE.md) adds a separate owner-issued processing
+grant over exact raw mail, the current approved instruction and an exact
+current processor registry revision. The server constructs a closed Anthropic
+Messages request, measures its full UTF-8 bytes, reserves one shared operation,
+input-byte and maximum-output-token pool, and retains immutable references and
+commitments without copying the outgoing body into the admission ledger.
+
+A procedure rechecks current authority, policies and exact rebuilt bytes in a
+transaction, commits the one-use dispatch state, then returns the payload only
+to its bound broker. A duplicate claim never returns the body. Lost responses
+remain consumed/uncertain; terminal outcomes contain no result content or raw
+errors. The global work key survives replacement grants, runs, nonces, epochs,
+reapproval and token-cap changes. This is a once-only release to a credentialed
+service, not evidence of process isolation or exactly-once remote transmission.
+
+Seven new tables remain private. A dedicated one-attempt HTTP driver strictly
+decodes the pinned procedure result, bounds response bytes and rejects
+redirects. No provider is called. Result-body acceptance, trusted UI, isolated
+credentials, real transport and IMAP/cursor authority remain later work.
+
 ## Coverage inventory and release gates
 
 The [entry-point inventory and next storage design](SENTINEL_COVERAGE.md) map
@@ -204,11 +229,11 @@ the existing identities, read paths and effect paths to their remaining gates.
 
 | Surface | Current implementation | Required before protected use |
 |---|---|---|
-| Fixed mail operations | Offline contracts and frozen append codec; atomic local staged-summary promotion | Trusted adapters, reviewed owner UI/recipe and admission for mailbox/inference effects |
+| Fixed mail operations | Offline contracts, canonical append/inference codecs, atomic local promotion and fixed inference admission/payload release | Trusted adapters, reviewed owner UI/recipe, provider execution/result acceptance and mailbox/cursor admission |
 | Source/exposure graph | Private source ceilings/current generations, cumulative registered exposure snapshots and immutable derived ancestry | Reviewed registration adapter, authenticated run binding, fresh admission/dispatch policy checks and complete actual exposure coverage |
 | Mail destination/readers | Separate private tables and explicit owner views, excluded from ordinary page readers/caches/exports | Reviewed owner UI, safe connection migration and admitted runtime use; legacy mail pages remain legacy |
 | Reviewed instructions | Private exact revisions, scoped owner decisions, edit-to-draft, governed inheritance and current approval bound to local promotion | Reviewed human UI/recipe and complete actual prompt/input instrumentation |
-| Authority/dispatch | Retained epochs/configuration; owner-issued local grants, service runs, shared budgets, unique promotion receipts | External one-use dispatch claims, current provider/rights rechecks, conservative unknown outcomes and isolated transport |
+| Authority/dispatch | Retained epochs/configuration; owner-issued grants, shared budgets, unique local effects and one-use inference payload claims with current checks | Restricted result acceptance, isolated credentials/transport and full connector lifecycle |
 | IMAP, model and classifier credentials | Existing worker custody unchanged | Isolated roles with minimal environment/mounts, authenticated RPC and host-enforced network policy |
 | Mail settings/lifecycle | Existing monitor unchanged | Draft/test/preview/enable, frozen processor approval, authentication-message suppression, cancellation and accurate terminal/backoff states |
 | Normal chat, APIs, MCP and output streams | Existing controls unchanged | Shared authorization across reads, writes, inference, responses, exports, notifications and sharing |
@@ -250,6 +275,12 @@ accuracy results.
 - `worker/scripts/protected-mail-authority-e2e.ts`: populated S1c upgrade,
   epoch/configuration edit–revert and replay, tombstones, processor-only restore
   fences, private protocol boundaries and controlled disk-backed restart.
+- `worker/scripts/protected-mail-admission-e2e.ts`: exact-artifact local grants,
+  complete append bytes, shared-budget/effect races, populated S2b1 upgrade and
+  retained private receipts/budgets across restart.
+- `worker/scripts/protected-mail-inference-e2e.ts`: exact current registry and
+  full fixed request, one-use broker claims, lost replies, private boundaries,
+  populated S2b2a upgrade and retained admitted/dispatching/unknown state.
 
 Tests cover forged approvals, unknown effects, scope/epoch/time mismatches,
 destination substitution, changed processors, malformed JSON-like objects,

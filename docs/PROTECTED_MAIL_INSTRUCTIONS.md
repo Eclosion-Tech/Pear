@@ -111,7 +111,10 @@ workflow authority and durable admission. It must recheck the current
 head/decision generation and owner eligibility; a historical approved revision
 can remain trackable data without being current instruction authority.
 [Local summary admission](PROTECTED_MAIL_ADMISSION.md) now performs this binding
-for an already-staged artifact; no prompt builder or mail runtime consumes it.
+for an already-staged artifact. [Fixed inference](PROTECTED_MAIL_INFERENCE.md)
+also binds the exact current decision and uses its literal body as the fixed
+request system instruction. No general prompt builder or mail runtime consumes
+either path.
 
 Authentication establishes which owner credential submitted a decision. It
 does not attest physical human presence or prove that a UI displayed the text.

@@ -39,6 +39,13 @@ resetting a budget or reactivating the grant. Authentication identifies the
 owner credential; it does not attest physical human presence or a reviewed
 display. The trusted UI/recipe remains a later gate.
 
+This older local API accepts a globally chosen grant ID. An eligible owner with
+its own collection can detect a collision with a guessed existing ID or reserve
+a predictable unused ID; it cannot read or use another owner's grant. Owner-
+scoped issuance is required before exposing this API through the trusted UI.
+The newer [inference grant](PROTECTED_MAIL_INFERENCE.md) derives that namespace
+on the server. Retained local IDs are unchanged by this slice.
+
 The service must authenticate as the bound `ctx.sender()` for each run and new
 promotion. Runtime/run strings are labels, not credentials or proof of an
 isolated executable. Owner, publisher, human and AI role changes are checked
@@ -160,9 +167,10 @@ baselines, rejects current identity against all six, and runs both authority and
 admission restart checks across one owned server restart. Release conformance
 also runs the fresh fixture against the exact release WASM.
 
-External operations still need a separate one-use dispatch claim, fresh
-dispatch-time checks, isolated credentials, authenticated broker RPC and host
-egress controls. Preserve spent/unknown outcomes rather than retrying a remote
+[Fixed inference admission](PROTECTED_MAIL_INFERENCE.md) adds a separate
+processing grant and one-use payload claim with current dispatch-time checks.
+Provider execution, isolated credentials, authenticated broker RPC and host
+egress controls remain later gates. Preserve spent/unknown outcomes rather than retrying a remote
 effect by resetting a local receipt. Trusted owner UI, complete real exposure
 tracking, sanitization, protected backup/restore and the full connector/provider
 workflow remain prerequisites for the protected mail canary.

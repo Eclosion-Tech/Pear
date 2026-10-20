@@ -7,6 +7,7 @@ mod accounts;
 mod admission;
 mod authority;
 mod governance;
+mod inference;
 mod instructions;
 mod processors;
 mod protected;
