@@ -94,3 +94,9 @@ synthetic values and make no network, classifier, provider, or mailbox calls.
 The containment harness in `test/support/` observes synthetic sink destinations
 and bytes using an in-memory test authority. It is not exported as a runtime,
 durable store, credential broker, or network boundary.
+
+The [one-use connector read-plan contract](../../docs/PROTECTED_MAIL_READ.md)
+adds a closed canonical commitment embedding the exact StoredBatch selection,
+fixed recipe and independent raw-MIME maxima. Preparation verifies the nested
+selection digest and deterministic read ID before returning frozen bytes; it
+authenticates no owner, reserves no budget and grants no execution permission.

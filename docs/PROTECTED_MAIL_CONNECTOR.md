@@ -157,3 +157,7 @@ all 38 survived one shared disk-backed restart without republishing. Only the
 selected pending ACK advanced. Native logs contained no panic or synthetic
 inference/result/connector body marker. The owned server, synthetic databases,
 checkpoint files, logs and JWT keys were removed.
+
+The later [one-use read-plan contract](PROTECTED_MAIL_READ.md) requires separate
+owner authorization over a StoredBatch selection. A selection alone still
+grants no mailbox read. Plan release adds no new body ingestion or ACK effect.

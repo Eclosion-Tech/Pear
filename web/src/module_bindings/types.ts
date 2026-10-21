@@ -2239,6 +2239,118 @@ export const ProtectedMailProcessorRevision = __t.object("ProtectedMailProcessor
 });
 export type ProtectedMailProcessorRevision = __Infer<typeof ProtectedMailProcessorRevision>;
 
+export const ProtectedMailReadDispatch = __t.object("ProtectedMailReadDispatch", {
+  readId: __t.string(),
+  planDigest: __t.string(),
+  planBytes: __t.u64(),
+  canonical: __t.string(),
+});
+export type ProtectedMailReadDispatch = __Infer<typeof ProtectedMailReadDispatch>;
+
+export const ProtectedMailReadEvent = __t.object("ProtectedMailReadEvent", {
+  id: __t.string(),
+  readId: __t.string(),
+  generation: __t.u64(),
+  get status() {
+    return ProtectedMailReadStatus;
+  },
+  eventNonce: __t.string(),
+  requestDigest: __t.string(),
+  actor: __t.identity(),
+  reservedOperations: __t.u64(),
+  reservedMessageSlots: __t.u64(),
+  reservedBodyBytes: __t.u64(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailReadEvent = __Infer<typeof ProtectedMailReadEvent>;
+
+export const ProtectedMailReadGrant = __t.object("ProtectedMailReadGrant", {
+  id: __t.string(),
+  owner: __t.identity(),
+  selectionId: __t.string(),
+  get request() {
+    return ProtectedMailReadGrantRequest;
+  },
+  selectionDigest: __t.string(),
+  planDigest: __t.string(),
+  planBytes: __t.u64(),
+  canonical: __t.string(),
+  issueDigest: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailReadGrant = __Infer<typeof ProtectedMailReadGrant>;
+
+export const ProtectedMailReadGrantEvent = __t.object("ProtectedMailReadGrantEvent", {
+  id: __t.string(),
+  grantId: __t.string(),
+  owner: __t.identity(),
+  generation: __t.u64(),
+  get kind() {
+    return ProtectedMailReadGrantEventKind;
+  },
+  eventNonce: __t.string(),
+  requestDigest: __t.string(),
+  actor: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailReadGrantEvent = __Infer<typeof ProtectedMailReadGrantEvent>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailReadGrantEventKind`.
+export const ProtectedMailReadGrantEventKind = __t.enum("ProtectedMailReadGrantEventKind", {
+  Issued: __t.unit(),
+  Revoked: __t.unit(),
+});
+export type ProtectedMailReadGrantEventKind = __Infer<typeof ProtectedMailReadGrantEventKind>;
+
+export const ProtectedMailReadGrantRequest = __t.object("ProtectedMailReadGrantRequest", {
+  selectionId: __t.string(),
+  maxMessageBytes: __t.u64(),
+  maxTotalBytes: __t.u64(),
+  eventNonce: __t.string(),
+});
+export type ProtectedMailReadGrantRequest = __Infer<typeof ProtectedMailReadGrantRequest>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailReadOutcome`.
+export const ProtectedMailReadOutcome = __t.enum("ProtectedMailReadOutcome", {
+  ReadReported: __t.unit(),
+  Failed: __t.unit(),
+  Unknown: __t.unit(),
+  CancelledBeforeDispatch: __t.unit(),
+});
+export type ProtectedMailReadOutcome = __Infer<typeof ProtectedMailReadOutcome>;
+
+export const ProtectedMailReadPreview = __t.object("ProtectedMailReadPreview", {
+  readId: __t.string(),
+  planDigest: __t.string(),
+  planBytes: __t.u64(),
+  canonical: __t.string(),
+});
+export type ProtectedMailReadPreview = __Infer<typeof ProtectedMailReadPreview>;
+
+export const ProtectedMailReadState = __t.object("ProtectedMailReadState", {
+  readId: __t.string(),
+  generation: __t.u64(),
+  get status() {
+    return ProtectedMailReadStatus;
+  },
+  reservedOperations: __t.u64(),
+  reservedMessageSlots: __t.u64(),
+  reservedBodyBytes: __t.u64(),
+  lastEventId: __t.string(),
+});
+export type ProtectedMailReadState = __Infer<typeof ProtectedMailReadState>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailReadStatus`.
+export const ProtectedMailReadStatus = __t.enum("ProtectedMailReadStatus", {
+  Pending: __t.unit(),
+  Dispatching: __t.unit(),
+  ReadReported: __t.unit(),
+  Failed: __t.unit(),
+  Unknown: __t.unit(),
+  CancelledBeforeDispatch: __t.unit(),
+});
+export type ProtectedMailReadStatus = __Infer<typeof ProtectedMailReadStatus>;
+
 export const ProtectedMailReceipt = __t.object("ProtectedMailReceipt", {
   id: __t.string(),
   owner: __t.identity(),

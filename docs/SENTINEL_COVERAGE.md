@@ -1,6 +1,6 @@
 # Sentinel coverage inventory and staged storage boundary
 
-**Status: S0–S2b2b2 merged; S2b2c1 exact connector selection/cursor ACK staged, October 21, 2026.** This branch authorizes progress over already-stored private mail through exact owner selections, explicit bootstrap and atomic cursor/history/receipt updates. It does not authorize preceding reads/imports, add missing/held dispositions, mint downstream grants or integrate a trusted UI. The legacy runner stays disconnected and protected monitoring stays disabled.
+**Status: S0–S2b2c1 merged; S2b2c2 one-use read-plan release staged, October 21, 2026.** This branch adds separate owner authority and one consumed maximum raw-MIME reservation before returning an exact read-plan declaration. It performs no IMAP access, credential release, new ingestion, cursor update or workflow delegation. The legacy runner stays disconnected and protected monitoring stays disabled. See the [read-plan boundary](PROTECTED_MAIL_READ.md).
 
 See [current implementation](SENTINEL.md), the Cloud [implementation plan](https://forge.syntropy.chat/Eclosion-Tech/pear-cloud/src/branch/main/docs/PEAR_SENTINEL_PLAN.md) and [research proposal](https://forge.syntropy.chat/Eclosion-Tech/pear-cloud/src/branch/main/docs/UNTRUSTED_CONTENT_SPIKE.md). Cloud links refer to that host repository; Pear OSS does not require its implementation. Source references identify the audited seams, not evidence that their remaining gates pass.
 

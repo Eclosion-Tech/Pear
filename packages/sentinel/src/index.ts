@@ -11,3 +11,5 @@ export { canonicalInferenceResultPayload, prepareInferenceResult, parseInference
 export type { InferenceResultDeclarationV1, InferenceResultBinding, InferenceResultPayloadV1, FrozenInferenceResult, InferenceResultPreparation } from "./result.js";
 export { canonicalConnectorSelection, prepareConnectorSelection } from "./connector.js";
 export type { ConnectorSelectionV1, FrozenConnectorSelection, ConnectorSelectionPreparation } from "./connector.js";
+export { canonicalConnectorRead, prepareConnectorRead } from "./read.js";
+export type { ConnectorReadV1, FrozenConnectorRead, ConnectorReadPreparation } from "./read.js";

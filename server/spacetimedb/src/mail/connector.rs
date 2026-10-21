@@ -477,7 +477,7 @@ fn owner_connection(ctx: &ReducerContext, id: u64) -> Result<MailConnection, Str
         .filter(|c| c.owner == ctx.sender())
         .ok_or(OWNER.into())
 }
-fn owned_selection(
+pub(super) fn owned_selection(
     ctx: &ReducerContext,
     id: &str,
 ) -> Result<ProtectedMailConnectorSelection, String> {
@@ -493,7 +493,7 @@ fn owned_selection(
         .ok_or(OWNER)?;
     checked_selection(ctx, row)
 }
-fn bound_selection(
+pub(super) fn bound_selection(
     ctx: &ReducerContext,
     id: &str,
 ) -> Result<ProtectedMailConnectorSelection, String> {
@@ -979,27 +979,10 @@ fn ack_dto(row: &ProtectedMailConnectorAckReceipt) -> ProtectedMailConnectorAck 
         receipt_digest: row.digest.clone(),
     }
 }
-fn acknowledge(
-    ctx: &ReducerContext,
-    id: &str,
-    nonce: &str,
-    sources: &[ProtectedMailSourceRef],
-) -> Result<ProtectedMailConnectorAck, String> {
-    let row = bound_selection(ctx, id)?;
-    if let Some(receipt) = ctx
-        .db
-        .protected_mail_connector_ack_receipt()
-        .selection_id()
-        .find(id.to_owned())
-    {
-        if receipt.event_nonce != nonce || receipt.sources != sources {
-            return Err(CONFLICT.into());
-        }
-        return checked_receipt(ctx, &row, receipt).map(|r| ack_dto(&r));
-    }
-    if !hex64(nonce) {
-        return Err(INVALID.into());
-    }
+/// Current selection authority only. No lookup of the future selected S1
+/// sources and no historical ACK bypass; review may precede activation.
+pub(super) fn require_current_selection(ctx: &ReducerContext, row: &ProtectedMailConnectorSelection,
+    require_active: bool) -> Result<Option<ProtectedMailConnectorCursor>, String> {
     if !human(ctx, row.owner) {
         return Err(STALE.into());
     }
@@ -1008,13 +991,13 @@ fn acknowledge(
     if authority.owner != row.owner
         || authority.epoch != row.connection_epoch
         || authority.snapshot_digest != row.snapshot_digest
-        || now < row.request.not_before_ms
+        || (require_active && now < row.request.not_before_ms)
         || now >= row.request.expires_at_ms
         || ctx
             .db
             .protected_mail_connector_selection_event()
             .id()
-            .find(event_id(id, 2))
+            .find(event_id(&row.id, 2))
             .is_some()
     {
         return Err(STALE.into());
@@ -1036,6 +1019,22 @@ fn acknowledge(
         }
         _ => return Err(STALE.into()),
     }
+    Ok(cursor)
+}
+fn acknowledge(
+    ctx: &ReducerContext,
+    id: &str,
+    nonce: &str,
+    sources: &[ProtectedMailSourceRef],
+) -> Result<ProtectedMailConnectorAck, String> {
+    let row = bound_selection(ctx, id)?;
+    if let Some(receipt) = ctx.db.protected_mail_connector_ack_receipt().selection_id().find(id.to_owned()) {
+        if receipt.event_nonce != nonce || receipt.sources != sources { return Err(CONFLICT.into()); }
+        return checked_receipt(ctx, &row, receipt).map(|r| ack_dto(&r));
+    }
+    if !hex64(nonce) { return Err(INVALID.into()); }
+    let cursor = require_current_selection(ctx, &row, true)?;
+    let cursor_id = cursor_id(ctx.identity(), row.request.connection_id, &row.folder);
     let bytes = selected_sources(ctx, &row, sources)?;
     let generation = row.expected_cursor_generation.checked_add(1).ok_or(LIMIT)?;
     let history_id = history_id(&cursor_id, generation);
