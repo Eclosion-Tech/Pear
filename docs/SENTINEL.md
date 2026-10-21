@@ -2,13 +2,13 @@
 
 **Updated:** 2026-10-21
 
-**Status:** S0 through S2b2c1 are merged, including private storage/provenance,
-exact owner decisions, retained authority, local promotion, fixed inference,
-restricted result storage and connector cursor ACKs. This branch adds S2b2c2
-[one-use owner-authorized read-plan release](PROTECTED_MAIL_READ.md). It commits
-a maximum raw-MIME reservation before returning exact metadata once; it adds no
-IMAP execution, credential release, body ingestion or cursor authority. Trusted
-workflow UI, redaction, broker isolation and host controls remain gates.
+**Status:** S0 through S2b2c2 are merged, including exact private storage,
+provenance, owner authority, inference/results, connector ACK and one-use read
+plans. This branch adds the [dormant bounded IMAP executor](PROTECTED_MAIL_EXECUTOR.md)
+and synthetic TLS conformance. It consumes a fresh claim internally and returns
+only private counts/digests; raw MIME is discarded. No production credential
+adapter, new body ingestion, cursor effect or active runner is added. Trusted
+workflow, sanitization, isolated credentials and host controls remain gates.
 Protected monitoring is disabled.
 
 Sentinel will enforce authority and disclosure rules outside the model. Email,
@@ -340,3 +340,13 @@ unknown outcomes nor terminal reports refund or reopen it. The fixed service
 procedure rechecks current selection, cursor and authority before committing
 Dispatching; no message needs to exist in S1 yet. Actual message bytes, IMAP
 execution, new storage/disposition and the protected runner remain later gates.
+
+## Dormant bounded IMAP executor
+
+The [fixed executor](PROTECTED_MAIL_EXECUTOR.md) claims once internally, checks
+the exact credential association and uses one verified TLS session for a
+read-only selected folder and bounded individual UID PEEKs. Raw octets stay
+opaque and are discarded; success returns bounded private metadata only.
+Malformed, missing or cap-sized partials fail the whole batch without cursor
+progress. No runner or credential service invokes this host library. Synthetic
+wire conformance is separate from production compatibility and S3 isolation.

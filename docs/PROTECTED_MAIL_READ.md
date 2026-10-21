@@ -145,3 +145,7 @@ matching generated clients, ten baseline collision guards, six private
 native-log guard cases, shell/workflow syntax and 130 local links passed.
 
 Connector read fresh/upgrade/seed/resume passed 10/11/11/1 stages. All 15 earlier regression/setup phases passed 208 checks, and all five earlier checkpoints recovered across the same disk-backed restart without republishing. The populated upgrade retained all 38 earlier private tables without backfill; all 42 survived recovery with owner histories and ordinary state unchanged. Only the selected pending read changed on first release; dispatching/terminal attempts remained consumed and full reservations were retained. Native logs contained no panic or synthetic inference/result/connector/read body marker. The owned server, synthetic databases, checkpoints, logs and generated test keys were removed.
+
+The later [dormant executor](PROTECTED_MAIL_EXECUTOR.md) tests this fixed wire
+profile against synthetic TLS servers. Its installation schedules no existing
+pending grant and supplies no production credential or workflow activation.
