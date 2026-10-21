@@ -1799,6 +1799,232 @@ export const ProtectedMailDirection = __t.enum("ProtectedMailDirection", {
 });
 export type ProtectedMailDirection = __Infer<typeof ProtectedMailDirection>;
 
+export const ProtectedMailDiscoveryCursorBinding = __t.object("ProtectedMailDiscoveryCursorBinding", {
+  id: __t.string(),
+  generation: __t.u64(),
+  digest: __t.string(),
+  uidValidity: __t.string(),
+  lastUid: __t.u32(),
+});
+export type ProtectedMailDiscoveryCursorBinding = __Infer<typeof ProtectedMailDiscoveryCursorBinding>;
+
+export const ProtectedMailDiscoveryDispatch = __t.object("ProtectedMailDiscoveryDispatch", {
+  discoveryId: __t.string(),
+  manifestDigest: __t.string(),
+  manifestBytes: __t.u64(),
+  canonical: __t.string(),
+});
+export type ProtectedMailDiscoveryDispatch = __Infer<typeof ProtectedMailDiscoveryDispatch>;
+
+export const ProtectedMailDiscoveryEvent = __t.object("ProtectedMailDiscoveryEvent", {
+  id: __t.string(),
+  discoveryId: __t.string(),
+  generation: __t.u64(),
+  get status() {
+    return ProtectedMailDiscoveryStatus;
+  },
+  eventNonce: __t.string(),
+  observationDigest: __t.option(__t.string()),
+  requestDigest: __t.string(),
+  actor: __t.identity(),
+  reservedOperations: __t.u64(),
+  reservedControlBytes: __t.u64(),
+  reservedSlots: __t.u32(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailDiscoveryEvent = __Infer<typeof ProtectedMailDiscoveryEvent>;
+
+export const ProtectedMailDiscoveryGrant = __t.object("ProtectedMailDiscoveryGrant", {
+  id: __t.string(),
+  owner: __t.identity(),
+  workspace: __t.identity(),
+  get request() {
+    return ProtectedMailDiscoveryRequest;
+  },
+  connectionEpoch: __t.u64(),
+  snapshotDigest: __t.string(),
+  host: __t.string(),
+  port: __t.u16(),
+  username: __t.string(),
+  folder: __t.string(),
+  get cursor() {
+    return __t.option(ProtectedMailDiscoveryCursorBinding);
+  },
+  get head() {
+    return __t.option(ProtectedMailDiscoveryHeadBinding);
+  },
+  manifestDigest: __t.string(),
+  manifestBytes: __t.u64(),
+  canonical: __t.string(),
+  issueDigest: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailDiscoveryGrant = __Infer<typeof ProtectedMailDiscoveryGrant>;
+
+export const ProtectedMailDiscoveryGrantEvent = __t.object("ProtectedMailDiscoveryGrantEvent", {
+  id: __t.string(),
+  discoveryId: __t.string(),
+  generation: __t.u64(),
+  get kind() {
+    return ProtectedMailDiscoveryGrantEventKind;
+  },
+  eventNonce: __t.string(),
+  requestDigest: __t.string(),
+  actor: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailDiscoveryGrantEvent = __Infer<typeof ProtectedMailDiscoveryGrantEvent>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailDiscoveryGrantEventKind`.
+export const ProtectedMailDiscoveryGrantEventKind = __t.enum("ProtectedMailDiscoveryGrantEventKind", {
+  Issued: __t.unit(),
+  Revoked: __t.unit(),
+});
+export type ProtectedMailDiscoveryGrantEventKind = __Infer<typeof ProtectedMailDiscoveryGrantEventKind>;
+
+export const ProtectedMailDiscoveryHead = __t.object("ProtectedMailDiscoveryHead", {
+  id: __t.string(),
+  owner: __t.identity(),
+  workspace: __t.identity(),
+  connectionId: __t.u64(),
+  folder: __t.string(),
+  generation: __t.u64(),
+  digest: __t.string(),
+  observationId: __t.string(),
+  uidValidity: __t.string(),
+  uidNext: __t.u32(),
+  updatedAt: __t.timestamp(),
+});
+export type ProtectedMailDiscoveryHead = __Infer<typeof ProtectedMailDiscoveryHead>;
+
+export const ProtectedMailDiscoveryHeadBinding = __t.object("ProtectedMailDiscoveryHeadBinding", {
+  id: __t.string(),
+  generation: __t.u64(),
+  digest: __t.string(),
+  observationId: __t.string(),
+  uidValidity: __t.string(),
+  uidNext: __t.u32(),
+});
+export type ProtectedMailDiscoveryHeadBinding = __Infer<typeof ProtectedMailDiscoveryHeadBinding>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailDiscoveryMode`.
+export const ProtectedMailDiscoveryMode = __t.enum("ProtectedMailDiscoveryMode", {
+  Bootstrap: __t.unit(),
+  get NextWindow() {
+    return ProtectedMailDiscoveryNextWindow;
+  },
+});
+export type ProtectedMailDiscoveryMode = __Infer<typeof ProtectedMailDiscoveryMode>;
+
+export const ProtectedMailDiscoveryNextWindow = __t.object("ProtectedMailDiscoveryNextWindow", {
+  expectedCursorGeneration: __t.u64(),
+  maxSlots: __t.u32(),
+});
+export type ProtectedMailDiscoveryNextWindow = __Infer<typeof ProtectedMailDiscoveryNextWindow>;
+
+export const ProtectedMailDiscoveryObservation = __t.object("ProtectedMailDiscoveryObservation", {
+  discoveryId: __t.string(),
+  headEventId: __t.string(),
+  headId: __t.string(),
+  headGeneration: __t.u64(),
+  previousHeadDigest: __t.string(),
+  previousObservationId: __t.option(__t.string()),
+  get input() {
+    return ProtectedMailDiscoveryObservationInput;
+  },
+  get range() {
+    return __t.option(ProtectedMailDiscoveryRange);
+  },
+  absentUids: __t.array(__t.u32()),
+  eventNonce: __t.string(),
+  observationDigest: __t.string(),
+  observationBytes: __t.u64(),
+  canonical: __t.string(),
+  actor: __t.identity(),
+  recordedAt: __t.timestamp(),
+});
+export type ProtectedMailDiscoveryObservation = __Infer<typeof ProtectedMailDiscoveryObservation>;
+
+export const ProtectedMailDiscoveryObservationInput = __t.object("ProtectedMailDiscoveryObservationInput", {
+  uidValidity: __t.string(),
+  uidNext: __t.u32(),
+  presentUids: __t.array(__t.u32()),
+});
+export type ProtectedMailDiscoveryObservationInput = __Infer<typeof ProtectedMailDiscoveryObservationInput>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailDiscoveryOutcome`.
+export const ProtectedMailDiscoveryOutcome = __t.enum("ProtectedMailDiscoveryOutcome", {
+  Failed: __t.unit(),
+  Unknown: __t.unit(),
+  CancelledBeforeDispatch: __t.unit(),
+});
+export type ProtectedMailDiscoveryOutcome = __Infer<typeof ProtectedMailDiscoveryOutcome>;
+
+export const ProtectedMailDiscoveryPreview = __t.object("ProtectedMailDiscoveryPreview", {
+  discoveryId: __t.string(),
+  connectionEpoch: __t.u64(),
+  snapshotDigest: __t.string(),
+  manifestDigest: __t.string(),
+  manifestBytes: __t.u64(),
+  canonical: __t.string(),
+});
+export type ProtectedMailDiscoveryPreview = __Infer<typeof ProtectedMailDiscoveryPreview>;
+
+export const ProtectedMailDiscoveryRange = __t.object("ProtectedMailDiscoveryRange", {
+  fromUid: __t.u32(),
+  throughUid: __t.u32(),
+});
+export type ProtectedMailDiscoveryRange = __Infer<typeof ProtectedMailDiscoveryRange>;
+
+export const ProtectedMailDiscoveryReceipt = __t.object("ProtectedMailDiscoveryReceipt", {
+  discoveryId: __t.string(),
+  observationDigest: __t.string(),
+  headId: __t.string(),
+  headGeneration: __t.u64(),
+});
+export type ProtectedMailDiscoveryReceipt = __Infer<typeof ProtectedMailDiscoveryReceipt>;
+
+export const ProtectedMailDiscoveryRequest = __t.object("ProtectedMailDiscoveryRequest", {
+  connectionId: __t.u64(),
+  connectorIdentity: __t.identity(),
+  runtimeId: __t.string(),
+  runId: __t.string(),
+  get direction() {
+    return ProtectedMailDirection;
+  },
+  get mode() {
+    return ProtectedMailDiscoveryMode;
+  },
+  notBeforeMs: __t.u64(),
+  expiresAtMs: __t.u64(),
+  eventNonce: __t.string(),
+});
+export type ProtectedMailDiscoveryRequest = __Infer<typeof ProtectedMailDiscoveryRequest>;
+
+export const ProtectedMailDiscoveryState = __t.object("ProtectedMailDiscoveryState", {
+  discoveryId: __t.string(),
+  generation: __t.u64(),
+  get status() {
+    return ProtectedMailDiscoveryStatus;
+  },
+  reservedOperations: __t.u64(),
+  reservedControlBytes: __t.u64(),
+  reservedSlots: __t.u32(),
+  lastEventId: __t.string(),
+});
+export type ProtectedMailDiscoveryState = __Infer<typeof ProtectedMailDiscoveryState>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailDiscoveryStatus`.
+export const ProtectedMailDiscoveryStatus = __t.enum("ProtectedMailDiscoveryStatus", {
+  Pending: __t.unit(),
+  Dispatching: __t.unit(),
+  Observed: __t.unit(),
+  Failed: __t.unit(),
+  Unknown: __t.unit(),
+  CancelledBeforeDispatch: __t.unit(),
+});
+export type ProtectedMailDiscoveryStatus = __Infer<typeof ProtectedMailDiscoveryStatus>;
+
 export const ProtectedMailExposure = __t.object("ProtectedMailExposure", {
   id: __t.string(),
   owner: __t.identity(),

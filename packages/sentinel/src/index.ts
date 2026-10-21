@@ -15,3 +15,5 @@ export { canonicalConnectorRead, prepareConnectorRead } from "./read.js";
 export type { ConnectorReadV1, FrozenConnectorRead, ConnectorReadPreparation } from "./read.js";
 export { canonicalMailIngestionPayload, parseMailIngestionEntries, prepareMailIngestion } from "./ingestion.js";
 export type { ProtectedMailPreparedMessage, MailIngestionHeldReason, MailIngestionEntry, MailIngestionPayloadV1, FrozenMailIngestion, MailIngestionPreparation } from "./ingestion.js";
+export { canonicalConnectorDiscovery, prepareConnectorDiscovery, parseMailDiscoveryObservation } from "./discovery.js";
+export type { ConnectorDiscoveryV1, MailDiscoveryObservation, FrozenConnectorDiscovery, ConnectorDiscoveryPreparation } from "./discovery.js";

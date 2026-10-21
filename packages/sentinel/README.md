@@ -107,3 +107,10 @@ adds a closed full-envelope codec for exact imported/held UID slots.
 `prepareMailIngestion` freezes literal UTF-8 bytes before hashing and verifies
 embedded read commitments. It supplies no sanitization, owner approval,
 mailbox evidence or storage permission; those remain distinct host boundaries.
+
+
+The [bounded discovery contract](../../docs/PROTECTED_MAIL_DISCOVERY.md) adds a
+closed canonical metadata-plan codec and observation-declaration parser. Preparing
+these bytes authenticates no owner or mailbox and supplies no dispatch, body-read,
+absence-skip or cursor authority. Current authority is enforced separately by the
+private discovery service; monitoring remains disabled.

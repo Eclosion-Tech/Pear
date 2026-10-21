@@ -2,11 +2,11 @@
 
 **Updated:** 2026-10-21
 
-**Status:** S0 through S2b2c3 are merged. This branch adds
-[exact prepared-text ingestion](PROTECTED_MAIL_INGESTION.md): separate owner
-storage approval, full canonical-byte binding and one atomic import/held
-batch, cursor and terminal-read commit. The merged fixed IMAP executor still
-discards MIME. Discovery, MIME sanitization/body adapter, recurring workflow,
+**Status:** S0 through S2b2c4 are merged. This branch adds
+[bounded metadata-only discovery](PROTECTED_MAIL_DISCOVERY.md): separate owner
+permission, a one-use metadata executor, atomic private observations and retained
+UID continuity. Discovery does not fetch bodies or advance the inbox cursor.
+MIME sanitization/body adaptation, sparse disposition, recurring workflow,
 isolated credentials, trusted UI and host controls remain gates.
 Protected monitoring stays disabled.
 
@@ -363,3 +363,15 @@ new versioned receipt/history family preserves old ACK semantics and prevents
 held slots from masquerading as imported sources. Missing, capped or uncertain
 reads cannot advance progress. No source policy or processing grant is created.
 The current executor, recurring runner and actual MIME sanitizer remain separate.
+
+
+## Bounded metadata-only discovery
+
+The [discovery contract](PROTECTED_MAIL_DISCOVERY.md) adds owner-approved
+Bootstrap or next-window discovery, a separate fixed EXAMINE/UID SEARCH executor
+and six private tables. The discovery head retains UIDVALIDITY and a monotonic
+UIDNEXT horizon independently of the inbox cursor. Observations record no body,
+create no baseline, grant no downstream authority and never advance that cursor.
+Lost claim/report replies do not retry a mailbox session or expose local UID
+metadata. All 47 earlier private schemas and contiguous selection/ingestion
+contracts retain their scope; monitoring stays disabled.

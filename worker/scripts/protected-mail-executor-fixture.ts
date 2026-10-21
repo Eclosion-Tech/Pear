@@ -41,14 +41,19 @@ export async function createExecutorFixtureCertificates(host = EXECUTOR_FIXTURE_
 export interface ExecutorFixtureFetch {
   readonly tag: string; readonly uid: number; readonly limit: number; readonly index: number;
 }
+export interface ExecutorFixtureSearch { readonly tag: string; readonly fromUid: number; readonly throughUid: number; readonly index: number }
 export interface ExecutorFixtureReply { readonly bytes: Uint8Array; readonly split?: boolean; readonly close?: boolean; readonly hang?: boolean }
 export interface ExecutorFixtureOptions {
+  readonly mode?: "read" | "discovery";
   readonly certificates?: ExecutorFixtureCertificates;
   readonly username?: string;
   readonly password?: string;
   /** Already encoded quoted mailbox contents, independent from production's encoder. */
   readonly folderWire?: string;
   readonly uidValidity?: string;
+  readonly uidNext?: number | string;
+  readonly presentUids?: readonly number[];
+  readonly searchReply?: (request: ExecutorFixtureSearch) => ExecutorFixtureReply;
   readonly readOnly?: boolean;
   readonly greeting?: string | null;
   readonly capabilities?: string;
@@ -63,6 +68,7 @@ export interface ExecutorFixtureStats {
   tcpConnections: number; connections: number; tlsFailures: number; authentications: number; authenticationMatched: boolean;
   tagsSequential: boolean; mailboxMatched: boolean; forbidden: boolean; closedConnections: number;
   commands: string[]; fetches: Array<{ uid: number; limit: number }>;
+  searches: Array<{ fromUid: number; throughUid: number }>;
 }
 /** Build one strict response, allowing adversarial protocol fields in tests.
  * Raw buffers are private fixture inputs, never assertion/error messages. */
@@ -77,7 +83,7 @@ export async function createExecutorFixture(options: ExecutorFixtureOptions = {}
   const certificates = options.certificates ?? await createExecutorFixtureCertificates(), ownCertificates = options.certificates === undefined;
   const secrets = material.get(certificates); if (!secrets) throw Error("executor_fixture_missing_material");
   const stats: ExecutorFixtureStats = { tcpConnections: 0, connections: 0, tlsFailures: 0, authentications: 0, authenticationMatched: true,
-    tagsSequential: true, mailboxMatched: true, forbidden: false, closedConnections: 0, commands: [], fetches: [] };
+    tagsSequential: true, mailboxMatched: true, forbidden: false, closedConnections: 0, commands: [], fetches: [], searches: [] };
   const sockets = new Set<TLSSocket>(), tcpSockets = new Set<Socket>();
   async function reply(socket: TLSSocket, response: ExecutorFixtureReply): Promise<void> {
     if (response.hang || socket.destroyed) return;
@@ -120,8 +126,16 @@ export async function createExecutorFixture(options: ExecutorFixtureOptions = {}
         await reply(socket, { bytes: Buffer.from("+\r\n"), split: options.split }); return;
       }
       if (operation.startsWith("EXAMINE ") && phase === "examine") {
-        stats.commands.push("EXAMINE"); stats.mailboxMatched &&= operation === `EXAMINE "${options.folderWire ?? "INBOX"}"`; phase = "fetch";
-        const response = options.examineReply?.(tag) ?? { bytes: Buffer.from(`* FLAGS (\\Seen \\Answered)\r\n* 8 EXISTS\r\n* 0 RECENT\r\n* OK [UIDVALIDITY ${options.uidValidity ?? "7"}] stable\r\n${tag} OK [${options.readOnly === false ? "READ-WRITE" : "READ-ONLY"}] examined\r\n`), split: options.split };
+        stats.commands.push("EXAMINE"); stats.mailboxMatched &&= operation === `EXAMINE "${options.folderWire ?? "INBOX"}"`; phase = options.mode === "discovery" ? "search" : "fetch";
+        const next = options.mode === "discovery" ? `* OK [UIDNEXT ${options.uidNext ?? 10}] next\r\n` : "";
+        const response = options.examineReply?.(tag) ?? { bytes: Buffer.from(`* FLAGS (\\Seen \\Answered)\r\n* 8 EXISTS\r\n* 0 RECENT\r\n* OK [UIDVALIDITY ${options.uidValidity ?? "7"}] stable\r\n${next}${tag} OK [${options.readOnly === false ? "READ-WRITE" : "READ-ONLY"}] examined\r\n`), split: options.split };
+        await reply(socket, response); return;
+      }
+      const search = /^UID SEARCH UID ([1-9][0-9]*):([1-9][0-9]*)$/.exec(operation);
+      if (search && phase === "search" && options.mode === "discovery") {
+        const request = { tag, fromUid: Number(search[1]), throughUid: Number(search[2]), index: stats.searches.length };
+        stats.commands.push("UID_SEARCH"); stats.searches.push({ fromUid: request.fromUid, throughUid: request.throughUid }); phase = "complete";
+        const response = options.searchReply?.(request) ?? { bytes: Buffer.from(`* SEARCH${options.presentUids?.length ? ` ${options.presentUids.join(" ")}` : ""}\r\n${tag} OK searched\r\n`), split: options.split };
         await reply(socket, response); return;
       }
       const fetch = /^UID FETCH ([1-9][0-9]*) \(UID RFC822\.SIZE BODY\.PEEK\[\]<0\.([1-9][0-9]*)>\)$/.exec(operation);
