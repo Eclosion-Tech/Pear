@@ -10,9 +10,12 @@ import * as AcceptProtectedMailInferenceResultProcedure from "../accept_protecte
 import * as AcceptProtectedMailIngestionProcedure from "../accept_protected_mail_ingestion_procedure";
 import * as AcknowledgeProtectedMailConnectorSelectionProcedure from "../acknowledge_protected_mail_connector_selection_procedure";
 import * as AdmitProtectedMailInferenceProcedure from "../admit_protected_mail_inference_procedure";
+import * as BeginProtectedMailDiscoveryDispatchProcedure from "../begin_protected_mail_discovery_dispatch_procedure";
 import * as BeginProtectedMailInferenceDispatchProcedure from "../begin_protected_mail_inference_dispatch_procedure";
 import * as BeginProtectedMailReadDispatchProcedure from "../begin_protected_mail_read_dispatch_procedure";
+import * as CompleteProtectedMailDiscoveryProcedure from "../complete_protected_mail_discovery_procedure";
 import * as ReviewProtectedMailConnectorSelectionProcedure from "../review_protected_mail_connector_selection_procedure";
+import * as ReviewProtectedMailDiscoveryProcedure from "../review_protected_mail_discovery_procedure";
 import * as ReviewProtectedMailIngestionProcedure from "../review_protected_mail_ingestion_procedure";
 import * as ReviewProtectedMailReadGrantProcedure from "../review_protected_mail_read_grant_procedure";
 
@@ -24,12 +27,18 @@ export type AcknowledgeProtectedMailConnectorSelectionArgs = __Infer<typeof Ackn
 export type AcknowledgeProtectedMailConnectorSelectionResult = __Infer<typeof AcknowledgeProtectedMailConnectorSelectionProcedure.returnType>;
 export type AdmitProtectedMailInferenceArgs = __Infer<typeof AdmitProtectedMailInferenceProcedure.params>;
 export type AdmitProtectedMailInferenceResult = __Infer<typeof AdmitProtectedMailInferenceProcedure.returnType>;
+export type BeginProtectedMailDiscoveryDispatchArgs = __Infer<typeof BeginProtectedMailDiscoveryDispatchProcedure.params>;
+export type BeginProtectedMailDiscoveryDispatchResult = __Infer<typeof BeginProtectedMailDiscoveryDispatchProcedure.returnType>;
 export type BeginProtectedMailInferenceDispatchArgs = __Infer<typeof BeginProtectedMailInferenceDispatchProcedure.params>;
 export type BeginProtectedMailInferenceDispatchResult = __Infer<typeof BeginProtectedMailInferenceDispatchProcedure.returnType>;
 export type BeginProtectedMailReadDispatchArgs = __Infer<typeof BeginProtectedMailReadDispatchProcedure.params>;
 export type BeginProtectedMailReadDispatchResult = __Infer<typeof BeginProtectedMailReadDispatchProcedure.returnType>;
+export type CompleteProtectedMailDiscoveryArgs = __Infer<typeof CompleteProtectedMailDiscoveryProcedure.params>;
+export type CompleteProtectedMailDiscoveryResult = __Infer<typeof CompleteProtectedMailDiscoveryProcedure.returnType>;
 export type ReviewProtectedMailConnectorSelectionArgs = __Infer<typeof ReviewProtectedMailConnectorSelectionProcedure.params>;
 export type ReviewProtectedMailConnectorSelectionResult = __Infer<typeof ReviewProtectedMailConnectorSelectionProcedure.returnType>;
+export type ReviewProtectedMailDiscoveryArgs = __Infer<typeof ReviewProtectedMailDiscoveryProcedure.params>;
+export type ReviewProtectedMailDiscoveryResult = __Infer<typeof ReviewProtectedMailDiscoveryProcedure.returnType>;
 export type ReviewProtectedMailIngestionArgs = __Infer<typeof ReviewProtectedMailIngestionProcedure.params>;
 export type ReviewProtectedMailIngestionResult = __Infer<typeof ReviewProtectedMailIngestionProcedure.returnType>;
 export type ReviewProtectedMailReadGrantArgs = __Infer<typeof ReviewProtectedMailReadGrantProcedure.params>;

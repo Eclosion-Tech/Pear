@@ -7,6 +7,7 @@ mod accounts;
 mod admission;
 mod authority;
 mod connector;
+mod discovery;
 mod governance;
 mod inference;
 mod ingestion;
