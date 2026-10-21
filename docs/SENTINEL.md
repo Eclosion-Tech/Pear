@@ -1,16 +1,15 @@
 # Sentinel implementation status
 
-**Updated:** 2026-10-20
+**Updated:** 2026-10-21
 
-**Status:** Merged S0 containment, S1a private mail storage, S1b
-source policy/exposure provenance and S1c exact instruction revisions/owner
-decisions, S2a retained epochs/frozen processor declarations and S2b1 governed
-instruction sources, S2b2a local summary admission and S2b2b1 fixed inference
-admission. This branch adds S2b2b2 restricted broker-result acceptance with
-separate owner storage authority, complete input ancestry and an atomic private
-derivation/receipt. The stores are not connected to a mail runtime. Actual
-provider transport/response validation, isolated credentials, redaction and
-host egress controls remain gates; the protected profile is disabled.
+**Status:** S0 through S2b2b2 are merged, including private storage/provenance,
+exact owner instruction decisions, retained authority, local promotion, fixed
+inference claims and restricted result storage. This branch adds S2b2c1 exact
+owner-approved connector selections and private cursor acknowledgment over
+already-stored records. It supplies no mailbox read or new import authority.
+Provider transport/response validation, trusted workflow UI, isolated
+credentials, redaction and host egress controls remain gates. Protected
+monitoring is disabled.
 
 Sentinel will enforce authority and disclosure rules outside the model. Email,
 webpages, workspace content, tool output, and derived summaries cannot grant
@@ -240,6 +239,24 @@ Three new tables remain private; the derived source uses the existing S1b
 family with full current restrictions. Connector, reviewed UI and host gates
 remain required before protected use.
 
+## Exact connector selection and cursor acknowledgment
+
+[S2b2c1](PROTECTED_MAIL_CONNECTOR.md) adds a stateless owner preview and immutable
+owner-issued selection bound to the module, current connection epoch/snapshot,
+exact configured folder, connector/runtime/run and cursor window. New-only
+bootstrap is an explicit owner declaration. Stored batches contain at most
+eight contiguous next UIDs; every S1 source/record/receipt must already exist
+and match. Missing or substituted slots leave the entire cursor unchanged.
+
+The cursor, immutable history and ACK receipt commit together. Exact completed
+retries remain metadata-only after revocation or later cursor progress, while
+fresh work rechecks current roles, authority and CAS. Five new tables are
+private; deletion retains their history. Existing model, result and local
+promotion grants/pools are unchanged. This acknowledges earlier storage,
+without authorizing or proving the preceding read/import. Admitted ingestion,
+missing/held dispositions, trusted workflow delegation/UI and wire/host checks
+remain later gates. The legacy runner and paused-only fences stay intact.
+
 ## Coverage inventory and release gates
 
 The [entry-point inventory and next storage design](SENTINEL_COVERAGE.md) map
@@ -247,11 +264,11 @@ the existing identities, read paths and effect paths to their remaining gates.
 
 | Surface | Current implementation | Required before protected use |
 |---|---|---|
-| Fixed mail operations | Offline contracts, canonical append/inference codecs, atomic local promotion and fixed inference admission/payload release | Trusted adapters, reviewed owner UI/recipe, provider transport/response validation and mailbox/cursor admission |
+| Fixed mail operations | Offline contracts, canonical mail codecs, atomic local promotion, inference/result admission and exact stored-mail cursor ACK | Trusted adapters, reviewed owner UI/recipe, provider transport/response validation and admitted mailbox ingestion |
 | Source/exposure graph | Private source ceilings/current generations, cumulative registered exposure snapshots and immutable derived ancestry | Reviewed registration adapter, authenticated run binding, fresh admission/dispatch policy checks and complete actual exposure coverage |
 | Mail destination/readers | Separate private tables and explicit owner views, excluded from ordinary page readers/caches/exports | Reviewed owner UI, safe connection migration and admitted runtime use; legacy mail pages remain legacy |
 | Reviewed instructions | Private exact revisions, scoped owner decisions, edit-to-draft, governed inheritance and current approval bound to local promotion | Reviewed human UI/recipe and complete actual prompt/input instrumentation |
-| Authority/dispatch | Retained epochs/configuration; owner grants/shared budgets, unique local effects, one-use inference payload claims and separately authorized private result acceptance | Isolated credentials/transport, provider response validation and full connector lifecycle |
+| Authority/dispatch | Retained epochs/configuration; owner grants/shared budgets, unique local effects, one-use inference payload claims, private result acceptance and exact cursor ACK | Isolated credentials/transport, provider response validation and full connector lifecycle |
 | IMAP, model and classifier credentials | Existing worker custody unchanged | Isolated roles with minimal environment/mounts, authenticated RPC and host-enforced network policy |
 | Mail settings/lifecycle | Existing monitor unchanged | Draft/test/preview/enable, frozen processor approval, authentication-message suppression, cancellation and accurate terminal/backoff states |
 | Normal chat, APIs, MCP and output streams | Existing controls unchanged | Shared authorization across reads, writes, inference, responses, exports, notifications and sharing |
@@ -299,6 +316,13 @@ accuracy results.
 - `worker/scripts/protected-mail-inference-e2e.ts`: exact current registry and
   full fixed request, one-use broker claims, lost replies, private boundaries,
   populated S2b2a upgrade and retained admitted/dispatching/unknown state.
+
+- `worker/scripts/protected-mail-result-e2e.ts`: separately authorized bounded
+  result storage, complete inherited restrictions, atomic races, populated old30
+  upgrade and retained result/authorization history across restart.
+- `worker/scripts/protected-mail-connector-e2e.ts`: exact owner preview/selection,
+  explicit bootstrap, contiguous stored-source ACK/CAS, populated old33 upgrade,
+  role/epoch/replay/privacy boundaries and retained cursor recovery.
 
 Tests cover forged approvals, unknown effects, scope/epoch/time mismatches,
 destination substitution, changed processors, malformed JSON-like objects,

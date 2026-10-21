@@ -254,8 +254,8 @@ fn validate_configured_source(
 
 /// Versioned, length-delimited UTF-8 fields avoid serialization ambiguities.
 /// Hashes remain private identifiers, not a claim of anonymization/redaction.
-fn message_digest(message: &ProtectedMailInput) -> String {
-    let mut hash = Sha256::new();
+fn message_representation(message: &ProtectedMailInput) -> Vec<u8> {
+    let mut bytes = Vec::new();
     let direction = match message.direction {
         ProtectedMailDirection::Received => "received",
         ProtectedMailDirection::Sent => "sent",
@@ -277,10 +277,14 @@ fn message_digest(message: &ProtectedMailInput) -> String {
         &message.note,
         &message.sanitization_version,
     ] {
-        hash.update((value.len() as u64).to_be_bytes());
-        hash.update(value.as_bytes());
+        bytes.extend_from_slice(&(value.len() as u64).to_be_bytes());
+        bytes.extend_from_slice(value.as_bytes());
     }
-    hex::encode(hash.finalize())
+    bytes
+}
+
+fn message_digest(message: &ProtectedMailInput) -> String {
+    hex::encode(Sha256::digest(message_representation(message)))
 }
 
 fn record_id(connection_id: u64, event_key: &str) -> String {
@@ -291,20 +295,47 @@ fn source_id(record_id: &str) -> String {
 }
 
 fn mailbox_event_id(connection_id: u64, message: &ProtectedMailInput) -> String {
+    mailbox_tuple_event_id(connection_id, &message.folder, &message.uid_validity, message.uid)
+}
+
+fn mailbox_tuple_event_id(connection_id: u64, folder: &str, uid_validity: &str, uid: u32) -> String {
     let mut hash = Sha256::new();
     let connection = connection_id.to_string();
-    let uid = message.uid.to_string();
+    let uid = uid.to_string();
     for value in [
         "pear-protected-mail-event-v1",
         &connection,
-        &message.folder,
-        &message.uid_validity,
+        folder,
+        uid_validity,
         &uid,
     ] {
         hash.update((value.len() as u64).to_be_bytes());
         hash.update(value.as_bytes());
     }
     hex::encode(hash.finalize())
+}
+
+/// Read only the server-selected mailbox tuple. This does not authorize a
+/// mailbox read or accept a caller-selected source ID, and returns no body.
+pub(super) fn checked_stored_mail_tuple(ctx: &ReducerContext, collection_id: u64, owner: Identity,
+    folder: &str, uid_validity: &str, uid: u32, direction: &ProtectedMailDirection)
+    -> Result<(String, u64, String, u64), String> {
+    let collection = ctx.db.protected_mail_collection().id().find(collection_id)
+        .filter(|row| row.owner == owner).ok_or("protected_mail_connector_inconsistent")?;
+    let receipt = ctx.db.protected_mail_receipt().mailbox_event_id()
+        .find(mailbox_tuple_event_id(collection_id, folder, uid_validity, uid))
+        .ok_or("protected_mail_connector_source_required")?;
+    let record = ctx.db.protected_mail_record().id().find(receipt.record_id.clone())
+        .ok_or("protected_mail_connector_inconsistent")?;
+    let source = ctx.db.protected_mail_source().id().find(receipt.source_id.clone())
+        .ok_or("protected_mail_connector_inconsistent")?;
+    if !associated(&collection, &source, &record, &receipt)
+        || validate_message(&receipt.event_key, &record.message).is_err()
+        || record.message.folder != folder || record.message.uid_validity != uid_validity
+        || record.message.uid != uid || &record.message.direction != direction {
+        return Err("protected_mail_connector_inconsistent".into());
+    }
+    Ok((source.id, source.revision, source.digest, message_representation(&record.message).len() as u64))
 }
 
 pub(super) fn associated(
@@ -545,6 +576,20 @@ mod tests {
             note: String::new(),
             sanitization_version: "fixture-v1".into(),
         }
+    }
+
+    #[test]
+    fn acknowledged_size_uses_the_exact_existing_digest_preimage() {
+        let message=message();let bytes=message_representation(&message);
+        assert_eq!(message_digest(&message),hex::encode(Sha256::digest(&bytes)));
+        let mut rest=bytes.as_slice();let mut fields=Vec::new();
+        while !rest.is_empty() {
+            let length=u64::from_be_bytes(rest[..8].try_into().unwrap()) as usize;
+            fields.push(std::str::from_utf8(&rest[8..8+length]).unwrap().to_owned());rest=&rest[8+length..];
+        }
+        assert_eq!(fields.len(),14);assert_eq!(fields[0],"pear-protected-mail-content-v1");assert_eq!(fields[1],"external_mail");
+        assert_eq!(fields[11],message.body);assert_eq!(fields[13],message.sanitization_version);
+        assert_eq!(bytes.len(),14*8+fields.iter().map(String::len).sum::<usize>());
     }
 
     #[test]
