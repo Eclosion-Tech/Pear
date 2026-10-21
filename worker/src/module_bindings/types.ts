@@ -1526,6 +1526,16 @@ export const PropertyValueInput = __t.object("PropertyValueInput", {
 });
 export type PropertyValueInput = __Infer<typeof PropertyValueInput>;
 
+export const ProtectedMailAcceptedResult = __t.object("ProtectedMailAcceptedResult", {
+  admissionId: __t.string(),
+  get source() {
+    return ProtectedMailSourceRef;
+  },
+  envelopeDigest: __t.string(),
+  envelopeBytes: __t.u64(),
+});
+export type ProtectedMailAcceptedResult = __Infer<typeof ProtectedMailAcceptedResult>;
+
 export const ProtectedMailCollection = __t.object("ProtectedMailCollection", {
   id: __t.u64(),
   owner: __t.identity(),
@@ -1839,6 +1849,16 @@ export const ProtectedMailInferenceStatus = __t.enum("ProtectedMailInferenceStat
 });
 export type ProtectedMailInferenceStatus = __Infer<typeof ProtectedMailInferenceStatus>;
 
+export const ProtectedMailInferenceTextResult = __t.object("ProtectedMailInferenceTextResult", {
+  formatVersion: __t.u32(),
+  adapter: __t.string(),
+  model: __t.string(),
+  stopReason: __t.string(),
+  outputTokens: __t.u64(),
+  body: __t.string(),
+});
+export type ProtectedMailInferenceTextResult = __Infer<typeof ProtectedMailInferenceTextResult>;
+
 export const ProtectedMailInput = __t.object("ProtectedMailInput", {
   folder: __t.string(),
   uidValidity: __t.string(),
@@ -2075,6 +2095,77 @@ export const ProtectedMailRecord = __t.object("ProtectedMailRecord", {
   importedAt: __t.timestamp(),
 });
 export type ProtectedMailRecord = __Infer<typeof ProtectedMailRecord>;
+
+export const ProtectedMailResultAuthorization = __t.object("ProtectedMailResultAuthorization", {
+  admissionId: __t.string(),
+  owner: __t.identity(),
+  collectionId: __t.u64(),
+  brokerIdentity: __t.identity(),
+  grantId: __t.string(),
+  grantDigest: __t.string(),
+  admissionRequestDigest: __t.string(),
+  inputPayloadDigest: __t.string(),
+  operationFingerprint: __t.string(),
+  issueNonce: __t.string(),
+  expiresAtMs: __t.u64(),
+  maxEnvelopeBytes: __t.u64(),
+  requestDigest: __t.string(),
+  digest: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailResultAuthorization = __Infer<typeof ProtectedMailResultAuthorization>;
+
+export const ProtectedMailResultAuthorizationEvent = __t.object("ProtectedMailResultAuthorizationEvent", {
+  id: __t.string(),
+  admissionId: __t.string(),
+  generation: __t.u64(),
+  get kind() {
+    return ProtectedMailResultAuthorizationEventKind;
+  },
+  eventNonce: __t.string(),
+  requestDigest: __t.string(),
+  authorizationDigest: __t.string(),
+  actor: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailResultAuthorizationEvent = __Infer<typeof ProtectedMailResultAuthorizationEvent>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailResultAuthorizationEventKind`.
+export const ProtectedMailResultAuthorizationEventKind = __t.enum("ProtectedMailResultAuthorizationEventKind", {
+  Issued: __t.unit(),
+  Revoked: __t.unit(),
+});
+export type ProtectedMailResultAuthorizationEventKind = __Infer<typeof ProtectedMailResultAuthorizationEventKind>;
+
+export const ProtectedMailResultReceipt = __t.object("ProtectedMailResultReceipt", {
+  admissionId: __t.string(),
+  owner: __t.identity(),
+  collectionId: __t.u64(),
+  brokerIdentity: __t.identity(),
+  authorizationDigest: __t.string(),
+  eventNonce: __t.string(),
+  requestDigest: __t.string(),
+  formatVersion: __t.u32(),
+  adapter: __t.string(),
+  model: __t.string(),
+  stopReason: __t.string(),
+  outputTokens: __t.u64(),
+  get source() {
+    return ProtectedMailSourceRef;
+  },
+  envelopeDigest: __t.string(),
+  envelopeBytes: __t.u64(),
+  dispatchEventId: __t.string(),
+  completionEventId: __t.string(),
+  get dispatchSourceBindings() {
+    return __t.array(ProtectedMailSourceGeneration);
+  },
+  get acceptSourceBindings() {
+    return __t.array(ProtectedMailSourceGeneration);
+  },
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailResultReceipt = __Infer<typeof ProtectedMailResultReceipt>;
 
 export const ProtectedMailRow = __t.object("ProtectedMailRow", {
   id: __t.string(),

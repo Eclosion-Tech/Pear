@@ -143,6 +143,7 @@ import InstallExtensionReducer from "./install_extension_reducer";
 import InvalidateAiEvaluationsForRowReducer from "./invalidate_ai_evaluations_for_row_reducer";
 import InvokeAutomationReducer from "./invoke_automation_reducer";
 import IssueProtectedMailInferenceGrantReducer from "./issue_protected_mail_inference_grant_reducer";
+import IssueProtectedMailResultAuthorizationReducer from "./issue_protected_mail_result_authorization_reducer";
 import IssueProtectedMailSummaryGrantReducer from "./issue_protected_mail_summary_grant_reducer";
 import LogApiCallReducer from "./log_api_call_reducer";
 import LoginReducer from "./login_reducer";
@@ -203,6 +204,7 @@ import RevokeBridgeDeviceGrantReducer from "./revoke_bridge_device_grant_reducer
 import RevokeExtensionPermissionReducer from "./revoke_extension_permission_reducer";
 import RevokeProtectedMailInferenceGrantReducer from "./revoke_protected_mail_inference_grant_reducer";
 import RevokeProtectedMailInstructionReducer from "./revoke_protected_mail_instruction_reducer";
+import RevokeProtectedMailResultAuthorizationReducer from "./revoke_protected_mail_result_authorization_reducer";
 import RevokeProtectedMailSummaryGrantReducer from "./revoke_protected_mail_summary_grant_reducer";
 import RunConventionSensorReducer from "./run_convention_sensor_reducer";
 import RunDeniedToolCallsSensorReducer from "./run_denied_tool_calls_sensor_reducer";
@@ -285,6 +287,7 @@ import UpsertHarnessTemplateReducer from "./upsert_harness_template_reducer";
 import ValidateAutomationReducer from "./validate_automation_reducer";
 
 // Import all procedure arg schemas
+import * as AcceptProtectedMailInferenceResultProcedure from "./accept_protected_mail_inference_result_procedure";
 import * as AdmitProtectedMailInferenceProcedure from "./admit_protected_mail_inference_procedure";
 import * as BeginProtectedMailInferenceDispatchProcedure from "./begin_protected_mail_inference_dispatch_procedure";
 
@@ -1611,6 +1614,7 @@ const reducersSchema = __reducers(
   __reducerSchema("invalidate_ai_evaluations_for_row", InvalidateAiEvaluationsForRowReducer),
   __reducerSchema("invoke_automation", InvokeAutomationReducer),
   __reducerSchema("issue_protected_mail_inference_grant", IssueProtectedMailInferenceGrantReducer),
+  __reducerSchema("issue_protected_mail_result_authorization", IssueProtectedMailResultAuthorizationReducer),
   __reducerSchema("issue_protected_mail_summary_grant", IssueProtectedMailSummaryGrantReducer),
   __reducerSchema("log_api_call", LogApiCallReducer),
   __reducerSchema("login", LoginReducer),
@@ -1671,6 +1675,7 @@ const reducersSchema = __reducers(
   __reducerSchema("revoke_extension_permission", RevokeExtensionPermissionReducer),
   __reducerSchema("revoke_protected_mail_inference_grant", RevokeProtectedMailInferenceGrantReducer),
   __reducerSchema("revoke_protected_mail_instruction", RevokeProtectedMailInstructionReducer),
+  __reducerSchema("revoke_protected_mail_result_authorization", RevokeProtectedMailResultAuthorizationReducer),
   __reducerSchema("revoke_protected_mail_summary_grant", RevokeProtectedMailSummaryGrantReducer),
   __reducerSchema("run_convention_sensor", RunConventionSensorReducer),
   __reducerSchema("run_denied_tool_calls_sensor", RunDeniedToolCallsSensorReducer),
@@ -1755,6 +1760,7 @@ const reducersSchema = __reducers(
 
 /** The schema information for all procedures in this module. This is defined the same way as the procedures would have been defined in the server. */
 const proceduresSchema = __procedures(
+  __procedureSchema("accept_protected_mail_inference_result", AcceptProtectedMailInferenceResultProcedure.params, AcceptProtectedMailInferenceResultProcedure.returnType),
   __procedureSchema("admit_protected_mail_inference", AdmitProtectedMailInferenceProcedure.params, AdmitProtectedMailInferenceProcedure.returnType),
   __procedureSchema("begin_protected_mail_inference_dispatch", BeginProtectedMailInferenceDispatchProcedure.params, BeginProtectedMailInferenceDispatchProcedure.returnType),
 );

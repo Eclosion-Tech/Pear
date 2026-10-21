@@ -5,12 +5,12 @@
 **Status:** Merged S0 containment, S1a private mail storage, S1b
 source policy/exposure provenance and S1c exact instruction revisions/owner
 decisions, S2a retained epochs/frozen processor declarations and S2b1 governed
-instruction sources and S2b2a local summary admission. This branch adds
-S2b2b1 fixed inference admission: a server-built exact request, shared-budget
-reservation and a one-use transactional payload release to the bound broker.
-The stores are not connected to a mail runtime. Provider execution, result-body
-acceptance, isolated credential brokers, redaction and host egress controls
-remain gates; the protected profile is disabled.
+instruction sources, S2b2a local summary admission and S2b2b1 fixed inference
+admission. This branch adds S2b2b2 restricted broker-result acceptance with
+separate owner storage authority, complete input ancestry and an atomic private
+derivation/receipt. The stores are not connected to a mail runtime. Actual
+provider transport/response validation, isolated credentials, redaction and
+host egress controls remain gates; the protected profile is disabled.
 
 Sentinel will enforce authority and disclosure rules outside the model. Email,
 webpages, workspace content, tool output, and derived summaries cannot grant
@@ -219,8 +219,26 @@ service, not evidence of process isolation or exactly-once remote transmission.
 
 Seven new tables remain private. A dedicated one-attempt HTTP driver strictly
 decodes the pinned procedure result, bounds response bytes and rejects
-redirects. No provider is called. Result-body acceptance, trusted UI, isolated
+redirects. No provider is called. Provider-response validation, trusted UI, isolated
 credentials, real transport and IMAP/cursor authority remain later work.
+
+## Restricted result acceptance
+
+[S2b2b2](PROTECTED_MAIL_RESULTS.md) adds explicit owner authorization to store
+one result of an exact consumed admission. Processing-only grants do not gain
+storage permission. The broker supplies a closed bounded literal declaration;
+the server supplies its complete input ancestry, current restrictions and fixed
+format tag, then measures the whole canonical envelope. Source, policy,
+receipt and terminal `response_received` state commit together.
+
+Only a dispatching admission may accept new content. Unknown/failed/legacy
+terminal outcomes cannot acquire a result later. Exact completed retries are
+metadata-only no-ops; changed declarations/nonces conflict. No result is
+promoted automatically, and no body view or ordinary snapshot is added.
+Reported model/stop/token metadata do not prove provider execution or accuracy.
+Three new tables remain private; the derived source uses the existing S1b
+family with full current restrictions. Connector, reviewed UI and host gates
+remain required before protected use.
 
 ## Coverage inventory and release gates
 
@@ -229,11 +247,11 @@ the existing identities, read paths and effect paths to their remaining gates.
 
 | Surface | Current implementation | Required before protected use |
 |---|---|---|
-| Fixed mail operations | Offline contracts, canonical append/inference codecs, atomic local promotion and fixed inference admission/payload release | Trusted adapters, reviewed owner UI/recipe, provider execution/result acceptance and mailbox/cursor admission |
+| Fixed mail operations | Offline contracts, canonical append/inference codecs, atomic local promotion and fixed inference admission/payload release | Trusted adapters, reviewed owner UI/recipe, provider transport/response validation and mailbox/cursor admission |
 | Source/exposure graph | Private source ceilings/current generations, cumulative registered exposure snapshots and immutable derived ancestry | Reviewed registration adapter, authenticated run binding, fresh admission/dispatch policy checks and complete actual exposure coverage |
 | Mail destination/readers | Separate private tables and explicit owner views, excluded from ordinary page readers/caches/exports | Reviewed owner UI, safe connection migration and admitted runtime use; legacy mail pages remain legacy |
 | Reviewed instructions | Private exact revisions, scoped owner decisions, edit-to-draft, governed inheritance and current approval bound to local promotion | Reviewed human UI/recipe and complete actual prompt/input instrumentation |
-| Authority/dispatch | Retained epochs/configuration; owner-issued grants, shared budgets, unique local effects and one-use inference payload claims with current checks | Restricted result acceptance, isolated credentials/transport and full connector lifecycle |
+| Authority/dispatch | Retained epochs/configuration; owner grants/shared budgets, unique local effects, one-use inference payload claims and separately authorized private result acceptance | Isolated credentials/transport, provider response validation and full connector lifecycle |
 | IMAP, model and classifier credentials | Existing worker custody unchanged | Isolated roles with minimal environment/mounts, authenticated RPC and host-enforced network policy |
 | Mail settings/lifecycle | Existing monitor unchanged | Draft/test/preview/enable, frozen processor approval, authentication-message suppression, cancellation and accurate terminal/backoff states |
 | Normal chat, APIs, MCP and output streams | Existing controls unchanged | Shared authorization across reads, writes, inference, responses, exports, notifications and sharing |
