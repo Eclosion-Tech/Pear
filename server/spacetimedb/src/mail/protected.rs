@@ -11,6 +11,7 @@ use spacetimedb::{
 
 use super::accounts::{mail_connection, MailConnection};
 use super::processors::protected_mail_processor_head;
+use super::ingestion::protected_mail_ingestion_disposition;
 use crate::ai::{ai_user_config, ai_user_config__view, ai_user_profile, ai_user_profile__view};
 use crate::auth::{user, user__view};
 use crate::module_install::{module_install_meta__view, sender_is_module_publisher};
@@ -208,7 +209,7 @@ fn plain_text(value: &str, limit: usize) -> bool {
             .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
 }
 
-fn validate_message(event_key: &str, message: &ProtectedMailInput) -> Result<(), String> {
+pub(super) fn validate_message(event_key: &str, message: &ProtectedMailInput) -> Result<(), String> {
     let validity = message.uid_validity.parse::<u64>().ok();
     if event_key.len() != 64
         || !event_key
@@ -254,7 +255,7 @@ fn validate_configured_source(
 
 /// Versioned, length-delimited UTF-8 fields avoid serialization ambiguities.
 /// Hashes remain private identifiers, not a claim of anonymization/redaction.
-fn message_representation(message: &ProtectedMailInput) -> Vec<u8> {
+pub(super) fn message_representation(message: &ProtectedMailInput) -> Vec<u8> {
     let mut bytes = Vec::new();
     let direction = match message.direction {
         ProtectedMailDirection::Received => "received",
@@ -298,7 +299,7 @@ fn mailbox_event_id(connection_id: u64, message: &ProtectedMailInput) -> String 
     mailbox_tuple_event_id(connection_id, &message.folder, &message.uid_validity, message.uid)
 }
 
-fn mailbox_tuple_event_id(connection_id: u64, folder: &str, uid_validity: &str, uid: u32) -> String {
+pub(super) fn mailbox_tuple_event_id(connection_id: u64, folder: &str, uid_validity: &str, uid: u32) -> String {
     let mut hash = Sha256::new();
     let connection = connection_id.to_string();
     let uid = uid.to_string();
@@ -422,6 +423,7 @@ pub fn append_protected_mail_message(
         .mailbox_event_id()
         .find(mailbox_event_id.clone())
         .is_some()
+        || ctx.db.protected_mail_ingestion_disposition().id().find(mailbox_event_id.clone()).is_some()
     {
         return Err("protected_mail_event_conflict".into());
     }
@@ -440,6 +442,24 @@ pub fn append_protected_mail_message(
     {
         return Err("protected_mail_inconsistent_state".into());
     }
+    insert_ingested_mail(ctx, &collection, &event_key, &message)?;
+    Ok(())
+}
+
+/// Internal immutable writer. Its caller must establish owner/service admission
+/// and validate the complete batch before writing. This grants no public access.
+pub(super) fn insert_ingested_mail(
+    ctx: &ReducerContext,
+    collection: &ProtectedMailCollection,
+    event_key: &str,
+    message: &ProtectedMailInput,
+) -> Result<super::governance::ProtectedMailSourceRef, String> {
+    require_new_mail(ctx, collection.id, event_key, message)?;
+    let connection_id = collection.id;
+    let id = record_id(connection_id, event_key);
+    let source_id = source_id(&id);
+    let digest = message_digest(message);
+    let mailbox_event_id = mailbox_event_id(connection_id, message);
     ctx.db.protected_mail_source().insert(ProtectedMailSource {
         id: source_id.clone(),
         owner: collection.owner,
@@ -456,7 +476,7 @@ pub fn append_protected_mail_message(
         collection_id: connection_id,
         source_id: source_id.clone(),
         source_revision: SOURCE_REVISION,
-        message,
+        message: message.clone(),
         imported_at: ctx.timestamp,
     });
     ctx.db
@@ -465,13 +485,116 @@ pub fn append_protected_mail_message(
             id: id.clone(),
             owner: collection.owner,
             collection_id: connection_id,
-            event_key,
+            event_key: event_key.into(),
             mailbox_event_id,
             record_id: id,
-            source_id,
-            digest,
+            source_id: source_id.clone(),
+            digest: digest.clone(),
         });
+    Ok(super::governance::ProtectedMailSourceRef {
+        id: source_id,
+        revision: SOURCE_REVISION,
+        digest,
+    })
+}
+
+pub(super) fn require_new_mail(
+    ctx: &ReducerContext,
+    collection_id: u64,
+    event_key: &str,
+    message: &ProtectedMailInput,
+) -> Result<(), String> {
+    validate_message(event_key, message)?;
+    let id = record_id(collection_id, event_key);
+    let tuple = mailbox_event_id(collection_id, message);
+    if ctx
+        .db
+        .protected_mail_receipt()
+        .mailbox_event_id()
+        .find(tuple.clone())
+        .is_some()
+        || ctx
+            .db
+            .protected_mail_receipt()
+            .id()
+            .find(id.clone())
+            .is_some()
+        || ctx
+            .db
+            .protected_mail_record()
+            .id()
+            .find(id.clone())
+            .is_some()
+        || ctx
+            .db
+            .protected_mail_source()
+            .id()
+            .find(source_id(&id))
+            .is_some()
+        || ctx
+            .db
+            .protected_mail_ingestion_disposition()
+            .id()
+            .find(tuple)
+            .is_some()
+    {
+        return Err("protected_mail_event_conflict".into());
+    }
     Ok(())
+}
+
+/// Read-only retained association, never an authorization or body projection.
+pub(super) fn retained_ingested_mail(
+    ctx: &ReducerContext,
+    collection_id: u64,
+    owner: Identity,
+    event_key: &str,
+) -> Result<
+    (
+        super::governance::ProtectedMailSourceRef,
+        ProtectedMailInput,
+    ),
+    String,
+> {
+    let collection = ctx
+        .db
+        .protected_mail_collection()
+        .id()
+        .find(collection_id)
+        .filter(|r| r.owner == owner)
+        .ok_or("protected_mail_inconsistent_state")?;
+    let id = record_id(collection_id, event_key);
+    let receipt = ctx
+        .db
+        .protected_mail_receipt()
+        .id()
+        .find(id.clone())
+        .ok_or("protected_mail_inconsistent_state")?;
+    let record = ctx
+        .db
+        .protected_mail_record()
+        .id()
+        .find(id)
+        .ok_or("protected_mail_inconsistent_state")?;
+    let source = ctx
+        .db
+        .protected_mail_source()
+        .id()
+        .find(receipt.source_id.clone())
+        .ok_or("protected_mail_inconsistent_state")?;
+    if !associated(&collection, &source, &record, &receipt)
+        || validate_message(event_key, &record.message).is_err()
+    {
+        return Err("protected_mail_inconsistent_state".into());
+    }
+    Ok((
+        super::governance::ProtectedMailSourceRef {
+            id: source.id,
+            revision: source.revision,
+            digest: source.digest,
+        },
+        record.message,
+    ))
 }
 
 pub(super) fn authenticated_owner(ctx: &ViewContext) -> bool {

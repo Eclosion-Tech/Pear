@@ -349,6 +349,82 @@ fn bound_grant(
     let (row, revoked) = checked_grant(ctx, row, &selection)?;
     Ok((row, selection, revoked))
 }
+pub(super) fn retained_ingestion_grant(
+    ctx: &ReducerContext,
+    row: ProtectedMailReadGrant,
+    selection: &ProtectedMailConnectorSelection,
+) -> Result<(ProtectedMailReadGrant, bool), String> {
+    checked_grant(ctx, row, selection)
+}
+/// Narrow retained read association for exact ingestion; no release/replay path.
+pub(super) fn ingestion_read(
+    ctx: &ReducerContext,
+    id: &str,
+    owner: bool,
+) -> Result<
+    (
+        ProtectedMailReadGrant,
+        ProtectedMailConnectorSelection,
+        ProtectedMailReadState,
+        bool,
+    ),
+    String,
+> {
+    let (grant, selection, revoked) = if owner {
+        owned_grant(ctx, id)?
+    } else {
+        bound_grant(ctx, id)?
+    };
+    let state = checked_state(ctx, &grant, &selection)?;
+    Ok((grant, selection, state, revoked))
+}
+pub(super) fn current_ingestion_read(
+    ctx: &ReducerContext,
+    grant: &ProtectedMailReadGrant,
+    selection: &ProtectedMailConnectorSelection,
+    pending_allowed: bool,
+) -> Result<(), String> {
+    let (_, revoked) = checked_grant(
+        ctx,
+        ctx.db
+            .protected_mail_read_grant()
+            .id()
+            .find(grant.id.clone())
+            .ok_or(INCONSISTENT)?,
+        selection,
+    )?;
+    let state = checked_state(ctx, grant, selection)?;
+    if revoked
+        || !(state.status == ProtectedMailReadStatus::Dispatching
+            || pending_allowed && state.status == ProtectedMailReadStatus::Pending)
+    {
+        return Err(STALE.into());
+    }
+    current_selection(ctx, selection, true)
+}
+pub(super) fn checked_ingestion_terminal(
+    ctx: &ReducerContext,
+    grant: &ProtectedMailReadGrant,
+    selection: &ProtectedMailConnectorSelection,
+    nonce: &str,
+) -> Result<(), String> {
+    let state = checked_state(ctx, grant, selection)?;
+    let event = ctx
+        .db
+        .protected_mail_read_event()
+        .id()
+        .find(state.last_event_id)
+        .ok_or(INCONSISTENT)?;
+    if state.status != ProtectedMailReadStatus::ReadReported
+        || state.generation != 3
+        || event.event_nonce != nonce
+        || event.actor != selection.request.connector_identity
+    {
+        return Err(INCONSISTENT.into());
+    }
+    Ok(())
+}
+
 fn status_name(status: &ProtectedMailReadStatus) -> &'static str {
     match status {
         ProtectedMailReadStatus::Pending => "pending",
