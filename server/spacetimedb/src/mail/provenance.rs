@@ -7,18 +7,21 @@ use sha2::{Digest, Sha256};
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
 use super::governance::{
-    current_effective_policy, install_derived_policy, resolve_source_graph, ProtectedMailSourceRef,
+    current_effective_policy, install_derived_policy, install_accepted_result_policy, resolve_source_graph, ProtectedMailSourceRef,
     ResolvedProtectedMailSource,
 };
 use super::protected::{
     paused_human_connection, protected_mail_collection, ProtectedMailCollection,
 };
 use crate::module_install::sender_is_module_publisher;
+use super::results::AuthorizedResultWrite;
 
 const MAX_DIRECT: usize = 64;
 const MAX_INHERITED: usize = 16;
 const MAX_MEMBERS: usize = 256;
 const DERIVED_REVISION: u64 = 1;
+const RESULT_RUNTIME: &str = "inference-result-v1";
+const RESULT_SANITIZATION: &str = "sentinel-result-v1";
 
 #[table(accessor = protected_mail_context, private)]
 pub struct ProtectedMailContext {
@@ -453,6 +456,9 @@ pub fn record_protected_mail_exposure(
             &request_digest,
         );
     }
+    if runtime_id == RESULT_RUNTIME {
+        return Err("protected_mail_reserved_result_context".into());
+    }
     let actual_generation = head.as_ref().map_or(0, |context| context.latest_generation);
     if actual_generation != expected_generation {
         return Err("protected_mail_exposure_stale".into());
@@ -641,6 +647,9 @@ pub fn append_protected_mail_derivation(
         }
         return Ok(());
     }
+    if runtime_id == RESULT_RUNTIME {
+        return Err("protected_mail_reserved_result_context".into());
+    }
     let policy = current_effective_policy(ctx, collection.id, &exposure.members)?;
     if !policy.allow_owner_storage {
         return Err("protected_mail_source_disclosure_denied".into());
@@ -675,6 +684,74 @@ pub fn append_protected_mail_derivation(
         policy.allow_owner_storage,
     )?;
     Ok(())
+}
+
+fn result_stage_ids(collection_id: u64, admission_id: &str) -> (String,String,String,String) {
+    let context=context_id(collection_id,RESULT_RUNTIME,admission_id);
+    let event=hash_fields("pear-mail-inference-result-stage-event-v1",[admission_id]);
+    let exposure=exposure_id(&context,&event);
+    let derivation=derivation_id(&context,&event);
+    (context,event,exposure,derivation)
+}
+pub(super) fn accepted_result_reference(collection_id: u64, admission_id: &str, body: &str) -> ProtectedMailSourceRef {
+    let (_,_,_,derivation)=result_stage_ids(collection_id,admission_id);
+    ProtectedMailSourceRef { id:derived_source_id(&derivation),revision:DERIVED_REVISION,digest:derivation_digest(body,RESULT_SANITIZATION) }
+}
+/// No public publisher gate is relaxed. The unforgeable internal token is
+/// created only after the separate result-storage authorization succeeds in
+/// this exact transaction; callers cannot choose a context, parents or policy.
+pub(super) fn insert_accepted_result_stage(ctx: &ReducerContext, authority: &AuthorizedResultWrite, body: &str)
+    -> Result<ProtectedMailSourceRef,String> {
+    if !authority.matches_context(ctx) || body.is_empty() || body.len() > 64*1024 { return Err("protected_mail_result_inconsistent".into()); }
+    let collection=ctx.db.protected_mail_collection().id().find(authority.collection_id()).ok_or("protected_mail_result_inconsistent")?;
+    if collection.owner != authority.owner() { return Err("protected_mail_result_inconsistent".into()); }
+    let (context,event,exposure,derivation)=result_stage_ids(collection.id,authority.admission_id());
+    validate_derivation(&event,body,RESULT_SANITIZATION)?;
+    let reference=accepted_result_reference(collection.id,authority.admission_id(),body);
+    if ctx.db.protected_mail_context().id().find(context.clone()).is_some()
+        || ctx.db.protected_mail_exposure().id().find(exposure.clone()).is_some()
+        || ctx.db.protected_mail_derivation().id().find(derivation.clone()).is_some()
+        || ctx.db.protected_mail_derivation().source_id().find(reference.id.clone()).is_some() {
+        return Err("protected_mail_result_event_conflict".into());
+    }
+    let roots=canonical_refs(authority.roots())?;
+    let resolved=resolve_source_graph(ctx,collection.id,&roots)?.into_iter().map(|source|source.reference).collect::<Vec<_>>();
+    if resolved != authority.parents() { return Err("protected_mail_result_inconsistent".into()); }
+    ctx.db.protected_mail_context().insert(ProtectedMailContext { id:context.clone(),owner:collection.owner,collection_id:collection.id,
+        runtime_id:RESULT_RUNTIME.into(),run_id:authority.admission_id().into(),latest_generation:1,latest_exposure_id:Some(exposure.clone()),
+        blocked:false,created_at:ctx.timestamp,updated_at:ctx.timestamp });
+    ctx.db.protected_mail_exposure().insert(ProtectedMailExposure { id:exposure.clone(),owner:collection.owner,collection_id:collection.id,
+        context_id:context.clone(),runtime_id:RESULT_RUNTIME.into(),run_id:authority.admission_id().into(),event_key:event.clone(),
+        request_digest:exposure_request_digest(&context,0,&event,&roots,&[]),generation:1,previous_id:None,added_sources:roots,
+        inherited_exposure_ids:vec![],members:resolved.clone(),created_at:ctx.timestamp });
+    ctx.db.protected_mail_derivation().insert(ProtectedMailDerivation { id:derivation,source_id:reference.id.clone(),owner:collection.owner,
+        collection_id:collection.id,context_id:context.clone(),exposure_id:exposure.clone(),event_key:event.clone(),
+        request_digest:derivation_request_digest(&context,&exposure,&event,&reference.digest),revision:reference.revision,digest:reference.digest.clone(),
+        body:body.into(),sanitization_version:RESULT_SANITIZATION.into(),parents:resolved,created_at:ctx.timestamp });
+    // The extra output node counts against both graph bounds. Any failure
+    // rolls back the context, seal, source, policy, receipt and lifecycle.
+    resolve_source_graph(ctx,collection.id,std::slice::from_ref(&reference))?;
+    install_accepted_result_policy(ctx,authority,&reference)?;
+    Ok(reference)
+}
+pub(super) fn verify_accepted_result_stage(ctx: &ReducerContext, collection_id: u64, admission_id: &str,
+    reference: &ProtectedMailSourceRef, body: &str, roots: &[ProtectedMailSourceRef], parents: &[ProtectedMailSourceRef]) -> Result<Timestamp,String> {
+    let collection=ctx.db.protected_mail_collection().id().find(collection_id).ok_or("protected_mail_result_inconsistent")?;
+    let (context_id,event,exposure_id,derivation_id)=result_stage_ids(collection_id,admission_id);
+    let context=ctx.db.protected_mail_context().id().find(context_id.clone()).ok_or("protected_mail_result_inconsistent")?;
+    let exposure=checked_exposure(ctx,&collection,&exposure_id)?;
+    let derivation=ctx.db.protected_mail_derivation().id().find(derivation_id).ok_or("protected_mail_result_inconsistent")?;
+    if *reference != accepted_result_reference(collection_id,admission_id,body)
+        || !context_matches(&context,&collection,RESULT_RUNTIME,admission_id) || context.latest_generation != 1
+        || context.latest_exposure_id.as_deref() != Some(exposure_id.as_str()) || exposure.generation != 1
+        || exposure.previous_id.is_some() || !exposure.inherited_exposure_ids.is_empty()
+        || exposure.added_sources != canonical_refs(roots)? || exposure.members != parents || exposure.event_key != event
+        || derivation.body != body || derivation.parents != parents || derivation.sanitization_version != RESULT_SANITIZATION
+        || derivation.created_at != exposure.created_at || context.created_at != exposure.created_at {
+        return Err("protected_mail_result_inconsistent".into());
+    }
+    resolve_derived_source(ctx,reference)?.ok_or("protected_mail_result_inconsistent")?;
+    Ok(derivation.created_at)
 }
 
 /// Validate immutable derived-source association without consulting current

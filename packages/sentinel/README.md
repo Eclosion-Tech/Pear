@@ -72,6 +72,13 @@ from stored inputs; portable preparation grants no disclosure permission.
 nonce. The server derives it independently from the authenticated owner;
 supplying an ID does not authenticate that owner or issue a grant.
 
+`parseInferenceResultDeclaration`, `canonicalInferenceResultPayload` and
+`prepareInferenceResult` define the closed broker-result declaration and full
+[storage envelope](../../docs/PROTECTED_MAIL_RESULTS.md). The server supplies
+its parents from retained admission state and independently checks authority,
+limits and current restrictions. The portable helper creates no S0 operation
+or permit, and reported model/token metadata are not provider attestations.
+
 No production mail runtime imports this package yet. It does not change existing
 mail or assistant permissions. Public research and arbitrary tools remain
 outside this contract. See [the implementation status](../../docs/SENTINEL.md).

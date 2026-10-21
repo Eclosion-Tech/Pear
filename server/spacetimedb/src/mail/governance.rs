@@ -336,6 +336,21 @@ pub(super) fn resolve_source_graph(
     })
 }
 
+/// Validate one prospective output wrapper without storing a placeholder or
+/// flattening its ancestors. The source identity/digest are host supplied;
+/// this only checks immutable association and the existing graph bounds.
+pub(super) fn validate_prospective_derived_source(ctx: &ReducerContext, collection_id: u64,
+    reference: &ProtectedMailSourceRef, parents: &[ProtectedMailSourceRef]) -> Result<(),String> {
+    let collection=ctx.db.protected_mail_collection().id().find(collection_id).ok_or("protected_mail_inconsistent_state")?;
+    walk_source_graph(collection.owner,collection_id,std::slice::from_ref(reference),|candidate| {
+        if candidate.id == reference.id && candidate.revision == reference.revision {
+            if candidate != reference { return Err("protected_mail_source_conflict".into()); }
+            Ok(ResolvedProtectedMailSource { reference:reference.clone(),owner:collection.owner,collection_id,parents:parents.to_vec() })
+        } else { resolve_source(ctx,candidate) }
+    })?;
+    Ok(())
+}
+
 fn current_policy(
     ctx: &ReducerContext,
     source: &ResolvedProtectedMailSource,
@@ -693,6 +708,15 @@ pub(super) fn install_derived_policy(
     if !sender_is_module_publisher(ctx) {
         return Err("protected_mail_publisher_required".into());
     }
+    install_derived_policy_checked(ctx,reference,processors,allow_owner_storage)
+}
+
+fn install_derived_policy_checked(
+    ctx: &ReducerContext,
+    reference: &ProtectedMailSourceRef,
+    processors: Vec<ProtectedMailProcessor>,
+    allow_owner_storage: bool,
+) -> Result<(), String> {
     let processors = canonical_processors(processors)?;
     let resolved = super::provenance::resolve_derived_source(ctx, reference)?
         .ok_or("protected_mail_source_missing")?;
@@ -704,6 +728,18 @@ pub(super) fn install_derived_policy(
         return Err("protected_mail_source_policy_expansion".into());
     }
     insert_initial_policy(ctx, &resolved, processors, allow_owner_storage)
+}
+
+/// A separate, same-transaction result capability; the public publisher
+/// installer above keeps its original authentication gate unchanged.
+pub(super) fn install_accepted_result_policy(ctx: &ReducerContext,
+    authority: &super::results::AuthorizedResultWrite, reference: &ProtectedMailSourceRef) -> Result<(),String> {
+    if !authority.matches_context(ctx) { return Err("protected_mail_result_inconsistent".into()); }
+    let resolved=super::provenance::resolve_derived_source(ctx,reference)?.ok_or("protected_mail_result_inconsistent")?;
+    if resolved.owner != authority.owner() || resolved.collection_id != authority.collection_id() || resolved.parents != authority.parents() {
+        return Err("protected_mail_result_inconsistent".into());
+    }
+    install_derived_policy_checked(ctx,reference,authority.processors().to_vec(),true)
 }
 
 #[cfg(test)]

@@ -154,8 +154,9 @@ an independent S2b2a baseline for seven historical baseline comparisons and
 runs authority, local admission and inference checkpoints across one owned
 disk-backed restart. Release conformance uses the exact release WASM.
 
-Result-body validation and restricted derivation acceptance are the next
-S2b2b2 slice. Connector selection/cursor authority, trusted owner UI/recipe,
+[S2b2b2 restricted result acceptance](PROTECTED_MAIL_RESULTS.md) adds explicit
+owner result-storage authorization and bounded private derivation acceptance.
+It does not validate an actual provider response or attest remote execution. Connector selection/cursor authority, trusted owner UI/recipe,
 sanitization/held-message handling, protected backup/restore and S3 isolation
 remain required before a real-mail canary.
 

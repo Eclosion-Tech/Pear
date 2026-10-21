@@ -1,9 +1,10 @@
 /** One-attempt protected inference procedure transport. This module releases a
- * request from the authority server; it never calls a model or credential vault.
+ * request or submits an explicitly authorized bounded result to the authority
+ * server; it never calls a model or credential vault.
  * A missing/invalid response can follow a committed claim and is always unknown.
  * Do not retry a payload claim or route it through a logging/generic SDK client. */
 import { createHash } from "node:crypto";
-import { canonicalInferencePayload } from "../../../packages/sentinel/src/index.js";
+import { canonicalInferencePayload, parseInferenceResultDeclaration } from "../../../packages/sentinel/src/index.js";
 
 /** Host-owned authority origin/workspace/credential and transport. Never derive
  * these options from mail, model output, fetched content or a tool proposal. */
@@ -38,7 +39,20 @@ const denials = [
   "protected_mail_inference_event_conflict", "protected_mail_inference_consumed",
   "protected_mail_inference_stale", "protected_mail_inference_budget_exceeded",
 ] as const;
-type Denial = typeof denials[number] | "invalid_request";
+const resultDenials = [
+  "protected_mail_result_invalid_request", "protected_mail_result_inconsistent",
+  "protected_mail_result_owner_required", "protected_mail_result_broker_required",
+  "protected_mail_result_event_conflict", "protected_mail_result_stale",
+  "protected_mail_result_authorization_required", "protected_mail_result_limit_exceeded",
+] as const;
+type Denial = typeof denials[number] | typeof resultDenials[number] | "invalid_request";
+type ProtectedProcedure = "admit_protected_mail_inference" | "begin_protected_mail_inference_dispatch" | "accept_protected_mail_inference_result";
+export interface ProtectedInferenceAcceptedResult {
+  readonly admissionId: string;
+  readonly source: Readonly<{ id: string; revision: "1"; digest: string }>;
+  readonly envelopeDigest: string;
+  readonly envelopeBytes: number;
+}
 export type ProtectedInferenceProcedureResult<T> =
   | { readonly kind: "ok"; readonly value: T }
   | { readonly kind: "denied"; readonly reason: Denial }
@@ -104,10 +118,10 @@ function decodeDispatch(value: unknown, expectedId: string): ProtectedInferenceD
     config: Object.freeze({ formatVersion: 1, adapter: "anthropic.messages.v1", endpoint, model, credentialHandle, credentialVersion }),
     method, contentType, anthropicVersion, payload, payloadDigest, operationFingerprint, inputBytes, outputTokens, expiresAtMs });
 }
-async function boundedJson(response: Response, signal: AbortSignal): Promise<unknown> {
+async function boundedJson(response: Response, signal: AbortSignal, limit: number): Promise<unknown> {
   if (!response.ok || !/^application\/json(?:;\s*charset=utf-8)?$/i.test(response.headers.get("content-type") ?? "")) throw Error("invalid_response");
   const length = response.headers.get("content-length");
-  if (length !== null && (!/^(0|[1-9][0-9]*)$/.test(length) || !safe(Number(length), 1, MAX_RESPONSE_BYTES))) throw Error("invalid_response");
+  if (length !== null && (!/^(0|[1-9][0-9]*)$/.test(length) || !safe(Number(length), 1, limit))) throw Error("invalid_response");
   if (!response.body) throw Error("invalid_response");
   const reader = response.body.getReader(), chunks: Uint8Array[] = [];
   let count = 0;
@@ -119,7 +133,7 @@ async function boundedJson(response: Response, signal: AbortSignal): Promise<unk
       const next = await reader.read();
       if (next.done) break;
       count += next.value.byteLength;
-      if (count > MAX_RESPONSE_BYTES) throw Error("invalid_response");
+      if (count > limit) throw Error("invalid_response");
       chunks.push(next.value);
     }
     const bytes = new Uint8Array(count);
@@ -132,7 +146,7 @@ async function boundedJson(response: Response, signal: AbortSignal): Promise<unk
     reader.releaseLock();
   }
 }
-async function procedure<T>(options: ProtectedInferenceProcedureOptions, name: string,
+async function procedure<T>(options: ProtectedInferenceProcedureOptions, name: ProtectedProcedure,
   args: readonly unknown[], decode: (value: unknown) => T | undefined): Promise<ProtectedInferenceProcedureResult<T>> {
   let target: string, token: string, timeout: number, body: string, fetchImpl: typeof fetch;
   try {
@@ -156,9 +170,10 @@ async function procedure<T>(options: ProtectedInferenceProcedureOptions, name: s
       const response = await fetchImpl(target, { method: "POST", redirect: "error", cache: "no-store", credentials: "omit",
         referrerPolicy: "no-referrer", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body, signal: controller.signal });
-      const result = await boundedJson(response, controller.signal);
+      const resultMethod = name === "accept_protected_mail_inference_result";
+      const result = await boundedJson(response, controller.signal, resultMethod ? 4096 : MAX_RESPONSE_BYTES);
       if (!tuple(result, 2)) throw Error("invalid_response");
-      if (result[0] === 1 && typeof result[1] === "string" && (denials as readonly string[]).includes(result[1])) {
+      if (result[0] === 1 && typeof result[1] === "string" && ((resultMethod ? resultDenials : denials) as readonly string[]).includes(result[1])) {
         return Object.freeze({ kind: "denied", reason: result[1] as Denial });
       }
       if (result[0] !== 0) throw Error("invalid_response");
@@ -196,4 +211,23 @@ export async function beginProtectedMailInferenceDispatch(options: ProtectedInfe
   admissionId: string): Promise<ProtectedInferenceProcedureResult<ProtectedInferenceDispatch>> {
   if (!hex(admissionId)) return { kind: "denied", reason: "invalid_request" };
   return procedure(options, "begin_protected_mail_inference_dispatch", [admissionId], value => decodeDispatch(value, admissionId));
+}
+
+/** Save a broker declaration only under separate server-checked owner storage
+ * authority. No parents/destination/tag are accepted from the caller. A missing
+ * reply may follow a committed result; no automatic retry occurs. The server
+ * owns the envelope ancestry/hash, so this decoder validates metadata shape,
+ * not provider execution or independent reconstruction of its private parents. */
+export async function acceptProtectedMailInferenceResult(options: ProtectedInferenceProcedureOptions,
+  admissionId: string, eventNonce: string, declaration: unknown): Promise<ProtectedInferenceProcedureResult<ProtectedInferenceAcceptedResult>> {
+  const result = parseInferenceResultDeclaration(declaration);
+  if (!hex(admissionId) || !hex(eventNonce) || !result) return { kind: "denied", reason: "invalid_request" };
+  const args = [admissionId, eventNonce, [result.formatVersion, result.adapter, result.model, result.stopReason, result.outputTokens, result.body]];
+  return procedure(options, "accept_protected_mail_inference_result", args, value => {
+    if (!tuple(value, 4) || value[0] !== admissionId || !tuple(value[1], 3)
+      || typeof value[1][0] !== "string" || !/^mail-derived-source:[a-f0-9]{64}$/.test(value[1][0])
+      || value[1][1] !== 1 || !hex(value[1][2]) || !hex(value[2]) || !safe(value[3], 1, 262144)) return;
+    return Object.freeze({ admissionId, source: Object.freeze({ id: value[1][0], revision: "1", digest: value[1][2] }),
+      envelopeDigest: value[2], envelopeBytes: value[3] });
+  });
 }

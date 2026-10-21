@@ -1385,6 +1385,43 @@ fn bound_admission(
     admission_matches(ctx, &grant, &run, &admission)?;
     Ok((grant, run, admission))
 }
+
+/// Result-storage authority is a separate owner action. These internal
+/// adapters expose validated metadata, never a body or a new disclosure path.
+pub(super) fn owner_result_context(ctx: &ReducerContext, id: &str)
+    -> Result<(ProtectedMailInferenceGrant,ProtectedMailInferenceRun,ProtectedMailInferenceAdmission),String> {
+    if !human(ctx,ctx.sender()) { return Err(OWNER.into()); }
+    let admission=ctx.db.protected_mail_inference_admission().id().find(id.to_owned())
+        .filter(|row| row.owner == ctx.sender()).ok_or(OWNER)?;
+    let grant=checked_grant(ctx,ctx.db.protected_mail_inference_grant().id().find(admission.grant_id.clone()).ok_or(INCONSISTENT)?)?;
+    let run=checked_run(ctx,&grant,&admission.run_id)?;
+    admission_matches(ctx,&grant,&run,&admission)?;
+    Ok((grant,run,admission))
+}
+pub(super) fn broker_result_context(ctx: &ReducerContext, id: &str)
+    -> Result<(ProtectedMailInferenceGrant,ProtectedMailInferenceRun,ProtectedMailInferenceAdmission),String> {
+    bound_admission(ctx,id)
+}
+pub(super) fn result_state(ctx: &ReducerContext, admission: &ProtectedMailInferenceAdmission)
+    -> Result<ProtectedMailInferenceState,String> { checked_state(ctx,admission) }
+pub(super) fn result_event(ctx: &ReducerContext, admission: &ProtectedMailInferenceAdmission, generation: u64)
+    -> Result<ProtectedMailInferenceEvent,String> { checked_event(ctx,admission,generation) }
+pub(super) fn result_nonce_available(ctx: &ReducerContext, id: &str, nonce: &str) -> bool {
+    ctx.db.protected_mail_inference_event().request_event_id().find(lifecycle_request_id(id,nonce)).is_none()
+}
+pub(super) fn current_result_input_bindings(ctx: &ReducerContext, grant: &ProtectedMailInferenceGrant,
+    run: &ProtectedMailInferenceRun, admission: &ProtectedMailInferenceAdmission)
+    -> Result<Vec<ProtectedMailSourceGeneration>,String> {
+    active(ctx,grant)?;
+    let data=materialize(ctx,grant,&admission.mail_source,true)?;
+    let digest=hex::encode(Sha256::digest(&data.bytes));
+    if digest != admission.payload_digest || data.bytes.len() as u64 != admission.input_bytes
+        || operation_fingerprint(ctx.identity(),grant.owner,grant.collection_id,grant.connection_epoch,&grant.runtime_id,&run.run_id,
+            run.parent_run_id.as_deref(),&data.processor,admission.input_bytes,admission.output_tokens,&digest)? != admission.operation_fingerprint {
+        return Err(INCONSISTENT.into());
+    }
+    Ok(data.bindings)
+}
 fn insert_event(
     ctx: &ReducerContext,
     admission_id: &str,

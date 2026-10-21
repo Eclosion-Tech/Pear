@@ -169,6 +169,8 @@ also runs the fresh fixture against the exact release WASM.
 
 [Fixed inference admission](PROTECTED_MAIL_INFERENCE.md) adds a separate
 processing grant and one-use payload claim with current dispatch-time checks.
+[Restricted result acceptance](PROTECTED_MAIL_RESULTS.md) adds explicit owner
+storage authorization for a bounded private stage, without automatic promotion.
 Provider execution, isolated credentials, authenticated broker RPC and host
 egress controls remain later gates. Preserve spent/unknown outcomes rather than retrying a remote
 effect by resetting a local receipt. Trusted owner UI, complete real exposure

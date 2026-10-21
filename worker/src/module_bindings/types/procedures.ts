@@ -6,9 +6,12 @@
 import { type Infer as __Infer } from "spacetimedb";
 
 // Import all procedure arg schemas
+import * as AcceptProtectedMailInferenceResultProcedure from "../accept_protected_mail_inference_result_procedure";
 import * as AdmitProtectedMailInferenceProcedure from "../admit_protected_mail_inference_procedure";
 import * as BeginProtectedMailInferenceDispatchProcedure from "../begin_protected_mail_inference_dispatch_procedure";
 
+export type AcceptProtectedMailInferenceResultArgs = __Infer<typeof AcceptProtectedMailInferenceResultProcedure.params>;
+export type AcceptProtectedMailInferenceResultResult = __Infer<typeof AcceptProtectedMailInferenceResultProcedure.returnType>;
 export type AdmitProtectedMailInferenceArgs = __Infer<typeof AdmitProtectedMailInferenceProcedure.params>;
 export type AdmitProtectedMailInferenceResult = __Infer<typeof AdmitProtectedMailInferenceProcedure.returnType>;
 export type BeginProtectedMailInferenceDispatchArgs = __Infer<typeof BeginProtectedMailInferenceDispatchProcedure.params>;
