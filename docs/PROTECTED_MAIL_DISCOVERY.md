@@ -155,3 +155,10 @@ earlier regressions, eight-checkpoint seed and resume passed 8/9/145/97/8 stages
 The restart retained all53 private tables and owner histories. Eleven private-log
 guard cases passed. All data, credentials, certificates and network peers were
 synthetic; no real mailbox or provider was contacted.
+
+
+The later [sparse checkpoint contract](PROTECTED_MAIL_SPARSE_CHECKPOINT.md)
+adds separate owner approval over a nonempty recorded observation and complete
+already-stored present records. It uses a dedicated third history family under
+the same cursor, preserving this contract's scope and exact historical retries.
+It does not authorize new body reads, ingestion or permanent absence tombstones.

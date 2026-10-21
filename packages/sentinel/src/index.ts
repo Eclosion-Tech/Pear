@@ -17,3 +17,5 @@ export { canonicalMailIngestionPayload, parseMailIngestionEntries, prepareMailIn
 export type { ProtectedMailPreparedMessage, MailIngestionHeldReason, MailIngestionEntry, MailIngestionPayloadV1, FrozenMailIngestion, MailIngestionPreparation } from "./ingestion.js";
 export { canonicalConnectorDiscovery, prepareConnectorDiscovery, parseMailDiscoveryObservation } from "./discovery.js";
 export type { ConnectorDiscoveryV1, MailDiscoveryObservation, FrozenConnectorDiscovery, ConnectorDiscoveryPreparation } from "./discovery.js";
+export { canonicalConnectorSparseCheckpoint, prepareConnectorSparseCheckpoint } from "./sparse-checkpoint.js";
+export type { ConnectorSparseCheckpointV1, FrozenConnectorSparseCheckpoint, ConnectorSparseCheckpointPreparation } from "./sparse-checkpoint.js";

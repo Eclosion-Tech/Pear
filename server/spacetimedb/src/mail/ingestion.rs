@@ -760,7 +760,8 @@ fn checked_receipt_local(
         .expected_cursor_generation
         .checked_add(1)
         .ok_or(INCONSISTENT)?;
-    if connector::cursor_generation_exists(ctx, &cid, generation) {
+    if connector::cursor_generation_exists(ctx, &cid, generation)
+        || super::sparse_checkpoint::cursor_generation_present(ctx, &cid, generation) {
         return Err(INCONSISTENT.into());
     }
     let history = ctx
@@ -1050,6 +1051,7 @@ fn accept(
         .find(hid.clone())
         .is_some()
         || connector::cursor_generation_exists(ctx, &cursor.id, generation)
+        || super::sparse_checkpoint::cursor_generation_present(ctx, &cursor.id, generation)
     {
         return Err(INCONSISTENT.into());
     }

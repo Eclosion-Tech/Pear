@@ -2,13 +2,13 @@
 
 **Updated:** 2026-10-21
 
-**Status:** S0 through S2b2c4 are merged. This branch adds
-[bounded metadata-only discovery](PROTECTED_MAIL_DISCOVERY.md): separate owner
-permission, a one-use metadata executor, atomic private observations and retained
-UID continuity. Discovery does not fetch bodies or advance the inbox cursor.
-MIME sanitization/body adaptation, sparse disposition, recurring workflow,
-isolated credentials, trusted UI and host controls remain gates.
-Protected monitoring stays disabled.
+**Status:** S0 through S2b2c5 are merged. This branch adds
+[sparse checkpoints over already-stored mail](PROTECTED_MAIL_SPARSE_CHECKPOINT.md):
+separate exact owner approval, recorded observation/source binding and atomic
+progress across verified messages and observed gaps. It adds no body read or
+import authority. Observation-bound sparse reads/ingestion, MIME sanitization,
+recurring workflow, isolated credentials, trusted UI and host controls remain
+gates. Protected monitoring stays disabled.
 
 Sentinel will enforce authority and disclosure rules outside the model. Email,
 webpages, workspace content, tool output, and derived summaries cannot grant
@@ -375,3 +375,14 @@ create no baseline, grant no downstream authority and never advance that cursor.
 Lost claim/report replies do not retry a mailbox session or expose local UID
 metadata. All 47 earlier private schemas and contiguous selection/ingestion
 contracts retain their scope; monitoring stays disabled.
+
+
+## Sparse checkpoints over stored records
+
+The [sparse checkpoint contract](PROTECTED_MAIL_SPARSE_CHECKPOINT.md) binds one
+successful nonempty discovery range to complete already-stored present records
+and an exact owner decision over its observed gaps. One atomic receipt/history/
+cursor commit joins the two existing cursor families. Fresh absence checks do
+not become permanent tombstones: later independently authorized staging cannot
+invalidate historical replay. Four private tables preserve all 53 earlier
+schemas. It supplies no read/import/processing grant or recurring activation.

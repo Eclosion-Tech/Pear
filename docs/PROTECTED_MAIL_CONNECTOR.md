@@ -168,3 +168,10 @@ adds separate owner-approved storage/disposition authority and an atomic cursor
 commit. It does not repurpose this contract's read/ACK authority, connect raw
 MIME to a sink, or permit missing/incomplete UID skips. Production MIME
 sanitization, discovery, workflow and host gates remain.
+
+
+The later [sparse checkpoint contract](PROTECTED_MAIL_SPARSE_CHECKPOINT.md)
+adds separate owner approval over a nonempty recorded observation and complete
+already-stored present records. It uses a dedicated third history family under
+the same cursor, preserving this contract's scope and exact historical retries.
+It does not authorize new body reads, ingestion or permanent absence tombstones.

@@ -114,3 +114,9 @@ closed canonical metadata-plan codec and observation-declaration parser. Prepari
 these bytes authenticates no owner or mailbox and supplies no dispatch, body-read,
 absence-skip or cursor authority. Current authority is enforced separately by the
 private discovery service; monitoring remains disabled.
+
+
+The [sparse checkpoint codec](../../docs/PROTECTED_MAIL_SPARSE_CHECKPOINT.md)
+binds an observed range, complete stored source references and byte costs to
+closed metadata. It supplies no body-read, ingestion or processing permission;
+current owner authority and atomic cursor progress remain server-enforced.
