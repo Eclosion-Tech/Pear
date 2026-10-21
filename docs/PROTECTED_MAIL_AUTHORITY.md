@@ -138,9 +138,15 @@ remove owned data and anonymous volumes and surface cleanup failures. Without
 the flag, normal fixtures attempt database DELETE after draining; that mode is
 not the disk-backed lifecycle being certified here.
 
-Cloud PR CI builds pinned pre-S1a, S1a, S1b, S1c, S2a and current modules independently,
-rejects current/baseline identity, runs all four mail harnesses and restarts its
-disposable disk-backed Docker server for the seed/resume check. The release
-also runs fresh authority conformance against its exact release WASM. A clean
-restart establishes this persistence check; it does not establish crash-safe
-admission, external exactly-once delivery or host containment.
+Cloud PR CI builds pinned historical and current modules independently, rejects
+current/baseline identity, runs the protected-mail harnesses and restarts the
+same disposable disk-backed server for retained recovery checkpoints. The
+release also runs fresh conformance against its exact release WASM. A clean
+restart establishes persistence, not external exactly-once delivery or host
+containment.
+
+The [connector checkpoint slice](PROTECTED_MAIL_CONNECTOR.md) uses current
+paused authority and exact owner selections to acknowledge already-stored mail.
+It supplies no authority for earlier reads/imports and does not change the
+legacy enable, lease or cursor fences. Admitted ingestion and trusted workflow
+activation remain later contracts.

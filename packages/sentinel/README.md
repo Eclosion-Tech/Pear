@@ -79,6 +79,12 @@ its parents from retained admission state and independently checks authority,
 limits and current restrictions. The portable helper creates no S0 operation
 or permit, and reported model/token metadata are not provider attestations.
 
+`canonicalConnectorSelection` and `prepareConnectorSelection` define the exact
+body-free [connector selection commitment](../../docs/PROTECTED_MAIL_CONNECTOR.md),
+including module identity, current connection binding and contiguous cursor
+window. They preserve full u64 decimal strings and freeze bytes before hashing.
+They create no S0 operation, IMAP command, grant or read/import authority.
+
 No production mail runtime imports this package yet. It does not change existing
 mail or assistant permissions. Public research and arbitrary tools remain
 outside this contract. See [the implementation status](../../docs/SENTINEL.md).

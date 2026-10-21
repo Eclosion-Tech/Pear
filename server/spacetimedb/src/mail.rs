@@ -6,6 +6,7 @@ use spacetimedb::{client_visibility_filter, reducer, table, Filter, Identity, Re
 mod accounts;
 mod admission;
 mod authority;
+mod connector;
 mod governance;
 mod inference;
 mod instructions;

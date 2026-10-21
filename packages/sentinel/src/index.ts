@@ -9,3 +9,5 @@ export { MAIL_INFERENCE_TRANSPORT_V1, canonicalInferencePayload, prepareMailInfe
 export type { MailInferenceMessageV1, FixedMailInferenceInputV1, MailInferenceBinding, FrozenMailInference, InferencePreparation } from "./inference.js";
 export { canonicalInferenceResultPayload, prepareInferenceResult, parseInferenceResultDeclaration } from "./result.js";
 export type { InferenceResultDeclarationV1, InferenceResultBinding, InferenceResultPayloadV1, FrozenInferenceResult, InferenceResultPreparation } from "./result.js";
+export { canonicalConnectorSelection, prepareConnectorSelection } from "./connector.js";
+export type { ConnectorSelectionV1, FrozenConnectorSelection, ConnectorSelectionPreparation } from "./connector.js";

@@ -1590,6 +1590,174 @@ export const ProtectedMailConnectionAuthorityHistory = __t.object("ProtectedMail
 });
 export type ProtectedMailConnectionAuthorityHistory = __Infer<typeof ProtectedMailConnectionAuthorityHistory>;
 
+export const ProtectedMailConnectorAck = __t.object("ProtectedMailConnectorAck", {
+  selectionId: __t.string(),
+  cursorId: __t.string(),
+  cursorGeneration: __t.u64(),
+  uidValidity: __t.string(),
+  lastUid: __t.u32(),
+  acknowledgedMessages: __t.u32(),
+  acknowledgedBytes: __t.u64(),
+  receiptDigest: __t.string(),
+});
+export type ProtectedMailConnectorAck = __Infer<typeof ProtectedMailConnectorAck>;
+
+export const ProtectedMailConnectorAckReceipt = __t.object("ProtectedMailConnectorAckReceipt", {
+  selectionId: __t.string(),
+  eventNonce: __t.string(),
+  requestDigest: __t.string(),
+  get sources() {
+    return __t.array(ProtectedMailSourceRef);
+  },
+  cursorId: __t.string(),
+  cursorGeneration: __t.u64(),
+  historyId: __t.string(),
+  cursorDigest: __t.string(),
+  uidValidity: __t.string(),
+  lastUid: __t.u32(),
+  acknowledgedMessages: __t.u32(),
+  acknowledgedBytes: __t.u64(),
+  digest: __t.string(),
+  actor: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailConnectorAckReceipt = __Infer<typeof ProtectedMailConnectorAckReceipt>;
+
+export const ProtectedMailConnectorCursor = __t.object("ProtectedMailConnectorCursor", {
+  id: __t.string(),
+  owner: __t.identity(),
+  collectionId: __t.u64(),
+  folder: __t.string(),
+  uidValidity: __t.string(),
+  generation: __t.u64(),
+  lastUid: __t.u32(),
+  digest: __t.string(),
+  historyId: __t.string(),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+});
+export type ProtectedMailConnectorCursor = __Infer<typeof ProtectedMailConnectorCursor>;
+
+export const ProtectedMailConnectorCursorHistory = __t.object("ProtectedMailConnectorCursorHistory", {
+  id: __t.string(),
+  cursorId: __t.string(),
+  owner: __t.identity(),
+  collectionId: __t.u64(),
+  folder: __t.string(),
+  uidValidity: __t.string(),
+  generation: __t.u64(),
+  lastUid: __t.u32(),
+  previousDigest: __t.string(),
+  selectionId: __t.string(),
+  requestDigest: __t.string(),
+  acknowledgedMessages: __t.u32(),
+  acknowledgedBytes: __t.u64(),
+  digest: __t.string(),
+  actor: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailConnectorCursorHistory = __Infer<typeof ProtectedMailConnectorCursorHistory>;
+
+export const ProtectedMailConnectorNewOnly = __t.object("ProtectedMailConnectorNewOnly", {
+  uidValidity: __t.string(),
+  uidNext: __t.u32(),
+});
+export type ProtectedMailConnectorNewOnly = __Infer<typeof ProtectedMailConnectorNewOnly>;
+
+export const ProtectedMailConnectorPreview = __t.object("ProtectedMailConnectorPreview", {
+  selectionId: __t.string(),
+  connectionEpoch: __t.u64(),
+  snapshotDigest: __t.string(),
+  manifestDigest: __t.string(),
+  manifestBytes: __t.u64(),
+  canonical: __t.string(),
+});
+export type ProtectedMailConnectorPreview = __Infer<typeof ProtectedMailConnectorPreview>;
+
+export const ProtectedMailConnectorSelection = __t.object("ProtectedMailConnectorSelection", {
+  id: __t.string(),
+  owner: __t.identity(),
+  workspace: __t.identity(),
+  get request() {
+    return ProtectedMailConnectorSelectionRequest;
+  },
+  connectionEpoch: __t.u64(),
+  snapshotDigest: __t.string(),
+  host: __t.string(),
+  port: __t.u16(),
+  username: __t.string(),
+  folder: __t.string(),
+  expectedCursorGeneration: __t.u64(),
+  previousCursorDigest: __t.string(),
+  fromUid: __t.u32(),
+  throughUid: __t.u32(),
+  uids: __t.array(__t.u32()),
+  maxAcknowledgedBytes: __t.u64(),
+  manifestDigest: __t.string(),
+  manifestBytes: __t.u64(),
+  canonical: __t.string(),
+  issueDigest: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailConnectorSelection = __Infer<typeof ProtectedMailConnectorSelection>;
+
+export const ProtectedMailConnectorSelectionEvent = __t.object("ProtectedMailConnectorSelectionEvent", {
+  id: __t.string(),
+  selectionId: __t.string(),
+  generation: __t.u64(),
+  get kind() {
+    return ProtectedMailConnectorSelectionEventKind;
+  },
+  eventNonce: __t.string(),
+  requestDigest: __t.string(),
+  actor: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailConnectorSelectionEvent = __Infer<typeof ProtectedMailConnectorSelectionEvent>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailConnectorSelectionEventKind`.
+export const ProtectedMailConnectorSelectionEventKind = __t.enum("ProtectedMailConnectorSelectionEventKind", {
+  Issued: __t.unit(),
+  Revoked: __t.unit(),
+});
+export type ProtectedMailConnectorSelectionEventKind = __Infer<typeof ProtectedMailConnectorSelectionEventKind>;
+
+export const ProtectedMailConnectorSelectionRequest = __t.object("ProtectedMailConnectorSelectionRequest", {
+  connectionId: __t.u64(),
+  connectorIdentity: __t.identity(),
+  runtimeId: __t.string(),
+  runId: __t.string(),
+  get direction() {
+    return ProtectedMailDirection;
+  },
+  get window() {
+    return ProtectedMailConnectorWindow;
+  },
+  notBeforeMs: __t.u64(),
+  expiresAtMs: __t.u64(),
+  eventNonce: __t.string(),
+});
+export type ProtectedMailConnectorSelectionRequest = __Infer<typeof ProtectedMailConnectorSelectionRequest>;
+
+export const ProtectedMailConnectorStoredBatch = __t.object("ProtectedMailConnectorStoredBatch", {
+  uidValidity: __t.string(),
+  expectedCursorGeneration: __t.u64(),
+  messageCount: __t.u32(),
+  maxAcknowledgedBytes: __t.u64(),
+});
+export type ProtectedMailConnectorStoredBatch = __Infer<typeof ProtectedMailConnectorStoredBatch>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailConnectorWindow`.
+export const ProtectedMailConnectorWindow = __t.enum("ProtectedMailConnectorWindow", {
+  get NewOnly() {
+    return ProtectedMailConnectorNewOnly;
+  },
+  get StoredBatch() {
+    return ProtectedMailConnectorStoredBatch;
+  },
+});
+export type ProtectedMailConnectorWindow = __Infer<typeof ProtectedMailConnectorWindow>;
+
 export const ProtectedMailContext = __t.object("ProtectedMailContext", {
   id: __t.string(),
   owner: __t.identity(),

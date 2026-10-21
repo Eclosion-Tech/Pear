@@ -141,10 +141,14 @@ source bytes and both limits unchanged across an owned disk-backed restart
 without republishing. Protected backup/restore must eventually retain all
 these ledgers and invalidate restored authority before real-mail use.
 
-Connector selection/cursor authority, trusted owner UI/recipe, sanitization
+Admitted connector reads/new ingestion, trusted owner UI/recipe, sanitization
 and held-message behavior, isolated credential/transport services and protected
 backup/restore remain prerequisites for a canary. Ordinary assistants still
 receive no protected mail through this work.
+
+The [checkpoint contract](PROTECTED_MAIL_CONNECTOR.md) separately acknowledges
+already-stored S1 mail. It cannot issue processing/result grants or authorize
+the preceding read/import.
 
 ## Validation
 
