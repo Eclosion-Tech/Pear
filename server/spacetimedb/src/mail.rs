@@ -9,6 +9,7 @@ mod authority;
 mod connector;
 mod governance;
 mod inference;
+mod ingestion;
 mod instructions;
 mod processors;
 mod protected;

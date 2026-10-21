@@ -7,15 +7,19 @@ import { type Infer as __Infer } from "spacetimedb";
 
 // Import all procedure arg schemas
 import * as AcceptProtectedMailInferenceResultProcedure from "../accept_protected_mail_inference_result_procedure";
+import * as AcceptProtectedMailIngestionProcedure from "../accept_protected_mail_ingestion_procedure";
 import * as AcknowledgeProtectedMailConnectorSelectionProcedure from "../acknowledge_protected_mail_connector_selection_procedure";
 import * as AdmitProtectedMailInferenceProcedure from "../admit_protected_mail_inference_procedure";
 import * as BeginProtectedMailInferenceDispatchProcedure from "../begin_protected_mail_inference_dispatch_procedure";
 import * as BeginProtectedMailReadDispatchProcedure from "../begin_protected_mail_read_dispatch_procedure";
 import * as ReviewProtectedMailConnectorSelectionProcedure from "../review_protected_mail_connector_selection_procedure";
+import * as ReviewProtectedMailIngestionProcedure from "../review_protected_mail_ingestion_procedure";
 import * as ReviewProtectedMailReadGrantProcedure from "../review_protected_mail_read_grant_procedure";
 
 export type AcceptProtectedMailInferenceResultArgs = __Infer<typeof AcceptProtectedMailInferenceResultProcedure.params>;
 export type AcceptProtectedMailInferenceResultResult = __Infer<typeof AcceptProtectedMailInferenceResultProcedure.returnType>;
+export type AcceptProtectedMailIngestionArgs = __Infer<typeof AcceptProtectedMailIngestionProcedure.params>;
+export type AcceptProtectedMailIngestionResult = __Infer<typeof AcceptProtectedMailIngestionProcedure.returnType>;
 export type AcknowledgeProtectedMailConnectorSelectionArgs = __Infer<typeof AcknowledgeProtectedMailConnectorSelectionProcedure.params>;
 export type AcknowledgeProtectedMailConnectorSelectionResult = __Infer<typeof AcknowledgeProtectedMailConnectorSelectionProcedure.returnType>;
 export type AdmitProtectedMailInferenceArgs = __Infer<typeof AdmitProtectedMailInferenceProcedure.params>;
@@ -26,6 +30,8 @@ export type BeginProtectedMailReadDispatchArgs = __Infer<typeof BeginProtectedMa
 export type BeginProtectedMailReadDispatchResult = __Infer<typeof BeginProtectedMailReadDispatchProcedure.returnType>;
 export type ReviewProtectedMailConnectorSelectionArgs = __Infer<typeof ReviewProtectedMailConnectorSelectionProcedure.params>;
 export type ReviewProtectedMailConnectorSelectionResult = __Infer<typeof ReviewProtectedMailConnectorSelectionProcedure.returnType>;
+export type ReviewProtectedMailIngestionArgs = __Infer<typeof ReviewProtectedMailIngestionProcedure.params>;
+export type ReviewProtectedMailIngestionResult = __Infer<typeof ReviewProtectedMailIngestionProcedure.returnType>;
 export type ReviewProtectedMailReadGrantArgs = __Infer<typeof ReviewProtectedMailReadGrantProcedure.params>;
 export type ReviewProtectedMailReadGrantResult = __Infer<typeof ReviewProtectedMailReadGrantProcedure.returnType>;
 

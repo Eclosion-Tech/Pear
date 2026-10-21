@@ -184,7 +184,7 @@ fn direction(value: &ProtectedMailDirection) -> &'static str {
         ProtectedMailDirection::Sent => "sent",
     }
 }
-fn validity(window: &ProtectedMailConnectorWindow) -> &str {
+pub(super) fn validity(window: &ProtectedMailConnectorWindow) -> &str {
     match window {
         ProtectedMailConnectorWindow::NewOnly(ProtectedMailConnectorNewOnly {
             uid_validity,
@@ -262,7 +262,7 @@ fn selection_id(owner: Identity, connection: u64, nonce: &str) -> String {
         ],
     )
 }
-fn cursor_id(workspace: Identity, collection: u64, folder: &str) -> String {
+pub(super) fn cursor_id(workspace: Identity, collection: u64, folder: &str) -> String {
     format!(
         "mail-connector-cursor:{}",
         hash(
@@ -466,6 +466,27 @@ fn checked_selection(
     }
     Ok(row)
 }
+pub(super) fn retained_selection(
+    ctx: &ReducerContext,
+    id: &str,
+) -> Result<ProtectedMailConnectorSelection, String> {
+    checked_selection(
+        ctx,
+        ctx.db
+            .protected_mail_connector_selection()
+            .id()
+            .find(id.to_owned())
+            .ok_or(INCONSISTENT)?,
+    )
+}
+pub(super) fn cursor_generation_exists(ctx: &ReducerContext, id: &str, generation: u64) -> bool {
+    ctx.db
+        .protected_mail_connector_cursor_history()
+        .id()
+        .find(history_id(id, generation))
+        .is_some()
+}
+
 fn owner_connection(ctx: &ReducerContext, id: u64) -> Result<MailConnection, String> {
     if !human(ctx, ctx.sender()) {
         return Err(OWNER.into());
@@ -596,7 +617,7 @@ fn selected_sources(
     }
     Ok(bytes)
 }
-fn checked_receipt(
+fn checked_receipt_local(
     ctx: &ReducerContext,
     selection: &ProtectedMailConnectorSelection,
     receipt: ProtectedMailConnectorAckReceipt,
@@ -649,31 +670,121 @@ fn checked_receipt(
     {
         return Err(INCONSISTENT.into());
     }
-    if generation > 1 {
-        let previous = ctx
-            .db
-            .protected_mail_connector_cursor_history()
-            .id()
-            .find(history_id(&cursor, generation - 1))
-            .ok_or(INCONSISTENT)?;
-        if previous.cursor_id != cursor
-            || previous.owner != selection.owner
-            || previous.collection_id != selection.request.connection_id
-            || previous.folder != selection.folder
-            || previous.uid_validity != receipt.uid_validity
-            || previous.generation != generation - 1
-            || previous.digest != selection.previous_cursor_digest
-            || previous.digest != history_digest(&previous)
-            || previous.last_uid.checked_add(1) != Some(selection.from_uid)
-        {
-            return Err(INCONSISTENT.into());
-        }
-    } else if !history.previous_digest.is_empty() {
-        return Err(INCONSISTENT.into());
-    }
     Ok(receipt)
 }
-fn checked_cursor(
+
+/// Closed read-only cursor association across the two immutable commit families.
+/// Descriptor validation is local, with only one explicit predecessor check.
+pub(super) struct CursorDescriptor {
+    pub history_id: String,
+    pub cursor_id: String,
+    pub owner: Identity,
+    pub collection_id: u64,
+    pub folder: String,
+    pub uid_validity: String,
+    pub generation: u64,
+    pub from_uid: u32,
+    pub last_uid: u32,
+    pub digest: String,
+    pub previous_digest: String,
+    pub created_at: Timestamp,
+}
+pub(super) fn checked_cursor_descriptor(
+    ctx: &ReducerContext,
+    cursor: &str,
+    generation: u64,
+) -> Result<CursorDescriptor, String> {
+    let old = ctx
+        .db
+        .protected_mail_connector_cursor_history()
+        .id()
+        .find(history_id(cursor, generation));
+    let new = super::ingestion::retained_cursor_descriptor(ctx, cursor, generation)?;
+    match (old, new) {
+        (Some(history), None) => {
+            let selection = checked_selection(
+                ctx,
+                ctx.db
+                    .protected_mail_connector_selection()
+                    .id()
+                    .find(history.selection_id.clone())
+                    .ok_or(INCONSISTENT)?,
+            )?;
+            let receipt = checked_receipt_local(
+                ctx,
+                &selection,
+                ctx.db
+                    .protected_mail_connector_ack_receipt()
+                    .selection_id()
+                    .find(selection.id.clone())
+                    .ok_or(INCONSISTENT)?,
+            )?;
+            if receipt.history_id != history.id
+                || history.cursor_id != cursor
+                || history.generation != generation
+            {
+                return Err(INCONSISTENT.into());
+            }
+            Ok(CursorDescriptor {
+                history_id: history.id,
+                cursor_id: history.cursor_id,
+                owner: history.owner,
+                collection_id: history.collection_id,
+                folder: history.folder,
+                uid_validity: history.uid_validity,
+                generation,
+                from_uid: selection.from_uid,
+                last_uid: history.last_uid,
+                digest: history.digest,
+                previous_digest: history.previous_digest,
+                created_at: history.created_at,
+            })
+        }
+        (None, Some(descriptor)) => Ok(descriptor),
+        _ => Err(INCONSISTENT.into()),
+    }
+}
+pub(super) fn validate_cursor_predecessor(
+    ctx: &ReducerContext,
+    row: &CursorDescriptor,
+) -> Result<(), String> {
+    if row.generation == 1 {
+        if !row.previous_digest.is_empty() || row.from_uid != 0 {
+            return Err(INCONSISTENT.into());
+        }
+        return Ok(());
+    }
+    let previous = checked_cursor_descriptor(
+        ctx,
+        &row.cursor_id,
+        row.generation.checked_sub(1).ok_or(INCONSISTENT)?,
+    )?;
+    if previous.owner != row.owner
+        || previous.collection_id != row.collection_id
+        || previous.folder != row.folder
+        || previous.uid_validity != row.uid_validity
+        || previous.digest != row.previous_digest
+        || previous.last_uid.checked_add(1) != Some(row.from_uid)
+        || previous.created_at > row.created_at
+    {
+        return Err(INCONSISTENT.into());
+    }
+    Ok(())
+}
+fn checked_receipt(
+    ctx: &ReducerContext,
+    selection: &ProtectedMailConnectorSelection,
+    receipt: ProtectedMailConnectorAckReceipt,
+) -> Result<ProtectedMailConnectorAckReceipt, String> {
+    let receipt = checked_receipt_local(ctx, selection, receipt)?;
+    let descriptor = checked_cursor_descriptor(ctx, &receipt.cursor_id, receipt.cursor_generation)?;
+    if descriptor.history_id != receipt.history_id || descriptor.digest != receipt.cursor_digest {
+        return Err(INCONSISTENT.into());
+    }
+    validate_cursor_predecessor(ctx, &descriptor)?;
+    Ok(receipt)
+}
+pub(super) fn checked_cursor(
     ctx: &ReducerContext,
     id: &str,
 ) -> Result<Option<ProtectedMailConnectorCursor>, String> {
@@ -685,58 +796,33 @@ fn checked_cursor(
     else {
         return Ok(None);
     };
-    let history = ctx
-        .db
-        .protected_mail_connector_cursor_history()
-        .id()
-        .find(row.history_id.clone())
-        .ok_or(INCONSISTENT)?;
-    let selection = checked_selection(
-        ctx,
-        ctx.db
-            .protected_mail_connector_selection()
-            .id()
-            .find(history.selection_id.clone())
-            .ok_or(INCONSISTENT)?,
-    )?;
-    let receipt = checked_receipt(
-        ctx,
-        &selection,
-        ctx.db
-            .protected_mail_connector_ack_receipt()
-            .selection_id()
-            .find(selection.id.clone())
-            .ok_or(INCONSISTENT)?,
-    )?;
+    let descriptor = checked_cursor_descriptor(ctx, id, row.generation)?;
     if row.id != cursor_id(ctx.identity(), row.collection_id, &row.folder)
-        || row.id != receipt.cursor_id
-        || row.owner != selection.owner
-        || row.collection_id != selection.request.connection_id
-        || row.folder != selection.folder
-        || row.uid_validity != receipt.uid_validity
-        || row.generation != receipt.cursor_generation
-        || row.last_uid != receipt.last_uid
-        || row.digest != receipt.cursor_digest
-        || row.history_id != receipt.history_id
-        || row.updated_at != receipt.created_at
+        || row.history_id != descriptor.history_id
+        || row.owner != descriptor.owner
+        || row.collection_id != descriptor.collection_id
+        || row.folder != descriptor.folder
+        || row.uid_validity != descriptor.uid_validity
+        || row.last_uid != descriptor.last_uid
+        || row.digest != descriptor.digest
+        || row.updated_at != descriptor.created_at
         || row.created_at > row.updated_at
     {
         return Err(INCONSISTENT.into());
     }
-    let initial = ctx
-        .db
-        .protected_mail_connector_cursor_history()
-        .id()
-        .find(history_id(&row.id, 1))
-        .ok_or(INCONSISTENT)?;
+    validate_cursor_predecessor(ctx, &descriptor)?;
+    let initial = checked_cursor_descriptor(ctx, id, 1)?;
     if initial.created_at != row.created_at
-        || initial.generation != 1
-        || initial.digest != history_digest(&initial)
+        || initial.owner != row.owner
+        || initial.collection_id != row.collection_id
+        || initial.folder != row.folder
+        || initial.uid_validity != row.uid_validity
     {
         return Err(INCONSISTENT.into());
     }
     Ok(Some(row))
 }
+
 fn preview(
     ctx: &ReducerContext,
     request: ProtectedMailConnectorSelectionRequest,
@@ -1044,6 +1130,7 @@ fn acknowledge(
         .id()
         .find(history_id.clone())
         .is_some()
+        || super::ingestion::cursor_generation_present(ctx,&cursor_id,generation)
     {
         return Err(INCONSISTENT.into());
     }

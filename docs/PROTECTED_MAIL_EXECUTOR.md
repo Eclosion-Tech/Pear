@@ -146,3 +146,10 @@ verified against merged c2; no schema, migration or code generation changed.
 All TLS sockets, ephemeral certificates, the owned database, test data, logs
 and generated synthetic JWT keys were removed. The paired Cloud PR records
 the exact-source CI run.
+
+
+The later [exact prepared-text ingestion contract](PROTECTED_MAIL_INGESTION.md)
+adds separate owner-approved storage/disposition authority and an atomic cursor
+commit. It does not broaden read authority or the existing ACK contract, connect raw
+MIME to a sink, or permit missing/incomplete UID skips. Production MIME
+sanitization, discovery, workflow and host gates remain.

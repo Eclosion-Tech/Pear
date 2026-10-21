@@ -100,3 +100,10 @@ adds a closed canonical commitment embedding the exact StoredBatch selection,
 fixed recipe and independent raw-MIME maxima. Preparation verifies the nested
 selection digest and deterministic read ID before returning frozen bytes; it
 authenticates no owner, reserves no budget and grants no execution permission.
+
+
+The [prepared-text ingestion contract](../../docs/PROTECTED_MAIL_INGESTION.md)
+adds a closed full-envelope codec for exact imported/held UID slots.
+`prepareMailIngestion` freezes literal UTF-8 bytes before hashing and verifies
+embedded read commitments. It supplies no sanitization, owner approval,
+mailbox evidence or storage permission; those remain distinct host boundaries.

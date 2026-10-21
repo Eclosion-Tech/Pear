@@ -117,6 +117,7 @@ import InvalidateAiEvaluationsForRowReducer from "../invalidate_ai_evaluations_f
 import InvokeAutomationReducer from "../invoke_automation_reducer";
 import IssueProtectedMailConnectorSelectionReducer from "../issue_protected_mail_connector_selection_reducer";
 import IssueProtectedMailInferenceGrantReducer from "../issue_protected_mail_inference_grant_reducer";
+import IssueProtectedMailIngestionReducer from "../issue_protected_mail_ingestion_reducer";
 import IssueProtectedMailReadGrantReducer from "../issue_protected_mail_read_grant_reducer";
 import IssueProtectedMailResultAuthorizationReducer from "../issue_protected_mail_result_authorization_reducer";
 import IssueProtectedMailSummaryGrantReducer from "../issue_protected_mail_summary_grant_reducer";
@@ -179,6 +180,7 @@ import RevokeBridgeDeviceGrantReducer from "../revoke_bridge_device_grant_reduce
 import RevokeExtensionPermissionReducer from "../revoke_extension_permission_reducer";
 import RevokeProtectedMailConnectorSelectionReducer from "../revoke_protected_mail_connector_selection_reducer";
 import RevokeProtectedMailInferenceGrantReducer from "../revoke_protected_mail_inference_grant_reducer";
+import RevokeProtectedMailIngestionReducer from "../revoke_protected_mail_ingestion_reducer";
 import RevokeProtectedMailInstructionReducer from "../revoke_protected_mail_instruction_reducer";
 import RevokeProtectedMailReadGrantReducer from "../revoke_protected_mail_read_grant_reducer";
 import RevokeProtectedMailResultAuthorizationReducer from "../revoke_protected_mail_result_authorization_reducer";
@@ -374,6 +376,7 @@ export type InvalidateAiEvaluationsForRowParams = __Infer<typeof InvalidateAiEva
 export type InvokeAutomationParams = __Infer<typeof InvokeAutomationReducer>;
 export type IssueProtectedMailConnectorSelectionParams = __Infer<typeof IssueProtectedMailConnectorSelectionReducer>;
 export type IssueProtectedMailInferenceGrantParams = __Infer<typeof IssueProtectedMailInferenceGrantReducer>;
+export type IssueProtectedMailIngestionParams = __Infer<typeof IssueProtectedMailIngestionReducer>;
 export type IssueProtectedMailReadGrantParams = __Infer<typeof IssueProtectedMailReadGrantReducer>;
 export type IssueProtectedMailResultAuthorizationParams = __Infer<typeof IssueProtectedMailResultAuthorizationReducer>;
 export type IssueProtectedMailSummaryGrantParams = __Infer<typeof IssueProtectedMailSummaryGrantReducer>;
@@ -436,6 +439,7 @@ export type RevokeBridgeDeviceGrantParams = __Infer<typeof RevokeBridgeDeviceGra
 export type RevokeExtensionPermissionParams = __Infer<typeof RevokeExtensionPermissionReducer>;
 export type RevokeProtectedMailConnectorSelectionParams = __Infer<typeof RevokeProtectedMailConnectorSelectionReducer>;
 export type RevokeProtectedMailInferenceGrantParams = __Infer<typeof RevokeProtectedMailInferenceGrantReducer>;
+export type RevokeProtectedMailIngestionParams = __Infer<typeof RevokeProtectedMailIngestionReducer>;
 export type RevokeProtectedMailInstructionParams = __Infer<typeof RevokeProtectedMailInstructionReducer>;
 export type RevokeProtectedMailReadGrantParams = __Infer<typeof RevokeProtectedMailReadGrantReducer>;
 export type RevokeProtectedMailResultAuthorizationParams = __Infer<typeof RevokeProtectedMailResultAuthorizationReducer>;

@@ -161,3 +161,10 @@ checkpoint files, logs and JWT keys were removed.
 The later [one-use read-plan contract](PROTECTED_MAIL_READ.md) requires separate
 owner authorization over a StoredBatch selection. A selection alone still
 grants no mailbox read. Plan release adds no new body ingestion or ACK effect.
+
+
+The later [exact prepared-text ingestion contract](PROTECTED_MAIL_INGESTION.md)
+adds separate owner-approved storage/disposition authority and an atomic cursor
+commit. It does not repurpose this contract's read/ACK authority, connect raw
+MIME to a sink, or permit missing/incomplete UID skips. Production MIME
+sanitization, discovery, workflow and host gates remain.

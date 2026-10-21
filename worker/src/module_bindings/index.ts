@@ -145,6 +145,7 @@ import InvalidateAiEvaluationsForRowReducer from "./invalidate_ai_evaluations_fo
 import InvokeAutomationReducer from "./invoke_automation_reducer";
 import IssueProtectedMailConnectorSelectionReducer from "./issue_protected_mail_connector_selection_reducer";
 import IssueProtectedMailInferenceGrantReducer from "./issue_protected_mail_inference_grant_reducer";
+import IssueProtectedMailIngestionReducer from "./issue_protected_mail_ingestion_reducer";
 import IssueProtectedMailReadGrantReducer from "./issue_protected_mail_read_grant_reducer";
 import IssueProtectedMailResultAuthorizationReducer from "./issue_protected_mail_result_authorization_reducer";
 import IssueProtectedMailSummaryGrantReducer from "./issue_protected_mail_summary_grant_reducer";
@@ -207,6 +208,7 @@ import RevokeBridgeDeviceGrantReducer from "./revoke_bridge_device_grant_reducer
 import RevokeExtensionPermissionReducer from "./revoke_extension_permission_reducer";
 import RevokeProtectedMailConnectorSelectionReducer from "./revoke_protected_mail_connector_selection_reducer";
 import RevokeProtectedMailInferenceGrantReducer from "./revoke_protected_mail_inference_grant_reducer";
+import RevokeProtectedMailIngestionReducer from "./revoke_protected_mail_ingestion_reducer";
 import RevokeProtectedMailInstructionReducer from "./revoke_protected_mail_instruction_reducer";
 import RevokeProtectedMailReadGrantReducer from "./revoke_protected_mail_read_grant_reducer";
 import RevokeProtectedMailResultAuthorizationReducer from "./revoke_protected_mail_result_authorization_reducer";
@@ -293,11 +295,13 @@ import ValidateAutomationReducer from "./validate_automation_reducer";
 
 // Import all procedure arg schemas
 import * as AcceptProtectedMailInferenceResultProcedure from "./accept_protected_mail_inference_result_procedure";
+import * as AcceptProtectedMailIngestionProcedure from "./accept_protected_mail_ingestion_procedure";
 import * as AcknowledgeProtectedMailConnectorSelectionProcedure from "./acknowledge_protected_mail_connector_selection_procedure";
 import * as AdmitProtectedMailInferenceProcedure from "./admit_protected_mail_inference_procedure";
 import * as BeginProtectedMailInferenceDispatchProcedure from "./begin_protected_mail_inference_dispatch_procedure";
 import * as BeginProtectedMailReadDispatchProcedure from "./begin_protected_mail_read_dispatch_procedure";
 import * as ReviewProtectedMailConnectorSelectionProcedure from "./review_protected_mail_connector_selection_procedure";
+import * as ReviewProtectedMailIngestionProcedure from "./review_protected_mail_ingestion_procedure";
 import * as ReviewProtectedMailReadGrantProcedure from "./review_protected_mail_read_grant_procedure";
 
 // Import all table schema definitions
@@ -1625,6 +1629,7 @@ const reducersSchema = __reducers(
   __reducerSchema("invoke_automation", InvokeAutomationReducer),
   __reducerSchema("issue_protected_mail_connector_selection", IssueProtectedMailConnectorSelectionReducer),
   __reducerSchema("issue_protected_mail_inference_grant", IssueProtectedMailInferenceGrantReducer),
+  __reducerSchema("issue_protected_mail_ingestion", IssueProtectedMailIngestionReducer),
   __reducerSchema("issue_protected_mail_read_grant", IssueProtectedMailReadGrantReducer),
   __reducerSchema("issue_protected_mail_result_authorization", IssueProtectedMailResultAuthorizationReducer),
   __reducerSchema("issue_protected_mail_summary_grant", IssueProtectedMailSummaryGrantReducer),
@@ -1687,6 +1692,7 @@ const reducersSchema = __reducers(
   __reducerSchema("revoke_extension_permission", RevokeExtensionPermissionReducer),
   __reducerSchema("revoke_protected_mail_connector_selection", RevokeProtectedMailConnectorSelectionReducer),
   __reducerSchema("revoke_protected_mail_inference_grant", RevokeProtectedMailInferenceGrantReducer),
+  __reducerSchema("revoke_protected_mail_ingestion", RevokeProtectedMailIngestionReducer),
   __reducerSchema("revoke_protected_mail_instruction", RevokeProtectedMailInstructionReducer),
   __reducerSchema("revoke_protected_mail_read_grant", RevokeProtectedMailReadGrantReducer),
   __reducerSchema("revoke_protected_mail_result_authorization", RevokeProtectedMailResultAuthorizationReducer),
@@ -1775,11 +1781,13 @@ const reducersSchema = __reducers(
 /** The schema information for all procedures in this module. This is defined the same way as the procedures would have been defined in the server. */
 const proceduresSchema = __procedures(
   __procedureSchema("accept_protected_mail_inference_result", AcceptProtectedMailInferenceResultProcedure.params, AcceptProtectedMailInferenceResultProcedure.returnType),
+  __procedureSchema("accept_protected_mail_ingestion", AcceptProtectedMailIngestionProcedure.params, AcceptProtectedMailIngestionProcedure.returnType),
   __procedureSchema("acknowledge_protected_mail_connector_selection", AcknowledgeProtectedMailConnectorSelectionProcedure.params, AcknowledgeProtectedMailConnectorSelectionProcedure.returnType),
   __procedureSchema("admit_protected_mail_inference", AdmitProtectedMailInferenceProcedure.params, AdmitProtectedMailInferenceProcedure.returnType),
   __procedureSchema("begin_protected_mail_inference_dispatch", BeginProtectedMailInferenceDispatchProcedure.params, BeginProtectedMailInferenceDispatchProcedure.returnType),
   __procedureSchema("begin_protected_mail_read_dispatch", BeginProtectedMailReadDispatchProcedure.params, BeginProtectedMailReadDispatchProcedure.returnType),
   __procedureSchema("review_protected_mail_connector_selection", ReviewProtectedMailConnectorSelectionProcedure.params, ReviewProtectedMailConnectorSelectionProcedure.returnType),
+  __procedureSchema("review_protected_mail_ingestion", ReviewProtectedMailIngestionProcedure.params, ReviewProtectedMailIngestionProcedure.returnType),
   __procedureSchema("review_protected_mail_read_grant", ReviewProtectedMailReadGrantProcedure.params, ReviewProtectedMailReadGrantProcedure.returnType),
 );
 

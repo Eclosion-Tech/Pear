@@ -149,3 +149,10 @@ Connector read fresh/upgrade/seed/resume passed 10/11/11/1 stages. All 15 earlie
 The later [dormant executor](PROTECTED_MAIL_EXECUTOR.md) tests this fixed wire
 profile against synthetic TLS servers. Its installation schedules no existing
 pending grant and supplies no production credential or workflow activation.
+
+
+The later [exact prepared-text ingestion contract](PROTECTED_MAIL_INGESTION.md)
+adds separate owner-approved storage/disposition authority and an atomic cursor
+commit. It does not repurpose this contract's read/ACK authority, connect raw
+MIME to a sink, or permit missing/incomplete UID skips. Production MIME
+sanitization, discovery, workflow and host gates remain.

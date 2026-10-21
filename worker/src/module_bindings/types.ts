@@ -1821,6 +1821,22 @@ export const ProtectedMailExposure = __t.object("ProtectedMailExposure", {
 });
 export type ProtectedMailExposure = __Infer<typeof ProtectedMailExposure>;
 
+export const ProtectedMailHeldInput = __t.object("ProtectedMailHeldInput", {
+  uid: __t.u32(),
+  get reason() {
+    return ProtectedMailHeldReason;
+  },
+});
+export type ProtectedMailHeldInput = __Infer<typeof ProtectedMailHeldInput>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailHeldReason`.
+export const ProtectedMailHeldReason = __t.enum("ProtectedMailHeldReason", {
+  AuthenticationMaterial: __t.unit(),
+  SensitiveContent: __t.unit(),
+  UnsupportedContent: __t.unit(),
+});
+export type ProtectedMailHeldReason = __Infer<typeof ProtectedMailHeldReason>;
+
 export const ProtectedMailInferenceAdmission = __t.object("ProtectedMailInferenceAdmission", {
   id: __t.string(),
   eventId: __t.string(),
@@ -2026,6 +2042,167 @@ export const ProtectedMailInferenceTextResult = __t.object("ProtectedMailInferen
   body: __t.string(),
 });
 export type ProtectedMailInferenceTextResult = __Infer<typeof ProtectedMailInferenceTextResult>;
+
+export const ProtectedMailIngestionAuthorization = __t.object("ProtectedMailIngestionAuthorization", {
+  readId: __t.string(),
+  owner: __t.identity(),
+  get request() {
+    return ProtectedMailIngestionRequest;
+  },
+  connectionEpoch: __t.u64(),
+  snapshotDigest: __t.string(),
+  readPlanDigest: __t.string(),
+  selectionDigest: __t.string(),
+  payloadDigest: __t.string(),
+  payloadBytes: __t.u64(),
+  entryCount: __t.u32(),
+  manifestDigest: __t.string(),
+  manifestBytes: __t.u64(),
+  canonical: __t.string(),
+  issueDigest: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailIngestionAuthorization = __Infer<typeof ProtectedMailIngestionAuthorization>;
+
+export const ProtectedMailIngestionAuthorizationEvent = __t.object("ProtectedMailIngestionAuthorizationEvent", {
+  id: __t.string(),
+  readId: __t.string(),
+  generation: __t.u64(),
+  get kind() {
+    return ProtectedMailIngestionAuthorizationEventKind;
+  },
+  eventNonce: __t.string(),
+  requestDigest: __t.string(),
+  actor: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailIngestionAuthorizationEvent = __Infer<typeof ProtectedMailIngestionAuthorizationEvent>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailIngestionAuthorizationEventKind`.
+export const ProtectedMailIngestionAuthorizationEventKind = __t.enum("ProtectedMailIngestionAuthorizationEventKind", {
+  Issued: __t.unit(),
+  Revoked: __t.unit(),
+});
+export type ProtectedMailIngestionAuthorizationEventKind = __Infer<typeof ProtectedMailIngestionAuthorizationEventKind>;
+
+export const ProtectedMailIngestionCursorHistory = __t.object("ProtectedMailIngestionCursorHistory", {
+  id: __t.string(),
+  cursorId: __t.string(),
+  owner: __t.identity(),
+  collectionId: __t.u64(),
+  folder: __t.string(),
+  uidValidity: __t.string(),
+  generation: __t.u64(),
+  lastUid: __t.u32(),
+  previousDigest: __t.string(),
+  readId: __t.string(),
+  selectionId: __t.string(),
+  requestDigest: __t.string(),
+  importedMessages: __t.u32(),
+  heldMessages: __t.u32(),
+  envelopeBytes: __t.u64(),
+  digest: __t.string(),
+  actor: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailIngestionCursorHistory = __Infer<typeof ProtectedMailIngestionCursorHistory>;
+
+export const ProtectedMailIngestionDisposition = __t.object("ProtectedMailIngestionDisposition", {
+  id: __t.string(),
+  readId: __t.string(),
+  owner: __t.identity(),
+  collectionId: __t.u64(),
+  folder: __t.string(),
+  uidValidity: __t.string(),
+  uid: __t.u32(),
+  get direction() {
+    return ProtectedMailDirection;
+  },
+  get kind() {
+    return ProtectedMailIngestionDispositionKind;
+  },
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailIngestionDisposition = __Infer<typeof ProtectedMailIngestionDisposition>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailIngestionDispositionKind`.
+export const ProtectedMailIngestionDispositionKind = __t.enum("ProtectedMailIngestionDispositionKind", {
+  get Imported() {
+    return ProtectedMailSourceRef;
+  },
+  get Held() {
+    return ProtectedMailHeldReason;
+  },
+});
+export type ProtectedMailIngestionDispositionKind = __Infer<typeof ProtectedMailIngestionDispositionKind>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailIngestionEntry`.
+export const ProtectedMailIngestionEntry = __t.enum("ProtectedMailIngestionEntry", {
+  get Imported() {
+    return ProtectedMailInput;
+  },
+  get Held() {
+    return ProtectedMailHeldInput;
+  },
+});
+export type ProtectedMailIngestionEntry = __Infer<typeof ProtectedMailIngestionEntry>;
+
+export const ProtectedMailIngestionPreview = __t.object("ProtectedMailIngestionPreview", {
+  readId: __t.string(),
+  connectionEpoch: __t.u64(),
+  snapshotDigest: __t.string(),
+  payloadDigest: __t.string(),
+  payloadBytes: __t.u64(),
+  manifestDigest: __t.string(),
+  manifestBytes: __t.u64(),
+  canonical: __t.string(),
+});
+export type ProtectedMailIngestionPreview = __Infer<typeof ProtectedMailIngestionPreview>;
+
+export const ProtectedMailIngestionReceipt = __t.object("ProtectedMailIngestionReceipt", {
+  readId: __t.string(),
+  selectionId: __t.string(),
+  eventNonce: __t.string(),
+  requestDigest: __t.string(),
+  payloadDigest: __t.string(),
+  envelopeBytes: __t.u64(),
+  dispositionIds: __t.array(__t.string()),
+  cursorId: __t.string(),
+  cursorGeneration: __t.u64(),
+  historyId: __t.string(),
+  cursorDigest: __t.string(),
+  uidValidity: __t.string(),
+  lastUid: __t.u32(),
+  importedMessages: __t.u32(),
+  heldMessages: __t.u32(),
+  digest: __t.string(),
+  actor: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailIngestionReceipt = __Infer<typeof ProtectedMailIngestionReceipt>;
+
+export const ProtectedMailIngestionReceiptDto = __t.object("ProtectedMailIngestionReceiptDto", {
+  readId: __t.string(),
+  selectionId: __t.string(),
+  cursorId: __t.string(),
+  cursorGeneration: __t.u64(),
+  uidValidity: __t.string(),
+  lastUid: __t.u32(),
+  importedMessages: __t.u32(),
+  heldMessages: __t.u32(),
+  envelopeBytes: __t.u64(),
+  receiptDigest: __t.string(),
+});
+export type ProtectedMailIngestionReceiptDto = __Infer<typeof ProtectedMailIngestionReceiptDto>;
+
+export const ProtectedMailIngestionRequest = __t.object("ProtectedMailIngestionRequest", {
+  readId: __t.string(),
+  notBeforeMs: __t.u64(),
+  expiresAtMs: __t.u64(),
+  maxEnvelopeBytes: __t.u64(),
+  eventNonce: __t.string(),
+});
+export type ProtectedMailIngestionRequest = __Infer<typeof ProtectedMailIngestionRequest>;
 
 export const ProtectedMailInput = __t.object("ProtectedMailInput", {
   folder: __t.string(),

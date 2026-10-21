@@ -2,14 +2,13 @@
 
 **Updated:** 2026-10-21
 
-**Status:** S0 through S2b2c2 are merged, including exact private storage,
-provenance, owner authority, inference/results, connector ACK and one-use read
-plans. This branch adds the [dormant bounded IMAP executor](PROTECTED_MAIL_EXECUTOR.md)
-and synthetic TLS conformance. It consumes a fresh claim internally and returns
-only private counts/digests; raw MIME is discarded. No production credential
-adapter, new body ingestion, cursor effect or active runner is added. Trusted
-workflow, sanitization, isolated credentials and host controls remain gates.
-Protected monitoring is disabled.
+**Status:** S0 through S2b2c3 are merged. This branch adds
+[exact prepared-text ingestion](PROTECTED_MAIL_INGESTION.md): separate owner
+storage approval, full canonical-byte binding and one atomic import/held
+batch, cursor and terminal-read commit. The merged fixed IMAP executor still
+discards MIME. Discovery, MIME sanitization/body adapter, recurring workflow,
+isolated credentials, trusted UI and host controls remain gates.
+Protected monitoring stays disabled.
 
 Sentinel will enforce authority and disclosure rules outside the model. Email,
 webpages, workspace content, tool output, and derived summaries cannot grant
@@ -46,7 +45,7 @@ caller-owned buffer cannot change the held request. It returns a frozen request,
 not an execution permit. Source-policy, grant, processor and epoch changes still
 require fresh admission/dispatch checks; an unchanged action hash supplies no
 evidence that current authority is unchanged. The separate read-plan release binds its concrete cursor/UID selection; actual
-connector execution and new-body admission remain unimplemented.
+production connector integration and reviewed MIME/body processing remain gates; separate exact prepared-text admission is implemented in this branch.
 
 The test-only containment driver records exact synthetic mailbox, classifier,
 inference and private-storage effects. Its in-memory authority and one-use test
@@ -338,8 +337,9 @@ over an exact existing StoredBatch selection. Four private tables enforce one
 plan release and one full maximum raw-MIME reservation per selection. Neither
 unknown outcomes nor terminal reports refund or reopen it. The fixed service
 procedure rechecks current selection, cursor and authority before committing
-Dispatching; no message needs to exist in S1 yet. Actual message bytes, IMAP
-execution, new storage/disposition and the protected runner remain later gates.
+Dispatching; no message needs to exist in S1 yet. The separate fixed executor tests bounded IMAP execution; prepared-text storage
+now has independent admission. Actual MIME/body integration and the protected
+runner remain later gates.
 
 ## Dormant bounded IMAP executor
 
@@ -350,3 +350,16 @@ opaque and are discarded; success returns bounded private metadata only.
 Malformed, missing or cap-sized partials fail the whole batch without cursor
 progress. No runner or credential service invokes this host library. Synthetic
 wire conformance is separate from production compatibility and S3 isolation.
+
+
+## Exact prepared-text ingestion
+
+The [ingestion contract](PROTECTED_MAIL_INGESTION.md) adds owner approval over
+one exact payload, independent of existing read authority. A bound dispatching
+read can commit imported S1 records, body-free held dispositions, the same
+cursor head and its terminal declaration atomically. Full UTF-8 envelope bytes
+are measured and committed; changed content cannot reuse the decision. The
+new versioned receipt/history family preserves old ACK semantics and prevents
+held slots from masquerading as imported sources. Missing, capped or uncertain
+reads cannot advance progress. No source policy or processing grant is created.
+The current executor, recurring runner and actual MIME sanitizer remain separate.
