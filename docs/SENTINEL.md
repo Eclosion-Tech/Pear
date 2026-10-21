@@ -2,14 +2,14 @@
 
 **Updated:** 2026-10-21
 
-**Status:** S0 through S2b2b2 are merged, including private storage/provenance,
-exact owner instruction decisions, retained authority, local promotion, fixed
-inference claims and restricted result storage. This branch adds S2b2c1 exact
-owner-approved connector selections and private cursor acknowledgment over
-already-stored records. It supplies no mailbox read or new import authority.
-Provider transport/response validation, trusted workflow UI, isolated
-credentials, redaction and host egress controls remain gates. Protected
-monitoring is disabled.
+**Status:** S0 through S2b2c1 are merged, including private storage/provenance,
+exact owner decisions, retained authority, local promotion, fixed inference,
+restricted result storage and connector cursor ACKs. This branch adds S2b2c2
+[one-use owner-authorized read-plan release](PROTECTED_MAIL_READ.md). It commits
+a maximum raw-MIME reservation before returning exact metadata once; it adds no
+IMAP execution, credential release, body ingestion or cursor authority. Trusted
+workflow UI, redaction, broker isolation and host controls remain gates.
+Protected monitoring is disabled.
 
 Sentinel will enforce authority and disclosure rules outside the model. Email,
 webpages, workspace content, tool output, and derived summaries cannot grant
@@ -45,8 +45,8 @@ digest, and retains a private payload buffer. Later edits to the proposal or
 caller-owned buffer cannot change the held request. It returns a frozen request,
 not an execution permit. Source-policy, grant, processor and epoch changes still
 require fresh admission/dispatch checks; an unchanged action hash supplies no
-evidence that current authority is unchanged. A future mail-read admission must
-also bind its concrete cursor/UID selection plan.
+evidence that current authority is unchanged. The separate read-plan release binds its concrete cursor/UID selection; actual
+connector execution and new-body admission remain unimplemented.
 
 The test-only containment driver records exact synthetic mailbox, classifier,
 inference and private-storage effects. Its in-memory authority and one-use test
@@ -330,3 +330,13 @@ resource limits, missing/cyclic source graphs, and restrictions preserved
 through summaries, memory, compaction and child-context derivation. A real host
 must still prove that it records every exposure and sends every effect through
 the enforced boundary.
+
+## One-use connector read-plan release
+
+The [read-plan contract](PROTECTED_MAIL_READ.md) requires separate owner authority
+over an exact existing StoredBatch selection. Four private tables enforce one
+plan release and one full maximum raw-MIME reservation per selection. Neither
+unknown outcomes nor terminal reports refund or reopen it. The fixed service
+procedure rechecks current selection, cursor and authority before committing
+Dispatching; no message needs to exist in S1 yet. Actual message bytes, IMAP
+execution, new storage/disposition and the protected runner remain later gates.

@@ -96,6 +96,7 @@ import FailTaskReducer from "../fail_task_reducer";
 import FindOrCreateAiDmReducer from "../find_or_create_ai_dm_reducer";
 import FindOrCreateDmReducer from "../find_or_create_dm_reducer";
 import FinishMailSyncReducer from "../finish_mail_sync_reducer";
+import FinishProtectedMailReadDispatchReducer from "../finish_protected_mail_read_dispatch_reducer";
 import GrantAutoApplyReducer from "../grant_auto_apply_reducer";
 import GrantBridgeDeviceReducer from "../grant_bridge_device_reducer";
 import GrantExtensionPermissionReducer from "../grant_extension_permission_reducer";
@@ -116,6 +117,7 @@ import InvalidateAiEvaluationsForRowReducer from "../invalidate_ai_evaluations_f
 import InvokeAutomationReducer from "../invoke_automation_reducer";
 import IssueProtectedMailConnectorSelectionReducer from "../issue_protected_mail_connector_selection_reducer";
 import IssueProtectedMailInferenceGrantReducer from "../issue_protected_mail_inference_grant_reducer";
+import IssueProtectedMailReadGrantReducer from "../issue_protected_mail_read_grant_reducer";
 import IssueProtectedMailResultAuthorizationReducer from "../issue_protected_mail_result_authorization_reducer";
 import IssueProtectedMailSummaryGrantReducer from "../issue_protected_mail_summary_grant_reducer";
 import LogApiCallReducer from "../log_api_call_reducer";
@@ -178,6 +180,7 @@ import RevokeExtensionPermissionReducer from "../revoke_extension_permission_red
 import RevokeProtectedMailConnectorSelectionReducer from "../revoke_protected_mail_connector_selection_reducer";
 import RevokeProtectedMailInferenceGrantReducer from "../revoke_protected_mail_inference_grant_reducer";
 import RevokeProtectedMailInstructionReducer from "../revoke_protected_mail_instruction_reducer";
+import RevokeProtectedMailReadGrantReducer from "../revoke_protected_mail_read_grant_reducer";
 import RevokeProtectedMailResultAuthorizationReducer from "../revoke_protected_mail_result_authorization_reducer";
 import RevokeProtectedMailSummaryGrantReducer from "../revoke_protected_mail_summary_grant_reducer";
 import RunConventionSensorReducer from "../run_convention_sensor_reducer";
@@ -350,6 +353,7 @@ export type FailTaskParams = __Infer<typeof FailTaskReducer>;
 export type FindOrCreateAiDmParams = __Infer<typeof FindOrCreateAiDmReducer>;
 export type FindOrCreateDmParams = __Infer<typeof FindOrCreateDmReducer>;
 export type FinishMailSyncParams = __Infer<typeof FinishMailSyncReducer>;
+export type FinishProtectedMailReadDispatchParams = __Infer<typeof FinishProtectedMailReadDispatchReducer>;
 export type GrantAutoApplyParams = __Infer<typeof GrantAutoApplyReducer>;
 export type GrantBridgeDeviceParams = __Infer<typeof GrantBridgeDeviceReducer>;
 export type GrantExtensionPermissionParams = __Infer<typeof GrantExtensionPermissionReducer>;
@@ -370,6 +374,7 @@ export type InvalidateAiEvaluationsForRowParams = __Infer<typeof InvalidateAiEva
 export type InvokeAutomationParams = __Infer<typeof InvokeAutomationReducer>;
 export type IssueProtectedMailConnectorSelectionParams = __Infer<typeof IssueProtectedMailConnectorSelectionReducer>;
 export type IssueProtectedMailInferenceGrantParams = __Infer<typeof IssueProtectedMailInferenceGrantReducer>;
+export type IssueProtectedMailReadGrantParams = __Infer<typeof IssueProtectedMailReadGrantReducer>;
 export type IssueProtectedMailResultAuthorizationParams = __Infer<typeof IssueProtectedMailResultAuthorizationReducer>;
 export type IssueProtectedMailSummaryGrantParams = __Infer<typeof IssueProtectedMailSummaryGrantReducer>;
 export type LogApiCallParams = __Infer<typeof LogApiCallReducer>;
@@ -432,6 +437,7 @@ export type RevokeExtensionPermissionParams = __Infer<typeof RevokeExtensionPerm
 export type RevokeProtectedMailConnectorSelectionParams = __Infer<typeof RevokeProtectedMailConnectorSelectionReducer>;
 export type RevokeProtectedMailInferenceGrantParams = __Infer<typeof RevokeProtectedMailInferenceGrantReducer>;
 export type RevokeProtectedMailInstructionParams = __Infer<typeof RevokeProtectedMailInstructionReducer>;
+export type RevokeProtectedMailReadGrantParams = __Infer<typeof RevokeProtectedMailReadGrantReducer>;
 export type RevokeProtectedMailResultAuthorizationParams = __Infer<typeof RevokeProtectedMailResultAuthorizationReducer>;
 export type RevokeProtectedMailSummaryGrantParams = __Infer<typeof RevokeProtectedMailSummaryGrantReducer>;
 export type RunConventionSensorParams = __Infer<typeof RunConventionSensorReducer>;

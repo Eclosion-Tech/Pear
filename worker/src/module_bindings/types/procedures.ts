@@ -10,7 +10,9 @@ import * as AcceptProtectedMailInferenceResultProcedure from "../accept_protecte
 import * as AcknowledgeProtectedMailConnectorSelectionProcedure from "../acknowledge_protected_mail_connector_selection_procedure";
 import * as AdmitProtectedMailInferenceProcedure from "../admit_protected_mail_inference_procedure";
 import * as BeginProtectedMailInferenceDispatchProcedure from "../begin_protected_mail_inference_dispatch_procedure";
+import * as BeginProtectedMailReadDispatchProcedure from "../begin_protected_mail_read_dispatch_procedure";
 import * as ReviewProtectedMailConnectorSelectionProcedure from "../review_protected_mail_connector_selection_procedure";
+import * as ReviewProtectedMailReadGrantProcedure from "../review_protected_mail_read_grant_procedure";
 
 export type AcceptProtectedMailInferenceResultArgs = __Infer<typeof AcceptProtectedMailInferenceResultProcedure.params>;
 export type AcceptProtectedMailInferenceResultResult = __Infer<typeof AcceptProtectedMailInferenceResultProcedure.returnType>;
@@ -20,6 +22,10 @@ export type AdmitProtectedMailInferenceArgs = __Infer<typeof AdmitProtectedMailI
 export type AdmitProtectedMailInferenceResult = __Infer<typeof AdmitProtectedMailInferenceProcedure.returnType>;
 export type BeginProtectedMailInferenceDispatchArgs = __Infer<typeof BeginProtectedMailInferenceDispatchProcedure.params>;
 export type BeginProtectedMailInferenceDispatchResult = __Infer<typeof BeginProtectedMailInferenceDispatchProcedure.returnType>;
+export type BeginProtectedMailReadDispatchArgs = __Infer<typeof BeginProtectedMailReadDispatchProcedure.params>;
+export type BeginProtectedMailReadDispatchResult = __Infer<typeof BeginProtectedMailReadDispatchProcedure.returnType>;
 export type ReviewProtectedMailConnectorSelectionArgs = __Infer<typeof ReviewProtectedMailConnectorSelectionProcedure.params>;
 export type ReviewProtectedMailConnectorSelectionResult = __Infer<typeof ReviewProtectedMailConnectorSelectionProcedure.returnType>;
+export type ReviewProtectedMailReadGrantArgs = __Infer<typeof ReviewProtectedMailReadGrantProcedure.params>;
+export type ReviewProtectedMailReadGrantResult = __Infer<typeof ReviewProtectedMailReadGrantProcedure.returnType>;
 

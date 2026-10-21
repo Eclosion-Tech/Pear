@@ -124,6 +124,7 @@ import FailTaskReducer from "./fail_task_reducer";
 import FindOrCreateAiDmReducer from "./find_or_create_ai_dm_reducer";
 import FindOrCreateDmReducer from "./find_or_create_dm_reducer";
 import FinishMailSyncReducer from "./finish_mail_sync_reducer";
+import FinishProtectedMailReadDispatchReducer from "./finish_protected_mail_read_dispatch_reducer";
 import GrantAutoApplyReducer from "./grant_auto_apply_reducer";
 import GrantBridgeDeviceReducer from "./grant_bridge_device_reducer";
 import GrantExtensionPermissionReducer from "./grant_extension_permission_reducer";
@@ -144,6 +145,7 @@ import InvalidateAiEvaluationsForRowReducer from "./invalidate_ai_evaluations_fo
 import InvokeAutomationReducer from "./invoke_automation_reducer";
 import IssueProtectedMailConnectorSelectionReducer from "./issue_protected_mail_connector_selection_reducer";
 import IssueProtectedMailInferenceGrantReducer from "./issue_protected_mail_inference_grant_reducer";
+import IssueProtectedMailReadGrantReducer from "./issue_protected_mail_read_grant_reducer";
 import IssueProtectedMailResultAuthorizationReducer from "./issue_protected_mail_result_authorization_reducer";
 import IssueProtectedMailSummaryGrantReducer from "./issue_protected_mail_summary_grant_reducer";
 import LogApiCallReducer from "./log_api_call_reducer";
@@ -206,6 +208,7 @@ import RevokeExtensionPermissionReducer from "./revoke_extension_permission_redu
 import RevokeProtectedMailConnectorSelectionReducer from "./revoke_protected_mail_connector_selection_reducer";
 import RevokeProtectedMailInferenceGrantReducer from "./revoke_protected_mail_inference_grant_reducer";
 import RevokeProtectedMailInstructionReducer from "./revoke_protected_mail_instruction_reducer";
+import RevokeProtectedMailReadGrantReducer from "./revoke_protected_mail_read_grant_reducer";
 import RevokeProtectedMailResultAuthorizationReducer from "./revoke_protected_mail_result_authorization_reducer";
 import RevokeProtectedMailSummaryGrantReducer from "./revoke_protected_mail_summary_grant_reducer";
 import RunConventionSensorReducer from "./run_convention_sensor_reducer";
@@ -293,7 +296,9 @@ import * as AcceptProtectedMailInferenceResultProcedure from "./accept_protected
 import * as AcknowledgeProtectedMailConnectorSelectionProcedure from "./acknowledge_protected_mail_connector_selection_procedure";
 import * as AdmitProtectedMailInferenceProcedure from "./admit_protected_mail_inference_procedure";
 import * as BeginProtectedMailInferenceDispatchProcedure from "./begin_protected_mail_inference_dispatch_procedure";
+import * as BeginProtectedMailReadDispatchProcedure from "./begin_protected_mail_read_dispatch_procedure";
 import * as ReviewProtectedMailConnectorSelectionProcedure from "./review_protected_mail_connector_selection_procedure";
+import * as ReviewProtectedMailReadGrantProcedure from "./review_protected_mail_read_grant_procedure";
 
 // Import all table schema definitions
 import AiEvaluationRow from "./ai_evaluation_table";
@@ -1599,6 +1604,7 @@ const reducersSchema = __reducers(
   __reducerSchema("find_or_create_ai_dm", FindOrCreateAiDmReducer),
   __reducerSchema("find_or_create_dm", FindOrCreateDmReducer),
   __reducerSchema("finish_mail_sync", FinishMailSyncReducer),
+  __reducerSchema("finish_protected_mail_read_dispatch", FinishProtectedMailReadDispatchReducer),
   __reducerSchema("grant_auto_apply", GrantAutoApplyReducer),
   __reducerSchema("grant_bridge_device", GrantBridgeDeviceReducer),
   __reducerSchema("grant_extension_permission", GrantExtensionPermissionReducer),
@@ -1619,6 +1625,7 @@ const reducersSchema = __reducers(
   __reducerSchema("invoke_automation", InvokeAutomationReducer),
   __reducerSchema("issue_protected_mail_connector_selection", IssueProtectedMailConnectorSelectionReducer),
   __reducerSchema("issue_protected_mail_inference_grant", IssueProtectedMailInferenceGrantReducer),
+  __reducerSchema("issue_protected_mail_read_grant", IssueProtectedMailReadGrantReducer),
   __reducerSchema("issue_protected_mail_result_authorization", IssueProtectedMailResultAuthorizationReducer),
   __reducerSchema("issue_protected_mail_summary_grant", IssueProtectedMailSummaryGrantReducer),
   __reducerSchema("log_api_call", LogApiCallReducer),
@@ -1681,6 +1688,7 @@ const reducersSchema = __reducers(
   __reducerSchema("revoke_protected_mail_connector_selection", RevokeProtectedMailConnectorSelectionReducer),
   __reducerSchema("revoke_protected_mail_inference_grant", RevokeProtectedMailInferenceGrantReducer),
   __reducerSchema("revoke_protected_mail_instruction", RevokeProtectedMailInstructionReducer),
+  __reducerSchema("revoke_protected_mail_read_grant", RevokeProtectedMailReadGrantReducer),
   __reducerSchema("revoke_protected_mail_result_authorization", RevokeProtectedMailResultAuthorizationReducer),
   __reducerSchema("revoke_protected_mail_summary_grant", RevokeProtectedMailSummaryGrantReducer),
   __reducerSchema("run_convention_sensor", RunConventionSensorReducer),
@@ -1770,7 +1778,9 @@ const proceduresSchema = __procedures(
   __procedureSchema("acknowledge_protected_mail_connector_selection", AcknowledgeProtectedMailConnectorSelectionProcedure.params, AcknowledgeProtectedMailConnectorSelectionProcedure.returnType),
   __procedureSchema("admit_protected_mail_inference", AdmitProtectedMailInferenceProcedure.params, AdmitProtectedMailInferenceProcedure.returnType),
   __procedureSchema("begin_protected_mail_inference_dispatch", BeginProtectedMailInferenceDispatchProcedure.params, BeginProtectedMailInferenceDispatchProcedure.returnType),
+  __procedureSchema("begin_protected_mail_read_dispatch", BeginProtectedMailReadDispatchProcedure.params, BeginProtectedMailReadDispatchProcedure.returnType),
   __procedureSchema("review_protected_mail_connector_selection", ReviewProtectedMailConnectorSelectionProcedure.params, ReviewProtectedMailConnectorSelectionProcedure.returnType),
+  __procedureSchema("review_protected_mail_read_grant", ReviewProtectedMailReadGrantProcedure.params, ReviewProtectedMailReadGrantProcedure.returnType),
 );
 
 /** The remote SpacetimeDB module schema, both runtime and type information. */
