@@ -157,3 +157,9 @@ Observation-bound sparse reads/ingestion, MIME sanitization/body adaptation,
 trusted recurring workflow, production credential/network isolation, trusted UI
 and protected backup/restore remain gates. No real mailbox, provider, deployment
 or protected monitoring activation is part of this slice.
+
+
+The later [observation-bound sparse read-plan contract](PROTECTED_MAIL_SPARSE_READ.md)
+adds independent exact owner approval and one consumed metadata release for the
+retained present UID list. It preserves this contract, supplies no executor or
+body ingestion, and neither changes an inbox cursor nor activates monitoring.

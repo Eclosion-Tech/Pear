@@ -126,6 +126,7 @@ import FindOrCreateDmReducer from "./find_or_create_dm_reducer";
 import FinishMailSyncReducer from "./finish_mail_sync_reducer";
 import FinishProtectedMailDiscoveryDispatchReducer from "./finish_protected_mail_discovery_dispatch_reducer";
 import FinishProtectedMailReadDispatchReducer from "./finish_protected_mail_read_dispatch_reducer";
+import FinishProtectedMailSparseReadDispatchReducer from "./finish_protected_mail_sparse_read_dispatch_reducer";
 import GrantAutoApplyReducer from "./grant_auto_apply_reducer";
 import GrantBridgeDeviceReducer from "./grant_bridge_device_reducer";
 import GrantExtensionPermissionReducer from "./grant_extension_permission_reducer";
@@ -151,6 +152,7 @@ import IssueProtectedMailIngestionReducer from "./issue_protected_mail_ingestion
 import IssueProtectedMailReadGrantReducer from "./issue_protected_mail_read_grant_reducer";
 import IssueProtectedMailResultAuthorizationReducer from "./issue_protected_mail_result_authorization_reducer";
 import IssueProtectedMailSparseCheckpointReducer from "./issue_protected_mail_sparse_checkpoint_reducer";
+import IssueProtectedMailSparseReadGrantReducer from "./issue_protected_mail_sparse_read_grant_reducer";
 import IssueProtectedMailSummaryGrantReducer from "./issue_protected_mail_summary_grant_reducer";
 import LogApiCallReducer from "./log_api_call_reducer";
 import LoginReducer from "./login_reducer";
@@ -217,6 +219,7 @@ import RevokeProtectedMailInstructionReducer from "./revoke_protected_mail_instr
 import RevokeProtectedMailReadGrantReducer from "./revoke_protected_mail_read_grant_reducer";
 import RevokeProtectedMailResultAuthorizationReducer from "./revoke_protected_mail_result_authorization_reducer";
 import RevokeProtectedMailSparseCheckpointReducer from "./revoke_protected_mail_sparse_checkpoint_reducer";
+import RevokeProtectedMailSparseReadGrantReducer from "./revoke_protected_mail_sparse_read_grant_reducer";
 import RevokeProtectedMailSummaryGrantReducer from "./revoke_protected_mail_summary_grant_reducer";
 import RunConventionSensorReducer from "./run_convention_sensor_reducer";
 import RunDeniedToolCallsSensorReducer from "./run_denied_tool_calls_sensor_reducer";
@@ -307,12 +310,14 @@ import * as AdmitProtectedMailInferenceProcedure from "./admit_protected_mail_in
 import * as BeginProtectedMailDiscoveryDispatchProcedure from "./begin_protected_mail_discovery_dispatch_procedure";
 import * as BeginProtectedMailInferenceDispatchProcedure from "./begin_protected_mail_inference_dispatch_procedure";
 import * as BeginProtectedMailReadDispatchProcedure from "./begin_protected_mail_read_dispatch_procedure";
+import * as BeginProtectedMailSparseReadDispatchProcedure from "./begin_protected_mail_sparse_read_dispatch_procedure";
 import * as CompleteProtectedMailDiscoveryProcedure from "./complete_protected_mail_discovery_procedure";
 import * as ReviewProtectedMailConnectorSelectionProcedure from "./review_protected_mail_connector_selection_procedure";
 import * as ReviewProtectedMailDiscoveryProcedure from "./review_protected_mail_discovery_procedure";
 import * as ReviewProtectedMailIngestionProcedure from "./review_protected_mail_ingestion_procedure";
 import * as ReviewProtectedMailReadGrantProcedure from "./review_protected_mail_read_grant_procedure";
 import * as ReviewProtectedMailSparseCheckpointProcedure from "./review_protected_mail_sparse_checkpoint_procedure";
+import * as ReviewProtectedMailSparseReadGrantProcedure from "./review_protected_mail_sparse_read_grant_procedure";
 
 // Import all table schema definitions
 import AiEvaluationRow from "./ai_evaluation_table";
@@ -1620,6 +1625,7 @@ const reducersSchema = __reducers(
   __reducerSchema("finish_mail_sync", FinishMailSyncReducer),
   __reducerSchema("finish_protected_mail_discovery_dispatch", FinishProtectedMailDiscoveryDispatchReducer),
   __reducerSchema("finish_protected_mail_read_dispatch", FinishProtectedMailReadDispatchReducer),
+  __reducerSchema("finish_protected_mail_sparse_read_dispatch", FinishProtectedMailSparseReadDispatchReducer),
   __reducerSchema("grant_auto_apply", GrantAutoApplyReducer),
   __reducerSchema("grant_bridge_device", GrantBridgeDeviceReducer),
   __reducerSchema("grant_extension_permission", GrantExtensionPermissionReducer),
@@ -1645,6 +1651,7 @@ const reducersSchema = __reducers(
   __reducerSchema("issue_protected_mail_read_grant", IssueProtectedMailReadGrantReducer),
   __reducerSchema("issue_protected_mail_result_authorization", IssueProtectedMailResultAuthorizationReducer),
   __reducerSchema("issue_protected_mail_sparse_checkpoint", IssueProtectedMailSparseCheckpointReducer),
+  __reducerSchema("issue_protected_mail_sparse_read_grant", IssueProtectedMailSparseReadGrantReducer),
   __reducerSchema("issue_protected_mail_summary_grant", IssueProtectedMailSummaryGrantReducer),
   __reducerSchema("log_api_call", LogApiCallReducer),
   __reducerSchema("login", LoginReducer),
@@ -1711,6 +1718,7 @@ const reducersSchema = __reducers(
   __reducerSchema("revoke_protected_mail_read_grant", RevokeProtectedMailReadGrantReducer),
   __reducerSchema("revoke_protected_mail_result_authorization", RevokeProtectedMailResultAuthorizationReducer),
   __reducerSchema("revoke_protected_mail_sparse_checkpoint", RevokeProtectedMailSparseCheckpointReducer),
+  __reducerSchema("revoke_protected_mail_sparse_read_grant", RevokeProtectedMailSparseReadGrantReducer),
   __reducerSchema("revoke_protected_mail_summary_grant", RevokeProtectedMailSummaryGrantReducer),
   __reducerSchema("run_convention_sensor", RunConventionSensorReducer),
   __reducerSchema("run_denied_tool_calls_sensor", RunDeniedToolCallsSensorReducer),
@@ -1803,12 +1811,14 @@ const proceduresSchema = __procedures(
   __procedureSchema("begin_protected_mail_discovery_dispatch", BeginProtectedMailDiscoveryDispatchProcedure.params, BeginProtectedMailDiscoveryDispatchProcedure.returnType),
   __procedureSchema("begin_protected_mail_inference_dispatch", BeginProtectedMailInferenceDispatchProcedure.params, BeginProtectedMailInferenceDispatchProcedure.returnType),
   __procedureSchema("begin_protected_mail_read_dispatch", BeginProtectedMailReadDispatchProcedure.params, BeginProtectedMailReadDispatchProcedure.returnType),
+  __procedureSchema("begin_protected_mail_sparse_read_dispatch", BeginProtectedMailSparseReadDispatchProcedure.params, BeginProtectedMailSparseReadDispatchProcedure.returnType),
   __procedureSchema("complete_protected_mail_discovery", CompleteProtectedMailDiscoveryProcedure.params, CompleteProtectedMailDiscoveryProcedure.returnType),
   __procedureSchema("review_protected_mail_connector_selection", ReviewProtectedMailConnectorSelectionProcedure.params, ReviewProtectedMailConnectorSelectionProcedure.returnType),
   __procedureSchema("review_protected_mail_discovery", ReviewProtectedMailDiscoveryProcedure.params, ReviewProtectedMailDiscoveryProcedure.returnType),
   __procedureSchema("review_protected_mail_ingestion", ReviewProtectedMailIngestionProcedure.params, ReviewProtectedMailIngestionProcedure.returnType),
   __procedureSchema("review_protected_mail_read_grant", ReviewProtectedMailReadGrantProcedure.params, ReviewProtectedMailReadGrantProcedure.returnType),
   __procedureSchema("review_protected_mail_sparse_checkpoint", ReviewProtectedMailSparseCheckpointProcedure.params, ReviewProtectedMailSparseCheckpointProcedure.returnType),
+  __procedureSchema("review_protected_mail_sparse_read_grant", ReviewProtectedMailSparseReadGrantProcedure.params, ReviewProtectedMailSparseReadGrantProcedure.returnType),
 );
 
 /** The remote SpacetimeDB module schema, both runtime and type information. */

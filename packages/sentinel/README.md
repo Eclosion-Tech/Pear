@@ -120,3 +120,9 @@ The [sparse checkpoint codec](../../docs/PROTECTED_MAIL_SPARSE_CHECKPOINT.md)
 binds an observed range, complete stored source references and byte costs to
 closed metadata. It supplies no body-read, ingestion or processing permission;
 current owner authority and atomic cursor progress remain server-enforced.
+
+
+The [sparse read-plan codec](../../docs/PROTECTED_MAIL_SPARSE_READ.md) binds a
+retained present UID list, exact observation/cursor/configuration and maximum
+raw-MIME reservation. Preparation freezes and hashes metadata; it supplies no
+owner approval, plan release, credentials, execution or body-storage authority.

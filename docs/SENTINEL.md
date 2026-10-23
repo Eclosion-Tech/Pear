@@ -1,14 +1,14 @@
 # Sentinel implementation status
 
-**Updated:** 2026-10-21
+**Updated:** 2026-10-23
 
-**Status:** S0 through S2b2c5 are merged. This branch adds
-[sparse checkpoints over already-stored mail](PROTECTED_MAIL_SPARSE_CHECKPOINT.md):
-separate exact owner approval, recorded observation/source binding and atomic
-progress across verified messages and observed gaps. It adds no body read or
-import authority. Observation-bound sparse reads/ingestion, MIME sanitization,
-recurring workflow, isolated credentials, trusted UI and host controls remain
-gates. Protected monitoring stays disabled.
+**Status:** S0 through S2b2c6 are merged. This branch adds
+[observation-bound one-use read-plan release](PROTECTED_MAIL_SPARSE_READ.md):
+separate exact owner authority for the retained present UID list, a full raw-MIME
+reservation before the only metadata release, and terminal outcomes without
+refund or reopening. It supplies no executor, credentials, body ingestion or
+cursor effect. Sparse execution/ingestion, MIME sanitization, trusted recurrence,
+isolated hosts and UI remain gates. Protected monitoring stays disabled.
 
 Sentinel will enforce authority and disclosure rules outside the model. Email,
 webpages, workspace content, tool output, and derived summaries cannot grant
@@ -386,3 +386,20 @@ cursor commit joins the two existing cursor families. Fresh absence checks do
 not become permanent tombstones: later independently authorized staging cannot
 invalidate historical replay. Four private tables preserve all 53 earlier
 schemas. It supplies no read/import/processing grant or recurring activation.
+
+
+## Observation-bound sparse read-plan release (S2b2c7)
+
+The [separate sparse read contract](PROTECTED_MAIL_SPARSE_READ.md) binds the exact
+successful discovery observation, latest completed head, original cursor and
+current owner/service/configuration to an independent owner decision. Four private
+tables add one immutable grant per observation and a bounded Pending/Dispatching/
+terminal lifecycle, preserving all 57 earlier schemas. Only present UIDs reserve
+message slots; the complete maximum raw-MIME byte ceiling is spent before the
+plan is released once. Lost replies and terminal outcomes do not reopen it.
+
+Existing contiguous read/ingestion and stored-mail checkpoint authority remains
+closed. No runtime executes the new plan, and no sources, cursor/history,
+discovery head, inference budget or ordinary state is written by this family.
+Observation-bound sparse execution/ingestion and reviewed MIME processing remain
+separate gates before any protected mail workflow can activate.

@@ -162,3 +162,9 @@ adds separate owner approval over a nonempty recorded observation and complete
 already-stored present records. It uses a dedicated third history family under
 the same cursor, preserving this contract's scope and exact historical retries.
 It does not authorize new body reads, ingestion or permanent absence tombstones.
+
+
+The later [observation-bound sparse read-plan contract](PROTECTED_MAIL_SPARSE_READ.md)
+adds independent exact owner approval and one consumed metadata release for the
+retained present UID list. It preserves this contract, supplies no executor or
+body ingestion, and neither changes an inbox cursor nor activates monitoring.

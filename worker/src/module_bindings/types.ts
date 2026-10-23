@@ -3057,6 +3057,123 @@ export const ProtectedMailSparseCheckpointSource = __t.object("ProtectedMailSpar
 });
 export type ProtectedMailSparseCheckpointSource = __Infer<typeof ProtectedMailSparseCheckpointSource>;
 
+export const ProtectedMailSparseReadDispatch = __t.object("ProtectedMailSparseReadDispatch", {
+  readId: __t.string(),
+  planDigest: __t.string(),
+  planBytes: __t.u64(),
+  canonical: __t.string(),
+});
+export type ProtectedMailSparseReadDispatch = __Infer<typeof ProtectedMailSparseReadDispatch>;
+
+export const ProtectedMailSparseReadEvent = __t.object("ProtectedMailSparseReadEvent", {
+  id: __t.string(),
+  readId: __t.string(),
+  generation: __t.u64(),
+  get status() {
+    return ProtectedMailSparseReadStatus;
+  },
+  eventNonce: __t.string(),
+  requestDigest: __t.string(),
+  actor: __t.identity(),
+  reservedOperations: __t.u64(),
+  reservedMessageSlots: __t.u64(),
+  reservedBodyBytes: __t.u64(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailSparseReadEvent = __Infer<typeof ProtectedMailSparseReadEvent>;
+
+export const ProtectedMailSparseReadGrant = __t.object("ProtectedMailSparseReadGrant", {
+  id: __t.string(),
+  observationId: __t.string(),
+  owner: __t.identity(),
+  workspace: __t.identity(),
+  get request() {
+    return ProtectedMailSparseReadRequest;
+  },
+  connectionEpoch: __t.u64(),
+  snapshotDigest: __t.string(),
+  planDigest: __t.string(),
+  planBytes: __t.u64(),
+  canonical: __t.string(),
+  issueDigest: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailSparseReadGrant = __Infer<typeof ProtectedMailSparseReadGrant>;
+
+export const ProtectedMailSparseReadGrantEvent = __t.object("ProtectedMailSparseReadGrantEvent", {
+  id: __t.string(),
+  readId: __t.string(),
+  generation: __t.u64(),
+  get kind() {
+    return ProtectedMailSparseReadGrantEventKind;
+  },
+  eventNonce: __t.string(),
+  requestDigest: __t.string(),
+  actor: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailSparseReadGrantEvent = __Infer<typeof ProtectedMailSparseReadGrantEvent>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailSparseReadGrantEventKind`.
+export const ProtectedMailSparseReadGrantEventKind = __t.enum("ProtectedMailSparseReadGrantEventKind", {
+  Issued: __t.unit(),
+  Revoked: __t.unit(),
+});
+export type ProtectedMailSparseReadGrantEventKind = __Infer<typeof ProtectedMailSparseReadGrantEventKind>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailSparseReadOutcome`.
+export const ProtectedMailSparseReadOutcome = __t.enum("ProtectedMailSparseReadOutcome", {
+  ReadReported: __t.unit(),
+  Failed: __t.unit(),
+  Unknown: __t.unit(),
+  CancelledBeforeDispatch: __t.unit(),
+});
+export type ProtectedMailSparseReadOutcome = __Infer<typeof ProtectedMailSparseReadOutcome>;
+
+export const ProtectedMailSparseReadPreview = __t.object("ProtectedMailSparseReadPreview", {
+  readId: __t.string(),
+  connectionEpoch: __t.u64(),
+  snapshotDigest: __t.string(),
+  planDigest: __t.string(),
+  planBytes: __t.u64(),
+  canonical: __t.string(),
+});
+export type ProtectedMailSparseReadPreview = __Infer<typeof ProtectedMailSparseReadPreview>;
+
+export const ProtectedMailSparseReadRequest = __t.object("ProtectedMailSparseReadRequest", {
+  observationId: __t.string(),
+  notBeforeMs: __t.u64(),
+  expiresAtMs: __t.u64(),
+  maxMessageBytes: __t.u64(),
+  maxTotalBytes: __t.u64(),
+  eventNonce: __t.string(),
+});
+export type ProtectedMailSparseReadRequest = __Infer<typeof ProtectedMailSparseReadRequest>;
+
+export const ProtectedMailSparseReadState = __t.object("ProtectedMailSparseReadState", {
+  readId: __t.string(),
+  generation: __t.u64(),
+  get status() {
+    return ProtectedMailSparseReadStatus;
+  },
+  reservedOperations: __t.u64(),
+  reservedMessageSlots: __t.u64(),
+  reservedBodyBytes: __t.u64(),
+  lastEventId: __t.string(),
+});
+export type ProtectedMailSparseReadState = __Infer<typeof ProtectedMailSparseReadState>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailSparseReadStatus`.
+export const ProtectedMailSparseReadStatus = __t.enum("ProtectedMailSparseReadStatus", {
+  Pending: __t.unit(),
+  Dispatching: __t.unit(),
+  ReadReported: __t.unit(),
+  Failed: __t.unit(),
+  Unknown: __t.unit(),
+  CancelledBeforeDispatch: __t.unit(),
+});
+export type ProtectedMailSparseReadStatus = __Infer<typeof ProtectedMailSparseReadStatus>;
+
 export const ProtectedMailSummaryAdmissionReceipt = __t.object("ProtectedMailSummaryAdmissionReceipt", {
   id: __t.string(),
   eventId: __t.string(),

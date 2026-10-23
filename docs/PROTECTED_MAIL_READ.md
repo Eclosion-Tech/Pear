@@ -156,3 +156,9 @@ adds separate owner-approved storage/disposition authority and an atomic cursor
 commit. It does not repurpose this contract's read/ACK authority, connect raw
 MIME to a sink, or permit missing/incomplete UID skips. Production MIME
 sanitization, discovery, workflow and host gates remain.
+
+
+The later [observation-bound sparse read-plan contract](PROTECTED_MAIL_SPARSE_READ.md)
+adds independent exact owner approval and one consumed metadata release for the
+retained present UID list. It preserves this contract, supplies no executor or
+body ingestion, and neither changes an inbox cursor nor activates monitoring.
