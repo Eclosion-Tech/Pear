@@ -168,3 +168,9 @@ The later [observation-bound sparse read-plan contract](PROTECTED_MAIL_SPARSE_RE
 adds independent exact owner approval and one consumed metadata release for the
 retained present UID list. It preserves this contract, supplies no executor or
 body ingestion, and neither changes an inbox cursor nor activates monitoring.
+
+
+The later [dormant sparse executor](PROTECTED_MAIL_SPARSE_EXECUTOR.md) consumes a
+separate observation-bound read claim and tests exact present-UID BODY.PEEKs.
+It preserves this contract, supplies no body ingestion or production credential
+adapter, and neither advances the cursor nor activates monitoring.
