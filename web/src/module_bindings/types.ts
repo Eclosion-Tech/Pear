@@ -2922,6 +2922,141 @@ export const ProtectedMailSourceRef = __t.object("ProtectedMailSourceRef", {
 });
 export type ProtectedMailSourceRef = __Infer<typeof ProtectedMailSourceRef>;
 
+export const ProtectedMailSparseCheckpointCursorHistory = __t.object("ProtectedMailSparseCheckpointCursorHistory", {
+  id: __t.string(),
+  cursorId: __t.string(),
+  checkpointId: __t.string(),
+  owner: __t.identity(),
+  collectionId: __t.u64(),
+  folder: __t.string(),
+  uidValidity: __t.string(),
+  generation: __t.u64(),
+  fromUid: __t.u32(),
+  lastUid: __t.u32(),
+  previousDigest: __t.string(),
+  digest: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailSparseCheckpointCursorHistory = __Infer<typeof ProtectedMailSparseCheckpointCursorHistory>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailSparseCheckpointDisposition`.
+export const ProtectedMailSparseCheckpointDisposition = __t.enum("ProtectedMailSparseCheckpointDisposition", {
+  get Present() {
+    return ProtectedMailSparseCheckpointSource;
+  },
+  ObservedAbsent: __t.u32(),
+});
+export type ProtectedMailSparseCheckpointDisposition = __Infer<typeof ProtectedMailSparseCheckpointDisposition>;
+
+export const ProtectedMailSparseCheckpointGrant = __t.object("ProtectedMailSparseCheckpointGrant", {
+  id: __t.string(),
+  observationId: __t.string(),
+  owner: __t.identity(),
+  workspace: __t.identity(),
+  get request() {
+    return ProtectedMailSparseCheckpointRequest;
+  },
+  connectionEpoch: __t.u64(),
+  snapshotDigest: __t.string(),
+  get sources() {
+    return __t.array(ProtectedMailSparseCheckpointSource);
+  },
+  acknowledgedBytes: __t.u64(),
+  manifestDigest: __t.string(),
+  manifestBytes: __t.u64(),
+  canonical: __t.string(),
+  issueDigest: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailSparseCheckpointGrant = __Infer<typeof ProtectedMailSparseCheckpointGrant>;
+
+export const ProtectedMailSparseCheckpointGrantEvent = __t.object("ProtectedMailSparseCheckpointGrantEvent", {
+  id: __t.string(),
+  checkpointId: __t.string(),
+  generation: __t.u64(),
+  get kind() {
+    return ProtectedMailSparseCheckpointGrantEventKind;
+  },
+  eventNonce: __t.string(),
+  requestDigest: __t.string(),
+  actor: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailSparseCheckpointGrantEvent = __Infer<typeof ProtectedMailSparseCheckpointGrantEvent>;
+
+// The tagged union or sum type for the algebraic type `ProtectedMailSparseCheckpointGrantEventKind`.
+export const ProtectedMailSparseCheckpointGrantEventKind = __t.enum("ProtectedMailSparseCheckpointGrantEventKind", {
+  Issued: __t.unit(),
+  Revoked: __t.unit(),
+});
+export type ProtectedMailSparseCheckpointGrantEventKind = __Infer<typeof ProtectedMailSparseCheckpointGrantEventKind>;
+
+export const ProtectedMailSparseCheckpointPreview = __t.object("ProtectedMailSparseCheckpointPreview", {
+  checkpointId: __t.string(),
+  connectionEpoch: __t.u64(),
+  snapshotDigest: __t.string(),
+  manifestDigest: __t.string(),
+  manifestBytes: __t.u64(),
+  canonical: __t.string(),
+});
+export type ProtectedMailSparseCheckpointPreview = __Infer<typeof ProtectedMailSparseCheckpointPreview>;
+
+export const ProtectedMailSparseCheckpointReceipt = __t.object("ProtectedMailSparseCheckpointReceipt", {
+  checkpointId: __t.string(),
+  eventNonce: __t.string(),
+  requestDigest: __t.string(),
+  observationDigest: __t.string(),
+  cursorId: __t.string(),
+  historyId: __t.string(),
+  cursorGeneration: __t.u64(),
+  uidValidity: __t.string(),
+  fromUid: __t.u32(),
+  lastUid: __t.u32(),
+  previousDigest: __t.string(),
+  get dispositions() {
+    return __t.array(ProtectedMailSparseCheckpointDisposition);
+  },
+  acknowledgedMessages: __t.u32(),
+  observedAbsentMessages: __t.u32(),
+  acknowledgedBytes: __t.u64(),
+  receiptDigest: __t.string(),
+  actor: __t.identity(),
+  createdAt: __t.timestamp(),
+});
+export type ProtectedMailSparseCheckpointReceipt = __Infer<typeof ProtectedMailSparseCheckpointReceipt>;
+
+export const ProtectedMailSparseCheckpointReceiptDto = __t.object("ProtectedMailSparseCheckpointReceiptDto", {
+  checkpointId: __t.string(),
+  observationId: __t.string(),
+  cursorId: __t.string(),
+  cursorGeneration: __t.u64(),
+  uidValidity: __t.string(),
+  lastUid: __t.u32(),
+  acknowledgedMessages: __t.u32(),
+  observedAbsentMessages: __t.u32(),
+  acknowledgedBytes: __t.u64(),
+  receiptDigest: __t.string(),
+});
+export type ProtectedMailSparseCheckpointReceiptDto = __Infer<typeof ProtectedMailSparseCheckpointReceiptDto>;
+
+export const ProtectedMailSparseCheckpointRequest = __t.object("ProtectedMailSparseCheckpointRequest", {
+  observationId: __t.string(),
+  notBeforeMs: __t.u64(),
+  expiresAtMs: __t.u64(),
+  maxAcknowledgedBytes: __t.u64(),
+  eventNonce: __t.string(),
+});
+export type ProtectedMailSparseCheckpointRequest = __Infer<typeof ProtectedMailSparseCheckpointRequest>;
+
+export const ProtectedMailSparseCheckpointSource = __t.object("ProtectedMailSparseCheckpointSource", {
+  uid: __t.u32(),
+  get source() {
+    return ProtectedMailSourceRef;
+  },
+  bytes: __t.u64(),
+});
+export type ProtectedMailSparseCheckpointSource = __Infer<typeof ProtectedMailSparseCheckpointSource>;
+
 export const ProtectedMailSummaryAdmissionReceipt = __t.object("ProtectedMailSummaryAdmissionReceipt", {
   id: __t.string(),
   eventId: __t.string(),

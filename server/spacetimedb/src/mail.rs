@@ -17,6 +17,7 @@ mod protected;
 mod provenance;
 mod read;
 mod results;
+mod sparse_checkpoint;
 pub(crate) use protected::require_no_protected_mail_collections;
 use accounts::{leased, mail_connection, MailConnection};
 use crate::pages::{create_component_tree_page_inner, page, PageType};

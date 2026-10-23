@@ -170,3 +170,10 @@ inert replay and selective pending/dispatched completion were checked. Release
 contracts (31), private native-log guard cases (8), shell/workflow syntax and
 170 local documentation links passed. The owned server, data, checkpoints,
 logs and generated synthetic keys were removed; no TLS fixture material remains.
+
+
+The later [sparse checkpoint contract](PROTECTED_MAIL_SPARSE_CHECKPOINT.md)
+adds separate owner approval over a nonempty recorded observation and complete
+already-stored present records. It uses a dedicated third history family under
+the same cursor, preserving this contract's scope and exact historical retries.
+It does not authorize new body reads, ingestion or permanent absence tombstones.

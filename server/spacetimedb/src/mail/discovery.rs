@@ -873,7 +873,7 @@ fn checked_observation_local(
     Ok((row, grant))
 }
 /// Local validation plus exactly one immediate predecessor; never walks history.
-fn checked_observation(
+pub(super) fn checked_observation(
     ctx: &ReducerContext,
     row: ProtectedMailDiscoveryObservation,
 ) -> Result<
@@ -1056,6 +1056,38 @@ fn current(
             ctx,
             &head_id(grant.workspace, grant.owner, connection.id, &folder),
         )? != grant.head
+    {
+        return Err(STALE.into());
+    }
+    Ok(())
+}
+/// A completed observation is retained data, independently of its probe grant's
+/// expiry/revocation. New checkpoint authority must bind the completed head,
+/// rather than the probe's predecessor head, and still match its original cursor.
+pub(super) fn require_current_completed_observation(
+    ctx: &ReducerContext,
+    observation: &ProtectedMailDiscoveryObservation,
+    grant: &ProtectedMailDiscoveryGrant,
+) -> Result<(), String> {
+    if !service(ctx, grant.request.connector_identity, grant.owner) {
+        return Err(STALE.into());
+    }
+    let (connection, folder, epoch, snapshot) = live_mailbox(
+        ctx, grant.request.connection_id, grant.owner, &grant.request.direction,
+    )?;
+    let completed = ProtectedMailDiscoveryHeadBinding {
+        id: observation.head_id.clone(),
+        generation: observation.head_generation,
+        digest: observation.observation_digest.clone(),
+        observation_id: observation.discovery_id.clone(),
+        uid_validity: observation.input.uid_validity.clone(),
+        uid_next: observation.input.uid_next,
+    };
+    if epoch != grant.connection_epoch || snapshot != grant.snapshot_digest
+        || connection.host != grant.host || connection.port != grant.port
+        || connection.username != grant.username || folder != grant.folder
+        || cursor_binding(ctx, grant.workspace, grant.owner, connection.id, &folder)? != grant.cursor
+        || checked_head(ctx, &observation.head_id)? != Some(completed)
     {
         return Err(STALE.into());
     }

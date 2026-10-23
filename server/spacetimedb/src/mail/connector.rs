@@ -673,7 +673,7 @@ fn checked_receipt_local(
     Ok(receipt)
 }
 
-/// Closed read-only cursor association across the two immutable commit families.
+/// Closed read-only cursor association across the three immutable commit families.
 /// Descriptor validation is local, with only one explicit predecessor check.
 pub(super) struct CursorDescriptor {
     pub history_id: String,
@@ -700,8 +700,9 @@ pub(super) fn checked_cursor_descriptor(
         .id()
         .find(history_id(cursor, generation));
     let new = super::ingestion::retained_cursor_descriptor(ctx, cursor, generation)?;
-    match (old, new) {
-        (Some(history), None) => {
+    let sparse = super::sparse_checkpoint::retained_cursor_descriptor(ctx, cursor, generation)?;
+    match (old, new, sparse) {
+        (Some(history), None, None) => {
             let selection = checked_selection(
                 ctx,
                 ctx.db
@@ -740,7 +741,7 @@ pub(super) fn checked_cursor_descriptor(
                 created_at: history.created_at,
             })
         }
-        (None, Some(descriptor)) => Ok(descriptor),
+        (None, Some(descriptor), None) | (None, None, Some(descriptor)) => Ok(descriptor),
         _ => Err(INCONSISTENT.into()),
     }
 }
@@ -1131,6 +1132,7 @@ fn acknowledge(
         .find(history_id.clone())
         .is_some()
         || super::ingestion::cursor_generation_present(ctx,&cursor_id,generation)
+        || super::sparse_checkpoint::cursor_generation_present(ctx,&cursor_id,generation)
     {
         return Err(INCONSISTENT.into());
     }
