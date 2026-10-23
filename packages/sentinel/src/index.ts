@@ -19,3 +19,5 @@ export { canonicalConnectorDiscovery, prepareConnectorDiscovery, parseMailDiscov
 export type { ConnectorDiscoveryV1, MailDiscoveryObservation, FrozenConnectorDiscovery, ConnectorDiscoveryPreparation } from "./discovery.js";
 export { canonicalConnectorSparseCheckpoint, prepareConnectorSparseCheckpoint } from "./sparse-checkpoint.js";
 export type { ConnectorSparseCheckpointV1, FrozenConnectorSparseCheckpoint, ConnectorSparseCheckpointPreparation } from "./sparse-checkpoint.js";
+export { canonicalConnectorSparseRead, prepareConnectorSparseRead } from "./sparse-read.js";
+export type { ConnectorSparseReadV1, FrozenConnectorSparseRead, ConnectorSparseReadPreparation } from "./sparse-read.js";
