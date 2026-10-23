@@ -174,3 +174,9 @@ and adaptation, trusted recurring workflow budgets/delegation, isolated producti
 credentials/network, trusted UI, provider transport and protected backup/restore
 remain gates before real-mail use. No mailbox or workspace hostname is hardcoded.
 Protected monitoring remains disabled.
+
+
+The later [dormant sparse executor](PROTECTED_MAIL_SPARSE_EXECUTOR.md) consumes a
+separate observation-bound read claim and tests exact present-UID BODY.PEEKs.
+It preserves this contract, supplies no body ingestion or production credential
+adapter, and neither advances the cursor nor activates monitoring.

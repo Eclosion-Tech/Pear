@@ -153,3 +153,9 @@ adds separate owner-approved storage/disposition authority and an atomic cursor
 commit. It does not broaden read authority or the existing ACK contract, connect raw
 MIME to a sink, or permit missing/incomplete UID skips. Production MIME
 sanitization, discovery, workflow and host gates remain.
+
+
+The later [dormant sparse executor](PROTECTED_MAIL_SPARSE_EXECUTOR.md) consumes a
+separate observation-bound read claim and tests exact present-UID BODY.PEEKs.
+It preserves this contract, supplies no body ingestion or production credential
+adapter, and neither advances the cursor nor activates monitoring.

@@ -2,13 +2,13 @@
 
 **Updated:** 2026-10-23
 
-**Status:** S0 through S2b2c6 are merged. This branch adds
-[observation-bound one-use read-plan release](PROTECTED_MAIL_SPARSE_READ.md):
-separate exact owner authority for the retained present UID list, a full raw-MIME
-reservation before the only metadata release, and terminal outcomes without
-refund or reopening. It supplies no executor, credentials, body ingestion or
-cursor effect. Sparse execution/ingestion, MIME sanitization, trusted recurrence,
-isolated hosts and UI remain gates. Protected monitoring stays disabled.
+**Status:** S0 through S2b2c7 are merged. This branch adds a
+[dormant sparse IMAP executor](PROTECTED_MAIL_SPARSE_EXECUTOR.md): one fresh
+observation-bound claim before credentials/socket access, exact present-UID
+BODY.PEEK reads with UID continuity guards, opaque internal MIME handling and
+one terminal report. No production adapter, body ingestion, cursor effect or
+activation is added. MIME, workflow, host isolation and trusted UI remain gates.
+Protected monitoring stays disabled.
 
 Sentinel will enforce authority and disclosure rules outside the model. Email,
 webpages, workspace content, tool output, and derived summaries cannot grant
@@ -403,3 +403,14 @@ closed. No runtime executes the new plan, and no sources, cursor/history,
 discovery head, inference budget or ordinary state is written by this family.
 Observation-bound sparse execution/ingestion and reviewed MIME processing remain
 separate gates before any protected mail workflow can activate.
+
+
+## Dormant sparse read execution (S2b2c8)
+
+The [sparse executor contract](PROTECTED_MAIL_SPARSE_EXECUTOR.md) exercises the
+fixed observed-UID profile against synthetic TLS. It uses the existing one-use
+sparse claim/report authority, exact canonical credential binding and absolute
+deadlines through late resolver/DNS callbacks. No new schema or authority is
+created; Rust/WASM and generated clients remain unchanged. Public results expose
+only private IDs, fixed reasons and the chosen report, including on lost replies.
+Raw MIME and body-derived metadata stay internal. No runner invokes this library.
