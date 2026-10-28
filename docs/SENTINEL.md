@@ -1,14 +1,13 @@
 # Sentinel implementation status
 
-**Updated:** 2026-10-23
+**Updated:** 2026-10-24
 
-**Status:** S0 through S2b2c7 are merged. This branch adds a
-[dormant sparse IMAP executor](PROTECTED_MAIL_SPARSE_EXECUTOR.md): one fresh
-observation-bound claim before credentials/socket access, exact present-UID
-BODY.PEEK reads with UID continuity guards, opaque internal MIME handling and
-one terminal report. No production adapter, body ingestion, cursor effect or
-activation is added. MIME, workflow, host isolation and trusted UI remain gates.
-Protected monitoring stays disabled.
+**Status:** S0 through S2b2c8 are merged. This branch is a
+[maintained-library reuse experiment](PROTECTED_MAIL_REUSE_SPIKE.md) and
+composition review, with no production or authority change. Next work joins
+bounded internal MIME custody to existing ingestion and adds narrow owner
+retrieval of accepted result rows. New per-step ledgers are deferred until
+that integration is proved. Protected monitoring stays disabled.
 
 Sentinel will enforce authority and disclosure rules outside the model. Email,
 webpages, workspace content, tool output, and derived summaries cannot grant
@@ -45,7 +44,7 @@ caller-owned buffer cannot change the held request. It returns a frozen request,
 not an execution permit. Source-policy, grant, processor and epoch changes still
 require fresh admission/dispatch checks; an unchanged action hash supplies no
 evidence that current authority is unchanged. The separate read-plan release binds its concrete cursor/UID selection; actual
-production connector integration and reviewed MIME/body processing remain gates; separate exact prepared-text admission is implemented in this branch.
+production connector integration and reviewed MIME/body processing remain gates; separate exact prepared-text admission is merged.
 
 The test-only containment driver records exact synthetic mailbox, classifier,
 inference and private-storage effects. Its in-memory authority and one-use test
@@ -414,3 +413,12 @@ deadlines through late resolver/DNS callbacks. No new schema or authority is
 created; Rust/WASM and generated clients remain unchanged. Public results expose
 only private IDs, fixed reasons and the chosen report, including on lost replies.
 Raw MIME and body-derived metadata stay internal. No runner invokes this library.
+
+## Reuse and composition checkpoint
+
+The [pinned library experiments](PROTECTED_MAIL_REUSE_SPIKE.md) evaluate maintained
+IMAP/MIME engines without replacing the current executors or changing frozen
+grants. Complete synthetic composition is the next milestone. Common transport,
+canonical and lifecycle code can be shared while retaining purpose-specific
+atomic transactions, IDs and historical replay. No durable-table migration,
+production dependency or runtime activation is part of this review.
