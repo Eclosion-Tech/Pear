@@ -8,9 +8,9 @@ use spacetimedb::{
     Timestamp,
 };
 
-use super::admission::{canonical, hash, hex64, now_ms};
+use super::admission::{canonical, hash, hex64, human, now_ms};
 use super::governance::{
-    current_effective_policy, source_policy_enrolled, validate_prospective_derived_source,
+    current_effective_policy, resolve_source_graph, source_policy_enrolled, validate_prospective_derived_source,
     validate_source_ref, ProtectedMailProcessor, ProtectedMailSourceGeneration,
     ProtectedMailSourceRef,
 };
@@ -22,8 +22,9 @@ use super::inference::{
 };
 use super::processors::checked_revision as checked_processor_revision;
 use super::provenance::{
-    accepted_result_reference, insert_accepted_result_stage, verify_accepted_result_stage,
+    accepted_result_body, accepted_result_reference, insert_accepted_result_stage, verify_accepted_result_stage,
 };
+use crate::module_install::module_install_meta;
 
 const INVALID: &str = "protected_mail_result_invalid_request";
 const INCONSISTENT: &str = "protected_mail_result_inconsistent";
@@ -115,6 +116,19 @@ pub struct ProtectedMailResultReceipt {
 pub struct ProtectedMailAcceptedResult {
     pub admission_id: String,
     pub source: ProtectedMailSourceRef,
+    pub envelope_digest: String,
+    pub envelope_bytes: u64,
+}
+
+/// One retained accepted body for its current authenticated human owner. This
+/// is not a new storage, processing, approval or summary-promotion capability.
+/// Product order is the closed procedure response contract.
+#[derive(SpacetimeType)]
+pub struct ProtectedMailOwnerResult {
+    pub format_version: u32,
+    pub admission_id: String,
+    pub source: ProtectedMailSourceRef,
+    pub body: String,
     pub envelope_digest: String,
     pub envelope_bytes: u64,
 }
@@ -765,9 +779,164 @@ pub fn accept_protected_mail_inference_result(
     })
 }
 
+fn owner_result_response(
+    accepted: ProtectedMailAcceptedResult,
+    body: String,
+) -> Result<ProtectedMailOwnerResult, String> {
+    if !hex64(&accepted.admission_id)
+        || validate_source_ref(&accepted.source).is_err()
+        || !accepted.source.id.starts_with("mail-derived-source:")
+        || accepted.source.revision != 1
+        || body.is_empty()
+        || body.len() > MAX_BODY
+        || body.chars().any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+        || !hex64(&accepted.envelope_digest)
+        || accepted.envelope_bytes == 0
+        || accepted.envelope_bytes > MAX_ENVELOPE
+    {
+        return Err(INCONSISTENT.into());
+    }
+    Ok(ProtectedMailOwnerResult {
+        format_version: 1,
+        admission_id: accepted.admission_id,
+        source: accepted.source,
+        body,
+        envelope_digest: accepted.envelope_digest,
+        envelope_bytes: accepted.envelope_bytes,
+    })
+}
+
+fn owner_read_error(error: String) -> String {
+    if error == OWNER { OWNER.into() } else { INCONSISTENT.into() }
+}
+
+fn read_owner_result(
+    ctx: &ReducerContext,
+    id: &str,
+) -> Result<ProtectedMailOwnerResult, String> {
+    // Identity metadata is read before any admission, receipt or body. Missing
+    // publisher metadata also fails closed, as the retained S1 owner view does.
+    let eligible = ctx.db.module_install_meta().id().find(0)
+        .is_some_and(|meta| meta.publisher_identity != ctx.sender())
+        && human(ctx, ctx.sender());
+    if !eligible || !hex64(id) {
+        return Err(OWNER.into());
+    }
+    // This exact-owner adapter validates retained grant/run/admission and the
+    // original immutable input graph without requiring live operational rights.
+    let (grant, _, admission) = owner_context(ctx, id)?;
+    let receipt = ctx.db.protected_mail_result_receipt().admission_id()
+        .find(id.to_owned()).ok_or(OWNER)?;
+    if receipt.owner != ctx.sender()
+        || receipt.owner != admission.owner
+        || receipt.collection_id != admission.collection_id
+        || receipt.broker_identity != admission.broker_identity
+    {
+        return Err(INCONSISTENT.into());
+    }
+    let authorization = checked_authorization(ctx, &grant, &admission)
+        .map_err(|_| INCONSISTENT)?;
+    let body = accepted_result_body(ctx, admission.collection_id, admission.owner, id, &receipt.source)
+        .map_err(|_| INCONSISTENT)?;
+    let result = ProtectedMailInferenceTextResult {
+        format_version: receipt.format_version,
+        adapter: receipt.adapter.clone(),
+        model: receipt.model.clone(),
+        stop_reason: receipt.stop_reason.clone(),
+        output_tokens: receipt.output_tokens,
+        body,
+    };
+    // Reuse the completed-result checker: authorization, envelope bytes/hash,
+    // dispatch/completion, accepted derivation/seal and policy-row associations.
+    // It does not restore or require current processing/storage permissions.
+    let accepted = historical_result(ctx, &grant, &admission, &authorization, &receipt,
+        &receipt.event_nonce, &result).map_err(|_| INCONSISTENT)?;
+    // Validate the complete immutable result graph, including its output node.
+    // Policy revocation is deliberately separate from retained owner access.
+    let actual = resolve_source_graph(ctx, admission.collection_id, std::slice::from_ref(&receipt.source))
+        .map_err(|_| INCONSISTENT)?;
+    let mut expected = bindings_refs(&admission.source_bindings);
+    expected.push(receipt.source.clone());
+    expected.sort_by(|a, b| (&a.id, a.revision).cmp(&(&b.id, b.revision)));
+    if actual.into_iter().map(|source| source.reference).collect::<Vec<_>>() != expected {
+        return Err(INCONSISTENT.into());
+    }
+    owner_result_response(accepted, result.body)
+}
+
+/// Historical private retrieval only. Later connection deletion, grant expiry,
+/// revocation or ancestor-policy narrowing cannot erase an already accepted
+/// owner's history. Current login, exact ownership and all retained joins are
+/// still required. This read performs no repair, admission, broadcast or write.
+#[procedure]
+pub fn read_protected_mail_result(
+    ctx: &mut ProcedureContext,
+    admission_id: String,
+) -> Result<ProtectedMailOwnerResult, String> {
+    ctx.try_with_tx(|tx| read_owner_result(tx.as_ref(), &admission_id).map_err(owner_read_error))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn accepted_owner_response(body: &str) -> ProtectedMailAcceptedResult {
+        let admission = "a".repeat(64);
+        let result = ProtectedMailInferenceTextResult { body: body.into(), ..declaration() };
+        let bytes = envelope(&admission, &result, &parents()).unwrap();
+        ProtectedMailAcceptedResult {
+            admission_id: admission.clone(),
+            source: accepted_result_reference(7, &admission, body),
+            envelope_digest: hex::encode(Sha256::digest(&bytes)),
+            envelope_bytes: bytes.len() as u64,
+        }
+    }
+
+    #[test]
+    fn owner_response_keeps_literal_unicode_and_closed_bounded_product() {
+        let body = " \u{feff}🍐e\u{301}\u{2028}\r\n\"\\\t ";
+        let row = owner_result_response(accepted_owner_response(body), body.into()).unwrap();
+        assert_eq!(row.format_version, 1);
+        assert!(row.body.as_bytes() == body.as_bytes());
+        let product = json!([row.format_version, row.admission_id,
+            [row.source.id, row.source.revision, row.source.digest], row.body,
+            row.envelope_digest, row.envelope_bytes]);
+        assert_eq!(product.as_array().unwrap().len(), 6);
+        // JSON doubles every body character in this worst-escape case, but
+        // remains below the host's separate streamed response ceiling.
+        let body = "\\".repeat(MAX_BODY);
+        let row = owner_result_response(accepted_owner_response(&body), body).unwrap();
+        let encoded = json!([row.format_version, row.admission_id,
+            [row.source.id, row.source.revision, row.source.digest], row.body,
+            row.envelope_digest, row.envelope_bytes]).to_string();
+        assert!(encoded.len() < 192 * 1024);
+    }
+
+    #[test]
+    fn owner_response_rejects_unbounded_or_nonliteral_payload_and_bad_metadata() {
+        for body in [String::new(), "x".repeat(MAX_BODY + 1), "bad\0body".into(), "bad\u{85}body".into()] {
+            assert!(owner_result_response(accepted_owner_response("valid"), body).is_err());
+        }
+        for mutate in [
+            |row: &mut ProtectedMailAcceptedResult| row.admission_id = "not-an-id".into(),
+            |row: &mut ProtectedMailAcceptedResult| row.source.revision = 2,
+            |row: &mut ProtectedMailAcceptedResult| row.source.id = "mail-source:7:unrelated".into(),
+            |row: &mut ProtectedMailAcceptedResult| row.envelope_digest = "not-a-digest".into(),
+            |row: &mut ProtectedMailAcceptedResult| row.envelope_bytes = 0,
+            |row: &mut ProtectedMailAcceptedResult| row.envelope_bytes = MAX_ENVELOPE + 1,
+        ] {
+            let mut row = accepted_owner_response("valid"); mutate(&mut row);
+            assert!(owner_result_response(row, "valid".into()).is_err());
+        }
+    }
+
+    #[test]
+    fn owner_read_only_exposes_its_two_fixed_denials() {
+        assert_eq!(owner_read_error(OWNER.into()), OWNER);
+        for error in [BROKER, REQUIRED, CONFLICT, STALE, LIMIT, "SYNTHETIC_PRIVATE_DETAIL\nsecret"] {
+            assert_eq!(owner_read_error(error.into()), INCONSISTENT);
+        }
+    }
+
     fn source(id: &str, revision: u64, c: char) -> ProtectedMailSourceRef {
         ProtectedMailSourceRef {
             id: id.into(),

@@ -697,6 +697,47 @@ pub(super) fn accepted_result_reference(collection_id: u64, admission_id: &str, 
     let (_,_,_,derivation)=result_stage_ids(collection_id,admission_id);
     ProtectedMailSourceRef { id:derived_source_id(&derivation),revision:DERIVED_REVISION,digest:derivation_digest(body,RESULT_SANITIZATION) }
 }
+
+fn accepted_result_body_matches(
+    collection_id: u64,
+    owner: Identity,
+    admission_id: &str,
+    reference: &ProtectedMailSourceRef,
+    row: &ProtectedMailDerivation,
+) -> bool {
+    let (context, event, exposure, derivation) = result_stage_ids(collection_id, admission_id);
+    row.owner == owner
+        && row.collection_id == collection_id
+        && row.id == derivation
+        && row.context_id == context
+        && row.exposure_id == exposure
+        && row.event_key == event
+        && row.source_id == reference.id
+        && row.revision == reference.revision
+        && row.digest == reference.digest
+        && row.sanitization_version == RESULT_SANITIZATION
+        && !row.body.is_empty()
+        && row.body.len() <= 64 * 1024
+        && *reference == accepted_result_reference(collection_id, admission_id, &row.body)
+}
+
+/// Indexed body lookup for an already authenticated exact-owner result read.
+/// This only bounds the body and its result namespace before returning it to
+/// the existing full historical receipt/stage validator; it is not authority.
+pub(super) fn accepted_result_body(
+    ctx: &ReducerContext,
+    collection_id: u64,
+    owner: Identity,
+    admission_id: &str,
+    reference: &ProtectedMailSourceRef,
+) -> Result<String, String> {
+    let row = ctx.db.protected_mail_derivation().source_id().find(reference.id.clone())
+        .ok_or("protected_mail_result_inconsistent")?;
+    if !accepted_result_body_matches(collection_id, owner, admission_id, reference, &row) {
+        return Err("protected_mail_result_inconsistent".into());
+    }
+    Ok(row.body)
+}
 /// No public publisher gate is relaxed. The unforgeable internal token is
 /// created only after the separate result-storage authorization succeeds in
 /// this exact transaction; callers cannot choose a context, parents or policy.
@@ -815,6 +856,56 @@ pub(super) fn resolve_derived_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn owner_result_stage() -> (String, ProtectedMailSourceRef, ProtectedMailDerivation) {
+        let admission = "a".repeat(64);
+        let body = "literal retained result 🍐\r\n";
+        let reference = accepted_result_reference(7, &admission, body);
+        let (context, event, exposure, derivation) = result_stage_ids(7, &admission);
+        let row = ProtectedMailDerivation {
+            id: derivation,
+            source_id: reference.id.clone(),
+            owner: Identity::from_byte_array([1; 32]),
+            collection_id: 7,
+            context_id: context.clone(),
+            exposure_id: exposure.clone(),
+            event_key: event.clone(),
+            request_digest: derivation_request_digest(&context, &exposure, &event, &reference.digest),
+            revision: reference.revision,
+            digest: reference.digest.clone(),
+            body: body.into(),
+            sanitization_version: RESULT_SANITIZATION.into(),
+            parents: vec![],
+            created_at: Timestamp::from_micros_since_unix_epoch(1),
+        };
+        (admission, reference, row)
+    }
+
+    #[test]
+    fn retained_body_lookup_is_exact_owner_result_namespace_and_digest_bound() {
+        let owner = Identity::from_byte_array([1; 32]);
+        let (admission, reference, row) = owner_result_stage();
+        assert!(accepted_result_body_matches(7, owner, &admission, &reference, &row));
+        assert!(!accepted_result_body_matches(8, owner, &admission, &reference, &row));
+        assert!(!accepted_result_body_matches(7, Identity::from_byte_array([2; 32]), &admission, &reference, &row));
+        assert!(!accepted_result_body_matches(7, owner, &"b".repeat(64), &reference, &row));
+        for mutate in [
+            |row: &mut ProtectedMailDerivation| row.context_id.push('x'),
+            |row: &mut ProtectedMailDerivation| row.exposure_id.push('x'),
+            |row: &mut ProtectedMailDerivation| row.id.push('x'),
+            |row: &mut ProtectedMailDerivation| row.event_key = "b".repeat(64),
+            |row: &mut ProtectedMailDerivation| row.source_id.push('x'),
+            |row: &mut ProtectedMailDerivation| row.digest = "b".repeat(64),
+            |row: &mut ProtectedMailDerivation| row.revision = 2,
+            |row: &mut ProtectedMailDerivation| row.sanitization_version = "other".into(),
+            |row: &mut ProtectedMailDerivation| row.body.push('x'),
+            |row: &mut ProtectedMailDerivation| row.body.clear(),
+            |row: &mut ProtectedMailDerivation| row.body = "x".repeat(64 * 1024 + 1),
+        ] {
+            let (admission, reference, mut row) = owner_result_stage(); mutate(&mut row);
+            assert!(!accepted_result_body_matches(7, owner, &admission, &reference, &row));
+        }
+    }
 
     fn source(id: &str, revision: u64, digit: char) -> ProtectedMailSourceRef {
         ProtectedMailSourceRef {

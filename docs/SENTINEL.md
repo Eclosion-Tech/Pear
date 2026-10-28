@@ -1,13 +1,13 @@
 # Sentinel implementation status
 
-**Updated:** 2026-10-24
+**Updated:** 2026-10-28
 
-**Status:** S0 through S2b2c8 are merged. This branch is a
-[maintained-library reuse experiment](PROTECTED_MAIL_REUSE_SPIKE.md) and
-composition review, with no production or authority change. Next work joins
-bounded internal MIME custody to existing ingestion and adds narrow owner
-retrieval of accepted result rows. New per-step ledgers are deferred until
-that integration is proved. Protected monitoring stays disabled.
+**Status:** S0 through S2b2c8 and the reuse review are merged. This branch adds a
+[dormant contiguous composition](PROTECTED_MAIL_COMPOSITION.md): bounded internal
+MIME custody feeds existing exact ingestion, and a narrow read-only procedure
+returns accepted results to their authenticated human owner. The synthetic proof
+uses existing durable operations, with no new table or grant family. Sparse
+integration, recurrence and production host/UI gates remain. Monitoring stays disabled.
 
 Sentinel will enforce authority and disclosure rules outside the model. Email,
 webpages, workspace content, tool output, and derived summaries cannot grant
@@ -337,7 +337,7 @@ plan release and one full maximum raw-MIME reservation per selection. Neither
 unknown outcomes nor terminal reports refund or reopen it. The fixed service
 procedure rechecks current selection, cursor and authority before committing
 Dispatching; no message needs to exist in S1 yet. The separate fixed executor tests bounded IMAP execution; prepared-text storage
-now has independent admission. Actual MIME/body integration and the protected
+now has independent admission. Production MIME/body integration and the protected
 runner remain later gates.
 
 ## Dormant bounded IMAP executor
@@ -418,7 +418,8 @@ Raw MIME and body-derived metadata stay internal. No runner invokes this library
 
 The [pinned library experiments](PROTECTED_MAIL_REUSE_SPIKE.md) evaluate maintained
 IMAP/MIME engines without replacing the current executors or changing frozen
-grants. Complete synthetic composition is the next milestone. Common transport,
+grants. The [contiguous composition](PROTECTED_MAIL_COMPOSITION.md) implements
+that next milestone as a dormant synthetic path. Common transport,
 canonical and lifecycle code can be shared while retaining purpose-specific
 atomic transactions, IDs and historical replay. No durable-table migration,
 production dependency or runtime activation is part of this review.

@@ -5,6 +5,7 @@ import { isIP } from "node:net";
 import { connect, checkServerIdentity, type ConnectionOptions, type TLSSocket } from "node:tls";
 import { prepareConnectorRead } from "../../../packages/sentinel/src/index.js";
 import { isPrivateIp, publicSocketLookup } from "../ssrf.js";
+import { ProtectedMailIngestionCustody } from "./protected-mail-ingestion-custody.js";
 import { ProtectedMailImapError, type ProtectedMailImapReason, type ProtectedMailImapSessionOptions,
   type ProtectedMailImapSessionResult, type ProtectedMailReadMessageMetadata } from "./protected-mail-read-types.js";
 
@@ -138,10 +139,13 @@ class Input {
     if (/\[REFERRAL(?:\s|\])/i.test(value)) return fail("protocol_failure");
     return value;
   }
-  async literal(length: number): Promise<string> {
+  async literal(length: number, captured?: Buffer): Promise<string> {
     const hash = createHash("sha256");
-    let remaining = length;
-    while (remaining) { const bytes = await this.take(remaining); hash.update(bytes); remaining -= bytes.length; }
+    let remaining = length, offset = 0;
+    while (remaining) {
+      const bytes = await this.take(remaining); hash.update(bytes);
+      captured?.set(bytes, offset); offset += bytes.length; remaining -= bytes.length;
+    }
     return hash.digest("hex");
   }
   write(command: string): void {
@@ -174,7 +178,8 @@ function flags(value: string): boolean {
   return value === "" || value.split(" ").every(flag => /^(?:\\(?:[A-Za-z]+|\*)|[A-Za-z0-9$._-]+)$/.test(flag));
 }
 
-async function session(input: Input, plan: ProtectedMailImapSessionOptions["plan"], password: string): Promise<ProtectedMailImapSessionResult> {
+async function session(input: Input, plan: ProtectedMailImapSessionOptions["plan"], password: string,
+  custody?: ProtectedMailIngestionCustody): Promise<ProtectedMailImapSessionResult> {
   const greeting = await input.line();
   if (!/^\* OK(?: |$)/i.test(greeting)) return fail("protocol_failure");
   input.boundary();
@@ -233,7 +238,10 @@ async function session(input: Input, plan: ProtectedMailImapSessionOptions["plan
     const header = await input.line();
     if (taggedOk(header, tag)) return fail("missing_uid");
     const { literalLength } = parseProtectedMailFetchHeader(header, uid, cap);
-    const digest = await input.literal(literalLength);
+    // Allocate only after the same strict UID/SIZE/exact-cap checks. The fixed
+    // internal custody has no caller-selected sink and publishes nothing yet.
+    const captured = custody?.allocate(uid, literalLength);
+    const digest = await input.literal(literalLength, captured);
     if (await input.line() !== ")" || !taggedOk(await input.line(), tag)) return fail("protocol_failure");
     input.boundary();
     bodyBytes += literalLength;
@@ -242,7 +250,8 @@ async function session(input: Input, plan: ProtectedMailImapSessionOptions["plan
   return Object.freeze({ messages: Object.freeze(messages), bodyBytes });
 }
 
-export async function runProtectedMailImapSession(options: ProtectedMailImapSessionOptions): Promise<ProtectedMailImapSessionResult> {
+async function runSession(options: ProtectedMailImapSessionOptions, capture: boolean):
+  Promise<{ session: ProtectedMailImapSessionResult; custody?: ProtectedMailIngestionCustody }> {
   const { password, signal, deadlineAtMs, ca, lookup } = options;
   if (!safePassword(password)) return fail("authentication_failed");
   if (!Number.isSafeInteger(deadlineAtMs) || deadlineAtMs <= 0) return fail("deadline_exceeded");
@@ -250,6 +259,8 @@ export async function runProtectedMailImapSession(options: ProtectedMailImapSess
   const prepared = await prepareConnectorRead(options.plan);
   if (prepared.status !== "prepared") return fail("protocol_failure");
   const plan = prepared.read.manifest, expires = plan.selection.expiresAtMs;
+  const custody = capture ? new ProtectedMailIngestionCustody(plan) : undefined;
+  let completed = false;
   const deadline = Math.min(deadlineAtMs, expires, Date.now() + 60_000);
   let input: Input | undefined, socket: TLSSocket | undefined, stopped: ProtectedMailImapReason | undefined;
   const guard = () => {
@@ -278,7 +289,27 @@ export async function runProtectedMailImapSession(options: ProtectedMailImapSess
     } catch { return fail("tls_failure"); }
     input = new Input(socket, plan.limits.maxTotalBytes + MAX_CONTROL, guard);
     await input.verified();
-    return await session(input, plan, password);
+    const result = await session(input, plan, password, custody);
+    guard();
+    custody?.seal(result.messages);
+    guard();
+    completed = true;
+    return { session: result, custody };
   } catch (error) { throw new ProtectedMailImapError(fixedReason(error)); }
-  finally { if (timer !== undefined) clearTimeout(timer); signal.removeEventListener("abort", onAbort); input?.close(); socket?.destroy(); }
+  finally {
+    if (timer !== undefined) clearTimeout(timer); signal.removeEventListener("abort", onAbort); input?.close(); socket?.destroy();
+    if (!completed) custody?.discard();
+  }
+}
+
+export async function runProtectedMailImapSession(options: ProtectedMailImapSessionOptions): Promise<ProtectedMailImapSessionResult> {
+  return (await runSession(options, false)).session;
+}
+
+/** Internal composition only. Not exported through any runner/tool/route.
+ * No raw bytes or general callback are returned; only sealed fixed custody. */
+export async function runProtectedMailImapIngestionSession(options: ProtectedMailImapSessionOptions):
+  Promise<{ session: ProtectedMailImapSessionResult; custody: ProtectedMailIngestionCustody }> {
+  const result = await runSession(options, true);
+  return { session: result.session, custody: result.custody! };
 }

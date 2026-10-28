@@ -177,3 +177,8 @@ adds separate owner approval over a nonempty recorded observation and complete
 already-stored present records. It uses a dedicated third history family under
 the same cursor, preserving this contract's scope and exact historical retries.
 It does not authorize new body reads, ingestion or permanent absence tombstones.
+
+
+The later [dormant composition](PROTECTED_MAIL_COMPOSITION.md) joins existing operations without changing
+this storage authority. It adds no grant family or recurring approval; monitoring
+remains disabled.
