@@ -312,6 +312,7 @@ import * as BeginProtectedMailInferenceDispatchProcedure from "./begin_protected
 import * as BeginProtectedMailReadDispatchProcedure from "./begin_protected_mail_read_dispatch_procedure";
 import * as BeginProtectedMailSparseReadDispatchProcedure from "./begin_protected_mail_sparse_read_dispatch_procedure";
 import * as CompleteProtectedMailDiscoveryProcedure from "./complete_protected_mail_discovery_procedure";
+import * as ReadProtectedMailResultProcedure from "./read_protected_mail_result_procedure";
 import * as ReviewProtectedMailConnectorSelectionProcedure from "./review_protected_mail_connector_selection_procedure";
 import * as ReviewProtectedMailDiscoveryProcedure from "./review_protected_mail_discovery_procedure";
 import * as ReviewProtectedMailIngestionProcedure from "./review_protected_mail_ingestion_procedure";
@@ -1813,6 +1814,7 @@ const proceduresSchema = __procedures(
   __procedureSchema("begin_protected_mail_read_dispatch", BeginProtectedMailReadDispatchProcedure.params, BeginProtectedMailReadDispatchProcedure.returnType),
   __procedureSchema("begin_protected_mail_sparse_read_dispatch", BeginProtectedMailSparseReadDispatchProcedure.params, BeginProtectedMailSparseReadDispatchProcedure.returnType),
   __procedureSchema("complete_protected_mail_discovery", CompleteProtectedMailDiscoveryProcedure.params, CompleteProtectedMailDiscoveryProcedure.returnType),
+  __procedureSchema("read_protected_mail_result", ReadProtectedMailResultProcedure.params, ReadProtectedMailResultProcedure.returnType),
   __procedureSchema("review_protected_mail_connector_selection", ReviewProtectedMailConnectorSelectionProcedure.params, ReviewProtectedMailConnectorSelectionProcedure.returnType),
   __procedureSchema("review_protected_mail_discovery", ReviewProtectedMailDiscoveryProcedure.params, ReviewProtectedMailDiscoveryProcedure.returnType),
   __procedureSchema("review_protected_mail_ingestion", ReviewProtectedMailIngestionProcedure.params, ReviewProtectedMailIngestionProcedure.returnType),

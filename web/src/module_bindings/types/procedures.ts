@@ -16,6 +16,7 @@ import * as BeginProtectedMailInferenceDispatchProcedure from "../begin_protecte
 import * as BeginProtectedMailReadDispatchProcedure from "../begin_protected_mail_read_dispatch_procedure";
 import * as BeginProtectedMailSparseReadDispatchProcedure from "../begin_protected_mail_sparse_read_dispatch_procedure";
 import * as CompleteProtectedMailDiscoveryProcedure from "../complete_protected_mail_discovery_procedure";
+import * as ReadProtectedMailResultProcedure from "../read_protected_mail_result_procedure";
 import * as ReviewProtectedMailConnectorSelectionProcedure from "../review_protected_mail_connector_selection_procedure";
 import * as ReviewProtectedMailDiscoveryProcedure from "../review_protected_mail_discovery_procedure";
 import * as ReviewProtectedMailIngestionProcedure from "../review_protected_mail_ingestion_procedure";
@@ -43,6 +44,8 @@ export type BeginProtectedMailSparseReadDispatchArgs = __Infer<typeof BeginProte
 export type BeginProtectedMailSparseReadDispatchResult = __Infer<typeof BeginProtectedMailSparseReadDispatchProcedure.returnType>;
 export type CompleteProtectedMailDiscoveryArgs = __Infer<typeof CompleteProtectedMailDiscoveryProcedure.params>;
 export type CompleteProtectedMailDiscoveryResult = __Infer<typeof CompleteProtectedMailDiscoveryProcedure.returnType>;
+export type ReadProtectedMailResultArgs = __Infer<typeof ReadProtectedMailResultProcedure.params>;
+export type ReadProtectedMailResultResult = __Infer<typeof ReadProtectedMailResultProcedure.returnType>;
 export type ReviewProtectedMailConnectorSelectionArgs = __Infer<typeof ReviewProtectedMailConnectorSelectionProcedure.params>;
 export type ReviewProtectedMailConnectorSelectionResult = __Infer<typeof ReviewProtectedMailConnectorSelectionProcedure.returnType>;
 export type ReviewProtectedMailDiscoveryArgs = __Infer<typeof ReviewProtectedMailDiscoveryProcedure.params>;

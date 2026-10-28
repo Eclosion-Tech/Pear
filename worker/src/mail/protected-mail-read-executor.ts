@@ -6,7 +6,8 @@ import type { LookupFunction } from "node:net";
 import { beginProtectedMailReadDispatch, type ProtectedMailReadDispatch, type ProtectedMailReadDispatchResult,
   type ProtectedMailReadProcedureOptions } from "./protected-mail-read-dispatch.js";
 import { finishProtectedMailReadDispatch } from "./protected-mail-read-report.js";
-import { runProtectedMailImapSession } from "./protected-mail-imap-session.js";
+import { runProtectedMailImapSession, runProtectedMailImapIngestionSession } from "./protected-mail-imap-session.js";
+import type { ProtectedMailIngestionCustody } from "./protected-mail-ingestion-custody.js";
 import { ProtectedMailImapError, type ProtectedMailImapReason, type ProtectedMailReadBinding,
   type ProtectedMailReadCredential, type ProtectedMailReadMessageMetadata, type ProtectedMailReadOutcome,
   type ProtectedMailReadReport } from "./protected-mail-read-types.js";
@@ -27,6 +28,9 @@ export type ProtectedMailReadExecutionResult =
   | { readonly kind: "stopped"; readonly readId: string; readonly reason: StopReason; readonly report: ProtectedMailReadReport }
   | { readonly kind: "completed"; readonly readId: string; readonly planDigest: string; readonly uidValidity: string;
     readonly messages: readonly ProtectedMailReadMessageMetadata[]; readonly bodyBytes: number; readonly report: ProtectedMailReadReport };
+/** Private composition result; not exposed by the public read executor. */
+export type ProtectedMailIngestionReadResult = Exclude<ProtectedMailReadExecutionResult, { kind: "completed" }>
+  | { readonly kind: "captured"; readonly claim: ProtectedMailReadDispatch; readonly custody: ProtectedMailIngestionCustody };
 
 const hex = (v: unknown): v is string => typeof v === "string" && /^[a-f0-9]{64}$/.test(v);
 const safe = (v: unknown, max: number): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 1 && v <= max;
@@ -98,8 +102,10 @@ async function bounded<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
 /** Configuration is copied once. A resolver must check the exact frozen
  * credential/version association and current host authority before returning;
  * its echo is a TCB declaration, not a vault attestation. No fallback exists. */
-export function createProtectedMailReadExecutor(options: ProtectedMailReadExecutorOptions):
-  (readId: string, signal?: AbortSignal) => Promise<ProtectedMailReadExecutionResult> {
+function createExecutor(options: ProtectedMailReadExecutorOptions, capture: false): (readId: string, signal?: AbortSignal) => Promise<ProtectedMailReadExecutionResult>;
+function createExecutor(options: ProtectedMailReadExecutorOptions, capture: true): (readId: string, signal?: AbortSignal) => Promise<ProtectedMailIngestionReadResult>;
+function createExecutor(options: ProtectedMailReadExecutorOptions, capture: boolean):
+  (readId: string, signal?: AbortSignal) => Promise<ProtectedMailReadExecutionResult | ProtectedMailIngestionReadResult> {
   let authority: ProtectedMailReadProcedureOptions, resolveCredential: ProtectedMailReadExecutorOptions["resolveCredential"],
     timeout: number, ca: string | undefined, lookup: LookupFunction | undefined;
   try {
@@ -123,6 +129,7 @@ export function createProtectedMailReadExecutor(options: ProtectedMailReadExecut
     let timer = setTimeout(() => controller.abort("deadline_exceeded"), timeout);
     let phase: "claim" | "credential" | "session" = "claim";
     let claim: ProtectedMailReadDispatch | undefined, session: Awaited<ReturnType<typeof runProtectedMailImapSession>> | undefined;
+    let custody: ProtectedMailIngestionCustody | undefined;
     let reason: StopReason | undefined;
     try {
       const fetchImpl = authority.fetchImpl ?? fetch;
@@ -136,12 +143,14 @@ export function createProtectedMailReadExecutor(options: ProtectedMailReadExecut
       const binding = bindingOf(claim);
       if (Date.now() < binding.notBeforeMs || Date.now() >= binding.expiresAtMs) throw new Stop("read_expired");
       if (controller.signal.aborted) throw new Stop(signalReason(controller.signal));
+      if (capture && Date.now() >= deadlineAtMs) throw new Stop("deadline_exceeded");
       clearTimeout(timer);
       timer = setTimeout(() => controller.abort(Date.now() >= binding.expiresAtMs ? "read_expired" : "deadline_exceeded"),
         Math.max(1, Math.min(deadlineAtMs, binding.expiresAtMs) - Date.now()));
       let resolved: unknown;
       try { resolved = await bounded(Promise.resolve().then(() => {
         if (controller.signal.aborted) throw new Stop(signalReason(controller.signal));
+        if (capture && (Date.now() >= deadlineAtMs || Date.now() >= binding.expiresAtMs)) throw new Stop("deadline_exceeded");
         return resolveCredential(binding, controller.signal);
       }), controller.signal); }
       catch (error) { if (error instanceof Stop) throw error; throw new Stop("credential_unavailable"); }
@@ -150,14 +159,25 @@ export function createProtectedMailReadExecutor(options: ProtectedMailReadExecut
       if (Date.now() < binding.notBeforeMs || Date.now() >= binding.expiresAtMs) throw new Stop("read_expired");
       if (controller.signal.aborted || Date.now() >= deadlineAtMs) throw new Stop(controller.signal.aborted ? signalReason(controller.signal) : "deadline_exceeded");
       phase = "session";
-      session = await bounded(runProtectedMailImapSession({ plan: claim.plan, password, signal: controller.signal,
-        deadlineAtMs, ca, lookup }), controller.signal);
+      const sessionOptions = { plan: claim.plan, password, signal: controller.signal, deadlineAtMs, ca, lookup };
+      if (capture) {
+        const pending = runProtectedMailImapIngestionSession(sessionOptions);
+        let adopted = false;
+        try {
+          const result = await bounded(pending, controller.signal);
+          session = result.session; custody = result.custody; adopted = true;
+        } finally {
+          // Even a losing late completion cannot retain an undisclosed batch.
+          if (!adopted) void pending.then(result => result.custody.discard(), () => {});
+        }
+      } else session = await bounded(runProtectedMailImapSession(sessionOptions), controller.signal);
     } catch (error) {
       if (!claim) return Object.freeze({ kind: "unknown", reason: "claim_outcome_unknown" });
       reason = error instanceof Stop || error instanceof ProtectedMailImapError ? error.reason : "executor_failure";
     } finally {
       clearTimeout(timer); signal?.removeEventListener("abort", abort); controller.abort("aborted");
     }
+    if (capture && session && custody) return Object.freeze({ kind: "captured", claim: claim!, custody });
     // Choose once, before reporting. A lost reporting reply never substitutes
     // another outcome, starts a second session, or refunds the reservation.
     const outcome: ProtectedMailReadOutcome = session ? "ReadReported" : phase === "session"
@@ -168,4 +188,16 @@ export function createProtectedMailReadExecutor(options: ProtectedMailReadExecut
     return Object.freeze({ kind: "completed", readId, planDigest: claim!.planDigest, uidValidity: claim!.plan.selection.selection.uidValidity,
       messages: session.messages, bodyBytes: session.bodyBytes, report });
   };
+}
+
+export function createProtectedMailReadExecutor(options: ProtectedMailReadExecutorOptions):
+  (readId: string, signal?: AbortSignal) => Promise<ProtectedMailReadExecutionResult> {
+  return createExecutor(options, false);
+}
+
+/** Fixed private continuation, no caller-selected collection/report option.
+ * Only the dormant ingestion composition consumes this function. */
+export function createProtectedMailIngestionRead(options: ProtectedMailReadExecutorOptions):
+  (readId: string, signal?: AbortSignal) => Promise<ProtectedMailIngestionReadResult> {
+  return createExecutor(options, true);
 }

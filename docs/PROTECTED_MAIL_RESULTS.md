@@ -161,3 +161,8 @@ The populated upgrade retained the old 30 private tables without backfill;
 all 33 survived the same disk-backed restart without republishing. Native logs
 contained no panic or synthetic inference/result body marker. The owned server,
 synthetic databases, checkpoints, logs and JWT keys were removed.
+
+
+The later [owner result retrieval and composition](PROTECTED_MAIL_COMPOSITION.md) joins existing operations without changing
+this storage authority. It adds no grant family or recurring approval; monitoring
+remains disabled.

@@ -2567,6 +2567,18 @@ export const ProtectedMailInstructionStatus = __t.enum("ProtectedMailInstruction
 });
 export type ProtectedMailInstructionStatus = __Infer<typeof ProtectedMailInstructionStatus>;
 
+export const ProtectedMailOwnerResult = __t.object("ProtectedMailOwnerResult", {
+  formatVersion: __t.u32(),
+  admissionId: __t.string(),
+  get source() {
+    return ProtectedMailSourceRef;
+  },
+  body: __t.string(),
+  envelopeDigest: __t.string(),
+  envelopeBytes: __t.u64(),
+});
+export type ProtectedMailOwnerResult = __Infer<typeof ProtectedMailOwnerResult>;
+
 export const ProtectedMailProcessor = __t.object("ProtectedMailProcessor", {
   profileId: __t.string(),
   revision: __t.string(),

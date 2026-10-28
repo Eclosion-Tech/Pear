@@ -1,6 +1,6 @@
 # Sentinel coverage inventory and staged storage boundary
 
-**Status: S0–S2b2c8 merged; reuse/composition review, October 24, 2026.** The [library experiments](PROTECTED_MAIL_REUSE_SPIKE.md) measure reuse without changing production paths or existing authority. Next are bounded internal MIME custody before atomic ingestion and authenticated owner result retrieval. No new ledger, migration or activation is added; monitoring remains disabled.
+**Status: S0–S2b2c8 and reuse review merged; contiguous composition working branch, October 28, 2026.** The [composition boundary](PROTECTED_MAIL_COMPOSITION.md) connects bounded internal read/MIME custody to existing atomic ingestion and adds exact authenticated-owner retrieval of accepted results. Public executors stay opaque; there is no new table, grant family, migration, sparse conversion or activation. Monitoring remains disabled.
 
 See [current implementation](SENTINEL.md), the Cloud [implementation plan](https://forge.syntropy.chat/Eclosion-Tech/pear-cloud/src/branch/main/docs/PEAR_SENTINEL_PLAN.md) and [research proposal](https://forge.syntropy.chat/Eclosion-Tech/pear-cloud/src/branch/main/docs/UNTRUSTED_CONTENT_SPIKE.md). Cloud links refer to that host repository; Pear OSS does not require its implementation. Source references identify the audited seams, not evidence that their remaining gates pass.
 
