@@ -1,6 +1,6 @@
 # Sentinel coverage inventory and staged storage boundary
 
-**Status: S0–S2b2c7 merged; S2b2c8 sparse execution staged, October 23, 2026.** A dormant host closure consumes the observed-UID read claim before exact credential resolution and fixed TLS execution. Raw MIME stays internal; only opaque IDs and terminal report metadata return. No body ingestion, cursor/head progress, production adapter or activation is added. See the [sparse executor boundary](PROTECTED_MAIL_SPARSE_EXECUTOR.md).
+**Status: S0–S2b2c8 merged; reuse/composition review, October 24, 2026.** The [library experiments](PROTECTED_MAIL_REUSE_SPIKE.md) measure reuse without changing production paths or existing authority. Next are bounded internal MIME custody before atomic ingestion and authenticated owner result retrieval. No new ledger, migration or activation is added; monitoring remains disabled.
 
 See [current implementation](SENTINEL.md), the Cloud [implementation plan](https://forge.syntropy.chat/Eclosion-Tech/pear-cloud/src/branch/main/docs/PEAR_SENTINEL_PLAN.md) and [research proposal](https://forge.syntropy.chat/Eclosion-Tech/pear-cloud/src/branch/main/docs/UNTRUSTED_CONTENT_SPIKE.md). Cloud links refer to that host repository; Pear OSS does not require its implementation. Source references identify the audited seams, not evidence that their remaining gates pass.
 
