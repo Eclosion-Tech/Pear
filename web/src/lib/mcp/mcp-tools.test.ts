@@ -950,19 +950,19 @@ describe("comment threads", () => {
   test("read_thread returns messages oldest-first with authors resolved", async () => {
     const fake = new FakeStdb();
     seedThreads(fake);
-    fake.aiProfiles.push({ identity: "0xkira", display_name: "Kira" });
-    fake.users.push({ identity: "0xkara", name: "Kara Raynoha" });
+    fake.aiProfiles.push({ identity: "0xagent", display_name: "Example Agent" });
+    fake.users.push({ identity: "0xperson", name: "Example Person" });
     fake.convMessages.push(
-      { id: 10, conversationId: 1, content: "from a person", senderHex: "0xkara" },
-      { id: 11, conversationId: 1, content: "from an agent", senderHex: "0xkira" },
+      { id: 10, conversationId: 1, content: "from a person", senderHex: "0xperson" },
+      { id: 11, conversationId: 1, content: "from an agent", senderHex: "0xagent" },
     );
 
     const res = await run(fake, "read_thread", { conversation_id: 1 });
     expect(res.ok).toBe(true);
     const msgs = res.messages as Array<{ author: string; is_ai: boolean; content: string }>;
-    expect(msgs.at(-2)!.author).toBe("Kara Raynoha");
+    expect(msgs.at(-2)!.author).toBe("Example Person");
     expect(msgs.at(-2)!.is_ai).toBe(false);
-    expect(msgs.at(-1)!.author).toBe("Kira");
+    expect(msgs.at(-1)!.author).toBe("Example Agent");
     expect(msgs.at(-1)!.is_ai).toBe(true);
   });
 
@@ -992,10 +992,10 @@ describe("comment threads", () => {
     seedThreads(fake);
     const res = await run(fake, "post_to_thread", {
       conversation_id: 1,
-      content: "@Kira can you check this?",
+      content: "@Example Agent can you check this?",
     });
     expect(res.ok).toBe(true);
-    expect(fake.convMessages.at(-1)!.content).toBe("@Kira can you check this?");
+    expect(fake.convMessages.at(-1)!.content).toBe("@Example Agent can you check this?");
   });
 
   test("post_to_thread rejects empty content without calling a reducer", async () => {
@@ -1025,14 +1025,14 @@ describe("comment threads", () => {
   test("create_thread anchors a new thread and posts the opening message", async () => {
     const fake = new FakeStdb();
     seedThreads(fake);
-    fake.aiProfiles.push({ identity: "0xkira", display_name: "Kira" });
-    fake.users.push({ identity: "0xkara", name: "Kara Raynoha" });
+    fake.aiProfiles.push({ identity: "0xagent", display_name: "Example Agent" });
+    fake.users.push({ identity: "0xperson", name: "Example Person" });
 
     const res = await run(fake, "create_thread", {
       page_id: 900,
       block_id: 2001,
-      content: "@Kira does this section still hold?",
-      participants: ["Kira", "Kara Raynoha"],
+      content: "@Example Agent does this section still hold?",
+      participants: ["Example Agent", "Example Person"],
     });
 
     expect(res.ok).toBe(true);
@@ -1046,14 +1046,14 @@ describe("comment threads", () => {
       .filter((p) => p.conversationId === cid)
       .map((p) => p.identity)
       .sort();
-    expect(seeded).toEqual(["0xkara", "0xkira"]);
-    expect(fake.convMessages.at(-1)!.content).toContain("@Kira");
+    expect(seeded).toEqual(["0xagent", "0xperson"]);
+    expect(fake.convMessages.at(-1)!.content).toContain("@Example Agent");
   });
 
   test("create_thread rejects an unknown participant rather than silently dropping them", async () => {
     const fake = new FakeStdb();
     seedThreads(fake);
-    fake.aiProfiles.push({ identity: "0xkira", display_name: "Kira" });
+    fake.aiProfiles.push({ identity: "0xagent", display_name: "Example Agent" });
     const before = fake.conversations.length;
 
     const res = await run(fake, "create_thread", {
@@ -1091,11 +1091,11 @@ describe("conversation history", () => {
   function seedConversationHistory(fake: FakeStdb) {
     const day = 86_400_000_000;
     fake.aiProfiles.push(
-      { ai_user_id: 7, identity: "0xkira", display_name: "Kira" },
+      { ai_user_id: 7, identity: "0xagent", display_name: "Example Agent" },
       { ai_user_id: 8, identity: "0xotherai", display_name: "Other AI" },
     );
     fake.users.push(
-      { identity: "0xkara", name: "Kara Raynoha" },
+      { identity: "0xperson", name: "Example Person" },
       { identity: "0xother", name: "Other Person" },
     );
     fake.seedPage({ id: 910, title: "Standups" });
@@ -1138,36 +1138,36 @@ describe("conversation history", () => {
       },
     );
     fake.conversationParticipants.push(
-      { conversationId: 10, identity: "0xkira" },
-      { conversationId: 10, identity: "0xkara" },
+      { conversationId: 10, identity: "0xagent" },
+      { conversationId: 10, identity: "0xperson" },
       // A historical membership must not keep granting transcript access.
-      { conversationId: 11, identity: "0xkira", leftAtMicros: NOW_MICROS - day },
-      { conversationId: 11, identity: "0xkara" },
+      { conversationId: 11, identity: "0xagent", leftAtMicros: NOW_MICROS - day },
+      { conversationId: 11, identity: "0xperson" },
       { conversationId: 12, identity: "0xotherai" },
       { conversationId: 12, identity: "0xother" },
-      { conversationId: 13, identity: "0xkira" },
-      { conversationId: 13, identity: "0xkara" },
+      { conversationId: 13, identity: "0xagent" },
+      { conversationId: 13, identity: "0xperson" },
     );
     fake.convMessages.push(
       {
         id: 100,
         conversationId: 10,
         content: "At the standup we committed to ship conversation recall.",
-        senderHex: "0xkara",
+        senderHex: "0xperson",
         createdAtMicros: NOW_MICROS - day * 3,
       },
       {
         id: 101,
         conversationId: 10,
         content: "I will take the worker implementation.",
-        senderHex: "0xkira",
+        senderHex: "0xagent",
         createdAtMicros: NOW_MICROS - day * 2,
       },
       {
         id: 110,
         conversationId: 11,
-        content: "Old standup visible only before Kira left.",
-        senderHex: "0xkara",
+        content: "Old standup visible only before Example Agent left.",
+        senderHex: "0xperson",
         createdAtMicros: NOW_MICROS - day * 4,
       },
       {
@@ -1181,7 +1181,7 @@ describe("conversation history", () => {
         id: 130,
         conversationId: 13,
         content: "Separate budget review.",
-        senderHex: "0xkara",
+        senderHex: "0xperson",
         createdAtMicros: NOW_MICROS - day,
       },
     );
@@ -1200,7 +1200,7 @@ describe("conversation history", () => {
     }>;
     expect(matches.map((match) => match.conversation_id)).toEqual([10]);
     expect(matches[0].page_title).toBe("Standups");
-    expect(matches[0].participants).toEqual(["Kira", "Kara Raynoha"]);
+    expect(matches[0].participants).toEqual(["Example Agent", "Example Person"]);
   });
 
   test("native chat search excludes its ambient conversation by default", async () => {
@@ -1244,7 +1244,7 @@ describe("conversation history", () => {
       is_ai: boolean;
     }>;
     expect(latestMessages).toEqual([
-      expect.objectContaining({ message_id: 101, author: "Kira", is_ai: true }),
+      expect.objectContaining({ message_id: 101, author: "Example Agent", is_ai: true }),
     ]);
 
     const older = await run(fake, "read_conversation", {
@@ -1259,7 +1259,7 @@ describe("conversation history", () => {
     expect(olderMessages).toEqual([
       expect.objectContaining({
         message_id: 100,
-        author: "Kara Raynoha",
+        author: "Example Person",
         is_ai: false,
       }),
     ]);
@@ -1285,7 +1285,7 @@ describe("conversation history", () => {
       id: 102,
       conversationId: 10,
       content: "x".repeat(5_000),
-      senderHex: "0xkira",
+      senderHex: "0xagent",
     });
 
     const res = await run(fake, "read_conversation", {
@@ -1333,6 +1333,9 @@ describe("registry", () => {
       "move_page",
       "post_to_thread",
       "prepare_answer",
+      "product_operations_contribute",
+      "product_operations_dispatch",
+      "product_operations_read",
       "query_database",
       "read_conversation",
       "read_file",

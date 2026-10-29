@@ -19,6 +19,8 @@ export interface McpContext {
   transport: StdbTransport;
   /** Opt-in host service, bound to a verified OAuth grant, never client-supplied scope. */
   answers?: import('./answer-contract').AnswerApi;
+  /** Available only on a configured host with a verified, explicitly scoped OAuth caller. */
+  productOperations?: import('./product-operations-contract').ProductOperationsApi;
   /** The AI user acting on this connection (resolved from ai_user_config). */
   aiUserId: bigint;
   /** Present for native chat turns; lets history search omit the current chat. */
