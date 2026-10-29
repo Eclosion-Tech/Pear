@@ -5,13 +5,14 @@ import { useTable } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
 import { DatabasePage } from "@/src/components/DatabasePage";
 import { DocPage } from "@/src/components/DocPage";
+import { parsePageId } from "@/src/lib/page-id";
 
 export default function PageRoute() {
   const params = useParams();
-  const pageId = BigInt(params.id as string);
+  const pageId = parsePageId(params?.id);
 
   const [pages, isReady] = useTable(tables.page);
-  const page = pages.find((p) => p.id === pageId);
+  const page = pageId === null ? undefined : pages.find((p) => p.id === pageId);
 
   // Render as soon as the page is in the local cache — don't block on isReady,
   // which resets to false on every navigation even when data is already available.
@@ -31,7 +32,7 @@ export default function PageRoute() {
   }
 
   // Page not in cache yet — wait for subscription to finish before declaring not found.
-  if (!isReady) {
+  if (pageId !== null && !isReady) {
     return (
       <div className="flex h-full items-center justify-center">
         <p className="text-neutral-500 text-sm">Loading…</p>
