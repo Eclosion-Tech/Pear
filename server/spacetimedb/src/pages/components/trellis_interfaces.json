@@ -1,0 +1,504 @@
+{
+  "catalog": {
+    "version": "trellis.interfaces.v1",
+    "actions": [
+      "notes.save",
+      "checklist.toggle"
+    ],
+    "components": {
+      "Container": {
+        "props": {
+          "type": "object",
+          "properties": {
+            "direction": {
+              "type": "string",
+              "enum": [
+                "column",
+                "row"
+              ]
+            }
+          },
+          "required": []
+        },
+        "acceptsChildren": true
+      },
+      "RichText": {
+        "props": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        },
+        "acceptsChildren": false,
+        "text": true
+      },
+      "Heading": {
+        "props": {
+          "type": "object",
+          "properties": {
+            "level": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 6
+            }
+          },
+          "required": []
+        },
+        "acceptsChildren": false,
+        "text": true
+      },
+      "BulletListItem": {
+        "props": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        },
+        "acceptsChildren": false,
+        "text": true
+      },
+      "NumberedListItem": {
+        "props": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        },
+        "acceptsChildren": false,
+        "text": true
+      },
+      "ChecklistItem": {
+        "props": {
+          "type": "object",
+          "properties": {
+            "checked": {
+              "type": "boolean"
+            }
+          },
+          "required": []
+        },
+        "acceptsChildren": false,
+        "text": true,
+        "action": true
+      },
+      "Input": {
+        "props": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "label": {
+              "type": "string"
+            },
+            "placeholder": {
+              "type": "string"
+            },
+            "required": {
+              "type": "boolean"
+            },
+            "defaultValue": {
+              "type": "string"
+            }
+          },
+          "required": []
+        },
+        "acceptsChildren": false,
+        "field": true
+      },
+      "Button": {
+        "props": {
+          "type": "object",
+          "properties": {
+            "label": {
+              "type": "string"
+            }
+          },
+          "required": []
+        },
+        "acceptsChildren": false,
+        "action": true
+      },
+      "MarkdownTable": {
+        "acceptsChildren": false,
+        "props": {
+          "type": "object",
+          "properties": {
+            "headers": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "alignments": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "left",
+                  "center",
+                  "right"
+                ]
+              }
+            }
+          },
+          "required": [
+            "headers",
+            "rows"
+          ]
+        }
+      }
+    }
+  },
+  "definitions": [
+    {
+      "template": {
+        "id": "trellis.note-form",
+        "version": "1.0.0",
+        "description": "A saved note and private input, reusable in any host.",
+        "catalogVersion": "trellis.interfaces.v1",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "maxLength": 160
+            },
+            "body": {
+              "type": "string",
+              "maxLength": 4000
+            },
+            "savedNote": {
+              "type": "string",
+              "maxLength": 4000
+            },
+            "fieldLabel": {
+              "type": "string",
+              "maxLength": 160
+            },
+            "placeholder": {
+              "type": "string",
+              "maxLength": 160
+            },
+            "defaultValue": {
+              "type": "string",
+              "maxLength": 4000
+            }
+          },
+          "required": [
+            "title",
+            "body",
+            "savedNote",
+            "fieldLabel",
+            "placeholder",
+            "defaultValue"
+          ]
+        },
+        "requiredComponents": [
+          "Container",
+          "Heading",
+          "RichText",
+          "Input",
+          "Button"
+        ],
+        "actionSlots": [
+          "save"
+        ],
+        "rootId": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "parentId": null,
+            "type": "Container",
+            "order": 0,
+            "props": {}
+          },
+          {
+            "id": "title",
+            "key": "title",
+            "parentId": "root",
+            "type": "Heading",
+            "order": 0,
+            "props": {
+              "level": 2
+            },
+            "text": [
+              {
+                "text": {
+                  "$param": "title"
+                }
+              }
+            ]
+          },
+          {
+            "id": "body",
+            "key": "body",
+            "parentId": "root",
+            "type": "RichText",
+            "order": 1,
+            "props": {},
+            "text": [
+              {
+                "text": {
+                  "$param": "body"
+                }
+              }
+            ]
+          },
+          {
+            "id": "saved",
+            "key": "saved-note",
+            "parentId": "root",
+            "type": "RichText",
+            "order": 2,
+            "props": {},
+            "text": [
+              {
+                "text": {
+                  "$param": "savedNote"
+                }
+              }
+            ]
+          },
+          {
+            "id": "input",
+            "key": "note-input",
+            "parentId": "root",
+            "type": "Input",
+            "order": 3,
+            "props": {
+              "name": "value",
+              "label": {
+                "$param": "fieldLabel"
+              },
+              "placeholder": {
+                "$param": "placeholder"
+              },
+              "defaultValue": {
+                "$param": "defaultValue"
+              },
+              "required": true
+            }
+          },
+          {
+            "id": "save",
+            "parentId": "root",
+            "type": "Button",
+            "order": 4,
+            "props": {
+              "label": "Save note"
+            },
+            "action": {
+              "slot": "save",
+              "input": {
+                "value": {
+                  "field": "value"
+                }
+              }
+            }
+          }
+        ],
+        "hash": "5d5265ed7e8aa1d565261b068bf67b711e62b5e50f74ae090ca2ea76099c6185"
+      },
+      "defaults": {
+        "title": "Notes",
+        "body": "Keep a thought here.",
+        "savedNote": "",
+        "fieldLabel": "Note",
+        "placeholder": "Write a note…",
+        "defaultValue": ""
+      },
+      "bindings": {
+        "save": {
+          "action": "notes.save",
+          "input": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string",
+                "maxLength": 4000,
+                "minLength": 1
+              }
+            },
+            "required": [
+              "value"
+            ]
+          },
+          "effect": {
+            "kind": "setText",
+            "target": {
+              "key": "saved-note"
+            },
+            "input": "value"
+          },
+          "message": "Note saved."
+        }
+      }
+    },
+    {
+      "template": {
+        "id": "trellis.checklist",
+        "version": "1.0.0",
+        "description": "An editable checklist with stable task identities and a private scratch field.",
+        "catalogVersion": "trellis.interfaces.v1",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "maxLength": 160
+            },
+            "headingLevel": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 6
+            },
+            "firstTask": {
+              "type": "string",
+              "maxLength": 4000,
+              "minLength": 1
+            },
+            "firstDone": {
+              "type": "boolean"
+            },
+            "secondTask": {
+              "type": "string",
+              "maxLength": 4000,
+              "minLength": 1
+            }
+          },
+          "required": [
+            "title",
+            "headingLevel",
+            "firstTask",
+            "firstDone",
+            "secondTask"
+          ]
+        },
+        "requiredComponents": [
+          "Container",
+          "Heading",
+          "ChecklistItem",
+          "Input"
+        ],
+        "actionSlots": [
+          "toggle"
+        ],
+        "rootId": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "parentId": null,
+            "type": "Container",
+            "order": 0,
+            "props": {}
+          },
+          {
+            "id": "title",
+            "key": "title",
+            "parentId": "root",
+            "type": "Heading",
+            "order": 0,
+            "props": {
+              "level": {
+                "$param": "headingLevel"
+              }
+            },
+            "text": [
+              {
+                "text": {
+                  "$param": "title"
+                }
+              }
+            ]
+          },
+          {
+            "id": "task-1",
+            "key": "first-task",
+            "parentId": "root",
+            "type": "ChecklistItem",
+            "order": 1,
+            "props": {
+              "checked": {
+                "$param": "firstDone"
+              }
+            },
+            "text": [
+              {
+                "text": {
+                  "$param": "firstTask"
+                }
+              }
+            ],
+            "action": {
+              "slot": "toggle",
+              "input": {}
+            }
+          },
+          {
+            "id": "task-2",
+            "key": "second-task",
+            "parentId": "root",
+            "type": "ChecklistItem",
+            "order": 2,
+            "props": {
+              "checked": false
+            },
+            "text": [
+              {
+                "text": {
+                  "$param": "secondTask"
+                }
+              }
+            ],
+            "action": {
+              "slot": "toggle",
+              "input": {}
+            }
+          },
+          {
+            "id": "scratch",
+            "key": "scratch",
+            "parentId": "root",
+            "type": "Input",
+            "order": 3,
+            "props": {
+              "name": "scratch",
+              "label": "Private scratch note",
+              "placeholder": "Unsent text stays in this view"
+            }
+          }
+        ],
+        "hash": "548201af2b143438360b9fb7de0eae961b85ecb70999764f3aa2e271c3dc5d8b"
+      },
+      "defaults": {
+        "title": "Tasks",
+        "headingLevel": 2,
+        "firstTask": "First task",
+        "firstDone": false,
+        "secondTask": "Second task"
+      },
+      "bindings": {
+        "toggle": {
+          "action": "checklist.toggle",
+          "input": {
+            "type": "object",
+            "properties": {}
+          },
+          "effect": {
+            "kind": "toggle",
+            "property": "checked"
+          },
+          "message": "Task updated."
+        }
+      }
+    }
+  ]
+}

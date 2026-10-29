@@ -67,7 +67,7 @@ export async function showPagePanel(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (
-        /UI_OCCUPIED|original sender|closed|lacks .*access|not found|INVALID_PAGE_PANEL/i.test(
+        /UI_OCCUPIED|original sender|closed|lacks .*access|not found|INVALID_PAGE_PANEL|INVALID_INTERFACE/i.test(
           message,
         )
       )

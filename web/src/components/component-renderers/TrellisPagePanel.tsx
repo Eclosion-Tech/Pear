@@ -42,6 +42,8 @@ import {
 import type { DbConnection } from "@/src/module_bindings";
 import { usePageAccess } from "@/src/hooks/usePageAccess";
 import { blockReferenceHref } from "@/src/lib/blockReferenceLink";
+import { isRetainedPageInterface } from "@pear/trellis-ui";
+import { RetainedPageInterfaceRenderer } from "./RetainedPageInterface";
 
 const Editable = createContext(false);
 function Input({ node }: BlockRendererProps) {
@@ -94,7 +96,10 @@ function Button({ node }: BlockRendererProps) {
 }
 const renderers: RendererCatalog = { ...defaultRenderers, Input, Button };
 
-export function TrellisPagePanelRenderer({ node }: PulpProps) {
+export function TrellisPagePanelRenderer(props: PulpProps) {
+  return isRetainedPageInterface(props.node.props) ? <RetainedPageInterfaceRenderer {...props} /> : <LegacyPagePanelRenderer {...props} />;
+}
+function LegacyPagePanelRenderer({ node }: PulpProps) {
   const access = usePageAccess(node.surfaceId);
   const parsed = useMemo(() => {
     try {

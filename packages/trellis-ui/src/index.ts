@@ -13,6 +13,7 @@ import {
 import definitions from "../templates.json" with { type: "json" };
 
 export * from "./page-panels.js";
+export * from "./interfaces.js";
 
 export const SAVED_UI_VERSION = "pear_trellis_ui_v1";
 export const CATALOG = createBaselineCatalog(["pear.manual-automation"]);
