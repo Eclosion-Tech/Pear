@@ -13,9 +13,6 @@ export const SCOPE_PAGES_READ = "pages:read";
 export const SCOPE_PAGES_WRITE = "pages:write";
 export const SCOPE_EXECUTION_READ = 'execution:read';
 export const SCOPE_EXECUTION_ANSWER = 'execution:answer';
-export const SCOPE_PRODUCT_OPERATIONS_READ = 'product-operations:read';
-export const SCOPE_PRODUCT_OPERATIONS_WRITE = 'product-operations:write';
-export const SCOPE_PRODUCT_OPERATIONS_EXECUTE = 'product-operations:execute';
 
 export const ALL_SCOPES = [
   SCOPE_MEMORY,
@@ -24,9 +21,6 @@ export const ALL_SCOPES = [
   SCOPE_PAGES_WRITE,
   SCOPE_EXECUTION_READ,
   SCOPE_EXECUTION_ANSWER,
-  SCOPE_PRODUCT_OPERATIONS_READ,
-  SCOPE_PRODUCT_OPERATIONS_WRITE,
-  SCOPE_PRODUCT_OPERATIONS_EXECUTE,
 ] as const;
 export type McpOauthScope = (typeof ALL_SCOPES)[number];
 
@@ -43,16 +37,9 @@ export const SCOPE_DESCRIPTIONS: Record<McpOauthScope, string> = {
   [SCOPE_PAGES_WRITE]: "Create, edit, move, and delete workspace pages",
   [SCOPE_EXECUTION_READ]: 'List eligible answer workers, prepare unapproved offers and read this connection’s results; no inference',
   [SCOPE_EXECUTION_ANSWER]: 'Consume explicitly confirmed offers for one bounded tool-less Claude answer; device grants still required',
-  [SCOPE_PRODUCT_OPERATIONS_READ]: 'Read initiatives and their evidence through the product operations service; initiative membership still required',
-  [SCOPE_PRODUCT_OPERATIONS_WRITE]: 'Contribute to initiatives within their delegated scope; human decisions remain with the initiative owner',
-  [SCOPE_PRODUCT_OPERATIONS_EXECUTE]: 'Run registered worker assignments within an initiative’s standing delegation and resource limits',
 };
 
 const SCOPE_TOOLS: Record<McpOauthScope, readonly string[]> = {
-  // Each operation additionally requires the prerequisite scopes below and a host capability.
-  [SCOPE_PRODUCT_OPERATIONS_READ]: ['product_operations_read'],
-  [SCOPE_PRODUCT_OPERATIONS_WRITE]: ['product_operations_contribute'],
-  [SCOPE_PRODUCT_OPERATIONS_EXECUTE]: ['product_operations_dispatch'],
   [SCOPE_EXECUTION_READ]: ['list_answer_workers', 'prepare_answer', 'get_answer'],
   [SCOPE_EXECUTION_ANSWER]: ['run_answer'],
   [SCOPE_MEMORY]: ["remember", "list_memory", "read_memory", "search_memory"],
@@ -134,9 +121,7 @@ export function toolFilterForScopes(scopes: readonly string[]): (tool: string) =
   for (const s of scopes) {
     if (isKnownScope(s)) for (const t of SCOPE_TOOLS[s]) allowed.add(t);
   }
-  return (tool) => allowed.has(tool)
-    && (!tool.startsWith('product_operations_') || scopes.includes(SCOPE_PRODUCT_OPERATIONS_READ))
-    && (tool !== 'product_operations_dispatch' || scopes.includes(SCOPE_PRODUCT_OPERATIONS_WRITE));
+  return (tool) => allowed.has(tool);
 }
 
 /** The scope that would grant a given tool (for actionable error messages). */

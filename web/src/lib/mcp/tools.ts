@@ -60,7 +60,6 @@ import {
 import { encodeOption, encodeU64 } from "./encode";
 import { reducerErrorMessage } from "./errors";
 import { answerTools } from './answers';
-import { productOperationsTools } from './product-operations';
 
 // ── Page tools ────────────────────────────────────────────────────────────────
 
@@ -504,7 +503,7 @@ const createThreadTool: McpToolEntry = {
       participants: {
         type: "array",
         items: { type: "string" },
-        description: 'Names of AI users or people to add, e.g. ["Example Agent", "Example Person"].',
+        description: 'Names of AI users or people to add, e.g. ["Kira", "Kara Raynoha"].',
       },
     },
     required: ["page_id", "block_id"],
@@ -1268,7 +1267,6 @@ const readConversationTool: McpToolEntry = {
 export function buildToolRegistry(): McpToolEntry[] {
   return [
     ...answerTools(),
-    ...productOperationsTools(),
     ...PAGE_PANEL_TOOLS,
     requestHumanInputTool,
     rememberTool,

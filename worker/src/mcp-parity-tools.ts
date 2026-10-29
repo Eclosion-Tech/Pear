@@ -10,8 +10,6 @@
  * Explicit answer operations are intentionally NOT workspace-authoring tools:
  * they require a separate host-backed OAuth capability and a human frontend.
  * Never add list_answer_workers/prepare_answer/run_answer/get_answer to parity.
- * Product operations also requires its own verified OAuth gateway capability;
- * product_operations_* tools are not part of native worker-token chat parity.
  *
  * ## One implementation, two surfaces
  *

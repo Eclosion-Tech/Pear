@@ -13,7 +13,6 @@
 import { Server } from "@modelcontextprotocol/server";
 import type { McpContext, McpToolEntry } from "./types";
 import { buildToolRegistry } from "./tools";
-import { PRODUCT_OPERATIONS_TOOLS } from './product-operations-contract';
 
 export const SERVER_INFO = { name: "pear", version: "0.2.0" };
 
@@ -34,8 +33,7 @@ export function createPearMcpServer(
   options: CreatePearMcpServerOptions = {},
 ): Server {
   const registry = buildToolRegistry().filter(
-    (t) => (!Object.values(PRODUCT_OPERATIONS_TOOLS).some(name => name === t.name) || !!ctx.productOperations)
-      && (!options.toolFilter || options.toolFilter(t.name)),
+    (t) => !options.toolFilter || options.toolFilter(t.name),
   );
   const byName = new Map<string, McpToolEntry>(registry.map((t) => [t.name, t]));
 
@@ -53,8 +51,7 @@ export function createPearMcpServer(
     const { name, arguments: args } = request.params;
     const entry = byName.get(name);
     if (!entry) {
-      const operationsUnavailable = Object.values(PRODUCT_OPERATIONS_TOOLS).some(tool => tool === name) && !ctx.productOperations;
-      const hint = operationsUnavailable ? 'product_operations_unavailable' : options.missingScopeHint?.(name);
+      const hint = options.missingScopeHint?.(name);
       return {
         content: [
           {

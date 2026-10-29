@@ -82,7 +82,7 @@ test("the chat surface exposes them alongside its own tools", () => {
   assert.ok(chat.has("post_to_thread"));
 });
 
-test("workspace tools retain parity, but scoped host operations never become chat tools", () => {
+test("workspace tools retain parity, but explicit answer operations never become chat tools", () => {
   // Workspace authoring/memory operations retain parity. Explicit execution
   // operations are a separate human-frontend capability, never model tools. Asserted over the registry
   // rather than a hand-kept list, so a tool added to MCP alone fails here.
@@ -94,10 +94,9 @@ test("workspace tools retain parity, but scoped host operations never become cha
   const missing = buildToolRegistry()
     .map((t: McpToolEntry) => t.name)
     .filter((n: string) => !chat.has(n));
-  const hostCapabilityOnly = ['list_answer_workers','prepare_answer','run_answer','get_answer',
-    'product_operations_read','product_operations_contribute','product_operations_dispatch'];
-  for(const name of hostCapabilityOnly){assert.equal(chat.has(name),false);assert.equal(isMcpParityTool(name),false);}
-  assert.deepEqual(missing.filter((n:string)=>!hostCapabilityOnly.includes(n)), [], `Unexpected MCP tools unreachable from chat: ${missing.join(", ")}`);
+  const humanFrontendOnly = ['list_answer_workers','prepare_answer','run_answer','get_answer'];
+  for(const name of humanFrontendOnly){assert.equal(chat.has(name),false);assert.equal(isMcpParityTool(name),false);}
+  assert.deepEqual(missing.filter((n:string)=>!humanFrontendOnly.includes(n)), [], `Unexpected MCP tools unreachable from chat: ${missing.join(", ")}`);
 });
 
 test("no tool is defined twice", () => {
