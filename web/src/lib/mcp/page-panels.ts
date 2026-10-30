@@ -1,4 +1,4 @@
-import { canonicalJson, sha256, TrellisError, createRetainedInterface, interfaceCreationFingerprint, commitRetainedInterface, observeInterfaceCommit, interfaceDefinition, type RetainedInterface, type InterfaceCreate, type InterfaceCommand, type JsonObject } from "@eclosion-tech/trellis";
+import { canonicalJson, sha256, TrellisError, describePatchContract, createRetainedInterface, interfaceCreationFingerprint, commitRetainedInterface, observeInterfaceCommit, interfaceDefinition, interfaceCatalog, type RetainedInterface, type InterfaceCreate, type InterfaceCommand, type JsonObject } from "@eclosion-tech/trellis";
 import {
   PAGE_PANEL_TYPE,
   PAGE_PANEL_TEMPLATE,
@@ -88,8 +88,9 @@ export function pagePanelResult(panel: {
     return {
       ok: true, saved: true, component_id: panel.componentId, page_id: panel.surfaceId, revision: saved.document.revision,
       template_id: origin.id, template_version: origin.version, parameters: origin.parameters,
-      editable_parameters: entry.template.parameters, allowed_edits: origin.state === "linked" ? ["parameters", "patch"] : ["patch"],
+      editable_parameters: origin.state === "linked" ? entry.template.parameters : null, allowed_edits: origin.state === "linked" ? ["parameters", "patch"] : ["patch"],
       document: saved.document, components: INTERFACE_REGISTRY.catalog.components,
+      patch_contract: describePatchContract(interfaceCatalog(INTERFACE_REGISTRY, entry), saved.document),
       actions: Object.fromEntries(Object.values(entry.bindings).map(binding => [binding.action, { input: binding.input }])),
       reference: { v: "pear_page_component_v1", surfaceId: panel.surfaceId, blockId: panel.componentId },
     };
@@ -141,6 +142,9 @@ function tool(entry: McpToolEntry): McpToolEntry {
               ? error.code
               : "INVALID_PAGE_PANEL",
           error: error instanceof Error ? error.message : String(error),
+          ...(error instanceof TrellisError ? { path: error.path } : {}),
+          ...(error instanceof TrellisError && entry.name === "update_page_panel" && ["INVALID_OPERATION", "UNKNOWN_KEY", "INVALID_TARGET"].includes(error.code)
+            ? { hint: "Read get_page_panel.patch_contract for exact operation schemas and examples. Use flat {op, ...} objects. insertNode has only op and node; placement belongs in node.parentId and node.order." } : {}),
         });
       }
     },
@@ -177,7 +181,7 @@ export const PAGE_PANEL_TOOLS: McpToolEntry[] = [
   tool({
     name: "get_page_panel",
     description:
-      "Read the saved state, revision and allowed settings of a page-owned panel. Unsent browser drafts are private and are not returned. Use get_page_components to discover a TrellisPanel component ID.",
+      "Read a saved panel's revision, document, component catalog, granted actions and patch_contract (exact operation schemas and examples using current IDs). After a structural edit or saved action, parameters are template provenance; use the document as current state and patches for further edits. Unsent browser drafts are private. Use get_page_components to discover the component ID.",
     inputSchema: {
       type: "object",
       properties: { component_id: idSchema },
@@ -317,7 +321,7 @@ export const PAGE_PANEL_TOOLS: McpToolEntry[] = [
   tool({
     name: "update_page_panel",
     description:
-      "Edit the SAME saved page interface. Read get_page_panel first for revision, typed parameters, document and allowed capabilities. Supply either parameters (while linked) or operations (insertNode, removeSubtree, moveNode, setText, setProps). Structural edits fork the pinned template; use operations for later edits. Preserve existing node IDs to retain private input. Human edits share this revision and commit path. A stale revision requires a new read and deliberate proposal; an uncertain result requires an identical retry.",
+      "Edit the SAME saved interface. First read get_page_panel and its patch_contract. Supply parameters only while linked, or a batch of flat operations with an op discriminator. insertNode is {op:'insertNode',node:{id,parentId,type,order,props,...}}. moveNode is {op:'moveNode',target:{id:...},parentId,order}; targets may also use {key:...}. Never wrap an operation in its name. Preserve existing IDs and private input nodes. Saved actions and structural edits fork the template; use patches afterward. A stale revision requires a fresh read and proposal; an uncertain commit requires an identical retry with the same request_id.",
     inputSchema: {
       type: "object",
       properties: {
@@ -328,7 +332,7 @@ export const PAGE_PANEL_TOOLS: McpToolEntry[] = [
           type: "object",
           description: "Typed parameter changes allowed by the selected interface definition.",
         },
-        operations: { type: "array", minItems: 1, maxItems: 100, items: { type: "object" }, description: "Atomic Trellis patch operations. Use the document, catalog and actions from get_page_panel. Host bindings and template provenance remain pinned." },
+        operations: { ...describePatchContract(INTERFACE_REGISTRY.catalog).operations_schema, description: "Atomic flat patch operations. Read get_page_panel.patch_contract for scoped actions and examples using current IDs. Host bindings and template provenance remain pinned." },
       },
       required: ["component_id", "base_revision", "request_id"],
       additionalProperties: false,

@@ -115,6 +115,19 @@ test("parity defs carry a description and an object schema", () => {
   }
 });
 
+test("chat receives the complete patch-operation schema, including placement and target rules", () => {
+  const chat = getConversationTools().find(tool => tool.name === "update_page_panel")!;
+  const mcp = buildToolRegistry().find(tool => tool.name === "update_page_panel")!;
+  const operations = (chat.input_schema as any).properties.operations;
+  assert.deepEqual(operations, (mcp.inputSchema as any).properties.operations);
+  const variants = new Map<string, any>(operations.items.oneOf.map((schema: any) => [schema.properties.op.enum[0], schema]));
+  assert.deepEqual([...variants.keys()].sort(), ["insertNode", "moveNode", "removeSubtree", "setText", "setProps"].sort());
+  assert.deepEqual(variants.get("insertNode").required, ["op", "node"]);
+  assert.equal(variants.get("insertNode").additionalProperties, false);
+  assert.deepEqual(variants.get("moveNode").required, ["op", "target", "parentId", "order"]);
+  assert.deepEqual(variants.get("moveNode").properties.target.oneOf.map((target: any) => target.required), [["id"], ["key"]]);
+});
+
 test("isMcpParityTool only claims the parity set", () => {
   for (const name of EXPECTED) assert.equal(isMcpParityTool(name), true);
   // Chat-only tools, which keep their own implementation: `render_ui` and
