@@ -15,7 +15,7 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@eclosion-tech/trellis": "file:../../vendor/trellis/eclosion-tech-trellis-0.1.0-alpha.1.tgz"
+    "@eclosion-tech/trellis": "file:../../vendor/trellis/eclosion-tech-trellis-0.1.0-alpha.2.tgz"
   },
   "devDependencies": {
     "typescript": "^5.9.3"

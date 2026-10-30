@@ -673,7 +673,7 @@ fn builtin_specs() -> Vec<BuiltinSpec> {
         BuiltinSpec {
             component_type: "TrellisPanel",
             display_name: "Note panel",
-            description: "A page-owned, versioned note panel. Human and agent settings use commit_trellis_panel.",
+            description: "A page-owned, registered interface. Human and agent settings, structure and actions share commit_trellis_panel.",
             prop_schema: r#"{"type":"object"}"#,
             capabilities: vec![],
             has_yjs_state: false,

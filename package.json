@@ -6,7 +6,7 @@
   "pnpm": {
     "overrides": {
       "sharp": "^0.34.5",
-      "@eclosion-tech/trellis": "file:vendor/trellis/eclosion-tech-trellis-0.1.0-alpha.1.tgz"
+      "@eclosion-tech/trellis": "file:vendor/trellis/eclosion-tech-trellis-0.1.0-alpha.2.tgz"
     }
   },
   "scripts": {

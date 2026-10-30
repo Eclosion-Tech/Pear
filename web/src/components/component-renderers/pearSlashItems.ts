@@ -5,6 +5,7 @@ import {
   type SlashMenuItem,
   type BlockTypeDefinition,
 } from "@eclosion-tech/pulp";
+import { INTERFACE_REGISTRY } from "@pear/trellis-ui";
 
 /**
  * Pear-only built-ins the slash menu expects in `component_type_definition`.
@@ -35,6 +36,10 @@ export const PEAR_SLASH_ITEMS: SlashMenuItem[] = [
     description: "A saved panel you and your AI can adjust together.",
     componentType: "TrellisPanel", defaultProps: {}, searchTokens: ["panel", "notes", "trellis", "adjustable"],
   },
+  ...INTERFACE_REGISTRY.definitions.map(entry => ({
+    id: `trellis-interface-${entry.template.id}`, section: "Data", label: entry.template.id === "trellis.checklist" ? "Task interface" : "Note interface",
+    description: entry.template.description, componentType: "TrellisPanel", defaultProps: { templateId: entry.template.id, templateVersion: entry.template.version, parameters: {} }, searchTokens: ["trellis", "interface", "tasks", "editable"],
+  })),
   {
     id: "reference", section: "Pages", label: "Reference",
     description: "Include and edit a page or block from elsewhere.",
