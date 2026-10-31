@@ -12,18 +12,18 @@ fn err(code: &str, message: &str) -> String {
 fn invalid(message: &str) -> String {
     err("INVALID_INTERFACE", message)
 }
-fn hash(value: &str) -> String {
+pub(crate) fn hash(value: &str) -> String {
     hex::encode(Sha256::digest(value.as_bytes()))
 }
-fn registry() -> Value {
+pub(crate) fn registry() -> Value {
     serde_json::from_str(BUNDLE).expect("trusted interface registry")
 }
-fn object(value: &Value) -> Result<&Map<String, Value>, String> {
+pub(crate) fn object(value: &Value) -> Result<&Map<String, Value>, String> {
     value
         .as_object()
         .ok_or_else(|| invalid("Expected an object"))
 }
-fn keys(value: &Value, allowed: &[&str]) -> Result<(), String> {
+pub(crate) fn keys(value: &Value, allowed: &[&str]) -> Result<(), String> {
     if object(value)?
         .keys()
         .any(|key| !allowed.contains(&key.as_str()))
@@ -32,10 +32,10 @@ fn keys(value: &Value, allowed: &[&str]) -> Result<(), String> {
     }
     Ok(())
 }
-fn text(value: &Value) -> Result<&str, String> {
+pub(crate) fn text(value: &Value) -> Result<&str, String> {
     value.as_str().ok_or_else(|| invalid("Expected a string"))
 }
-fn id(value: &Value) -> Result<&str, String> {
+pub(crate) fn id(value: &Value) -> Result<&str, String> {
     let value = text(value)?;
     if value.is_empty()
         || value.len() > 256
@@ -49,7 +49,7 @@ fn id(value: &Value) -> Result<&str, String> {
     }
     Ok(value)
 }
-fn rev(value: &Value) -> Result<u64, String> {
+pub(crate) fn rev(value: &Value) -> Result<u64, String> {
     value
         .as_f64()
         .filter(|v| v.is_finite() && *v >= 0.0 && *v <= MAX as f64 && v.fract() == 0.0)
@@ -89,7 +89,7 @@ fn bounded(value: &Value, depth: usize, visited: &mut usize) -> Result<(), Strin
     }
     Ok(())
 }
-fn parse_json(raw: &str) -> Result<Value, String> {
+pub(crate) fn parse_json(raw: &str) -> Result<Value, String> {
     if raw.len() > BYTES {
         return Err(invalid("Payload limit exceeded"));
     }
@@ -97,7 +97,7 @@ fn parse_json(raw: &str) -> Result<Value, String> {
     bounded(&value, 0, &mut 0)?;
     Ok(value)
 }
-fn equal(a: &Value, b: &Value) -> bool {
+pub(crate) fn equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Number(a), Value::Number(b)) => a.as_f64() == b.as_f64(),
         (Value::Array(a), Value::Array(b)) => {
@@ -109,7 +109,7 @@ fn equal(a: &Value, b: &Value) -> bool {
         _ => a == b,
     }
 }
-fn validate_value(value: &Value, schema: &Value) -> Result<(), String> {
+pub(crate) fn validate_value(value: &Value, schema: &Value) -> Result<(), String> {
     if schema["enum"]
         .as_array()
         .is_some_and(|items| !items.iter().any(|v| equal(v, value)))
@@ -177,7 +177,7 @@ fn validate_value(value: &Value, schema: &Value) -> Result<(), String> {
     }
     Ok(())
 }
-fn definition<'a>(
+pub(crate) fn definition<'a>(
     registry: &'a Value,
     template_id: &Value,
     version: &Value,
@@ -205,7 +205,7 @@ fn substitute(value: &Value, parameters: &Value) -> Value {
         _ => value.clone(),
     }
 }
-fn materialize(
+pub(crate) fn materialize(
     entry: &Value,
     parameters: &Value,
     document_id: &str,
@@ -304,7 +304,7 @@ fn safe_text(runs: &Value) -> Result<(), String> {
     }
     Ok(())
 }
-fn validate_document(document: &Value, registry: &Value) -> Result<(), String> {
+pub(crate) fn validate_document(document: &Value, registry: &Value) -> Result<(), String> {
     keys(
         document,
         &[
@@ -516,6 +516,9 @@ pub fn is_interface(raw: &str) -> bool {
         .is_some_and(|v| v["v"] == "trellis_instance_v1")
 }
 pub fn parse(raw: &str) -> Result<Value, String> {
+    parse_with_registry(raw, &registry())
+}
+pub fn parse_with_registry(raw: &str, registry: &Value) -> Result<Value, String> {
     let saved = parse_json(raw)?;
     keys(
         &saved,
@@ -524,8 +527,7 @@ pub fn parse(raw: &str) -> Result<Value, String> {
     if saved["v"] != "trellis_instance_v1" {
         return Err(invalid("Unsupported retained version"));
     }
-    let registry = registry();
-    validate_document(&saved["document"], &registry)?;
+    validate_document(&saved["document"], registry)?;
     id(&saved["updatedBy"])?;
     keys(
         &saved["creation"],
@@ -576,14 +578,19 @@ pub fn create(
     request_id: &str,
     raw: &str,
 ) -> Result<String, String> {
+    create_with_registry(surface_id, component_id, parent_id, principal, request_id, raw, &registry())
+}
+pub fn create_with_registry(
+    surface_id: u64, component_id: u64, parent_id: &str, principal: &str,
+    request_id: &str, raw: &str, registry: &Value,
+) -> Result<String, String> {
     let descriptor = parse_json(raw)?;
-    let registry = registry();
     keys(
         &descriptor,
         &["templateId", "templateVersion", "parameters"],
     )?;
     let entry = definition(
-        &registry,
+        registry,
         &descriptor["templateId"],
         &descriptor["templateVersion"],
     )?;
@@ -598,7 +605,7 @@ pub fn create(
     )?;
     let fingerprint = creation_fingerprint(raw)?;
     let saved=json!({"v":"trellis_instance_v1","document":document,"creation":{"principal":principal,"parentId":parent_id,"requestId":request_id,"fingerprint":fingerprint},"updatedBy":principal,"receipts":[{"principal":principal,"requestId":request_id,"fingerprint":fingerprint,"revision":0}]}).to_string();
-    parse(&saved)?;
+    parse_with_registry(&saved, registry)?;
     Ok(saved)
 }
 fn patch(document: &Value, operations: &Value, registry: &Value) -> Result<Value, String> {
@@ -780,9 +787,14 @@ pub fn commit(
     request_id: &str,
     raw: &str,
 ) -> Result<Option<String>, String> {
-    let mut saved = parse(existing)?;
+    commit_with_registry(existing, base_revision, principal, request_id, raw, &registry())
+}
+pub fn commit_with_registry(
+    existing: &str, base_revision: u64, principal: &str, request_id: &str,
+    raw: &str, registry: &Value,
+) -> Result<Option<String>, String> {
+    let mut saved = parse_with_registry(existing, registry)?;
     let command = parse_json(raw)?;
-    let registry = registry();
     id(&json!(principal))?;
     id(&json!(request_id))?;
     let fingerprint = hash(&format!("trellis.command.v1\n{base_revision}\n{raw}"));
@@ -870,6 +882,6 @@ pub fn commit(
         receipts.drain(..receipts.len() - 128);
     }
     let raw = saved.to_string();
-    parse(&raw)?;
+    parse_with_registry(&raw, registry)?;
     Ok(Some(raw))
 }

@@ -1,4 +1,4 @@
-import { canonicalJson, sha256, TrellisError, describePatchContract, createRetainedInterface, interfaceCreationFingerprint, commitRetainedInterface, observeInterfaceCommit, interfaceDefinition, interfaceCatalog, type RetainedInterface, type InterfaceCreate, type InterfaceCommand, type JsonObject } from "@eclosion-tech/trellis";
+import { canonicalJson, sha256, TrellisError, describePatchContract, createRetainedInterface, interfaceCreationFingerprint, commitRetainedInterface, observeInterfaceCommit, interfaceDefinition, interfaceCatalog, type RetainedInterface, type InterfaceCreate, type InterfaceCommand, type JsonObject, type InterfaceRegistry } from "@eclosion-tech/trellis";
 import {
   PAGE_PANEL_TYPE,
   PAGE_PANEL_TEMPLATE,
@@ -17,6 +17,7 @@ import {
 import type { McpContext, McpToolEntry, StdbTransport } from "./types.js";
 import { isOptionNone } from "../api-endpoint/codec.js";
 import { reducerErrorMessage } from "./errors.js";
+import { panelRegistry, workspaceTemplateFamilies, workspaceTemplate } from "./component-repository-store";
 
 type RawNode = {
   id: unknown;
@@ -72,25 +73,30 @@ export async function getPagePanel(
   const row = await rawNode(transport, componentId);
   if (row.component_type !== PAGE_PANEL_TYPE)
     fail("INVALID_PAGE_PANEL", "This component is not a versioned panel.");
+  const raw = isRetainedPageInterface(row.props) ? JSON.parse(row.props) : null;
+  const registry = raw ? await panelRegistry(transport, String(raw.document?.template?.id), String(raw.document?.template?.version)) : INTERFACE_REGISTRY;
   return {
     componentId,
     surfaceId: sqlId(row.surface_id),
-    state: isRetainedPageInterface(row.props) ? readPageInterface(row.props, sqlId(row.surface_id), componentId) : readPagePanel(row.props),
+    state: raw ? readPageInterface(row.props, sqlId(row.surface_id), componentId, registry) : readPagePanel(row.props),
+    registry,
   };
 }
 export function pagePanelResult(panel: {
   componentId: string;
   surfaceId: string;
   state: PagePanel | RetainedInterface;
+  registry?: InterfaceRegistry;
 }) {
   if ("document" in panel.state) {
-    const saved = panel.state, origin = saved.document.template!, entry = interfaceDefinition(INTERFACE_REGISTRY, origin.id, origin.version);
+    const registry = panel.registry ?? INTERFACE_REGISTRY;
+    const saved = panel.state, origin = saved.document.template!, entry = interfaceDefinition(registry, origin.id, origin.version);
     return {
       ok: true, saved: true, component_id: panel.componentId, page_id: panel.surfaceId, revision: saved.document.revision,
       template_id: origin.id, template_version: origin.version, parameters: origin.parameters,
       editable_parameters: origin.state === "linked" ? entry.template.parameters : null, allowed_edits: origin.state === "linked" ? ["parameters", "patch"] : ["patch"],
       document: saved.document, components: INTERFACE_REGISTRY.catalog.components,
-      patch_contract: describePatchContract(interfaceCatalog(INTERFACE_REGISTRY, entry), saved.document),
+      patch_contract: describePatchContract(interfaceCatalog(registry, entry), saved.document),
       actions: Object.fromEntries(Object.values(entry.bindings).map(binding => [binding.action, { input: binding.input }])),
       reference: { v: "pear_page_component_v1", surfaceId: panel.surfaceId, blockId: panel.componentId },
     };
@@ -160,8 +166,13 @@ export const PAGE_PANEL_TOOLS: McpToolEntry[] = [
       properties: {},
       additionalProperties: false,
     },
-    async execute(_ctx, input) {
+    async execute(ctx, input) {
       exact(input, []);
+      const families = await workspaceTemplateFamilies(ctx.transport);
+      const workspace = await Promise.all(families.map(async family => {
+        const saved = await workspaceTemplate(ctx.transport, family.template_id, family.latest_version), entry = saved.package.definition;
+        return { id: entry.template.id, version: entry.template.version, hash: entry.template.hash, repository_id: "workspace", package_hash: saved.reference.hash, name: saved.package.name, parameters: entry.template.parameters, defaults: entry.defaults, allowed_edits: ["parameters", "patch"] };
+      }));
       return JSON.stringify({
         ok: true,
         templates: [
@@ -174,6 +185,7 @@ export const PAGE_PANEL_TOOLS: McpToolEntry[] = [
             allowed_edits: "parameters",
           },
           ...INTERFACE_REGISTRY.definitions.map(entry => ({ id: entry.template.id, version: entry.template.version, hash: entry.template.hash, parameters: entry.template.parameters, defaults: entry.defaults, allowed_edits: ["parameters", "patch"] })),
+          ...workspace,
         ],
       });
     },
@@ -205,10 +217,10 @@ export const PAGE_PANEL_TOOLS: McpToolEntry[] = [
       type: "object",
       properties: {
         parent_id: idSchema,
-        template_id: { type: "string", enum: [PAGE_PANEL_TEMPLATE.id, ...INTERFACE_REGISTRY.definitions.map(entry => entry.template.id)] },
+        template_id: { type: "string", description: "Exact bundled or workspace template ID from list_page_panel_templates or the component library." },
         template_version: {
           type: "string",
-          enum: [...new Set([PAGE_PANEL_TEMPLATE.version, ...INTERFACE_REGISTRY.definitions.map(entry => entry.template.version)])],
+          description: "Exact immutable major.minor.patch version from discovery.",
         },
         parameters: {
           type: "object",
@@ -234,7 +246,8 @@ export const PAGE_PANEL_TOOLS: McpToolEntry[] = [
         "request_id",
       ]);
       const generic = input.template_id !== PAGE_PANEL_TEMPLATE.id;
-      if (generic) interfaceDefinition(INTERFACE_REGISTRY, String(input.template_id), String(input.template_version));
+      const registry = generic ? await panelRegistry(ctx.transport, String(input.template_id), String(input.template_version)) : INTERFACE_REGISTRY;
+      if (generic) interfaceDefinition(registry, String(input.template_id), String(input.template_version));
       else if (input.template_version !== PAGE_PANEL_TEMPLATE.version) fail("TEMPLATE_PINNED", "Choose an exact bundled page-panel template.");
       const parentId = panelId(input.parent_id),
         requestId = panelRequestId(input.request_id),
@@ -245,7 +258,7 @@ export const PAGE_PANEL_TOOLS: McpToolEntry[] = [
       ]);
       const surfaceId = sqlId(parent.surface_id);
       const descriptor: InterfaceCreate = { templateId: String(input.template_id), templateVersion: String(input.template_version), parameters };
-      if (generic) await createRetainedInterface(descriptor, { registry: INTERFACE_REGISTRY, principal, parentId, requestId, documentId: "validation", instanceId: "validation" });
+      if (generic) await createRetainedInterface(descriptor, { registry, principal, parentId, requestId, documentId: "validation", instanceId: "validation" });
       const fingerprint = generic ? await interfaceCreationFingerprint(descriptor) : await sha256({ operation: "create", parameters });
       let acknowledgement: unknown;
       try {
@@ -257,7 +270,7 @@ export const PAGE_PANEL_TOOLS: McpToolEntry[] = [
       } catch (error) {
         const message = reducerErrorMessage(error);
         const code =
-          /\b(REQUEST_REUSED|PANEL_DELETED|INVALID_PAGE_PANEL|INVALID_INTERFACE|TEMPLATE_NOT_FOUND):/.exec(
+          /\b(REQUEST_REUSED|PANEL_DELETED|INVALID_PAGE_PANEL|INVALID_INTERFACE|TEMPLATE_NOT_FOUND|TEMPLATE_ARCHIVED):/.exec(
             message,
           )?.[1];
         if (code) fail(code, message);
@@ -283,7 +296,7 @@ export const PAGE_PANEL_TOOLS: McpToolEntry[] = [
               continue;
             let saved: PagePanel | RetainedInterface;
             try {
-              saved = isRetainedPageInterface(row.props) ? readPageInterface(row.props, surfaceId, sqlId(row.id)) : readPagePanel(row.props);
+              saved = isRetainedPageInterface(row.props) ? readPageInterface(row.props, surfaceId, sqlId(row.id), registry) : readPagePanel(row.props);
             } catch {
               continue;
             }
@@ -303,6 +316,7 @@ export const PAGE_PANEL_TOOLS: McpToolEntry[] = [
                 componentId: sqlId(row.id),
                 surfaceId,
                 state: saved,
+                registry,
               }),
             );
           }
@@ -358,9 +372,9 @@ export const PAGE_PANEL_TOOLS: McpToolEntry[] = [
       if ("document" in current.state) {
         const command = (Object.hasOwn(input, "parameters") ? { kind: "parameters", parameters: input.parameters } : { kind: "patch", operations: input.operations }) as InterfaceCommand;
         const request = { baseRevision: input.base_revision as number, requestId, command };
-        await commitRetainedInterface(current.state, request, { registry: INTERFACE_REGISTRY, principal });
+        await commitRetainedInterface(current.state, request, { registry: current.registry, principal });
         const state = await observeInterfaceCommit(request, {
-          registry: INTERFACE_REGISTRY, principal,
+          registry: current.registry, principal,
           write: async args => {
             try { return await ctx.transport.call("commit_trellis_panel", [componentId, args.baseRevision, args.requestId, canonicalJson(args.command)]); }
             catch (error) {

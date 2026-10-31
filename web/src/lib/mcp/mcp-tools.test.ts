@@ -1310,6 +1310,7 @@ describe("registry", () => {
   test("exposes the page, page-panel, memory and conversation surface", () => {
     expect([...tools.keys()].sort()).toEqual([
       "add_property",
+      "archive_component_template",
       "create_page",
       "create_page_panel",
       "create_thread",
@@ -1318,6 +1319,7 @@ describe("registry", () => {
       "delete_property",
       "edit_page_content",
       "get_answer",
+      "get_component_template",
       "get_page",
       "get_page_components",
       "get_page_panel",
@@ -1326,6 +1328,7 @@ describe("registry", () => {
       "insert_component",
       "list_answer_workers",
       "list_child_pages",
+      "list_component_templates",
       "list_memory",
       "list_page_panel_templates",
       "list_page_threads",
@@ -1333,6 +1336,8 @@ describe("registry", () => {
       "move_page",
       "post_to_thread",
       "prepare_answer",
+      "preview_component_template",
+      "publish_component_template",
       "query_database",
       "read_conversation",
       "read_file",

@@ -33,8 +33,8 @@ export const SCOPE_DESCRIPTIONS: Record<McpOauthScope, string> = {
   [SCOPE_MEMORY]: "Private memory: save and recall its own notes (invisible to other users)",
   [SCOPE_CONVERSATIONS_READ]:
     "Conversation history: search and read chats where this AI user is an active participant",
-  [SCOPE_PAGES_READ]: "Read workspace pages and search their titles",
-  [SCOPE_PAGES_WRITE]: "Create, edit, move, and delete workspace pages",
+  [SCOPE_PAGES_READ]: "Read workspace pages and discover published component templates",
+  [SCOPE_PAGES_WRITE]: "Create, edit, move, and delete pages; publish and manage reusable workspace components",
   [SCOPE_EXECUTION_READ]: 'List eligible answer workers, prepare unapproved offers and read this connection’s results; no inference',
   [SCOPE_EXECUTION_ANSWER]: 'Consume explicitly confirmed offers for one bounded tool-less Claude answer; device grants still required',
 };
@@ -47,6 +47,8 @@ const SCOPE_TOOLS: Record<McpOauthScope, readonly string[]> = {
   [SCOPE_PAGES_READ]: [
     "list_page_panel_templates",
     "get_page_panel",
+    "list_component_templates",
+    "get_component_template",
     "get_page",
     "read_file",
     "get_page_theme",
@@ -62,6 +64,9 @@ const SCOPE_TOOLS: Record<McpOauthScope, readonly string[]> = {
   [SCOPE_PAGES_WRITE]: [
     "create_page_panel",
     "update_page_panel",
+    "preview_component_template",
+    "publish_component_template",
+    "archive_component_template",
     "create_page",
     "add_property",
     "rename_property",

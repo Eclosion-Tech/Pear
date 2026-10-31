@@ -47,6 +47,7 @@ import {
 } from "./database-schema";
 import { writePageContent } from "./write-content";
 import { PAGE_PANEL_TOOLS } from "./page-panels";
+import { COMPONENT_REPOSITORY_TOOLS } from "./component-repository-tools";
 import {
   executeListMemory,
   executeReadMemory,
@@ -1268,6 +1269,7 @@ export function buildToolRegistry(): McpToolEntry[] {
   return [
     ...answerTools(),
     ...PAGE_PANEL_TOOLS,
+    ...COMPONENT_REPOSITORY_TOOLS,
     requestHumanInputTool,
     rememberTool,
     listMemoryTool,

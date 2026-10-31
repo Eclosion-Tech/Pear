@@ -16,6 +16,7 @@ mod auth;
 mod automations;
 mod bridge;
 mod conversations;
+mod component_repository;
 mod cron;
 mod extensions;
 mod harness;

@@ -4,6 +4,8 @@ use crate::access_control::helpers::require_page_read;
 use crate::ai::ai_user_profile;
 #[path = "trellis_interface_state.rs"]
 pub(crate) mod interface_state;
+#[path = "component_repository_state.rs"]
+pub(crate) mod repository_state;
 #[path = "trellis_panel_state.rs"]
 pub(crate) mod state;
 pub const COMPONENT_TYPE: &str = "TrellisPanel";
@@ -18,13 +20,14 @@ pub(super) fn initialize(
         .is_some_and(|v| v.get("templateId").is_some())
     {
         let parent = require_live_node(ctx, parent_id)?;
-        return interface_state::create(
+        return interface_state::create_with_registry(
             parent.surface_id,
             node_id,
             &parent_id.to_string(),
             &ctx.sender().to_hex().to_string(),
             &format!("insert:{node_id}"),
             parameters_json,
+            &crate::component_repository::registry_for_create(ctx, parameters_json)?,
         );
     }
     state::create(
@@ -121,13 +124,14 @@ pub fn commit_trellis_panel(
         return Err("INVALID_PAGE_PANEL: target is not a Trellis panel".into());
     }
     let update = if interface_state::is_interface(&node.props) {
-        validate_interface_owner(&node)?;
-        interface_state::commit(
+        validate_interface_owner(ctx, &node)?;
+        interface_state::commit_with_registry(
             &node.props,
             base_revision,
             &ctx.sender().to_hex().to_string(),
             &request_id,
             &parameters_json,
+            &crate::component_repository::registry_for_props(ctx, &node.props)?,
         )?
     } else {
         state::commit(
@@ -156,14 +160,14 @@ pub(crate) fn reference(ctx: &ReducerContext, component_id: &str) -> Result<Stri
         return Err("INVALID_PAGE_PANEL: reference is not a Trellis panel".into());
     }
     if interface_state::is_interface(&node.props) {
-        validate_interface_owner(&node)?;
+        validate_interface_owner(ctx, &node)?;
     } else {
         state::parse(&node.props)?;
     }
     Ok(serde_json::json!({"v":"pear_page_component_v1", "surfaceId":node.surface_id.to_string(), "blockId":component_id}).to_string())
 }
-fn validate_interface_owner(node: &ComponentNode) -> Result<(), String> {
-    let saved = interface_state::parse(&node.props)?;
+fn validate_interface_owner(ctx: &ReducerContext, node: &ComponentNode) -> Result<(), String> {
+    let saved = interface_state::parse_with_registry(&node.props, &crate::component_repository::registry_for_props(ctx, &node.props)?)?;
     if saved["document"]["documentId"]
         != format!("pear-page:{}:component:{}", node.surface_id, node.id)
         || saved["document"]["template"]["instanceId"] != format!("pear-component:{}", node.id)
@@ -199,13 +203,14 @@ fn create_interface(
         return Ok(());
     }
     let id = next_component_node_id(ctx);
-    let props = interface_state::create(
+    let props = interface_state::create_with_registry(
         page.id,
         id,
         &parent_id.to_string(),
         &principal,
         request_id,
         descriptor,
+        &crate::component_repository::registry_for_create(ctx, descriptor)?,
     )?;
     let siblings = live_siblings_sorted(ctx, page.id, parent_id, None);
     let count = siblings.len();
@@ -242,7 +247,8 @@ fn existing_creation(
             continue;
         }
         let creation = if interface_state::is_interface(&node.props) {
-            let Ok(saved) = interface_state::parse(&node.props) else {
+            let Ok(registry) = crate::component_repository::registry_for_props(ctx, &node.props) else { continue; };
+            let Ok(saved) = interface_state::parse_with_registry(&node.props, &registry) else {
                 continue;
             };
             saved["creation"].clone()
