@@ -126,7 +126,9 @@ pub(super) fn decode_identity(v: &Value) -> Result<Identity, String> {
 pub(super) fn identity_from_hex(hex_str: &str) -> Result<Identity, String> {
     let bytes = hex::decode(hex_str.trim()).map_err(|e| format!("identity hex: {e}"))?;
     let arr: [u8; 32] = bytes.try_into().map_err(|_| "identity must be 32 bytes")?;
-    Ok(Identity::from_byte_array(arr))
+    // SDK toHexString() follows the big-endian text convention. The little-endian
+    // from_byte_array constructor would restore a different account identity.
+    Ok(Identity::from_be_byte_array(arr))
 }
 
 pub(super) fn decode_timestamp(v: &Value) -> Result<Timestamp, String> {
@@ -993,6 +995,38 @@ pub(super) fn decode_api_endpoint_key(v: &Value) -> Result<ApiEndpointKey, Strin
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn snapshot_identity_hex_preserves_sdk_byte_order_and_leading_zeroes() {
+        for text in [
+            "c2000123456789abcdef0123456789abcdef0123456789abcdef0123456789ab",
+            "0000000000000000000000000000000000000000000000000000000000000001",
+        ] {
+            let expected = Identity::from_hex(text).unwrap();
+            let decoded = decode_identity(&json!({"__pear":"identity","v":text})).unwrap();
+            assert_eq!(decoded, expected, "snapshot hex changed the account identity");
+            assert_eq!(decoded.to_hex().to_string(), text);
+        }
+        for invalid in ["00", "g".repeat(64).as_str()] {
+            assert!(identity_from_hex(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn snapshot_membership_and_acl_keep_the_original_account_identity() {
+        let text = "c2000123456789abcdef0123456789abcdef0123456789abcdef0123456789ab";
+        let expected = Identity::from_hex(text).unwrap();
+        let identity = json!({"__pear":"identity","v":text});
+        let timestamp = json!({"__pear":"timestamp","v":"1700000000000000"});
+        let user = decode_user(&json!({"identity":identity,"name":"Owner","email":"owner@local.invalid","isAuthenticated":true,"isAdmin":true,"createdAt":timestamp,"lastSeenAt":timestamp})).unwrap();
+        assert_eq!(user.identity, expected);
+        let profile = decode_ai_user_profile(&json!({"aiUserId":1,"identity":identity,"displayName":"Template author","providerName":"Anthropic","modelName":"local-test","createdBy":identity,"createdAt":timestamp,"updatedAt":timestamp})).unwrap();
+        assert_eq!(profile.identity, expected);
+        assert_eq!(profile.created_by, expected);
+        let rule = decode_page_access_rule(&json!({"id":1,"pageId":5,"principal":{"tag":"WorkspaceMember","value":identity},"permission":{"tag":"Write"},"grantedBy":identity,"grantedAt":timestamp})).unwrap();
+        assert_eq!(rule.principal, Principal::WorkspaceMember(expected));
+        assert_eq!(rule.granted_by, expected);
+    }
 
     #[test]
     fn snapshot_file_values_preserve_blob_and_external_references() {

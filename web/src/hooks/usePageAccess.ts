@@ -59,5 +59,5 @@ export function usePageAccess(surfaceId: bigint) {
           privileged,
         )
       : null;
-  return { principal, pages, ready, permission, canEdit: permission === "Write" };
+  return { principal, pages, ready, permission, canEdit: permission === "Write", privileged };
 }

@@ -705,6 +705,45 @@ export const ComponentNode = __t.object("ComponentNode", {
 });
 export type ComponentNode = __Infer<typeof ComponentNode>;
 
+export const ComponentRepositoryReceipt = __t.object("ComponentRepositoryReceipt", {
+  key: __t.string(),
+  principal: __t.identity(),
+  requestId: __t.string(),
+  fingerprint: __t.string(),
+  templateId: __t.string(),
+  operation: __t.string(),
+  resultRevision: __t.u64(),
+  createdAt: __t.timestamp(),
+});
+export type ComponentRepositoryReceipt = __Infer<typeof ComponentRepositoryReceipt>;
+
+export const ComponentTemplateFamily = __t.object("ComponentTemplateFamily", {
+  templateId: __t.string(),
+  scope: __t.u8(),
+  name: __t.string(),
+  description: __t.string(),
+  tagsJson: __t.string(),
+  owner: __t.identity(),
+  latestVersion: __t.string(),
+  archived: __t.bool(),
+  revision: __t.u64(),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+});
+export type ComponentTemplateFamily = __Infer<typeof ComponentTemplateFamily>;
+
+export const ComponentTemplateVersion = __t.object("ComponentTemplateVersion", {
+  key: __t.string(),
+  scope: __t.u8(),
+  templateId: __t.string(),
+  version: __t.string(),
+  packageJson: __t.string(),
+  contentHash: __t.string(),
+  publishedBy: __t.identity(),
+  publishedAt: __t.timestamp(),
+});
+export type ComponentTemplateVersion = __Infer<typeof ComponentTemplateVersion>;
+
 export const ComponentTypeDefinition = __t.object("ComponentTypeDefinition", {
   id: __t.u64(),
   componentType: __t.string(),

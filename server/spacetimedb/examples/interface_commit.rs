@@ -1,32 +1,40 @@
 #[path = "../src/pages/components/trellis_interface_state.rs"]
 mod state;
+use state as interface_state;
+#[path = "../src/pages/components/component_repository_state.rs"]
+mod repository_state;
 use serde_json::{json, Value};
 use std::io::{self, BufRead};
 fn run(request: Value) -> Result<Value, String> {
+    let registry = request.get("registry").cloned().unwrap_or_else(state::registry);
     let get = |key: &str| {
         request[key]
             .as_str()
             .ok_or_else(|| format!("Missing {key}"))
     };
     match get("operation")? {
-        "create" => state::create(
+        "export-template" => repository_state::prepare(get("existing")?, &request.get("registry").cloned().unwrap_or_else(state::registry), get("optionsJson")?).map(|package| json!({"ok":true,"package":package})),
+        "validate-package" => repository_state::validate_package(get("packageJson")?,get("hash")?).map(|package|json!({"ok":true,"package":package})),
+        "create" => state::create_with_registry(
             request["surfaceId"].as_u64().ok_or("surfaceId")?,
             request["componentId"].as_u64().ok_or("componentId")?,
             get("parentId")?,
             get("principal")?,
             get("requestId")?,
             get("intentJson")?,
+            &registry,
         )
         .map(|saved| json!({"ok":true,"saved":saved})),
-        "commit" => state::commit(
+        "commit" => state::commit_with_registry(
             get("existing")?,
             request["baseRevision"].as_u64().ok_or("baseRevision")?,
             get("principal")?,
             get("requestId")?,
             get("commandJson")?,
+            &registry,
         )
         .map(|saved| json!({"ok":true,"saved":saved})),
-        "parse" => state::parse(get("existing")?).map(|saved| json!({"ok":true,"state":saved})),
+        "parse" => state::parse_with_registry(get("existing")?, &registry).map(|saved| json!({"ok":true,"state":saved})),
         _ => Err("Unknown operation".into()),
     }
 }

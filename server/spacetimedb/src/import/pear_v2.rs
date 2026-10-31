@@ -18,6 +18,8 @@
 
 use super::decode::*;
 use crate::auth::sender_is_admin;
+use crate::component_repository::{component_template_family,component_template_version,ComponentTemplateFamily,ComponentTemplateVersion};
+use crate::pages::components::trellis_panel::repository_state as component_package;
 use crate::bridge::{bridge_device_grant, BridgeDeviceGrant, UnlistedCommandPolicy};
 use crate::conversations::{message_feedback, MessageFeedback, MessageFeedbackRating};
 use crate::{
@@ -69,6 +71,8 @@ const IMPORT_SESSION_ID: u64 = 1;
 /// `dispatch_table_matches_policy_include_list` below (and mirrored on the
 /// TypeScript side in `pear/web/src/lib/pearExport.test.ts`).
 const IMPORT_V2_TABLES: &[&str] = &[
+    "workspace_component_template",
+    "workspace_component_template_version",
     "user",
     "user_preference",
     "workspace_setting",
@@ -188,6 +192,8 @@ pub fn import_v2_begin(ctx: &ReducerContext, header_json: String) -> Result<(), 
     if !ok {
         return Err("You must be logged in to import a snapshot.".to_string());
     }
+
+    crate::component_repository::require_empty_for_import(ctx)?;
 
     if ctx
         .db
@@ -316,6 +322,8 @@ pub fn import_v2_commit(ctx: &ReducerContext, manifest_json: String) -> Result<(
     }
 
     // Reset the id allocator (see doc comment above / id_counters.rs).
+    crate::component_repository::validate_restored(ctx)?;
+
     let counter_names: Vec<String> = ctx.db.id_counter().iter().map(|r| r.name).collect();
     for name in counter_names {
         ctx.db.id_counter().name().delete(name);
@@ -420,6 +428,8 @@ fn import_rows(ctx: &ReducerContext, table_name: &str, arr: &[Value]) -> Result<
     }
 
     let counts: (u64, u64) = match table_name {
+        "workspace_component_template" => plain!(component_template_family,decode_component_template_family),
+        "workspace_component_template_version" => plain!(component_template_version,decode_component_template_version),
         "user" => plain!(user, decode_user),
         "user_preference" => plain!(user_preference, decode_user_preference),
         "workspace_setting" => plain!(workspace_setting, decode_workspace_setting),
@@ -817,6 +827,22 @@ fn decode_extension_manifest(v: &Value) -> Result<ExtensionManifest, String> {
 
 // ── Decoders for tables new in v2 ─────────────────────────────────────────────
 
+fn decode_component_template_family(v:&Value)->Result<ComponentTemplateFamily,String>{
+    let m=obj(v,"workspace component template")?;
+    let template_id=string_at(m,"templateId")?;let latest_version=string_at(m,"latestVersion")?;
+    let options=serde_json::json!({"slug":template_id.strip_prefix("workspace:").ok_or("Invalid workspace template identity")?,"version":latest_version,"name":string_at(m,"name")?,"description":string_at(m,"description")?,"tags":serde_json::from_str::<Value>(&string_at(m,"tagsJson")?).map_err(|e|e.to_string())?});
+    component_package::options(&component_package::canonical(&options)?)?;
+    let revision=u64_at(m,"revision")?;if revision>9_007_199_254_740_991{return Err("Invalid template revision".into());}
+    Ok(ComponentTemplateFamily{template_id,scope:0,name:string_at(m,"name")?,description:string_at(m,"description")?,tags_json:string_at(m,"tagsJson")?,owner:decode_identity(m.get("owner").ok_or("Missing owner")?)?,latest_version,archived:bool_at(m,"archived")?,revision,created_at:decode_timestamp(m.get("createdAt").ok_or("createdAt")?)?,updated_at:decode_timestamp(m.get("updatedAt").ok_or("updatedAt")?)?})
+}
+fn decode_component_template_version(v:&Value)->Result<ComponentTemplateVersion,String>{
+    let m=obj(v,"workspace component version")?;
+    let key=string_at(m,"key")?;let template_id=string_at(m,"templateId")?;let version=string_at(m,"version")?;
+    let package_json=string_at(m,"packageJson")?;let content_hash=string_at(m,"contentHash")?;
+    let package=component_package::validate_package(&package_json,&content_hash)?;
+    if key!=format!("{template_id}@{version}")||package["definition"]["template"]["id"]!=template_id||package["definition"]["template"]["version"]!=version{return Err("Imported template coordinate differs from its package".into());}
+    Ok(ComponentTemplateVersion{key,scope:0,template_id,version,package_json,content_hash,published_by:decode_identity(m.get("publishedBy").ok_or("publishedBy")?)?,published_at:decode_timestamp(m.get("publishedAt").ok_or("publishedAt")?)?})
+}
 fn decode_component_node(v: &Value) -> Result<ComponentNode, String> {
     let m = obj(v, "component_node")?;
     Ok(ComponentNode {
@@ -1448,6 +1474,31 @@ mod pear_v2_tests {
 
     fn ident() -> Value {
         json!({"__pear": "identity", "v": ID_HEX})
+    }
+
+    fn component_package_fixture()->(Value,String){
+        use crate::pages::components::trellis_panel::interface_state;
+        let registry=interface_state::registry();
+        let saved=interface_state::create(7,100,"70","author","create",r#"{"templateId":"trellis.checklist","templateVersion":"1.0.0","parameters":{}}"#).unwrap();
+        let package=component_package::prepare(&saved,&registry,r#"{"slug":"release-checklist","version":"1.0.0","name":"Release checklist","description":"Reusable","tags":["release"]}"#).unwrap();
+        let hash=interface_state::hash(&component_package::canonical(&package).unwrap());(package,hash)
+    }
+    #[test]
+    fn component_repository_snapshot_rows_preserve_versions_and_validate_packages(){
+        let(package,hash)=component_package_fixture();
+        let family=json!({"templateId":"workspace:release-checklist","name":"Release checklist","description":"Reusable","tagsJson":"[\"release\"]","owner":ident(),"latestVersion":"1.0.0","archived":true,"revision":2,"createdAt":ts(),"updatedAt":ts()});
+        let family=decode_component_template_family(&family).unwrap();assert!(family.archived);assert_eq!(family.revision,2);assert_eq!(family.scope,0);
+        let mut row=json!({"key":"workspace:release-checklist@1.0.0","templateId":"workspace:release-checklist","version":"1.0.0","packageJson":component_package::canonical(&package).unwrap(),"contentHash":hash,"publishedBy":ident(),"publishedAt":ts()});
+        let version=decode_component_template_version(&row).unwrap();assert_eq!(version.template_id,family.template_id);assert_eq!(version.version,"1.0.0");
+        row["version"]=json!("1.1.0");assert!(decode_component_template_version(&row).is_err());
+        row["version"]=json!("1.0.0");row["contentHash"]=json!("0".repeat(64));assert!(decode_component_template_version(&row).is_err());
+    }
+    #[test]
+    fn component_repository_restore_rejects_rehashed_unapproved_policies(){
+        use crate::pages::components::trellis_panel::interface_state;
+        let(mut package,_)=component_package_fixture();package["definition"]["bindings"]["toggle"]["message"]=json!("Forged host policy");
+        let bytes=component_package::canonical(&package).unwrap();let hash=interface_state::hash(&bytes);
+        assert!(component_package::validate_package(&bytes,&hash).unwrap_err().starts_with("UNSUPPORTED_CAPABILITY:"));
     }
 
     /// Keep in sync with `PEAR_SNAPSHOT_V2_FORMAT` in

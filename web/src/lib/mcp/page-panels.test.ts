@@ -8,7 +8,7 @@ async function fixture() {
   let saved: RetainedInterface | null = null, calls = 0, denied = false, loseResponse = false;
   const row = () => ({ id: "100", surface_id: "7", component_type: "TrellisPanel", props: canonicalJson(saved), deleted_at: null });
   const ctx = { aiUserId: 1n, transport: {
-    sql: async (query: string) => query.includes("ai_user_config") ? [{ identity: principal }] : query.includes("WHERE id = 70") ? [{ id: "70", surface_id: "7", component_type: "Container", props: "{}", deleted_at: null }] : saved ? [row()] : [],
+    sql: async (query: string) => query.includes("workspace_component_template") ? [] : query.includes("ai_user_config") ? [{ identity: principal }] : query.includes("WHERE id = 70") ? [{ id: "70", surface_id: "7", component_type: "Container", props: "{}", deleted_at: null }] : saved ? [row()] : [],
     call: async (name: string, args: unknown[]) => {
       calls++;
       if (denied) throw new Error("Caller lacks write access on this page");

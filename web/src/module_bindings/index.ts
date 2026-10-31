@@ -47,6 +47,7 @@ import AppendPageDocReducer from "./append_page_doc_reducer";
 import AppendProtectedMailDerivationReducer from "./append_protected_mail_derivation_reducer";
 import AppendProtectedMailMessageReducer from "./append_protected_mail_message_reducer";
 import ApproveProtectedMailInstructionReducer from "./approve_protected_mail_instruction_reducer";
+import ArchiveComponentTemplateReducer from "./archive_component_template_reducer";
 import AuthorizeMailTriageReducer from "./authorize_mail_triage_reducer";
 import AwaitBridgeCommandConfirmationReducer from "./await_bridge_command_confirmation_reducer";
 import BlockProtectedMailContextReducer from "./block_protected_mail_context_reducer";
@@ -171,6 +172,7 @@ import ProcessAutomationEventReducer from "./process_automation_event_reducer";
 import ProcessPendingAutomationEventsReducer from "./process_pending_automation_events_reducer";
 import PromoteToInstructionReducer from "./promote_to_instruction_reducer";
 import ProvisionAiUserMemoryReducer from "./provision_ai_user_memory_reducer";
+import PublishComponentTemplateReducer from "./publish_component_template_reducer";
 import PublishExtensionReducer from "./publish_extension_reducer";
 import PublishMailEncryptionKeyReducer from "./publish_mail_encryption_key_reducer";
 import PurgePageReducer from "./purge_page_reducer";
@@ -373,6 +375,7 @@ import MailImportReceiptRow from "./mail_import_receipt_table";
 import MessageFeedbackRow from "./message_feedback_table";
 import MigrationStateRow from "./migration_state_table";
 import ModuleInstallMetaRow from "./module_install_meta_table";
+import MyComponentRepositoryReceiptRow from "./my_component_repository_receipt_table";
 import MyExtensionPermissionsRow from "./my_extension_permissions_table";
 import MyProtectedMailRow from "./my_protected_mail_table";
 import MyProtectedMailCollectionsRow from "./my_protected_mail_collections_table";
@@ -406,6 +409,8 @@ import SensorRegistryRow from "./sensor_registry_table";
 import StructuralSensorFindingRow from "./structural_sensor_finding_table";
 import UserRow from "./user_table";
 import UserPreferenceRow from "./user_preference_table";
+import WorkspaceComponentTemplateRow from "./workspace_component_template_table";
+import WorkspaceComponentTemplateVersionRow from "./workspace_component_template_version_table";
 import WorkspaceSettingRow from "./workspace_setting_table";
 
 /** Type-only namespace exports for generated type groups. */
@@ -1446,6 +1451,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, ApiEndpointKeyLookupRow),
+  my_component_repository_receipt: __table({
+    name: 'my_component_repository_receipt',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, MyComponentRepositoryReceiptRow),
   my_extension_permissions: __table({
     name: 'my_extension_permissions',
     indexes: [
@@ -1530,6 +1542,20 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, ReadableSchemasRow),
+  workspace_component_template: __table({
+    name: 'workspace_component_template',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, WorkspaceComponentTemplateRow),
+  workspace_component_template_version: __table({
+    name: 'workspace_component_template_version',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, WorkspaceComponentTemplateVersionRow),
 });
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
@@ -1547,6 +1573,7 @@ const reducersSchema = __reducers(
   __reducerSchema("append_protected_mail_derivation", AppendProtectedMailDerivationReducer),
   __reducerSchema("append_protected_mail_message", AppendProtectedMailMessageReducer),
   __reducerSchema("approve_protected_mail_instruction", ApproveProtectedMailInstructionReducer),
+  __reducerSchema("archive_component_template", ArchiveComponentTemplateReducer),
   __reducerSchema("authorize_mail_triage", AuthorizeMailTriageReducer),
   __reducerSchema("await_bridge_command_confirmation", AwaitBridgeCommandConfirmationReducer),
   __reducerSchema("block_protected_mail_context", BlockProtectedMailContextReducer),
@@ -1671,6 +1698,7 @@ const reducersSchema = __reducers(
   __reducerSchema("process_pending_automation_events", ProcessPendingAutomationEventsReducer),
   __reducerSchema("promote_to_instruction", PromoteToInstructionReducer),
   __reducerSchema("provision_ai_user_memory", ProvisionAiUserMemoryReducer),
+  __reducerSchema("publish_component_template", PublishComponentTemplateReducer),
   __reducerSchema("publish_extension", PublishExtensionReducer),
   __reducerSchema("publish_mail_encryption_key", PublishMailEncryptionKeyReducer),
   __reducerSchema("purge_page", PurgePageReducer),

@@ -46,6 +46,7 @@ import { registerPearBuiltinRenderers } from "./built-in";
 import { PEAR_SLASH_ITEMS, slashItemsForDefs } from "./pearSlashItems";
 import { useQueryResolver } from "@/src/lib/repeater/queryResolver";
 import { pearReferences } from "./PearReferenceSource";
+import { ComponentLibraryButton } from "./ComponentTemplateLibrary";
 
 registerCoreBlocks();
 registerPearBuiltinRenderers();
@@ -434,6 +435,7 @@ export function ComponentTreeRenderer({
             <PageComposition layout={layout} onLayoutChange={onLayoutChange}
               pageLabel={pages.find(page => page.id === surfaceId)?.title || "Untitled"}>
               <div ref={editorContainerRef} className="relative">
+                <ComponentLibraryButton surfaceId={surfaceId} parentId={tree.root?.id??null}/>
                 <BlockEditor />
                 {onOpenThread && (
                   <BlockThreadGutter
