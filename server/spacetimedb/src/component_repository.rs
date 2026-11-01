@@ -94,7 +94,10 @@ pub fn workspace_component_template_version(ctx: &ViewContext) -> Vec<ComponentT
         .filter(0u8)
         .collect()
 }
-#[view(accessor = my_component_repository_receipt, public)]
+// 2.0.3 caches view function pointers in dependency read sets across upgrades.
+// Register new repository views after existing views so those pointers stay
+// stable. Keep the public SQL name while appending this internal accessor.
+#[view(accessor = workspace_component_repository_receipt, name = "my_component_repository_receipt", public)]
 pub fn my_component_repository_receipt(ctx: &ViewContext) -> Vec<ComponentRepositoryReceipt> {
     if !member(ctx) {
         return vec![];

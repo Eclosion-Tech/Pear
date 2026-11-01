@@ -13,7 +13,7 @@ import { HttpStdbTransport } from "../../web/src/lib/api-endpoint/http-transport
 import { decodeOptionSome } from "../../web/src/lib/api-endpoint/codec.js";
 import { buildPearSnapshotV2, SNAPSHOT_TABLES_V2, snapshotExportQueriesV2 } from "../../packages/snapshot-core/src/index.js";
 import { subscribeToAvailableTables } from "../src/subscriptions.js";
-import { drainFixtureConnections, retainFixtureDatabaseUntilServerCleanup } from "./protected-mail-fixture-lifecycle.js";
+import { drainFixtureConnections, fixtureFailureCode, retainFixtureDatabaseUntilServerCleanup, withFixtureCleanup } from "./protected-mail-fixture-lifecycle.js";
 import { inferenceGrantId, parseInferenceResultDeclaration, prepareInferenceResult } from "../../packages/sentinel/src/index.js";
 import type { InferenceResultDeclarationV1, SourceRef as PortableSourceRef } from "../../packages/sentinel/src/index.js";
 import { acceptProtectedMailInferenceResult, admitProtectedMailInference, beginProtectedMailInferenceDispatch } from "../src/mail/protected-inference-claim.js";
@@ -192,6 +192,7 @@ async function main(): Promise<void> {
       if (result.AutoMigrate.break_clients) { assert.ok(result.AutoMigrate.token, "migration_token_required"); suffix = `?policy=BreakClients&token=${encodeURIComponent(result.AutoMigrate.token)}`; }
     }
     const response = await localFetch(databaseUrl + suffix, { method: "PUT", headers: { Authorization: `Bearer ${publisherIdentity.token}` }, body: new Uint8Array(wasm), signal: AbortSignal.timeout(60000) });
+    if (!response.ok) console.error(`FAIL protected_mail_result_publish_http status=${response.status}`);
     assert.ok(response.ok, "module_publish_failed");
     const result: unknown = await response.json();
     const findIdentity = (value: unknown): string | undefined => {
@@ -228,7 +229,7 @@ async function main(): Promise<void> {
     assert.equal(result.kind, "ok", "result_transport_unknown");
     return result.value;
   }
-  try {
+  return withFixtureCleanup(async () => {
     if (checkpoint) {
       stage = "restart_exact_private_state_and_accepted_history";
       publisherIdentity = checkpoint.actors.publisher;
@@ -285,8 +286,11 @@ async function main(): Promise<void> {
     const baselineWasm = baselinePath ? await readFile(baselinePath) : undefined;
     assert.ok(currentWasm.length > 0 && (!baselineWasm || baselineWasm.length > 0 && !baselineWasm.equals(currentWasm)), "distinct_module_artifacts_required");
     publisherIdentity = await identity();
+    stage = "publish_fixture_module";
     await publish(baselineWasm ?? currentWasm);
+    stage = "connect_fixture_publisher";
     let publisher = await connect(publisherIdentity);
+    stage = "connect_fixture_actors";
     let admin = await actor(), owner = await actor(), other = await actor(), ai = await actor(), hybrid = await actor(), anonymous = await actor(), broker = await actor(), unbound = await actor();
     stage = "fixture_accounts";
     await admin.transport.call("register", ["result-admin@example.test", "Fixture admin", password]);
@@ -790,7 +794,7 @@ async function main(): Promise<void> {
       retainFixture = true; console.log("PASS protected_mail_result_restart_checkpoint_written");
     }
     stage = "complete";
-  } finally {
+  }, async () => {
     const cleanup: Promise<unknown>[] = [];
     if (publisherIdentity) {
       const token = publisherIdentity.token;
@@ -806,7 +810,7 @@ async function main(): Promise<void> {
     if (restartPhase === "resume") cleanup.push(unlink(checkpointPath!));
     const cleaned = await Promise.allSettled(cleanup);
     assert.ok(cleaned.every(result => result.status === "fulfilled"), "fixture_cleanup_failed");
-  }
+  }, () => console.error("WARN protected_mail_result_secondary_cleanup_failed"));
 }
 // Only host-authored assertion identifiers may reach diagnostics.
 const fixedFailureCodes = new Set([
@@ -859,5 +863,6 @@ const fixedFailureCodes = new Set([
 void main().catch((error: unknown) => {
   const code = error instanceof Error ? error.message.split("\n", 1)[0] : undefined;
   if (code && fixedFailureCodes.has(code)) failureReason = code;
+  else if (failureReason === "assertion_failed") failureReason = fixtureFailureCode(error);
   console.error(`FAIL protected_mail_result_e2e stage=${stage} reason=${failureReason}`); process.exitCode = 1;
 });

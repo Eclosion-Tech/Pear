@@ -375,7 +375,6 @@ import MailImportReceiptRow from "./mail_import_receipt_table";
 import MessageFeedbackRow from "./message_feedback_table";
 import MigrationStateRow from "./migration_state_table";
 import ModuleInstallMetaRow from "./module_install_meta_table";
-import MyComponentRepositoryReceiptRow from "./my_component_repository_receipt_table";
 import MyExtensionPermissionsRow from "./my_extension_permissions_table";
 import MyProtectedMailRow from "./my_protected_mail_table";
 import MyProtectedMailCollectionsRow from "./my_protected_mail_collections_table";
@@ -409,6 +408,7 @@ import SensorRegistryRow from "./sensor_registry_table";
 import StructuralSensorFindingRow from "./structural_sensor_finding_table";
 import UserRow from "./user_table";
 import UserPreferenceRow from "./user_preference_table";
+import WorkspaceComponentRepositoryReceiptRow from "./workspace_component_repository_receipt_table";
 import WorkspaceComponentTemplateRow from "./workspace_component_template_table";
 import WorkspaceComponentTemplateVersionRow from "./workspace_component_template_version_table";
 import WorkspaceSettingRow from "./workspace_setting_table";
@@ -1451,13 +1451,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, ApiEndpointKeyLookupRow),
-  my_component_repository_receipt: __table({
+  workspace_component_repository_receipt: __table({
     name: 'my_component_repository_receipt',
     indexes: [
     ],
     constraints: [
     ],
-  }, MyComponentRepositoryReceiptRow),
+  }, WorkspaceComponentRepositoryReceiptRow),
   my_extension_permissions: __table({
     name: 'my_extension_permissions',
     indexes: [
