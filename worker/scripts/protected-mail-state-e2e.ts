@@ -5,7 +5,7 @@
  * Output contains fixed stage codes only, never fixture values or raw errors.
  */
 import assert from "node:assert/strict";
-import { drainFixtureConnections, retainFixtureDatabaseUntilServerCleanup } from "./protected-mail-fixture-lifecycle.js";
+import { drainFixtureConnections, fixtureFailureCode, retainFixtureDatabaseUntilServerCleanup } from "./protected-mail-fixture-lifecycle.js";
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { setGlobalLogLevel } from "spacetimedb";
@@ -140,9 +140,9 @@ async function main(): Promise<void> {
     return value;
   }
 
-  async function connect(value: IdentityToken): Promise<Actor> {
+  async function connect(value: IdentityToken, timeoutMs = 12000): Promise<Actor> {
     const live = await new Promise<DbConnection>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("connection_timeout")), 12000);
+      const timer = setTimeout(() => reject(new Error("connection_timeout")), timeoutMs);
       const connection = DbConnection.builder().withUri(base).withDatabaseName(name).withToken(value.token)
         .onConnect(connected => { clearTimeout(timer); resolve(connected); })
         .onConnectError(() => { clearTimeout(timer); reject(new Error("connection_failed")); })
@@ -266,13 +266,22 @@ async function main(): Promise<void> {
     assert.ok(containsMarker(retainedOwnerRows), "retained_fixture_missing");
 
     if (baseline) {
-      stage = "additive_upgrade_retained_private_state";
-      for (const live of connections) live.disconnect();
+      // disconnect() schedules asynchronous closure. Publishing immediately can
+      // overlap old client-disconnected reducers with the new module's clients.
+      stage = "additive_upgrade_drain_old_clients";
+      await drainFixtureConnections(connections, () => publisher.transport.sql("SELECT * FROM st_client"));
+      stage = "additive_upgrade_publish";
       await publish(currentWasm, true);
+      stage = "additive_upgrade_reconnect";
       [publisher, admin, owner, other, ai, hybrid, anonymous, service] = await Promise.all(
-        [publisher, admin, owner, other, ai, hybrid, anonymous, service].map(account => connect(account)),
+        // A cold CI server may still initialize the upgraded module during the
+        // handshake. This setup deadline matches the bounded publish deadline;
+        // permission, mutation, and data-retention assertions stay unchanged.
+        [publisher, admin, owner, other, ai, hybrid, anonymous, service].map(account => connect(account, 60000)),
       );
+      stage = "additive_upgrade_retained_private_state";
       assert.deepEqual(await state(mailTables), retainedMail, "upgrade_changed_private_bytes_or_associations");
+      stage = "additive_upgrade_retained_owner_view";
       assert.deepEqual(sorted(await owner.transport.sql<Row>("SELECT * FROM my_protected_mail")), retainedOwnerRows, "upgrade_changed_owner_view");
       console.log("PASS protected_mail_state_retained_s1a_upgrade");
     }
@@ -580,16 +589,23 @@ async function main(): Promise<void> {
     assert.equal((await context(run)).blocked, true, "disconnected_context_block_failed");
     console.log("PASS protected_mail_state_terminal_context_and_retained_disconnect_controls");
 
-    stage = "no_ordinary_or_owner_projection_and_restore_fence";
+    stage = "retained_s1a_storage";
     assert.deepEqual(await state(mailTables), retainedMail, "source_state_rewrote_s1a_content");
+    stage = "retained_owner_http_projection";
     assert.deepEqual(sorted(await owner.transport.sql<Row>("SELECT * FROM my_protected_mail")), retainedOwnerRows, "state_added_owner_projection");
+    stage = "retained_owner_ws_projection";
     assert.equal(cache(owner.live, "my_protected_mail").count(), 4n, "state_changed_owner_ws_projection");
     for (const table of SNAPSHOT_TABLES_V2) {
+      stage = `ordinary_snapshot_${table}`;
       assert.ok(!containsMarker(await publisher.transport.sql(`SELECT * FROM ${table}`)), "ordinary_surface_contains_private_marker");
     }
+    stage = "capture_restore_state";
     const beforeRestore = await state(privateTables);
+    stage = "ordinary_restore_v1_refused";
     await denied(owner.transport.call("import_pear_snapshot_v_1", [JSON.stringify({ format: "pear-snapshot-v1", tables: {} })]), "protected_mail_restore_not_supported");
+    stage = "ordinary_restore_v2_refused";
     await denied(owner.transport.call("import_v_2_begin", [JSON.stringify({ format: "pear-snapshot-v2" })]), "protected_mail_restore_not_supported");
+    stage = "ordinary_restore_private_state_retained";
     assert.deepEqual(await state(privateTables), beforeRestore, "ordinary_restore_changed_source_state");
     console.log("PASS protected_mail_state_no_new_projection_or_ordinary_restore");
     stage = "complete";
@@ -605,7 +621,7 @@ async function main(): Promise<void> {
   }
 }
 
-void main().catch(() => {
-  console.error(`FAIL protected_mail_state_e2e stage=${stage}`);
+void main().catch(error => {
+  console.error(`FAIL protected_mail_state_e2e stage=${stage} reason=${fixtureFailureCode(error)}`);
   process.exitCode = 1;
 });

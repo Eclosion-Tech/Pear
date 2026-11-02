@@ -51,7 +51,7 @@ export function useComponentRepositoryWriter() {
     const { getConnection, identity } = useSpacetimeDB(), principal = identity?.toHexString() ?? "anonymous";
     const live = useRef(principal);
     live.current = principal;
-    useScopedTable(tables.my_component_repository_receipt, "SELECT * FROM my_component_repository_receipt", () => true);
+    useScopedTable(tables.workspace_component_repository_receipt, "SELECT * FROM my_component_repository_receipt", () => true);
     return useCallback(async (requestId: string, command: ComponentRepositoryCommand) => {
         const connection = getConnection() as DbConnection | null, author = principal;
         const check = () => { if (author === "anonymous" || live.current !== author || connection?.identity?.toHexString() !== author)
@@ -73,7 +73,7 @@ export function useComponentRepositoryWriter() {
         }
         for (let attempt = 0; attempt < 25; attempt++) {
             check();
-            const receipt = [...connection!.db.my_component_repository_receipt.iter()].find(row => row.requestId === requestId);
+            const receipt = [...connection!.db.workspace_component_repository_receipt.iter()].find(row => row.requestId === requestId);
             if (receipt) {
                 if (receipt.fingerprint !== fingerprint || receipt.operation !== command.kind)
                     throw new PanelCommitError("REQUEST_REUSED", "Repository receipt belongs to different arguments.");
