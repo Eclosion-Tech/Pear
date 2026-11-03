@@ -803,7 +803,7 @@ async function handleConversationMessage(
       pageContext += `${pageContext ? "\n\n" : ""}Focused page component: ${JSON.stringify({ page_id: String(conv.pageId), component_id: String(conv.blockAnchor), component_type: focusedNode?.componentType ?? "unknown" })}. ` +
         "The user placed this conversation on that component; keep edits scoped to it. " +
         (focusedNode?.componentType === "TrellisPanel"
-          ? "Read it with get_page_panel before changing its declared settings with update_page_panel. Use show_page_panel to display the same live component in your reply. Unsent browser input is private."
+          ? "Read it with get_component/get_page_panel. Authored components use update_component for atomic layout, action and binding edits; registered examples use update_page_panel. Use show_page_panel to display the same live component in your reply. Unsent browser input is private."
           : "Read get_page_components to inspect its current type and properties before editing. Do not replace the page to change this component.");
       const focusText = readComponentNodeText(conn, conv.blockAnchor).trim();
       if (focusText) {

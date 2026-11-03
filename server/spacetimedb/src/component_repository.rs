@@ -7,7 +7,7 @@ use crate::auth::user__view;
 use crate::module_install::module_install_meta__view;
 use crate::pages::components::{
     component_node,
-    trellis_panel::{interface_state as state, repository_state as export, COMPONENT_TYPE},
+    trellis_panel::{authored_state as authored, interface_state as state, repository_state as export, COMPONENT_TYPE},
 };
 use crate::pages::page;
 use serde_json::{json, Value};
@@ -244,20 +244,19 @@ pub fn publish_component_template(
     if replay(ctx, &request_id, &fingerprint)? {
         return Ok(());
     }
-    let source_registry = registry_for_props(ctx, &node.props)?;
-    let saved = state::parse_with_registry(&node.props, &source_registry)?;
-    if saved["document"]["documentId"]
-        != format!("pear-page:{}:component:{}", node.surface_id, node.id)
-        || saved["document"]["template"]["instanceId"] != format!("pear-component:{}", node.id)
-    {
-        return Err("INVALID_INTERFACE: Source interface belongs to another component".into());
-    }
-    if state::rev(&saved["document"]["revision"])? != source_revision {
-        return Err("STALE_REVISION: Source interface changed; preview the template again".into());
-    }
-    let package = export::prepare(&node.props, &source_registry, &options_json)?;
-    let bytes = export::canonical(&package)?;
-    let hash = state::hash(&bytes);
+    let (bytes,hash)=if authored::is_component(&node.props){
+        let saved=authored::parse(&node.props)?;
+        if saved["document"]["documentId"]!=format!("pear-page:{}:component:{}",node.surface_id,node.id){return Err("INVALID_COMPONENT: Source belongs to another component".into());}
+        if state::rev(&saved["document"]["revision"])?!=source_revision{return Err("STALE_REVISION: Preview the updated component".into());}
+        let package=authored::prepare_template(&node.props,&options_json)?;
+        (package.to_string(),authored::package_hash(&package)?)
+    }else{
+        let source_registry=registry_for_props(ctx,&node.props)?;
+        let saved=state::parse_with_registry(&node.props,&source_registry)?;
+        if saved["document"]["documentId"]!=format!("pear-page:{}:component:{}",node.surface_id,node.id)||saved["document"]["template"]["instanceId"]!=format!("pear-component:{}",node.id){return Err("INVALID_INTERFACE: Source belongs to another component".into());}
+        if state::rev(&saved["document"]["revision"])?!=source_revision{return Err("STALE_REVISION: Preview the updated component".into());}
+        let package=export::prepare(&node.props,&source_registry,&options_json)?;let bytes=export::canonical(&package)?;let hash=state::hash(&bytes);(bytes,hash)
+    };
     if expected_hash != hash {
         return Err(
             "PREVIEW_CHANGED: The template preview changed; inspect it before publishing".into(),
@@ -427,17 +426,7 @@ pub(crate) fn validate_restored(ctx: &ReducerContext) -> Result<(), String> {
             .find(format!("{}@{}", family.template_id, family.latest_version))
             .ok_or("INVALID_TEMPLATE: Imported family is missing its latest version")?;
         let package = state::parse_json(&version.package_json)?;
-        if package["name"] != family.name
-            || package["definition"]["template"]["description"] != family.description
-            || package["tags"]
-                != serde_json::from_str::<Value>(&family.tags_json)
-                    .map_err(|_| "INVALID_TEMPLATE: Invalid imported tags")?
-        {
-            return Err(
-                "INVALID_TEMPLATE: Family metadata differs from its immutable latest version"
-                    .into(),
-            );
-        }
+        validate_family_metadata(&package, &family.name, &family.description, &family.tags_json)?;
         for row in ctx
             .db
             .component_template_version()
@@ -467,4 +456,61 @@ pub(crate) fn validate_restored(ctx: &ReducerContext) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn validate_family_metadata(
+    package: &Value,
+    name: &str,
+    description: &str,
+    tags_json: &str,
+) -> Result<(), String> {
+    let package_description = match package["format"].as_str() {
+        Some("trellis_component_template_v1") => &package["definition"]["template"]["description"],
+        Some("trellis_authored_template_v1") => &package["description"],
+        _ => return Err("INVALID_TEMPLATE: Unsupported imported package format".into()),
+    };
+    let tags = serde_json::from_str::<Value>(tags_json)
+        .map_err(|_| "INVALID_TEMPLATE: Invalid imported tags")?;
+    if package["name"] != name || package_description != description || package["tags"] != tags {
+        return Err("INVALID_TEMPLATE: Family metadata differs from its immutable latest version".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod restore_metadata_tests {
+    use super::*;
+
+    fn packages() -> Vec<Value> {
+        let options = r#"{"slug":"shared-component","version":"1.0.0","name":"Shared component","description":"Reusable workspace component","tags":["shared"]}"#;
+        let registered = state::create(7, 100, "70", "author", "registered", r#"{"templateId":"trellis.checklist","templateVersion":"1.0.0","parameters":{}}"#).unwrap();
+        let authored = authored::create(7, 101, "70", "author", "authored", "Custom source title").unwrap();
+        vec![
+            export::prepare(&registered, &state::registry(), options).unwrap(),
+            authored::prepare_template(&authored, options).unwrap(),
+        ]
+    }
+
+    #[test]
+    fn restored_families_match_registered_and_authored_latest_package_metadata() {
+        for package in packages() {
+            validate_family_metadata(&package, "Shared component", "Reusable workspace component", r#"["shared"]"#).unwrap();
+        }
+    }
+
+    #[test]
+    fn restored_families_still_reject_changed_name_description_tags_and_unknown_formats() {
+        for mut package in packages() {
+            for (name, description, tags) in [
+                ("Changed name", "Reusable workspace component", r#"["shared"]"#),
+                ("Shared component", "Changed description", r#"["shared"]"#),
+                ("Shared component", "Reusable workspace component", r#"["changed"]"#),
+                ("Shared component", "Reusable workspace component", "invalid json"),
+            ] {
+                assert!(validate_family_metadata(&package, name, description, tags).is_err());
+            }
+            package["format"] = json!("unknown");
+            assert!(validate_family_metadata(&package, "Shared component", "Reusable workspace component", r#"["shared"]"#).is_err());
+        }
+    }
 }

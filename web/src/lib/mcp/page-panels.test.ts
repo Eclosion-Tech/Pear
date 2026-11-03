@@ -26,9 +26,9 @@ async function fixture() {
 }
 const create = { parent_id: "70", template_id: "trellis.checklist", template_version: "1.0.0", request_id: "create", parameters: { headingLevel: 3, firstDone: true } };
 describe("registered page interfaces through the existing tools", () => {
-  it("discovers typed definitions, creates and reads their saved capability contract", async () => {
+  it("offers no hardcoded presets while retaining pinned legacy capability contracts", async () => {
     const host = await fixture();
-    expect((await host.run("list_page_panel_templates", {})).templates.map((entry: any) => entry.id)).toEqual(["pear.note-panel", "trellis.note-form", "trellis.checklist"]);
+    expect((await host.run("list_page_panel_templates", {})).templates).toEqual([]);
     const created = await host.run("create_page_panel", create);
     expect(created.ok).toBe(true); expect(created.document.template.parameters.firstDone).toBe(true);
     expect(created.actions).toEqual({ "checklist.toggle": { input: { type: "object", properties: {} } } });
@@ -66,7 +66,7 @@ describe("registered page interfaces through the existing tools", () => {
     expect(current.revision).toBe(2); expect(current.allowed_edits).toEqual(["patch"]); expect(current.editable_parameters).toBeNull();
     expect(current.patch_contract.protocol).toBe("trellis_patch_v1");
     const advertised = PAGE_PANEL_TOOLS.find(tool => tool.name === "update_page_panel")!.inputSchema.properties!.operations as any;
-    expect(advertised.items.oneOf.map((schema: any) => schema.properties.op.enum[0])).toEqual(["insertNode", "removeSubtree", "moveNode", "setText", "setProps"]);
+    expect(advertised.items.oneOf.map((schema: any) => schema.properties.op.enum[0])).toEqual(["insertNode", "removeSubtree", "moveNode", "setText", "setProps", "setAction"]);
     const insert = structuredClone(current.patch_contract.examples.insertNode);
     insert.node.text = [{ text: "Ship a test" }]; insert.node.props.checked = false; insert.node.order = 1;
     const moves = ["first-task", "second-task", "scratch"].map((key, index) => ({

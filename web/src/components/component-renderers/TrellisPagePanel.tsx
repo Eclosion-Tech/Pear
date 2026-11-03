@@ -42,7 +42,8 @@ import {
 import type { DbConnection } from "@/src/module_bindings";
 import { usePageAccess } from "@/src/hooks/usePageAccess";
 import { blockReferenceHref } from "@/src/lib/blockReferenceLink";
-import { isRetainedPageInterface } from "@pear/trellis-ui";
+import { isAuthoredPageComponent, isRetainedPageInterface } from "@pear/trellis-ui";
+import { AuthoredPageComponentRenderer } from "./AuthoredPageComponent";
 import { RetainedPageInterfaceRenderer } from "./RetainedPageInterface";
 
 const Editable = createContext(false);
@@ -97,7 +98,7 @@ function Button({ node }: BlockRendererProps) {
 const renderers: RendererCatalog = { ...defaultRenderers, Input, Button };
 
 export function TrellisPagePanelRenderer(props: PulpProps) {
-  return isRetainedPageInterface(props.node.props) ? <RetainedPageInterfaceRenderer {...props} /> : <LegacyPagePanelRenderer {...props} />;
+  return isAuthoredPageComponent(props.node.props) ? <AuthoredPageComponentRenderer {...props} /> : isRetainedPageInterface(props.node.props) ? <RetainedPageInterfaceRenderer {...props} /> : <LegacyPagePanelRenderer {...props} />;
 }
 function LegacyPagePanelRenderer({ node }: PulpProps) {
   const access = usePageAccess(node.surfaceId);

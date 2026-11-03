@@ -248,7 +248,7 @@ pub(crate) fn materialize(
         json!({"protocol":"trellis_ui_v1","documentId":document_id,"revision":revision,"catalogVersion":template["catalogVersion"],"rootId":mapping[text(&template["rootId"])?],"nodes":nodes,"retiredIds":[],"template":{"id":template["id"],"version":template["version"],"hash":template["hash"],"instanceId":instance,"parameters":parameters,"mapping":mapping,"actionBindings":bindings,"state":"linked"}}),
     )
 }
-fn target<'a>(document: &'a Value, selector: &Value) -> Result<&'a Value, String> {
+pub(crate) fn target<'a>(document: &'a Value, selector: &Value) -> Result<&'a Value, String> {
     keys(selector, &["id", "key"])?;
     let map = object(selector)?;
     if map.len() != 1 {
@@ -370,6 +370,9 @@ pub(crate) fn validate_document(document: &Value, registry: &Value) -> Result<()
             "Linked content differs from its definition",
         ));
     }
+    validate_nodes(document, registry, entry, true)
+}
+fn validate_nodes(document: &Value, registry: &Value, entry: &Value, registered_effects: bool) -> Result<(), String> {
     let nodes = document["nodes"]
         .as_array()
         .ok_or_else(|| invalid("Expected nodes"))?;
@@ -490,6 +493,7 @@ pub(crate) fn validate_document(document: &Value, registry: &Value) -> Result<()
             }) {
                 return Err(invalid("Missing action input"));
             }
+            if !registered_effects { continue; }
             let effect = &binding["effect"];
             if effect["kind"] == "setText" {
                 let target = target(document, &effect["target"])?;
@@ -509,6 +513,16 @@ pub(crate) fn validate_document(document: &Value, registry: &Value) -> Result<()
         }
     }
     Ok(())
+}
+pub(crate) fn validate_component_document(document: &Value, catalog: &Value, actions: &Value) -> Result<(), String> {
+    keys(document, &["protocol", "documentId", "revision", "catalogVersion", "rootId", "nodes", "retiredIds"])?;
+    if document["protocol"] != "trellis_ui_v1" || document["catalogVersion"] != catalog["version"] { return Err(invalid("Unsupported document/catalog")); }
+    id(&document["documentId"])?; id(&document["rootId"])?; rev(&document["revision"])?;
+    let mut bindings = Map::new();
+    for (slot, value) in object(actions)? {
+        let mut value = object(value)?.clone(); value.insert("action".into(), json!(slot)); bindings.insert(slot.clone(), Value::Object(value));
+    }
+    validate_nodes(document, &json!({"catalog":catalog}), &json!({"bindings":bindings}), false)
 }
 pub fn is_interface(raw: &str) -> bool {
     serde_json::from_str::<Value>(raw)
@@ -609,6 +623,11 @@ pub fn create_with_registry(
     Ok(saved)
 }
 fn patch(document: &Value, operations: &Value, registry: &Value) -> Result<Value, String> {
+    let doc = patch_nodes(document, operations)?;
+    validate_document(&doc, registry)?;
+    Ok(doc)
+}
+pub(crate) fn patch_nodes(document: &Value, operations: &Value) -> Result<Value, String> {
     let ops = operations
         .as_array()
         .ok_or_else(|| invalid("Expected patch operations"))?;
@@ -672,12 +691,13 @@ fn patch(document: &Value, operations: &Value, registry: &Value) -> Result<Value
                     .unwrap()
                     .extend(removed_order);
             }
-            kind @ ("setText" | "setProps" | "moveNode") => {
+            kind @ ("setText" | "setProps" | "setAction" | "moveNode") => {
                 keys(
                     op,
                     match kind {
                         "setText" => &["op", "target", "text"],
                         "setProps" => &["op", "target", "props"],
+                        "setAction" => &["op", "target", "action"],
                         _ => &["op", "target", "parentId", "order"],
                     },
                 )?;
@@ -694,6 +714,10 @@ fn patch(document: &Value, operations: &Value, registry: &Value) -> Result<Value
                 match kind {
                     "setText" => node["text"] = op["text"].clone(),
                     "setProps" => node["props"] = op["props"].clone(),
+                    "setAction" => {
+                        if op["action"].is_null() { node.as_object_mut().unwrap().remove("action"); }
+                        else { node["action"] = op["action"].clone(); }
+                    }
                     _ => {
                         id(&op["parentId"])?;
                         node["parentId"] = op["parentId"].clone();
@@ -705,8 +729,7 @@ fn patch(document: &Value, operations: &Value, registry: &Value) -> Result<Value
         }
     }
     doc["revision"] = json!(rev(&document["revision"])? + 1);
-    doc["template"]["state"] = json!("forked");
-    validate_document(&doc, registry)?;
+    if doc.get("template").is_some() { doc["template"]["state"] = json!("forked"); }
     Ok(doc)
 }
 fn action_operations(doc: &Value, event: &Value, registry: &Value) -> Result<Value, String> {
