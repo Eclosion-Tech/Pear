@@ -1483,8 +1483,8 @@ function targetPageForAccessRequest(
   input: Record<string, unknown>,
   ctx: ToolCallContext,
 ): bigint | undefined {
-  if (toolName === "create_page_panel" || toolName === "update_page_panel") {
-    const id = numericInputToBigInt(toolName === "create_page_panel" ? input.parent_id : input.component_id);
+  if (["create_page_panel","update_page_panel","create_component","update_component","write_component_data"].includes(toolName)) {
+    const id = numericInputToBigInt(["create_page_panel","create_component"].includes(toolName) ? input.parent_id : input.component_id);
     const node = id ? conn.db.component_node?.id?.find?.(id) as { surfaceId?: bigint } | undefined : undefined;
     return node?.surfaceId ?? ctx.currentPageId;
   }
@@ -1522,6 +1522,9 @@ function isPageWriteTool(toolName: string): boolean {
   return [
     "create_page_panel",
     "update_page_panel",
+    "create_component",
+    "update_component",
+    "write_component_data",
     "create_page",
     "add_property",
     "delete_property",

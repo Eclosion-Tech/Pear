@@ -839,8 +839,10 @@ fn decode_component_template_version(v:&Value)->Result<ComponentTemplateVersion,
     let m=obj(v,"workspace component version")?;
     let key=string_at(m,"key")?;let template_id=string_at(m,"templateId")?;let version=string_at(m,"version")?;
     let package_json=string_at(m,"packageJson")?;let content_hash=string_at(m,"contentHash")?;
-    let package=component_package::validate_package(&package_json,&content_hash)?;
-    if key!=format!("{template_id}@{version}")||package["definition"]["template"]["id"]!=template_id||package["definition"]["template"]["version"]!=version{return Err("Imported template coordinate differs from its package".into());}
+    let authored=crate::pages::components::trellis_panel::interface_state::parse_json(&package_json)?["format"]=="trellis_authored_template_v1";
+    let package=if authored{crate::pages::components::trellis_panel::authored_state::validate_package(&package_json,Some(&content_hash))?}else{component_package::validate_package(&package_json,&content_hash)?};
+    let coordinate=if authored{(&package["templateId"],&package["version"])}else{(&package["definition"]["template"]["id"],&package["definition"]["template"]["version"])};
+    if key!=format!("{template_id}@{version}")||coordinate.0!=&template_id||coordinate.1!=&version{return Err("Imported template coordinate differs from its package".into());}
     Ok(ComponentTemplateVersion{key,scope:0,template_id,version,package_json,content_hash,published_by:decode_identity(m.get("publishedBy").ok_or("publishedBy")?)?,published_at:decode_timestamp(m.get("publishedAt").ok_or("publishedAt")?)?})
 }
 fn decode_component_node(v: &Value) -> Result<ComponentNode, String> {

@@ -26,6 +26,10 @@ const EXPECTED = [
   "list_page_panel_templates",
   "get_page_panel",
   "create_page_panel",
+  "create_component",
+  "get_component",
+  "update_component",
+  "write_component_data",
   "update_page_panel",
   "list_component_templates",
   "get_component_template",
@@ -126,7 +130,7 @@ test("chat receives the complete patch-operation schema, including placement and
   const operations = (chat.input_schema as any).properties.operations;
   assert.deepEqual(operations, (mcp.inputSchema as any).properties.operations);
   const variants = new Map<string, any>(operations.items.oneOf.map((schema: any) => [schema.properties.op.enum[0], schema]));
-  assert.deepEqual([...variants.keys()].sort(), ["insertNode", "moveNode", "removeSubtree", "setText", "setProps"].sort());
+  assert.deepEqual([...variants.keys()].sort(), ["insertNode", "moveNode", "removeSubtree", "setText", "setProps", "setAction"].sort());
   assert.deepEqual(variants.get("insertNode").required, ["op", "node"]);
   assert.equal(variants.get("insertNode").additionalProperties, false);
   assert.deepEqual(variants.get("moveNode").required, ["op", "target", "parentId", "order"]);

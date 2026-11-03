@@ -1,9 +1,10 @@
 "use client";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSpacetimeDB } from "spacetimedb/react";
-import { RetainedInterfaceView } from "@eclosion-tech/trellis-react";
-import { canonicalJson, compareComponentTemplateVersions, componentTemplateReference, createRetainedInterface, interfaceCreationFingerprint, prepareComponentTemplate, validateComponentTemplatePackage, type ComponentTemplateOptions, type ComponentTemplatePackage, type InterfaceRegistry, type RetainedInterface } from "@eclosion-tech/trellis";
-import { INTERFACE_REGISTRY, readPageInterface } from "@pear/trellis-ui";
+import { AuthoredComponentView, RetainedInterfaceView } from "@eclosion-tech/trellis-react";
+import { canonicalJson, sha256, instantiateAuthoredTemplate, authoredTemplateHash, prepareAuthoredTemplate, reusableComponentReference, validateReusableComponentPackage, compareComponentTemplateVersions, componentTemplateReference, createRetainedInterface, interfaceCreationFingerprint, prepareComponentTemplate, validateComponentTemplatePackage, type ComponentTemplateOptions, type ReusableComponentPackage, type AuthoredComponent, type InterfaceRegistry, type RetainedInterface } from "@eclosion-tech/trellis";
+import { INTERFACE_REGISTRY, readPageComponent, readPageInterface } from "@pear/trellis-ui";
+import { NewComponentButton } from "./NewComponentButton";
 import type { DbConnection } from "@/src/module_bindings";
 import { useComponentRepositoryWriter, useWorkspaceComponentTemplates, useWorkspaceComponentVersions } from "@/src/hooks/useComponentRepository";
 import { usePageAccess } from "@/src/hooks/usePageAccess";
@@ -19,12 +20,13 @@ function LibraryDialog({ title, onClose, children }: {
   </dialog>;
 }
 type Preview = {
-    package: ComponentTemplatePackage;
+    package: ReusableComponentPackage;
     hash: string;
-    saved: RetainedInterface;
+    saved: RetainedInterface | AuthoredComponent;
     registry: InterfaceRegistry;
 };
-async function previewPackage(value: ComponentTemplatePackage): Promise<Preview> {
+async function previewPackage(value: ReusableComponentPackage): Promise<Preview> {
+    if(value.format==="trellis_authored_template_v1")return{package:value,hash:await authoredTemplateHash(value),registry:INTERFACE_REGISTRY,saved:await instantiateAuthoredTemplate(value,INTERFACE_REGISTRY.catalog,{principal:"preview",parentId:"preview",requestId:"preview",documentId:"repository:preview",instanceId:"repository:preview"})};
     const registry = { catalog: INTERFACE_REGISTRY.catalog, definitions: [...INTERFACE_REGISTRY.definitions, value.definition] };
     const saved = await createRetainedInterface({ templateId: value.definition.template.id, templateVersion: value.definition.template.version, parameters: {} }, { registry, principal: "preview", parentId: "preview", requestId: "preview", documentId: "repository:preview", instanceId: "repository:preview" });
     return { package: value, hash: (await componentTemplateReference(value)).hash, saved, registry };
@@ -32,10 +34,10 @@ async function previewPackage(value: ComponentTemplatePackage): Promise<Preview>
 function TemplatePreview({ preview }: {
     preview: Preview;
 }) {
-    return <fieldset disabled className="my-4 rounded-lg border border-neutral-300 p-4 dark:border-neutral-700"><legend>Fresh instance preview</legend><RetainedInterfaceView key={preview.hash} saved={preview.saved} registry={preview.registry} principalKey="preview" canEdit={false} onCommit={async () => { throw new Error("This is a preview."); }}/></fieldset>;
+    return <fieldset disabled className="my-4 rounded-lg border border-neutral-300 p-4 dark:border-neutral-700"><legend>Fresh instance preview</legend>{preview.saved.v==="trellis_component_v1"?<AuthoredComponentView key={preview.hash} saved={preview.saved} catalog={INTERFACE_REGISTRY.catalog} principalKey="preview" canEdit={false} preview onCommit={async()=>{throw new Error("Preview");}}/>:<RetainedInterfaceView key={preview.hash} saved={preview.saved} registry={preview.registry} principalKey="preview" canEdit={false} onCommit={async () => { throw new Error("This is a preview."); }}/>}</fieldset>;
 }
 export function SaveComponentTemplate({ saved, registry, componentId, principal, canEdit }: {
-    saved: RetainedInterface;
+    saved: RetainedInterface | AuthoredComponent;
     registry: InterfaceRegistry;
     componentId: string;
     principal: string;
@@ -46,14 +48,14 @@ export function SaveComponentTemplate({ saved, registry, componentId, principal,
     return <><button type="button" disabled={!canEdit} onClick={() => { setOpen(true); setMessage(""); }}>Save as template</button>{message && <span role="status">{message}</span>}{open && <SaveTemplateForm key={principal} saved={saved} registry={registry} componentId={componentId} canEdit={canEdit} onClose={() => setOpen(false)} onSaved={() => { setMessage("Template saved to the workspace library."); setOpen(false); }}/>}</>;
 }
 function SaveTemplateForm({ saved, registry, componentId, canEdit, onClose, onSaved }: {
-    saved: RetainedInterface;
+    saved: RetainedInterface | AuthoredComponent;
     registry: InterfaceRegistry;
     componentId: string;
     canEdit: boolean;
     onClose: () => void;
     onSaved: () => void;
 }) {
-    const heading = saved.document.nodes.find(n => n.type === "Heading")?.text?.map(run => run.text).join("") || "My component";
+    const heading = (saved.v==="trellis_component_v1"?saved.title:"") || saved.document.nodes.find(n => n.type === "Heading")?.text?.map(run => run.text).join("") || "My component";
     const [name, setName] = useState(heading), [slug, setSlug] = useState(heading.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 64) || "my-component"), [version, setVersion] = useState("1.0.0"), [description, setDescription] = useState(""), [tags, setTags] = useState("");
     const [preview, setPreview] = useState<(Preview & {
         revision: number;
@@ -67,7 +69,7 @@ function SaveTemplateForm({ saved, registry, componentId, canEdit, onClose, onSa
     const optionsKey = canonicalJson(options);
     useEffect(() => { setPreview(null); attempt.current = null; }, [optionsKey]);
     async function prepare() { setBusy(true); setError(""); try {
-        const value = await prepareComponentTemplate(saved, registry, options);
+        const value = saved.v==="trellis_component_v1"?await prepareAuthoredTemplate(saved,registry.catalog,options):await prepareComponentTemplate(saved, registry, options);
         setPreview({ ...await previewPackage(value), revision: saved.document.revision, options });
     }
     catch (error) {
@@ -100,7 +102,7 @@ function SaveTemplateForm({ saved, registry, componentId, canEdit, onClose, onSa
       <label>Tags (comma separated)<input className="block w-full rounded border bg-transparent p-2" value={tags} onChange={e => setTags(e.target.value)}/></label>
       <label className="sm:col-span-2">Description<textarea className="block w-full rounded border bg-transparent p-2" value={description} maxLength={4000} onChange={e => setDescription(e.target.value)}/></label>
     </fieldset>
-    <p className="my-3 text-sm">Checkboxes start unchecked. Field values and saved action output start empty. Private drafts stay out of the library. Published versions cannot be overwritten.</p>
+    <p className="my-3 text-sm">Checkboxes start unchecked. Field values and saved action output start empty. Source connections must be configured for each new instance. Private drafts stay out of the library. Published versions cannot be overwritten.</p>
     <button type="button" disabled={busy || !canEdit} onClick={() => void prepare()}>Preview template</button>
     {preview && <><TemplatePreview preview={preview}/><details><summary>Shared content, defaults and actions</summary><pre className="max-h-60 overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(preview.package, null, 2)}</pre></details>{preview.revision !== saved.document.revision && <p role="alert">The source changed after this preview. Preview it again before publishing.</p>}<button type="button" className="mt-4" disabled={busy || !canEdit || preview.revision !== saved.document.revision} onClick={() => void publish()}>{attempt.current ? "Retry publication" : "Publish to workspace"}</button></>}
     {error && <p role="alert" className="mt-3">{error}</p>}
@@ -112,7 +114,7 @@ export function ComponentLibraryButton({ surfaceId, parentId }: {
 }) {
     const access = usePageAccess(surfaceId), [open, setOpen] = useState(false);
     useEffect(() => setOpen(false), [access.principal, surfaceId]);
-    return <><button type="button" className="mb-3 rounded border px-3 py-1 text-sm" onClick={() => setOpen(true)}>Component library</button>{open && <WorkspaceLibrary key={`${surfaceId}:${access.principal}`} surfaceId={surfaceId} parentId={parentId} onClose={() => setOpen(false)}/>}</>;
+    return <><NewComponentButton surfaceId={surfaceId} parentId={parentId}/><button type="button" className="mb-3 rounded border px-3 py-1 text-sm" onClick={() => setOpen(true)}>Component library</button>{open && <WorkspaceLibrary key={`${surfaceId}:${access.principal}`} surfaceId={surfaceId} parentId={parentId} onClose={() => setOpen(false)}/>}</>;
 }
 function WorkspaceLibrary({ surfaceId, parentId, onClose }: {
     surfaceId: bigint;
@@ -130,7 +132,7 @@ function WorkspaceLibrary({ surfaceId, parentId, onClose }: {
     live.current = access;
     useEffect(() => { let cancelled = false; setPreview(null); setError(""); request.current = null; if (!row)
         return; void (async () => { try {
-        const value = await validateComponentTemplatePackage(JSON.parse(row.packageJson), INTERFACE_REGISTRY), next = await previewPackage(value);
+        const value = await validateReusableComponentPackage(JSON.parse(row.packageJson), INTERFACE_REGISTRY), next = await previewPackage(value);
         if (next.hash !== row.contentHash)
             throw new Error("The saved package hash does not match this version.");
         if (!cancelled)
@@ -166,14 +168,14 @@ function WorkspaceLibrary({ surfaceId, parentId, onClose }: {
         const connection = getConnection() as DbConnection | null, principal = access.principal;
         const check = () => { if (!connection || live.current.principal !== principal || connection.identity?.toHexString() !== principal || !live.current.canEdit)
             throw new Error("This editing session ended or page access changed."); };
-        const descriptor = { templateId: preview.package.definition.template.id, templateVersion: preview.package.definition.template.version, parameters: {} };
+        const descriptor = preview.package.format==="trellis_authored_template_v1"?{kind:"component-template",templateId:preview.package.templateId,version:preview.package.version,hash:preview.hash}:{templateId: preview.package.definition.template.id, templateVersion: preview.package.definition.template.version, parameters: {}};
         const key = canonicalJson([parentId.toString(), descriptor]);
         if (request.current?.key !== key)
             request.current = { key, id: `library:${crypto.randomUUID()}` };
         const requestId = request.current.id;
         try {
             check();
-            const fingerprint = await interfaceCreationFingerprint(descriptor);
+            const fingerprint = "kind" in descriptor ? await sha256({templateId:descriptor.templateId,version:descriptor.version,hash:descriptor.hash}):await interfaceCreationFingerprint(descriptor);
             check();
             try {
                 await connection!.reducers.createTrellisPanel({ parentId: parentId.toString(), requestId, parametersJson: canonicalJson(descriptor) });
@@ -188,9 +190,9 @@ function WorkspaceLibrary({ surfaceId, parentId, onClose }: {
                 for (const node of connection!.db.component_node.iter()) {
                     if (node.surfaceId !== surfaceId || node.componentType !== "TrellisPanel" || node.deletedAt != null)
                         continue;
-                    let saved: RetainedInterface;
+                    let saved: RetainedInterface | AuthoredComponent;
                     try {
-                        saved = readPageInterface(node.props, String(surfaceId), String(node.id), preview.registry);
+                        saved = preview.package.format==="trellis_authored_template_v1"?readPageComponent(node.props,String(surfaceId),String(node.id)):readPageInterface(node.props, String(surfaceId), String(node.id), preview.registry);
                     }
                     catch {
                         continue;

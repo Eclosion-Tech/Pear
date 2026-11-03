@@ -1,8 +1,7 @@
-import { canonicalJson, sha256, TrellisError, describePatchContract, createRetainedInterface, interfaceCreationFingerprint, commitRetainedInterface, observeInterfaceCommit, interfaceDefinition, interfaceCatalog, type RetainedInterface, type InterfaceCreate, type InterfaceCommand, type JsonObject, type InterfaceRegistry } from "@eclosion-tech/trellis";
+import { readAuthoredComponent, createAuthoredComponent, commitAuthoredComponent, observeComponentCommit, componentCatalog, authorizeComponentWrite, type AuthoredComponent, type ComponentCommit, type ComponentCommand, canonicalJson, sha256, TrellisError, describePatchContract, createRetainedInterface, interfaceCreationFingerprint, commitRetainedInterface, observeInterfaceCommit, interfaceDefinition, interfaceCatalog, type RetainedInterface, type InterfaceCreate, type InterfaceCommand, type JsonObject, type InterfaceRegistry } from "@eclosion-tech/trellis";
 import {
   PAGE_PANEL_TYPE,
   PAGE_PANEL_TEMPLATE,
-  PAGE_PANEL_DEFAULTS,
   readPagePanel,
   panelId,
   panelRequestId,
@@ -11,7 +10,7 @@ import {
   PanelCommitError,
   type PagePanel,
   INTERFACE_REGISTRY,
-  isRetainedPageInterface,
+  isAuthoredPageComponent, readPageComponent, isRetainedPageInterface,
   readPageInterface,
 } from "@pear/trellis-ui";
 import type { McpContext, McpToolEntry, StdbTransport } from "./types.js";
@@ -78,16 +77,30 @@ export async function getPagePanel(
   return {
     componentId,
     surfaceId: sqlId(row.surface_id),
-    state: raw ? readPageInterface(row.props, sqlId(row.surface_id), componentId, registry) : readPagePanel(row.props),
+    state: isAuthoredPageComponent(row.props)?readPageComponent(row.props,sqlId(row.surface_id),componentId):raw ? readPageInterface(row.props, sqlId(row.surface_id), componentId, registry) : readPagePanel(row.props),
     registry,
   };
 }
 export function pagePanelResult(panel: {
   componentId: string;
   surfaceId: string;
-  state: PagePanel | RetainedInterface;
+  state: PagePanel | RetainedInterface | AuthoredComponent;
   registry?: InterfaceRegistry;
 }) {
+  if(panel.state.v==="trellis_component_v1"){
+    const saved=panel.state,catalog=componentCatalog(INTERFACE_REGISTRY.catalog,saved.actions);
+    return{ok:true,saved:true,component_id:panel.componentId,page_id:panel.surfaceId,revision:saved.document.revision,format:saved.v,
+      document:saved.document,configuration:{title:saved.title,actions:saved.actions,sources:saved.sources,bindings:saved.bindings},origin:saved.origin,
+      components:catalog.components,patch_contract:describePatchContract(catalog,saved.document,{allowNewActions:true}),allowed_edits:["patch","configuration"],
+      authoring_contract:{edit:{kind:"edit",operations:"Flat patch operations from patch_contract; an empty array is allowed when changing configuration",configuration:"Optional COMPLETE title/actions/sources/bindings map, matching the current configuration with your changes"},
+        local_action:{kind:"local",input:{type:"object",properties:{value:{type:"string"}},required:["value"]},message:"Saved.",effects:[{kind:"setText",target:{id:"existing-output-node"},input:"value"}]},
+        attach_action:{op:"setAction",target:{id:"existing-button"},action:{slot:"your-action-name",input:{value:{field:"existing-input-name"}}}},
+        workspace_source:{label:"Workspace data",fields:{name:{type:"string",writable:true}},connection:{adapter:"pear.database",schemaId:"positive-schema-id",mapping:{name:"positive-property-id"}}},
+        external_source:{label:"Service",fields:{name:{type:"string",writable:false}},connection:{adapter:"external.json",readUrl:"https://service.example/records",recordsPath:"",idField:"id"}},
+        binding:{source:"your-source-name",recordId:{first:true},field:"name",property:"value",writeBack:true},
+        source_rules:"Only supported field writes with current record permission are writable. External JSON requires CORS and explicit write:{url,method:'PUT'|'PATCH'}. Authentication is supplied privately per browser session, never in saved definitions. No write operation means read-only. Use write_component_data for workspace bindings; external source writes run in the connected browser adapter. Sources in published templates become disconnected ports."},
+      reference:{v:"pear_page_component_v1",surfaceId:panel.surfaceId,blockId:panel.componentId}};
+  }
   if ("document" in panel.state) {
     const registry = panel.registry ?? INTERFACE_REGISTRY;
     const saved = panel.state, origin = saved.document.template!, entry = interfaceDefinition(registry, origin.id, origin.version);
@@ -127,13 +140,6 @@ const requestSchema = {
   description:
     "Stable request ID. Retry uncertain writes with identical arguments and this same ID.",
 };
-// Convert the portable schema into the MCP SDK's JSON value representation.
-const parametersSchema = {
-  ...PAGE_PANEL_TEMPLATE.parameters,
-  properties: JSON.parse(
-    canonicalJson(PAGE_PANEL_TEMPLATE.parameters.properties ?? {}),
-  ),
-};
 function tool(entry: McpToolEntry): McpToolEntry {
   return {
     ...entry,
@@ -160,7 +166,7 @@ export const PAGE_PANEL_TOOLS: McpToolEntry[] = [
   tool({
     name: "list_page_panel_templates",
     description:
-      "List pinned templates that can live on a Pear page. These are page-owned components, separate from retained assistant-message panels.",
+      "List reusable templates published in this workspace. Start from blank with create_component, or use a discovered exact template version. Bundled legacy note/checklist presets are not offered for new work.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -170,23 +176,14 @@ export const PAGE_PANEL_TOOLS: McpToolEntry[] = [
       exact(input, []);
       const families = await workspaceTemplateFamilies(ctx.transport);
       const workspace = await Promise.all(families.map(async family => {
-        const saved = await workspaceTemplate(ctx.transport, family.template_id, family.latest_version), entry = saved.package.definition;
+        const saved = await workspaceTemplate(ctx.transport, family.template_id, family.latest_version);
+        if(saved.package.format==="trellis_authored_template_v1")return{id:saved.reference.templateId,version:saved.reference.version,hash:saved.reference.hash,repository_id:"workspace",name:saved.package.name,allowed_edits:["patch","configuration"],create_with:"create_component"};
+        const entry = saved.package.definition;
         return { id: entry.template.id, version: entry.template.version, hash: entry.template.hash, repository_id: "workspace", package_hash: saved.reference.hash, name: saved.package.name, parameters: entry.template.parameters, defaults: entry.defaults, allowed_edits: ["parameters", "patch"] };
       }));
       return JSON.stringify({
         ok: true,
-        templates: [
-          {
-            id: PAGE_PANEL_TEMPLATE.id,
-            version: PAGE_PANEL_TEMPLATE.version,
-            hash: PAGE_PANEL_TEMPLATE.hash,
-            parameters: parametersSchema,
-            defaults: PAGE_PANEL_DEFAULTS,
-            allowed_edits: "parameters",
-          },
-          ...INTERFACE_REGISTRY.definitions.map(entry => ({ id: entry.template.id, version: entry.template.version, hash: entry.template.hash, parameters: entry.template.parameters, defaults: entry.defaults, allowed_edits: ["parameters", "patch"] })),
-          ...workspace,
-        ],
+        templates: workspace,
       });
     },
   }),
@@ -212,12 +209,12 @@ export const PAGE_PANEL_TOOLS: McpToolEntry[] = [
   tool({
     name: "create_page_panel",
     description:
-      "Create a registered interface under an existing page container. Discover the exact template and typed parameter schema with list_page_panel_templates. Read get_page_components for parent_id. Humans and agents share the saved component and its revision. Reuse request_id and identical arguments after an uncertain result.",
+      "Instantiate a workspace-published registered template under an existing page container. Discover its exact version and typed parameters with list_page_panel_templates. For a blank component or an authored template use create_component. This endpoint also retains compatibility with previously pinned legacy requests. Read get_page_components for parent_id; retry uncertain writes with identical request_id and arguments.",
     inputSchema: {
       type: "object",
       properties: {
         parent_id: idSchema,
-        template_id: { type: "string", description: "Exact bundled or workspace template ID from list_page_panel_templates or the component library." },
+        template_id: { type: "string", description: "Exact workspace template ID from list_page_panel_templates or the component library." },
         template_version: {
           type: "string",
           description: "Exact immutable major.minor.patch version from discovery.",
@@ -369,6 +366,10 @@ export const PAGE_PANEL_TOOLS: McpToolEntry[] = [
         fail("INVALID_INPUT", "Expected a safe base revision.");
       const principal = await caller(ctx);
       const current = await getPagePanel(ctx.transport, componentId);
+      if(current.state.v==="trellis_component_v1"){
+        if(Object.hasOwn(input,"parameters"))fail("USE_COMPONENT_AUTHORING","Use update_component with configuration for this authored component.");
+        return updateAuthored(ctx,componentId,current.state,{baseRevision:input.base_revision as number,requestId,command:{kind:"edit",operations:input.operations as any}});
+      }
       if ("document" in current.state) {
         const command = (Object.hasOwn(input, "parameters") ? { kind: "parameters", parameters: input.parameters } : { kind: "patch", operations: input.operations }) as InterfaceCommand;
         const request = { baseRevision: input.base_revision as number, requestId, command };
@@ -387,7 +388,7 @@ export const PAGE_PANEL_TOOLS: McpToolEntry[] = [
           },
           read: async () => {
             const observed = (await getPagePanel(ctx.transport, componentId)).state;
-            if (!("document" in observed)) fail("INVALID_INTERFACE", "The saved interface changed format.");
+            if (observed.v!=="trellis_instance_v1") fail("INVALID_INTERFACE", "The saved interface changed format.");
             return observed;
           },
         });
@@ -433,3 +434,28 @@ export const PAGE_PANEL_TOOLS: McpToolEntry[] = [
     },
   }),
 ];
+
+async function updateAuthored(ctx:McpContext,componentId:string,current:AuthoredComponent,request:ComponentCommit){
+  const principal=await caller(ctx);
+  if(request.command.kind==="source-write")authorizeComponentWrite(current,request.command.write);
+  else await commitAuthoredComponent(current,request,{catalog:INTERFACE_REGISTRY.catalog,principal});
+  const state=await observeComponentCommit(request,{catalog:INTERFACE_REGISTRY.catalog,principal,
+    write:async args=>{try{return await ctx.transport.call("commit_trellis_panel",[componentId,args.baseRevision,args.requestId,canonicalJson(args.command)]);}catch(error){const message=reducerErrorMessage(error);if(/lacks .*access|Authentication required|not found/i.test(message))fail("AUTHORIZATION_DENIED",message);const code=/\b(STALE_REVISION|STALE_ACTION|REQUEST_REUSED|INVALID_COMPONENT|INVALID_INTERFACE|INVALID_BINDING|UNKNOWN_ACTION|UNKNOWN_NODE|DUPLICATE_ID|READ_ONLY_SOURCE|SOURCE_WRITE_REQUIRED):/.exec(message)?.[1];if(code)fail(code,message);throw error;}},
+    read:async()=>{const observed=await getPagePanel(ctx.transport,componentId);if(observed.state.v!=="trellis_component_v1")fail("INVALID_COMPONENT","The component changed format.");return observed.state;}});
+  const panel=await getPagePanel(ctx.transport,componentId);
+  return JSON.stringify({...pagePanelResult({...panel,state}),committed_revision:state.receipts.find(r=>r.principal===principal&&r.requestId===request.requestId)!.revision,replayed:current.receipts.some(r=>r.principal===principal&&r.requestId===request.requestId)});
+}
+PAGE_PANEL_TOOLS.push(
+ tool({name:"create_component",description:"Create a genuinely blank page-owned component to design with the user, or instantiate an exact authored workspace template. Read get_page_components for a container parent_id. Then get_component returns its configuration, catalog and exact patch contract; update_component saves atomic structure/action/binding edits. Never require a task/note preset. Each template use has fresh identities, empty state and disconnected data ports. Retry uncertain creation with the identical request_id.",
+ inputSchema:{type:"object",properties:{parent_id:idSchema,title:{type:"string",maxLength:160},template:{type:"object",properties:{template_id:{type:"string"},version:{type:"string"},hash:{type:"string",pattern:"^[a-f0-9]{64}$"}},required:["template_id","version","hash"],additionalProperties:false},request_id:requestSchema},required:["parent_id","request_id"],additionalProperties:false},
+ async execute(ctx,input){exact(input,["parent_id","title","template","request_id"]);const parentId=panelId(input.parent_id),requestId=panelRequestId(input.request_id),principal=await caller(ctx),parent=await rawNode(ctx.transport,parentId),surfaceId=sqlId(parent.surface_id);
+ let descriptor:unknown,fingerprint:string;
+ if(input.template){if(input.title!==undefined)fail("INVALID_INPUT","Choose blank title or template, not both.");const template=input.template as Record<string,unknown>;exact(template,["template_id","version","hash"]);const value=await workspaceTemplate(ctx.transport,String(template.template_id),String(template.version));if(value.package.format!=="trellis_authored_template_v1"||value.reference.hash!==template.hash)fail("TEMPLATE_PINNED","Choose an exact authored component package.");descriptor={kind:"component-template",templateId:template.template_id,version:template.version,hash:template.hash};fingerprint=await sha256({templateId:template.template_id,version:template.version,hash:template.hash});}
+ else{const title=input.title??"Untitled component";if(typeof title!=="string")fail("INVALID_INPUT","Component title must be text.");const saved=await createAuthoredComponent(title,{catalog:INTERFACE_REGISTRY.catalog,principal,parentId,requestId,documentId:"validation",instanceId:"validation"});fingerprint=saved.creation.fingerprint;descriptor={kind:"component",title};}
+ try{await ctx.transport.call("create_trellis_panel",[parentId,requestId,canonicalJson(descriptor)]);}catch(error){const message=reducerErrorMessage(error);const code=/\b(REQUEST_REUSED|TEMPLATE_ARCHIVED|TEMPLATE_NOT_FOUND|TEMPLATE_PINNED|INVALID_COMPONENT|PANEL_DELETED):/.exec(message)?.[1];if(code)fail(code,message);if(/lacks .*access|Authentication required|cannot contain/.test(message))fail("AUTHORIZATION_DENIED",message);}
+ const deadline=Date.now()+3000;do{const rows=await ctx.transport.sql<RawNode>(`SELECT id, surface_id, component_type, props, deleted_at FROM component_node WHERE surface_id = ${surfaceId}`);for(const row of rows){if(row.component_type!==PAGE_PANEL_TYPE||!isOptionNone(row.deleted_at)||!isAuthoredPageComponent(row.props))continue;const saved=readPageComponent(row.props,surfaceId,sqlId(row.id));if(saved.creation.principal===principal&&saved.creation.parentId===parentId&&saved.creation.requestId===requestId){if(saved.creation.fingerprint!==fingerprint)fail("REQUEST_REUSED","Creation arguments differ.");return JSON.stringify(pagePanelResult({componentId:sqlId(row.id),surfaceId,state:saved}));}}await new Promise(resolve=>setTimeout(resolve,25));}while(Date.now()<deadline);fail("COMMIT_UNCONFIRMED","The created component has not arrived. Retry identical arguments.");}
+ }),
+ tool({name:"get_component",description:"Read the live component definition shared by humans and AI: revision, full configuration, layout, field/action/binding contract and exact patch examples. No private browser drafts or connection credentials are returned. Use show_page_panel to show the same live instance in chat.",inputSchema:{type:"object",properties:{component_id:idSchema},required:["component_id"],additionalProperties:false},async execute(ctx,input){exact(input,["component_id"]);return JSON.stringify(pagePanelResult(await getPagePanel(ctx.transport,panelId(input.component_id))));}}),
+ tool({name:"update_component",description:"Co-edit an authored component with the user. First get_component. Pass command:{kind:'edit',operations:[flat patches],configuration?:COMPLETE configuration}. Actions, source ports and bindings are declarative data, never code. setAction attaches a declared action slot; null removes it. Preserve existing IDs and private-input names. Atomic layout/config changes share the human builder revision. Stale revisions require a fresh read; uncertain results require identical retries.",inputSchema:{type:"object",properties:{component_id:idSchema,base_revision:{type:"integer",minimum:0,maximum:Number.MAX_SAFE_INTEGER},request_id:requestSchema,command:{type:"object",properties:{kind:{type:"string",enum:["edit"]},operations:describePatchContract(componentCatalog(INTERFACE_REGISTRY.catalog),undefined,{allowNewActions:true}).operations_schema,configuration:{type:"object",properties:{title:{type:"string",maxLength:160},actions:{type:"object"},sources:{type:"object"},bindings:{type:"object"}},required:["title","actions","sources","bindings"],additionalProperties:false}},required:["kind","operations"],additionalProperties:false}},required:["component_id","base_revision","request_id","command"],additionalProperties:false},async execute(ctx,input){exact(input,["component_id","base_revision","request_id","command"]);const id=panelId(input.component_id),current=await getPagePanel(ctx.transport,id);if(current.state.v!=="trellis_component_v1")fail("USE_REGISTERED_INTERFACE","Use update_page_panel for registered examples.");if(!Number.isSafeInteger(input.base_revision)||(input.base_revision as number)<0||!input.command||typeof input.command!=="object"||(input.command as any).kind!=="edit")fail("INVALID_INPUT","Pass an edit command and safe current revision.");return updateAuthored(ctx,id,current.state,{baseRevision:input.base_revision as number,requestId:panelRequestId(input.request_id),command:input.command as ComponentCommand});}}),
+ tool({name:"write_component_data",description:"Write real Pear workspace records through a component's saved binding/table/source action. Read get_component first. Only declared writable fields and current record permissions are allowed; computed/unsupported fields are read-only. Data and durable receipt commit atomically. This does not write external services; those require the connected browser adapter. Use the same request_id and exact values for an uncertain retry.",inputSchema:{type:"object",properties:{component_id:idSchema,base_revision:{type:"integer",minimum:0,maximum:Number.MAX_SAFE_INTEGER},source:{type:"string"},record_id:idSchema,values:{type:"object"},request_id:requestSchema},required:["component_id","base_revision","source","record_id","values","request_id"],additionalProperties:false},async execute(ctx,input){exact(input,["component_id","base_revision","source","record_id","values","request_id"]);const id=panelId(input.component_id),current=await getPagePanel(ctx.transport,id);if(current.state.v!=="trellis_component_v1")fail("INVALID_COMPONENT","Choose an authored component.");if(!Number.isSafeInteger(input.base_revision)||(input.base_revision as number)<0)fail("INVALID_INPUT","Use the current safe revision.");const requestId=panelRequestId(input.request_id);return updateAuthored(ctx,id,current.state,{baseRevision:input.base_revision as number,requestId,command:{kind:"source-write",write:{source:String(input.source),recordId:panelId(input.record_id),values:input.values as any,requestId}}});}})
+);

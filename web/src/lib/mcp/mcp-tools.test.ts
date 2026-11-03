@@ -1311,6 +1311,7 @@ describe("registry", () => {
     expect([...tools.keys()].sort()).toEqual([
       "add_property",
       "archive_component_template",
+      "create_component",
       "create_page",
       "create_page_panel",
       "create_thread",
@@ -1319,6 +1320,7 @@ describe("registry", () => {
       "delete_property",
       "edit_page_content",
       "get_answer",
+      "get_component",
       "get_component_template",
       "get_page",
       "get_page_components",
@@ -1356,12 +1358,14 @@ describe("registry", () => {
       "set_page_theme",
       "set_row_properties",
       "update_block_content",
+      "update_component",
       "update_component_props",
       "update_page_content",
       "update_page_panel",
       "update_page_title",
       "update_property_config",
       "update_property_type",
+      "write_component_data",
     ]);
   });
 

@@ -68,7 +68,7 @@ export function useComponentRepositoryWriter() {
         }
         catch (error) {
             errorMessage = error instanceof Error ? error.message : String(error);
-            if (/lacks .*access|Authentication required|Only the creator|STALE_REVISION|PREVIEW_CHANGED|REQUEST_REUSED|IMMUTABLE_VERSION|TEMPLATE_ARCHIVED|INVALID_TEMPLATE|PANEL_UNAVAILABLE|TEMPLATE_NOT_FOUND|INVALID_INTERFACE|TEMPLATE_PINNED|UNSUPPORTED_CAPABILITY|IMPORT_IN_PROGRESS|LIMIT:/.test(errorMessage))
+            if (/lacks .*access|Authentication required|Only the creator|STALE_REVISION|PREVIEW_CHANGED|REQUEST_REUSED|IMMUTABLE_VERSION|TEMPLATE_ARCHIVED|INVALID_TEMPLATE|INVALID_COMPONENT|INVALID_BINDING|PANEL_UNAVAILABLE|TEMPLATE_NOT_FOUND|INVALID_INTERFACE|TEMPLATE_PINNED|UNSUPPORTED_CAPABILITY|IMPORT_IN_PROGRESS|LIMIT:/.test(errorMessage))
                 throw error;
         }
         for (let attempt = 0; attempt < 25; attempt++) {

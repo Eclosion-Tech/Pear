@@ -1,5 +1,5 @@
 import { INTERFACE_REGISTRY, panelId, PanelCommitError } from "@pear/trellis-ui";
-import { canonicalJson, validateComponentTemplatePackage, componentTemplateReference, componentRepositoryFingerprint, type InterfaceRegistry, type ComponentRepositoryCommand, type ComponentTemplatePackage } from "@eclosion-tech/trellis";
+import { canonicalJson, validateReusableComponentPackage, reusableComponentReference, componentRepositoryFingerprint, type InterfaceRegistry, type ComponentRepositoryCommand, type ComponentTemplatePackage } from "@eclosion-tech/trellis";
 import type { StdbTransport } from "./types";
 import { reducerErrorMessage } from "./errors";
 export const sqlText = (value: string) => `'${value.replaceAll("'", "''")}'`;
@@ -47,8 +47,8 @@ export async function workspaceTemplate(transport: StdbTransport, id: string, ve
     }>(`SELECT package_json, content_hash FROM workspace_component_template_version WHERE template_id = ${sqlText(id)} AND version = ${sqlText(version)}`);
     if (rows.length !== 1)
         throw new PanelCommitError("TEMPLATE_NOT_FOUND", "The exact workspace component version is unavailable or unreadable.");
-    const packageValue = await validateComponentTemplatePackage(JSON.parse(rows[0].package_json), INTERFACE_REGISTRY);
-    const reference = await componentTemplateReference(packageValue);
+    const packageValue = await validateReusableComponentPackage(JSON.parse(rows[0].package_json), INTERFACE_REGISTRY);
+    const reference = await reusableComponentReference(packageValue);
     if (reference.repositoryId !== "workspace" || reference.templateId !== id || reference.version !== version || reference.hash !== rows[0].content_hash)
         throw new PanelCommitError("TEMPLATE_PINNED", "Saved component package does not match its exact repository coordinate.");
     return { package: packageValue, reference };
@@ -59,6 +59,7 @@ export async function panelRegistry(transport: StdbTransport, id: string, versio
     if (creating && (await workspaceTemplateFamily(transport, id)).archived)
         throw new PanelCommitError("TEMPLATE_ARCHIVED", "This component template is archived. Existing instances remain available.");
     const value = await workspaceTemplate(transport, id, version);
+    if(value.package.format!=="trellis_component_template_v1")throw new PanelCommitError("USE_COMPONENT_AUTHORING", "Use create_component to instantiate this authored template.");
     return { catalog: INTERFACE_REGISTRY.catalog, definitions: [...INTERFACE_REGISTRY.definitions, value.package.definition] };
 }
 export async function observeRepositoryCommand(transport: StdbTransport, requestId: string, command: ComponentRepositoryCommand) {
@@ -73,7 +74,7 @@ export async function observeRepositoryCommand(transport: StdbTransport, request
         const message = reducerErrorMessage(error);
         if (/lacks .*access|Authentication required|Only the creator|not found/i.test(message))
             throw new PanelCommitError("AUTHORIZATION_DENIED", message);
-        const code = /\b(STALE_REVISION|REQUEST_REUSED|PREVIEW_CHANGED|IMMUTABLE_VERSION|TEMPLATE_ARCHIVED|INVALID_TEMPLATE|PANEL_UNAVAILABLE|TEMPLATE_NOT_FOUND|INVALID_INTERFACE|TEMPLATE_PINNED|UNSUPPORTED_CAPABILITY|IMPORT_IN_PROGRESS|LIMIT):/.exec(message)?.[1];
+        const code = /\b(STALE_REVISION|REQUEST_REUSED|PREVIEW_CHANGED|IMMUTABLE_VERSION|TEMPLATE_ARCHIVED|INVALID_TEMPLATE|INVALID_COMPONENT|INVALID_BINDING|PANEL_UNAVAILABLE|TEMPLATE_NOT_FOUND|INVALID_INTERFACE|TEMPLATE_PINNED|UNSUPPORTED_CAPABILITY|IMPORT_IN_PROGRESS|LIMIT):/.exec(message)?.[1];
         if (code)
             throw new PanelCommitError(code, message);
         transportError = error;
