@@ -46,7 +46,7 @@
     "y-protocols": "^1.0.7",
     "yjs": "^13.6.29",
     "@eclosion-tech/trellis": "file:../vendor/trellis/eclosion-tech-trellis-0.1.0-alpha.6.tgz",
-    "@eclosion-tech/trellis-react": "file:../vendor/trellis/eclosion-tech-trellis-react-0.1.0-alpha.6.tgz",
+    "@eclosion-tech/trellis-react": "file:../vendor/trellis/eclosion-tech-trellis-react-0.1.0-alpha.7.tgz",
     "@pear/trellis-ui": "workspace:*"
   },
   "devDependencies": {

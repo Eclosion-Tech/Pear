@@ -105,7 +105,7 @@ async function fill(element: HTMLInputElement, value: string) {
 async function click(name: string) {
   const button = [...document.querySelectorAll("button")]
     .filter((button) => !button.closest("[hidden]"))
-    .find((button) => button.textContent === name);
+    .find((button) => (button.getAttribute("aria-label") ?? button.textContent) === name);
   expect(button, `button ${name}`).toBeDefined();
   await act(async () => {
     button!.click();
@@ -125,6 +125,7 @@ it("the human builder adds a real building block to a blank component and saves 
   ]);
   const saved = await mount(await blank());
   await click("Build a component");
+  await click("Add layer");
   await fill(label("Building block"), "RichText");
   await click("Add building block");
   expect(saved().document.nodes).toHaveLength(2);
@@ -245,6 +246,7 @@ it("the actual live table renders a read-only API as read-only and confirms an e
 it("a concurrent AI edit rejects stale human settings while retaining the unsent draft until explicit reload", async () => {
   const saved = await mount(await blank());
   await click("Build a component");
+  await click("Add layer");
   await fill(label("Building block"), "RichText");
   await click("Add building block");
   await fill(label("Text"), "My unsent change");
@@ -547,4 +549,88 @@ it("confirmed creation clears the submitted field and an adapter without creatio
       (button) => button.textContent === "Add entry",
     )!.disabled,
   ).toBe(true);
+});
+
+async function layeredForm() {
+  const initial = await blank();
+  return commitAuthoredComponent(initial, {
+    baseRevision: 0, requestId: "layer-fixture", command: { kind: "edit", operations: [
+      { op: "insertNode", node: { id: "group", parentId: initial.document.rootId, order: 1, type: "Container", props: { direction: "column" } } },
+      { op: "insertNode", node: { id: "name", parentId: "group", order: 0, type: "Input", props: { name: "name", label: "Name" } } },
+      { op: "insertNode", node: { id: "heading", parentId: initial.document.rootId, order: 0, type: "Heading", props: { level: 2 }, text: [{ text: "Contact form" }] } },
+      { op: "insertNode", node: { id: "help", parentId: "group", order: 1, type: "RichText", props: {}, text: [{ text: "Your contact details" }] } },
+    ] },
+  }, { catalog: INTERFACE_REGISTRY.catalog, principal: "human" });
+}
+const layer = (name: string) => [...document.querySelectorAll<HTMLElement>('[role="treeitem"]')].find(item => item.getAttribute("aria-label") === name)!;
+const selectedPreview = () => document.querySelector<HTMLElement>('[data-trellis-design-selected="true"]')?.dataset.trellisDesignNode;
+async function selectLayer(name: string) {
+  await act(async () => layer(name).querySelector<HTMLElement>(".trellis-layer-row")!.click());
+}
+
+it("the compact layer tree follows saved hierarchy/order and supports collapsing and keyboard navigation", async () => {
+  const current = await mount(await layeredForm());
+  await click("Edit component");
+  const dialog = document.querySelector("dialog")!;
+  expect(dialog.querySelector('[aria-label="Insert building block"]')?.hasAttribute("hidden")).toBe(true);
+  expect(dialog.querySelector('.trellis-layer-panel[aria-label="Component settings"]')?.hasAttribute("hidden")).toBe(true);
+  expect([...dialog.querySelectorAll('[role="treeitem"]')].map(node => node.getAttribute("aria-label")))
+    .toEqual(["Contact form", "Container", "Name", "Your contact details"]);
+  expect(layer("Name").getAttribute("aria-level")).toBe("2");
+  await selectLayer("Container");
+  await act(async () => layer("Container").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })));
+  expect(layer("Name").getAttribute("aria-selected")).toBe("true");
+  expect(selectedPreview()).toBe("name");
+  await click("Collapse Container");
+  expect(layer("Name")).toBeUndefined();
+  expect(layer("Container").getAttribute("aria-selected")).toBe("true");
+  expect(document.activeElement).toBe(layer("Container"));
+  await act(async () => layer("Container").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })));
+  expect(layer("Name")).toBeDefined();
+  await act(async () => layer("Container").dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true, cancelable: true })));
+  expect(layer("Contact form").getAttribute("aria-selected")).toBe("true");
+  expect(current().document.revision).toBe(1);
+});
+
+it("preview selection reveals the matching layer without remounting private runtime fields or discarding inspector drafts", async () => {
+  const current = await mount(await layeredForm());
+  const runtimeInput = container.querySelector<HTMLInputElement>('input')!;
+  await fill(runtimeInput, "Keep this private draft");
+  await click("Edit component");
+  await selectLayer("Name");
+  await fill(label("Label"), "Unsent inspector draft");
+  await click("Collapse Container");
+  expect(layer("Name")).toBeUndefined();
+  const preview = document.querySelector('[aria-label="Live component preview"]')!;
+  const span = preview.querySelector<HTMLElement>('[data-trellis-design-node="name"] label span')!;
+  await act(async () => span.click());
+  expect(layer("Name").getAttribute("aria-selected")).toBe("true");
+  expect(selectedPreview()).toBe("name");
+  expect(label("Label").value).toBe("Unsent inspector draft");
+  expect(container.querySelector('input')).toBe(runtimeInput);
+  expect(runtimeInput.value).toBe("Keep this private draft");
+  expect(current().document.revision).toBe(1);
+  await selectLayer("Contact form");
+  expect(selectedPreview()).toBe("heading");
+  expect(preview.querySelectorAll('[data-trellis-design-selected="true"]')).toHaveLength(1);
+  expect(container.querySelector('[data-trellis-design-node]')).toBeNull();
+});
+
+it("toolbar disclosures preserve drafts and add a selected layer without leaving the creation form in the sidebar", async () => {
+  const current = await mount(await blank());
+  await click("Build a component");
+  await click("Add layer");
+  await fill(label("Building block"), "Heading");
+  await click("Add building block");
+  expect(layer("Heading").getAttribute("aria-selected")).toBe("true");
+  expect(document.querySelector('[aria-label="Insert building block"]')?.hasAttribute("hidden")).toBe(true);
+  await click("Component settings");
+  await fill(label("Component name"), "My unsent name");
+  await act(async () => label("Component name").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  expect(document.querySelector('dialog')!.open).toBe(true);
+  await click("Component settings");
+  expect(label("Component name").value).toBe("My unsent name");
+  await click("Save name");
+  expect(current().title).toBe("My unsent name");
+  expect(current().document.nodes).toHaveLength(2);
 });
