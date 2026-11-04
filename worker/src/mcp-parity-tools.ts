@@ -59,6 +59,7 @@ const PARITY_TOOL_NAMES = new Set([
   "get_component",
   "update_component",
   "write_component_data",
+  "run_component_action",
   "get_page_panel",
   "update_page_panel",
   "list_component_templates",

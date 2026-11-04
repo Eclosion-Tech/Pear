@@ -167,13 +167,58 @@ pub fn commit_trellis_panel(
         } else {
             None
         };
-        let update = authored_state::commit(
+        let mut update = authored_state::commit(
             &node.props,
             base_revision,
             &ctx.sender().to_hex().to_string(),
             &request_id,
             &parameters_json,
         )?;
+        if command["kind"] == "source-create" {
+            let saved = authored_state::parse(&node.props)?;
+            let (source, values) =
+                authored_state::create_intent(&saved, &command["event"], update.is_none())?;
+            // Creation authority is rechecked before accepting even a matching
+            // durable receipt. A retry never creates a second page.
+            let (database, properties) = workspace_create_values(ctx, &saved, &source, &values)?;
+            if let Some(props) = update.as_mut() {
+                let title = values
+                    .as_object()
+                    .and_then(|values| {
+                        values
+                            .values()
+                            .find_map(|value| value.as_str().filter(|text| !text.trim().is_empty()))
+                    })
+                    .unwrap_or("New entry")
+                    .chars()
+                    .take(200)
+                    .collect();
+                let row = crate::pages::create_component_tree_page_inner(
+                    ctx,
+                    Some(database),
+                    crate::pages::PageType::Doc,
+                    title,
+                    actor(ctx),
+                )?;
+                for (property, value) in properties {
+                    crate::pages::schemas::set_property_value_inner(
+                        ctx,
+                        row,
+                        property,
+                        value,
+                        actor(ctx),
+                    )?;
+                }
+                let mut committed = interface_state::parse_json(props)?;
+                let receipt = committed["receipts"]
+                    .as_array_mut()
+                    .and_then(|receipts| receipts.last_mut())
+                    .ok_or("INVALID_RECEIPT: Creation receipt unavailable")?;
+                receipt["recordId"] = serde_json::json!(row.to_string());
+                *props = committed.to_string();
+                authored_state::parse(props)?;
+            }
+        }
         if update.is_some() {
             if let Some((row, values)) = writes {
                 for (property, value) in values {
@@ -556,4 +601,71 @@ fn workspace_writes(
         values.push((id, value));
     }
     Ok((row.id, values))
+}
+fn workspace_create_values(
+    ctx: &ReducerContext,
+    saved: &serde_json::Value,
+    source_id: &str,
+    values: &serde_json::Value,
+) -> Result<(u64, Vec<(u64, crate::pages::schemas::PropertyValue)>), String> {
+    use crate::pages::schemas::{
+        database_schema, property_definition, PropertyType, PropertyValue,
+    };
+    crate::access_control::helpers::require_workspace_principal(ctx)?;
+    let source = &saved["sources"][source_id];
+    let connection = &source["connection"];
+    if connection["adapter"] != "pear.database" {
+        return Err("SOURCE_WRITE_REQUIRED: External creation requires its source adapter".into());
+    }
+    let schema = ctx
+        .db
+        .database_schema()
+        .id()
+        .find(state::id(interface_state::text(&connection["schemaId"])?)?)
+        .ok_or("READ_ONLY_SOURCE: Database unavailable")?;
+    ctx.db
+        .page()
+        .id()
+        .find(schema.page_id)
+        .filter(|page| page.deleted_at.is_none())
+        .ok_or("READ_ONLY_SOURCE: Source database is deleted")?;
+    require_page_read(ctx, schema.page_id)?;
+    require_page_write(ctx, schema.page_id)?;
+    let mut properties = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for (field, value) in interface_state::object(values)? {
+        if source["fields"][field]["writable"] != true {
+            return Err("READ_ONLY_SOURCE: Field is read-only".into());
+        }
+        let id = state::id(interface_state::text(&connection["mapping"][field])?)?;
+        let property = ctx
+            .db
+            .property_definition()
+            .id()
+            .find(id)
+            .filter(|p| p.schema_id == schema.id)
+            .ok_or("READ_ONLY_SOURCE: Field is not in the connected schema")?;
+        if !seen.insert(id) {
+            return Err("INVALID_BINDING: Multiple source fields target one property".into());
+        }
+        let value = match property.property_type {
+            PropertyType::Text => PropertyValue::Text(interface_state::text(value)?.into()),
+            PropertyType::Url => PropertyValue::Url(interface_state::text(value)?.into()),
+            PropertyType::Number => PropertyValue::Number(
+                value
+                    .as_f64()
+                    .filter(|v| v.is_finite())
+                    .ok_or("INVALID_BINDING: Expected finite number")?,
+            ),
+            PropertyType::Checkbox => {
+                PropertyValue::Checkbox(value.as_bool().ok_or("INVALID_BINDING: Expected boolean")?)
+            }
+            _ => return Err("READ_ONLY_SOURCE: Field has no supported creation operation".into()),
+        };
+        properties.push((id, value));
+    }
+    if properties.is_empty() {
+        return Err("INVALID_BINDING: Choose fields for the new record".into());
+    }
+    Ok((schema.page_id, properties))
 }

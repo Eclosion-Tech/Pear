@@ -1352,6 +1352,7 @@ describe("registry", () => {
       "resolve_thread",
       "restore_page",
       "run_answer",
+      "run_component_action",
       "search_conversations",
       "search_memory",
       "search_pages",

@@ -44,6 +44,9 @@ fn hex(value: &Value) -> bool {
 pub(crate) fn catalog() -> Value {
     let mut catalog = core::registry()["catalog"].clone();
     catalog["components"]["ChecklistItem"]["action"] = json!(true);
+    catalog["components"]["Input"]["props"]["properties"]["inputType"] =
+        json!({"type":"string","enum":["text","email","url","number"]});
+    catalog["components"]["Input"]["props"]["properties"]["multiline"] = json!({"type":"boolean"});
     catalog["components"]["DataTable"] = json!({"acceptsChildren":false,"props":{"type":"object","properties":{"source":{"type":"string"},"columns":{"type":"array","items":{"type":"string"},"maxItems":32},"emptyText":{"type":"string","maxLength":500}},"required":["source","columns"]}});
     catalog
 }
@@ -145,7 +148,14 @@ fn connection(value: &Value) -> Result<(), String> {
         "external.json" => {
             core::keys(
                 value,
-                &["adapter", "readUrl", "recordsPath", "idField", "write"],
+                &[
+                    "adapter",
+                    "readUrl",
+                    "recordsPath",
+                    "idField",
+                    "write",
+                    "create",
+                ],
             )?;
             fn url(raw: &Value) -> Result<(), String> {
                 let raw = string(raw, 2048)?.replace("{id}", "record");
@@ -177,6 +187,15 @@ fn connection(value: &Value) -> Result<(), String> {
                 url(&write["url"])?;
                 if !["PUT", "PATCH"].contains(&core::text(&write["method"])?) {
                     return Err(invalid("Declare PUT or PATCH for write-back"));
+                }
+            }
+            if let Some(create) = value.get("create") {
+                exact(create, &["url", "method", "idempotency"])?;
+                url(&create["url"])?;
+                if create["method"] != "POST" || create["idempotency"] != "key" {
+                    return Err(invalid(
+                        "Creation requires POST and provider Idempotency-Key support",
+                    ));
                 }
             }
         }
@@ -237,14 +256,38 @@ pub fn parse(raw: &str) -> Result<Value, String> {
     }
     for action in actions.values() {
         let kind = core::text(&action["kind"])?;
-        exact(
-            action,
-            if kind == "local" {
-                &["kind", "input", "message", "effects"]
-            } else {
-                &["kind", "input", "message", "source", "recordId", "fields"]
-            },
-        )?;
+        match kind {
+            "local" => exact(action, &["kind", "input", "message", "effects"])?,
+            "refresh" => exact(action, &["kind", "input", "message", "source"])?,
+            "create" => {
+                core::keys(
+                    action,
+                    &[
+                        "kind",
+                        "input",
+                        "message",
+                        "source",
+                        "fields",
+                        "clearOnSuccess",
+                    ],
+                )?;
+                for key in ["kind", "input", "message", "source", "fields"] {
+                    if action.get(key).is_none() {
+                        return Err(invalid("Required action fields are missing"));
+                    }
+                }
+                if action
+                    .get("clearOnSuccess")
+                    .is_some_and(|v| !v.is_boolean())
+                {
+                    return Err(invalid("Clear-on-success must be a boolean"));
+                }
+            }
+            _ => exact(
+                action,
+                &["kind", "input", "message", "source", "recordId", "fields"],
+            )?,
+        }
         schema(&action["input"], 0)?;
         string(&action["message"], 500)?;
         if action["input"]["type"] != "object" {
@@ -302,20 +345,28 @@ pub fn parse(raw: &str) -> Result<Value, String> {
                     }
                 }
             }
-            "source" => {
+            "source" | "create" | "refresh" => {
                 let source = sources
                     .get(core::text(&action["source"])?)
                     .ok_or_else(|| invalid("Action source missing"))?;
-                if action["recordId"].is_object() && action["recordId"].get("input").is_some() {
-                    exact(&action["recordId"], &["input"])?;
-                    if action["input"]["properties"][core::text(&action["recordId"]["input"])?]
-                        ["type"]
-                        != "string"
-                    {
-                        return Err(invalid("Record input must be a string"));
+                if action["kind"] == "refresh" {
+                    if !core::object(&action["input"]["properties"])?.is_empty() {
+                        return Err(invalid("Refresh takes no input"));
                     }
-                } else {
-                    record_target(&action["recordId"])?;
+                    continue;
+                }
+                if action["kind"] == "source" {
+                    if action["recordId"].is_object() && action["recordId"].get("input").is_some() {
+                        exact(&action["recordId"], &["input"])?;
+                        if action["input"]["properties"][core::text(&action["recordId"]["input"])?]
+                            ["type"]
+                            != "string"
+                        {
+                            return Err(invalid("Record input must be a string"));
+                        }
+                    } else {
+                        record_target(&action["recordId"])?;
+                    }
                 }
                 let fields = map(&action["fields"], 32)?;
                 if fields.is_empty() {
@@ -401,10 +452,21 @@ pub fn parse(raw: &str) -> Result<Value, String> {
     }
     let mut seen = BTreeSet::new();
     for receipt in receipts {
-        exact(
+        core::keys(
             receipt,
-            &["principal", "requestId", "fingerprint", "revision"],
+            &[
+                "principal",
+                "requestId",
+                "fingerprint",
+                "revision",
+                "recordId",
+            ],
         )?;
+        if let Some(id) = receipt.get("recordId") {
+            if string(id, 256)?.is_empty() {
+                return Err(invalid("Created record identity is empty"));
+            }
+        }
         let key = (
             core::id(&receipt["principal"])?,
             core::id(&receipt["requestId"])?,
@@ -543,6 +605,116 @@ pub(crate) fn authorize_write_for_record(
         "No saved control permits this source write",
     ))
 }
+fn validate_field_input(field: &Value, value: &Value) -> Result<(), String> {
+    if field["props"]["required"] == true
+        && (value.is_null() || value.as_str().is_some_and(|s| s.trim().is_empty()))
+    {
+        return Err(error("REQUIRED_PROP", "An input is required"));
+    }
+    if let Some(value) = value.as_str().filter(|s| !s.is_empty()) {
+        if field["props"]["inputType"] == "email" {
+            let valid = value.split_once('@').is_some_and(|(name, domain)| {
+                !name.is_empty()
+                    && !domain.contains('@')
+                    && domain
+                        .rsplit_once('.')
+                        .is_some_and(|(a, b)| !a.is_empty() && !b.is_empty())
+            }) && !value.chars().any(char::is_whitespace);
+            if !valid {
+                return Err(error("INVALID_INPUT", "Enter a valid email address"));
+            }
+        }
+        if field["props"]["inputType"] == "url"
+            && url::Url::parse(value)
+                .ok()
+                .filter(|url| ["http", "https"].contains(&url.scheme()))
+                .is_none()
+        {
+            return Err(error(
+                "INVALID_INPUT",
+                "Enter an absolute HTTP or HTTPS URL",
+            ));
+        }
+    }
+    Ok(())
+}
+fn action_input<'a>(
+    saved: &'a Value,
+    event: &Value,
+    allow_stale: bool,
+) -> Result<&'a Value, String> {
+    exact(
+        event,
+        &[
+            "documentId",
+            "revision",
+            "nodeId",
+            "slot",
+            "invocationId",
+            "input",
+        ],
+    )?;
+    core::id(&event["invocationId"])?;
+    let document = &saved["document"];
+    let node = document["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == event["nodeId"])
+        .ok_or_else(|| error("STALE_ACTION", "Control unavailable"))?;
+    if event["documentId"] != document["documentId"]
+        || (!allow_stale && event["revision"] != document["revision"])
+        || node["action"]["slot"] != event["slot"]
+    {
+        return Err(error("STALE_ACTION", "Component changed"));
+    }
+    let action = &saved["actions"][core::text(&event["slot"])?];
+    core::validate_value(&event["input"], &action["input"])?;
+    if core::object(&event["input"])?
+        .keys()
+        .ne(core::object(&node["action"]["input"])?.keys())
+    {
+        return Err(invalid("Action inputs differ from saved control"));
+    }
+    for (key, value) in core::object(&node["action"]["input"])? {
+        if value.is_object() {
+            let field = document["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|n| n["type"] == "Input" && n["props"]["name"] == value["field"]);
+            if field.is_some_and(|f| f["props"]["required"] == true)
+                && event["input"][key]
+                    .as_str()
+                    .is_some_and(|s| s.trim().is_empty())
+            {
+                return Err(error("REQUIRED_PROP", "An input is required"));
+            }
+            if let Some(field) = field {
+                validate_field_input(field, &event["input"][key])?;
+            }
+        } else if !core::equal(value, &event["input"][key]) {
+            return Err(invalid("A literal action input changed"));
+        }
+    }
+
+    Ok(action)
+}
+pub(crate) fn create_intent(
+    saved: &Value,
+    event: &Value,
+    allow_stale: bool,
+) -> Result<(String, Value), String> {
+    let action = action_input(saved, event, allow_stale)?;
+    if action["kind"] != "create" {
+        return Err(invalid("This control does not create a source record"));
+    }
+    let mut values = Map::new();
+    for (field, input) in core::object(&action["fields"])? {
+        values.insert(field.clone(), event["input"][core::text(input)?].clone());
+    }
+    Ok((core::text(&action["source"])?.into(), Value::Object(values)))
+}
 pub fn commit(
     existing: &str,
     base_revision: u64,
@@ -604,56 +776,7 @@ pub fn commit(
         "action" => {
             exact(&command, &["kind", "event"])?;
             let event = &command["event"];
-            exact(
-                event,
-                &[
-                    "documentId",
-                    "revision",
-                    "nodeId",
-                    "slot",
-                    "invocationId",
-                    "input",
-                ],
-            )?;
-            core::id(&event["invocationId"])?;
-            let node = document["nodes"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|n| n["id"] == event["nodeId"])
-                .ok_or_else(|| error("STALE_ACTION", "Control unavailable"))?;
-            if event["documentId"] != document["documentId"]
-                || event["revision"] != document["revision"]
-                || node["action"]["slot"] != event["slot"]
-            {
-                return Err(error("STALE_ACTION", "Component changed"));
-            }
-            let action = &saved["actions"][core::text(&event["slot"])?];
-            core::validate_value(&event["input"], &action["input"])?;
-            if core::object(&event["input"])?
-                .keys()
-                .ne(core::object(&node["action"]["input"])?.keys())
-            {
-                return Err(invalid("Action inputs differ from saved control"));
-            }
-            for (key, value) in core::object(&node["action"]["input"])? {
-                if value.is_object() {
-                    let field = document["nodes"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .find(|n| n["type"] == "Input" && n["props"]["name"] == value["field"]);
-                    if field.is_some_and(|f| f["props"]["required"] == true)
-                        && event["input"][key]
-                            .as_str()
-                            .is_none_or(|s| s.trim().is_empty())
-                    {
-                        return Err(error("REQUIRED_PROP", "An input is required"));
-                    }
-                } else if !core::equal(value, &event["input"][key]) {
-                    return Err(invalid("A literal action input changed"));
-                }
-            }
+            let action = action_input(&saved, event, false)?;
             if action["kind"] != "local" {
                 return Err(error(
                     "SOURCE_WRITE_REQUIRED",
@@ -685,6 +808,17 @@ pub fn commit(
                 }
             }
             saved["document"] = core::patch_nodes(&document, &json!(operations))?;
+        }
+        "source-create" => {
+            exact(&command, &["kind", "event"])?;
+            let (source, _) = create_intent(&saved, &command["event"], false)?;
+            if saved["sources"][&source]["connection"]["adapter"] != "pear.database" {
+                return Err(error(
+                    "SOURCE_WRITE_REQUIRED",
+                    "External creation requires its source adapter",
+                ));
+            }
+            saved["document"]["revision"] = json!(base_revision + 1);
         }
         "source-write" => {
             exact(&command, &["kind", "write"])?;
