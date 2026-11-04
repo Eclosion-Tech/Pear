@@ -76,22 +76,30 @@ export function slashMenuPlugin(opts: {
         const current = slashPluginKey.getState(view.state);
         // "/ " (space with an empty query) is not a command — close, let the
         // space type normally.
-        if (text === " " && current?.active) {
+        if (/^\s/.test(text) && current?.active) {
           const session = getSlashSession(view.state);
           if (session && session.query.length === 0) {
             view.dispatch(
               view.state.tr.setMeta(slashPluginKey, { type: "close" }),
             );
           }
-          return false;
         }
-        if (text !== "/") return false;
         if (opts.isDisabled?.()) return false;
         if (!view.state.selection.empty) return false;
-        if (!isSlashBoundary(view.state, from)) return false;
+        // DOMObserver can report several fast keystrokes as one text input.
+        // Locate the slash within that insertion, including its preceding
+        // whitespace, rather than requiring a standalone "/" event.
+        let slash = -1;
+        for (let index = text.length - 1; index >= 0; index--) {
+          if (text[index] === "/" && (index > 0 ? /\s/.test(text[index - 1]) : isSlashBoundary(view.state, from))) {
+            slash = index;
+            break;
+          }
+        }
+        if (slash < 0 || /[\r\n]/.test(text) || /^\s/.test(text.slice(slash + 1))) return false;
 
-        const tr = view.state.tr.insertText("/", from, to);
-        tr.setMeta(slashPluginKey, { type: "open", from });
+        const tr = view.state.tr.insertText(text, from, to);
+        tr.setMeta(slashPluginKey, { type: "open", from: from + slash });
         view.dispatch(tr);
         return true;
       },

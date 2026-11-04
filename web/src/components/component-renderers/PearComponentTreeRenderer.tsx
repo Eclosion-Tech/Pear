@@ -43,10 +43,10 @@ import { useCreateAttachment } from "@/src/hooks/usePages";
 import { useCreateConversation } from "@/src/hooks/useConversations";
 import { useSpacetimeDB } from "spacetimedb/react";
 import { registerPearBuiltinRenderers } from "./built-in";
-import { PEAR_SLASH_ITEMS, slashItemsForDefs } from "./pearSlashItems";
+import { slashItemsForDefs } from "./pearSlashItems";
+import { useComponentSlashItems } from "./useComponentSlashItems";
 import { useQueryResolver } from "@/src/lib/repeater/queryResolver";
 import { pearReferences } from "./PearReferenceSource";
-import { ComponentLibraryButton } from "./ComponentTemplateLibrary";
 
 registerCoreBlocks();
 registerPearBuiltinRenderers();
@@ -409,17 +409,18 @@ export function ComponentTreeRenderer({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on page content, not array identity
   }, [linkTargetsKey]);
 
+  const componentSlashItems = useComponentSlashItems(surfaceId, tree.root?.id ?? null);
   const config = useMemo(
     () => ({
       idbPrefix: `pear:${idbNamespace}`,
       validateProps: validateComponentProps,
-      slashItems: slashItemsForDefs(PEAR_SLASH_ITEMS, tree.defs),
+      slashItems: slashItemsForDefs(componentSlashItems, tree.defs),
       linkTargets,
       onCommentBlock: handleCommentBlock,
       queryResolver,
       references: pearReferences,
     }),
-    [idbNamespace, linkTargets, tree.defs, handleCommentBlock, queryResolver],
+    [idbNamespace, linkTargets, tree.defs, componentSlashItems, handleCommentBlock, queryResolver],
   );
 
   const attachmentCtx = useMemo(
@@ -435,7 +436,6 @@ export function ComponentTreeRenderer({
             <PageComposition layout={layout} onLayoutChange={onLayoutChange}
               pageLabel={pages.find(page => page.id === surfaceId)?.title || "Untitled"}>
               <div ref={editorContainerRef} className="relative">
-                <ComponentLibraryButton surfaceId={surfaceId} parentId={tree.root?.id??null}/>
                 <BlockEditor />
                 {onOpenThread && (
                   <BlockThreadGutter

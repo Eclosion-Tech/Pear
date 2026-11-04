@@ -26,5 +26,5 @@ export function workspaceComponentSnapshot(source: ComponentSource, data: Worksp
     }
     return { id: page.id.toString(), values, writableFields: permission(page.id) === "Write" ? writableFields : [] };
   });
-  return { status: "ready", records, writableFields };
+  return { status: "ready", records, writableFields,creatableFields:permission(schema.pageId)==="Write"?writableFields:[] };
 }

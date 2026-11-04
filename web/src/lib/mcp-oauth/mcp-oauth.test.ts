@@ -312,3 +312,10 @@ describe("metadata", () => {
     expect(challenge).toContain('scope="memory"');
   });
 });
+
+it("component authoring and executing saved actions require explicit page scopes",()=>{
+ const reads=["get_component"],writes=["create_component","update_component","write_component_data","run_component_action"];
+ for(const name of reads){expect(scopeForTool(name)).toBe("pages:read");expect(toolFilterForScopes(["pages:read"])(name)).toBe(true);}
+ for(const name of writes){expect(scopeForTool(name)).toBe("pages:write");expect(toolFilterForScopes(["pages:read"])(name)).toBe(false);expect(toolFilterForScopes(["pages:write"])(name)).toBe(true);}
+ for(const name of [...reads,...writes])expect(toolFilterForScopes(["memory"])(name)).toBe(false);
+});

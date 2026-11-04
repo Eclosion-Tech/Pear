@@ -1,9 +1,110 @@
-import {expect,it} from "vitest";
-import {workspaceComponentSnapshot,type WorkspaceComponentData} from "./component-workspace-data";
-import type {ComponentSource} from "@eclosion-tech/trellis";
-const principal="a".repeat(64),identity={toHexString:()=>principal};
-const source:ComponentSource={label:"Records",fields:{name:{type:"string",writable:true},status:{type:"string",writable:true}},connection:{adapter:"pear.database",schemaId:"5",mapping:{name:"7",status:"8"}}};
-const fixture=()=>({ready:true,principal,privileged:false,pages:[{id:10n},{id:11n,parentId:10n},{id:12n,parentId:20n}],rules:[],schemas:[{id:5n,pageId:10n}],properties:[{id:7n,schemaId:5n,propertyType:{tag:"Text"}},{id:8n,schemaId:5n,propertyType:{tag:"Select"}}],values:[{pageId:11n,propertyDefinitionId:7n,value:{tag:"Text",value:"Saved value"}},{pageId:11n,propertyDefinitionId:8n,value:{tag:"Select",value:"Ready"}}]} as unknown as WorkspaceComponentData);
-it("live workspace data projects only the connected database and exposes supported writes",()=>{const value=workspaceComponentSnapshot(source,fixture());expect(value.records).toHaveLength(1);expect(value.records[0]).toEqual({id:"11",values:{name:"Saved value",status:"Ready"},writableFields:["name"]});expect(value.writableFields).toEqual(["name"]);});
-it("current record ACLs revoke writes while retaining readable source data",()=>{const data=fixture();data.rules=[{pageId:10n,principal:{tag:"WorkspaceMember",value:identity},permission:{tag:"Read"}}] as any;const value=workspaceComponentSnapshot(source,data);expect(value.records[0].values.name).toBe("Saved value");expect(value.records[0].writableFields).toEqual([]);});
-it("unreadable connections reveal no cached records and unready connections permit no writes",()=>{const data=fixture();data.rules=[{pageId:10n,principal:{tag:"WorkspaceMember",value:{toHexString:()=>"other"}},permission:{tag:"Read"}}] as any;expect(workspaceComponentSnapshot(source,data).records).toEqual([]);expect(workspaceComponentSnapshot(source,{...data,ready:false}).status).toBe("loading");expect(workspaceComponentSnapshot(source,{...fixture(),principal:"anonymous"}).records).toEqual([]);});
+import { expect, it } from "vitest";
+import {
+  workspaceComponentSnapshot,
+  type WorkspaceComponentData,
+} from "./component-workspace-data";
+import type { ComponentSource } from "@eclosion-tech/trellis";
+const principal = "a".repeat(64),
+  identity = { toHexString: () => principal };
+const source: ComponentSource = {
+  label: "Records",
+  fields: {
+    name: { type: "string", writable: true },
+    status: { type: "string", writable: true },
+  },
+  connection: {
+    adapter: "pear.database",
+    schemaId: "5",
+    mapping: { name: "7", status: "8" },
+  },
+};
+const fixture = () =>
+  ({
+    ready: true,
+    principal,
+    privileged: false,
+    pages: [
+      { id: 10n },
+      { id: 11n, parentId: 10n },
+      { id: 12n, parentId: 20n },
+    ],
+    rules: [],
+    schemas: [{ id: 5n, pageId: 10n }],
+    properties: [
+      { id: 7n, schemaId: 5n, propertyType: { tag: "Text" } },
+      { id: 8n, schemaId: 5n, propertyType: { tag: "Select" } },
+    ],
+    values: [
+      {
+        pageId: 11n,
+        propertyDefinitionId: 7n,
+        value: { tag: "Text", value: "Saved value" },
+      },
+      {
+        pageId: 11n,
+        propertyDefinitionId: 8n,
+        value: { tag: "Select", value: "Ready" },
+      },
+    ],
+  }) as unknown as WorkspaceComponentData;
+it("live workspace data projects only the connected database and exposes supported writes", () => {
+  const value = workspaceComponentSnapshot(source, fixture());
+  expect(value.records).toHaveLength(1);
+  expect(value.records[0]).toEqual({
+    id: "11",
+    values: { name: "Saved value", status: "Ready" },
+    writableFields: ["name"],
+  });
+  expect(value.writableFields).toEqual(["name"]);
+});
+it("current record ACLs revoke writes while retaining readable source data", () => {
+  const data = fixture();
+  data.rules = [
+    {
+      pageId: 10n,
+      principal: { tag: "WorkspaceMember", value: identity },
+      permission: { tag: "Read" },
+    },
+  ] as any;
+  const value = workspaceComponentSnapshot(source, data);
+  expect(value.records[0].values.name).toBe("Saved value");
+  expect(value.records[0].writableFields).toEqual([]);
+});
+it("unreadable connections reveal no cached records and unready connections permit no writes", () => {
+  const data = fixture();
+  data.rules = [
+    {
+      pageId: 10n,
+      principal: {
+        tag: "WorkspaceMember",
+        value: { toHexString: () => "other" },
+      },
+      permission: { tag: "Read" },
+    },
+  ] as any;
+  expect(workspaceComponentSnapshot(source, data).records).toEqual([]);
+  expect(
+    workspaceComponentSnapshot(source, { ...data, ready: false }).status,
+  ).toBe("loading");
+  expect(
+    workspaceComponentSnapshot(source, { ...fixture(), principal: "anonymous" })
+      .records,
+  ).toEqual([]);
+});
+
+it("creating in an empty database requires current database authority and supported property mappings", () => {
+  const data = fixture();
+  data.pages = data.pages.filter((page) => page.id !== 11n);
+  let value = workspaceComponentSnapshot(source, data);
+  expect(value.records).toEqual([]);
+  expect(value.creatableFields).toEqual(["name"]);
+  data.rules = [
+    {
+      pageId: 10n,
+      principal: { tag: "WorkspaceMember", value: identity },
+      permission: { tag: "Read" },
+    },
+  ] as any;
+  value = workspaceComponentSnapshot(source, data);
+  expect(value.creatableFields).toEqual([]);
+});

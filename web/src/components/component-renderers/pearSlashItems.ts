@@ -31,14 +31,22 @@ export const PEAR_REGISTRY_REQUIRED_TYPES = [
 export const PEAR_SLASH_ITEMS: SlashMenuItem[] = [
   ...SPRINT_3B_SLASH_ITEMS,
   {
-    id: "trellis-component", section: "Data", label: "New component",
-    description: "Build from scratch or collaborate with AI, connect live data, then save a reusable template.",
-    componentType: "TrellisPanel", defaultProps: {kind:"component",title:"Untitled component"}, searchTokens: ["component","builder","interface","trellis","template"],
+    id: "trellis-component",
+    section: "Components",
+    label: "New component",
+    description:
+      "Build from scratch or collaborate with AI, connect live data, then save a reusable template.",
+    componentType: "TrellisPanel",
+    defaultProps: { kind: "component", title: "Untitled component" },
+    searchTokens: ["component", "builder", "interface", "trellis", "template"],
   },
   {
-    id: "reference", section: "Pages", label: "Reference",
+    id: "reference",
+    section: "Pages",
+    label: "Reference",
     description: "Include and edit a page or block from elsewhere.",
-    componentType: "Reference", defaultProps: {},
+    componentType: "Reference",
+    defaultProps: {},
     searchTokens: ["reference", "include", "embed", "linked", "section"],
   },
   {
@@ -54,7 +62,15 @@ export const PEAR_SLASH_ITEMS: SlashMenuItem[] = [
     defaultProps: {
       dataSource: { v: 1, entity: { kind: "pages", parentId: null } },
     },
-    searchTokens: ["repeat", "repeater", "list", "rows", "data", "query", "view"],
+    searchTokens: [
+      "repeat",
+      "repeater",
+      "list",
+      "rows",
+      "data",
+      "query",
+      "view",
+    ],
   },
   {
     id: "bullet-list",
@@ -107,7 +123,13 @@ export const PEAR_SLASH_ITEMS: SlashMenuItem[] = [
     label: "File",
     description: "Upload any file as a downloadable attachment.",
     componentType: "FileBlock",
-    defaultProps: { storageKey: "", filename: "", contentType: "", sizeBytes: 0, caption: "" },
+    defaultProps: {
+      storageKey: "",
+      filename: "",
+      contentType: "",
+      sizeBytes: 0,
+      caption: "",
+    },
     searchTokens: [
       "file",
       "upload",
@@ -139,6 +161,67 @@ export const PEAR_SLASH_ITEMS: SlashMenuItem[] = [
     searchTokens: ["page", "link", "existing", "doc"],
   },
 ];
+
+export function workspaceTemplateSlashItems(
+  families: readonly {
+    templateId: string;
+    name: string;
+    description: string;
+    tagsJson: string;
+    latestVersion: string;
+    archived: boolean;
+  }[],
+  versions: readonly {
+    templateId: string;
+    version: string;
+    contentHash: string;
+    packageJson: string;
+  }[],
+): SlashMenuItem[] {
+  return families
+    .filter((family) => !family.archived)
+    .flatMap((family) => {
+      const version = versions.find(
+        (row) =>
+          row.templateId === family.templateId &&
+          row.version === family.latestVersion,
+      );
+      if (!version) return [];
+      try {
+        const value = JSON.parse(version.packageJson);
+        const descriptor =
+          value.format === "trellis_authored_template_v1"
+            ? {
+                kind: "component-template",
+                templateId: family.templateId,
+                version: version.version,
+                hash: version.contentHash,
+              }
+            : {
+                templateId: value.definition.template.id,
+                templateVersion: value.definition.template.version,
+                parameters: {},
+              };
+        return [
+          {
+            id: `template:${family.templateId}`,
+            section: "Components",
+            label: family.name,
+            description: family.description || "Reusable workspace component",
+            componentType: "TrellisPanel",
+            defaultProps: descriptor,
+            searchTokens: [
+              "component",
+              "template",
+              family.tagsJson.toLowerCase(),
+            ],
+          },
+        ];
+      } catch {
+        return [];
+      }
+    });
+}
 
 /** Only offer slash items whose type exists in this workspace's registry table. */
 export function slashItemsForDefs(

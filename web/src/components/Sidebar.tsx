@@ -18,6 +18,7 @@ import { ContextMenu, type ContextMenuItem } from "@/src/components/ContextMenu"
 import { QuickSwitcher } from "@/src/components/QuickSwitcher";
 import { EmojiPicker } from "@/src/components/EmojiPicker";
 import { RepeaterSidebarTree } from "@/src/components/RepeaterSidebarTree";
+import {WorkspaceComponentsButton} from "./component-renderers/ComponentLibraryProvider";
 import { useRepeaterSidebarFlagState } from "@/src/lib/repeater/sidebarFlag";
 import { measureDelivery, recordMount } from "@/src/lib/repeater/paintMetrics";
 import type { PageRow } from "@/src/hooks/usePages";
@@ -691,6 +692,7 @@ export function Sidebar() {
 
       {/* Page tree */}
       <nav className="flex-1 overflow-y-auto px-2 py-2">
+        <WorkspaceComponentsButton/>
         {repeaterSidebar ? (
           // M3 flag — off by default. Renders the same page tree through the
           // repeater runtime so the two paths can be compared on one clock.

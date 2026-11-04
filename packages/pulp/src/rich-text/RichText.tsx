@@ -26,14 +26,21 @@ import {
   type SlashMenuItem,
 } from "../SlashMenu";
 import { InlineSlashMenu } from "./InlineSlashMenu";
-import { closeSlashSession } from "./slashMenuPlugin";
+import { closeSlashSession, getSlashSession } from "./slashMenuPlugin";
 import { parseClipboardToBlocks } from "./pasteToBlocks";
 import { turnIntoToolbarItems } from "../toolbarTurnIntoItems";
 import { buildMarkdownShortcuts } from "./markdownInputRules";
-import { knownSiblingIdsForParent, siblingsForParent, idsMatch } from "../focus/insertFocusHelpers";
+import {
+  knownSiblingIdsForParent,
+  siblingsForParent,
+  idsMatch,
+} from "../focus/insertFocusHelpers";
 import type { FocusPlacement } from "../focus/SurfaceFocusCoordinator";
 import { focusDebug, idStr } from "../focus/focusDebug";
-import { getDocumentPrevBlock, getDocumentNextBlock } from "../navigation/blockNavigation";
+import {
+  getDocumentPrevBlock,
+  getDocumentNextBlock,
+} from "../navigation/blockNavigation";
 import {
   exitEmptyListItemToRichText,
   unlistToRichText,
@@ -114,7 +121,10 @@ function StaticRichText({
   tree,
   textDensity = "default",
 }: BlockRendererProps & { textDensity?: RichTextTextDensity }) {
-  const props = useMemo<RichTextProps>(() => safeParse(node.props), [node.props]);
+  const props = useMemo<RichTextProps>(
+    () => safeParse(node.props),
+    [node.props],
+  );
   const state = tree.yjs.get(node.id);
   const html = useMemo(() => {
     if (!state?.data || state.data.byteLength === 0) return "";
@@ -142,16 +152,35 @@ function EditableRichText({
   tree,
   textDensity = "default",
 }: BlockRendererProps & { textDensity?: RichTextTextDensity }) {
-  const props = useMemo<RichTextProps>(() => safeParse(node.props), [node.props]);
+  const latestTree = useRef(tree);
+  latestTree.current = tree;
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const props = useMemo<RichTextProps>(
+    () => safeParse(node.props),
+    [node.props],
+  );
   const state = tree.yjs.get(node.id);
-  const { insertBlock, deleteBlock, moveBlock, saveYjsState, config, updateBlockProps } = usePulp();
+  const {
+    insertBlock,
+    deleteBlock,
+    moveBlock,
+    saveYjsState,
+    config,
+    updateBlockProps,
+  } = usePulp();
   const focus = useSurfaceFocus();
   const selection = useSurfaceSelectionOptional();
   /** Set before intentional soft-delete so unmount flush skips save. */
   const suppressSaveRef = useRef(false);
-  const editorApplyFocusRef = useRef<((placement: FocusPlacement) => void) | null>(
-    null,
-  );
+  const editorApplyFocusRef = useRef<
+    ((placement: FocusPlacement) => void) | null
+  >(null);
   const pendingFocusRef = useRef<FocusPlacement | null>(null);
   /** Set in `onSplit`; cleared once the new sibling receives focus. */
   const splitHandoffRef = useRef<{
@@ -166,19 +195,25 @@ function EditableRichText({
     deleteBlock({ componentId: node.id });
   };
 
-  const onNavigatePrev = useCallback((goalX?: number): boolean => {
-    const prev = getDocumentPrevBlock(tree, node.id);
-    if (!prev) return false;
-    focus.requestFocus(prev.id, "end", goalX);
-    return true;
-  }, [tree, node.id, focus]);
+  const onNavigatePrev = useCallback(
+    (goalX?: number): boolean => {
+      const prev = getDocumentPrevBlock(tree, node.id);
+      if (!prev) return false;
+      focus.requestFocus(prev.id, "end", goalX);
+      return true;
+    },
+    [tree, node.id, focus],
+  );
 
-  const onNavigateNext = useCallback((goalX?: number): boolean => {
-    const next = getDocumentNextBlock(tree, node.id);
-    if (!next) return false;
-    focus.requestFocus(next.id, "start", goalX);
-    return true;
-  }, [tree, node.id, focus]);
+  const onNavigateNext = useCallback(
+    (goalX?: number): boolean => {
+      const next = getDocumentNextBlock(tree, node.id);
+      if (!next) return false;
+      focus.requestFocus(next.id, "start", goalX);
+      return true;
+    },
+    [tree, node.id, focus],
+  );
 
   const bindFocus = useCallback(
     (applyFocus: (placement: FocusPlacement) => void) => {
@@ -223,7 +258,9 @@ function EditableRichText({
   const onSplit = (view: EditorView): boolean => {
     if (node.parentId == null) return false;
     if (focus.isAwaitingInsert()) {
-      focusDebug("onSplit: swallow (awaiting insert)", { nodeId: idStr(node.id) });
+      focusDebug("onSplit: swallow (awaiting insert)", {
+        nodeId: idStr(node.id),
+      });
       return true;
     }
 
@@ -260,7 +297,9 @@ function EditableRichText({
       parentId: node.parentId,
       afterId: node.id,
       knownIds: new Set(
-        knownSiblingIdsForParent(tree, node.parentId).map((id) => id.toString()),
+        knownSiblingIdsForParent(tree, node.parentId).map((id) =>
+          id.toString(),
+        ),
       ),
     };
     splitHandoffWaitLoggedRef.current = false;
@@ -278,16 +317,12 @@ function EditableRichText({
     return true;
   };
 
-  const siblings = node.parentId != null ? tree.byParent.get(node.parentId) ?? [] : [];
+  const siblings =
+    node.parentId != null ? (tree.byParent.get(node.parentId) ?? []) : [];
   const canDelete = siblings.length > 1;
 
   const onIndent = useCallback((): boolean => {
-    return nestBlockUnderPreviousSibling(
-      node,
-      tree,
-      { moveBlock },
-      focus,
-    );
+    return nestBlockUnderPreviousSibling(node, tree, { moveBlock }, focus);
   }, [node, tree, moveBlock, focus]);
 
   const onOutdent = useCallback((): boolean => {
@@ -295,7 +330,11 @@ function EditableRichText({
   }, [node, tree, moveBlock, focus]);
 
   const turnIntoItems = useMemo(
-    () => turnIntoToolbarItems(config.slashItems ?? SPRINT_3B_SLASH_ITEMS, tree.defs),
+    () =>
+      turnIntoToolbarItems(
+        config.slashItems ?? SPRINT_3B_SLASH_ITEMS,
+        tree.defs,
+      ),
     [config.slashItems, tree.defs],
   );
 
@@ -373,7 +412,13 @@ function EditableRichText({
           node,
           tree,
           item,
-          { insertBlock, deleteBlock, moveBlock, updateBlockProps, saveYjsState },
+          {
+            insertBlock,
+            deleteBlock,
+            moveBlock,
+            updateBlockProps,
+            saveYjsState,
+          },
           focus,
         );
       },
@@ -406,7 +451,12 @@ function EditableRichText({
     // List item → un-list to a paragraph first (Notion/BlockNote); a second
     // Backspace on the resulting empty RichText then deletes/merges.
     if (isDocumentListItemType(node.componentType)) {
-      unlistToRichText(node, tree, { insertBlock, deleteBlock, moveBlock }, focus);
+      unlistToRichText(
+        node,
+        tree,
+        { insertBlock, deleteBlock, moveBlock },
+        focus,
+      );
       return;
     }
     deleteEmptyBlockAndFocusDocumentPrev(node, tree, focus, {
@@ -425,7 +475,12 @@ function EditableRichText({
     // List item → un-list before merging (Notion/BlockNote): the first
     // Backspace at the start of a list row converts it to a paragraph.
     if (isDocumentListItemType(node.componentType)) {
-      return unlistToRichText(node, tree, { insertBlock, deleteBlock, moveBlock }, focus);
+      return unlistToRichText(
+        node,
+        tree,
+        { insertBlock, deleteBlock, moveBlock },
+        focus,
+      );
     }
     return mergeBlockIntoDocumentPrev(
       node,
@@ -448,7 +503,8 @@ function EditableRichText({
   } | null>(null);
   const [slashActiveIndex, setSlashActiveIndex] = useState(0);
   const slashFiltered = useMemo(
-    () => (slashSession ? filterSlashItems(slashItems, slashSession.query) : []),
+    () =>
+      slashSession ? filterSlashItems(slashItems, slashSession.query) : [],
     [slashItems, slashSession],
   );
 
@@ -520,7 +576,31 @@ function EditableRichText({
       hostNowEmpty = tr.doc.textContent.trim().length === 0;
     }
     setSlashSession(null);
-    insertChosenBlock(item, hostNowEmpty);
+    if (item.choose)
+      item.choose({
+        insert: (chosen) => {
+          const current = latestTree.current.byId.get(node.id);
+          if (
+            !mounted.current ||
+            !current ||
+            current.parentId !== node.parentId ||
+            current.order !== node.order
+          )
+            throw new Error(
+              "The insertion point changed. Close the library and choose a new position.",
+            );
+          // Remote text can arrive while the picker is open. Never remove that
+          // new content when replacing what was an empty slash paragraph.
+          const editor = focus.getEditor(node.id);
+          insertChosenBlock(
+            chosen,
+            hostNowEmpty &&
+              !!editor &&
+              editor.state.doc.textContent.trim().length === 0,
+          );
+        },
+      });
+    else insertChosenBlock(item, hostNowEmpty);
     return true;
   };
 
@@ -548,7 +628,11 @@ function EditableRichText({
     const initial = focus.consumeInitialDoc(node.id);
     const doc = initial ?? new Y.Doc();
     if (state?.data?.byteLength) {
-      try { Y.applyUpdate(doc, state.data, "remote"); } catch { /* reconciler reports malformed state */ }
+      try {
+        Y.applyUpdate(doc, state.data, "remote");
+      } catch {
+        /* reconciler reports malformed state */
+      }
     }
     return { doc, wasPrepopulated: initial != null };
   });
@@ -672,7 +756,11 @@ function EditableRichText({
 
     const candidate = siblings[afterIdx + 1];
     if (!candidate || handoff.knownIds.has(candidate.id.toString())) {
-      if (handoff && idsMatch(handoff.afterId, node.id) && !splitHandoffWaitLoggedRef.current) {
+      if (
+        handoff &&
+        idsMatch(handoff.afterId, node.id) &&
+        !splitHandoffWaitLoggedRef.current
+      ) {
         splitHandoffWaitLoggedRef.current = true;
         focusDebug("splitHandoff: waiting for new sibling", {
           sourceId: idStr(node.id),
@@ -715,7 +803,8 @@ function EditableRichText({
   // Focus preservation — if this block currently holds focus, stay live
   // even when scrolled out of the preload band. This avoids tearing down
   // the prosemirror view (and the user's IME / selection) on every scroll.
-  const live = inViewport || hasFocus || !!selection?.textRange?.ids.includes(node.id);
+  const live =
+    inViewport || hasFocus || !!selection?.textRange?.ids.includes(node.id);
 
   // Static-mode HTML. Only maintained while static: in live mode ProseMirror
   // renders the doc and `html` is unused, so serializing on every local
@@ -738,7 +827,11 @@ function EditableRichText({
     // `min-h-[1.5em]` keeps the wrapper non-zero-height even for empty
     // RichText nodes — required for IntersectionObserver to be able to
     // report intersection at all (zero-area elements never intersect).
-    <div ref={hostRef} data-text-block={String(node.id)} className="min-h-[1.5em]">
+    <div
+      ref={hostRef}
+      data-text-block={String(node.id)}
+      className="min-h-[1.5em]"
+    >
       {live ? (
         <RichTextEditor
           doc={doc}
@@ -751,7 +844,9 @@ function EditableRichText({
           onSplit={tree.root?.id === node.id ? undefined : onSplit}
           onDeleteSelf={canBackspaceDeleteEmpty ? onDeleteSelf : undefined}
           onMergeWithPrev={onMergeWithPrev}
-          onSlashSessionChange={tree.root?.id === node.id ? undefined : onSlashSessionChange}
+          onSlashSessionChange={
+            tree.root?.id === node.id ? undefined : onSlashSessionChange
+          }
           onSlashNavigate={navigateSlash}
           onSlashCommit={commitSlash}
           onSlashDismiss={dismissSlash}
@@ -763,7 +858,9 @@ function EditableRichText({
           bindFocus={bindFocus}
           blockActions={tree.root?.id === node.id ? undefined : blockActions}
           markdownShortcuts={markdownShortcuts}
-          onMarkdownShortcut={tree.root?.id === node.id ? undefined : onMarkdownShortcut}
+          onMarkdownShortcut={
+            tree.root?.id === node.id ? undefined : onMarkdownShortcut
+          }
           onPaste={tree.root?.id === node.id ? undefined : onPaste}
           onEscape={onEscape}
         />
@@ -777,6 +874,19 @@ function EditableRichText({
       {slashSession != null && (
         <InlineSlashMenu
           anchorRect={slashSession.rect}
+          getAnchorRect={() => {
+            const view = focus.getEditor(node.id);
+            const session =
+              view && !view.isDestroyed && getSlashSession(view.state);
+            if (!view || !session) return null;
+            const coords = view.coordsAtPos(session.from);
+            return new DOMRect(
+              coords.left,
+              coords.top,
+              0,
+              coords.bottom - coords.top,
+            );
+          }}
           items={slashFiltered}
           activeIndex={slashActiveIndex}
           onHover={setSlashActiveIndex}

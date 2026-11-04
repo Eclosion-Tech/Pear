@@ -75,7 +75,9 @@ export function BlockMenu({
     return (
       <SlashMenu
         anchorRect={anchorRect}
-        items={pulp.config.slashItems ?? SPRINT_3B_SLASH_ITEMS}
+        items={(pulp.config.slashItems ?? SPRINT_3B_SLASH_ITEMS).filter(
+          (item) => !item.choose,
+        )}
         onClose={() => {
           setTurnIntoOpen(false);
           onClose();
@@ -99,21 +101,28 @@ export function BlockMenu({
       role="menu"
       aria-label="Block actions"
     >
-      {!boundaryRoot && <MenuItem
-        label="Duplicate"
-        onSelect={() => {
-          duplicateBlock(node, pulp.tree, pulpMutations, focus);
-          onClose();
-        }}
-      />}
-      {!boundaryRoot && <MenuItem
-        label="Turn into…"
-        onSelect={() => setTurnIntoOpen(true)}
-      />}
+      {!boundaryRoot && (
+        <MenuItem
+          label="Duplicate"
+          onSelect={() => {
+            duplicateBlock(node, pulp.tree, pulpMutations, focus);
+            onClose();
+          }}
+        />
+      )}
+      {!boundaryRoot && (
+        <MenuItem label="Turn into…" onSelect={() => setTurnIntoOpen(true)} />
+      )}
       <MenuItem
         label={copyFeedback ? "Link copied" : "Copy link"}
         onSelect={async () => {
-          const ok = await copyBlockLink(node.id, pulp.config.references?.href({ surfaceId: node.surfaceId, blockId: node.id }));
+          const ok = await copyBlockLink(
+            node.id,
+            pulp.config.references?.href({
+              surfaceId: node.surfaceId,
+              blockId: node.id,
+            }),
+          );
           if (ok) {
             setCopyFeedback(true);
             window.setTimeout(onClose, 600);
@@ -194,7 +203,8 @@ function MenuItem({
 function computePosition(anchor: DOMRect): { top: number; left: number } {
   const top = anchor.bottom + 4;
   const desiredLeft = anchor.left;
-  const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1024;
+  const viewportWidth =
+    typeof window !== "undefined" ? window.innerWidth : 1024;
   const menuWidth = 200;
   const left = Math.min(desiredLeft, viewportWidth - menuWidth - 8);
   return { top, left };

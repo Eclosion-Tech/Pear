@@ -1,12 +1,6 @@
 "use client";
 
-import {
-  Fragment,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 /**
@@ -36,6 +30,8 @@ export type SlashMenuItem = {
   defaultProps: Record<string, unknown>;
   /** Lowercased tokens the filter input matches against. */
   searchTokens: string[];
+  /** Ephemeral host picker. Its selection inserts at the original slash slot. */
+  choose?: (context: { insert: (item: SlashMenuItem) => void }) => void;
 };
 
 /**
@@ -123,7 +119,10 @@ export function SlashMenu({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
-  const filtered = useMemo(() => filterSlashItems(items, query), [items, query]);
+  const filtered = useMemo(
+    () => filterSlashItems(items, query),
+    [items, query],
+  );
 
   // Reset active index whenever the filtered list shape changes —
   // otherwise activeIndex can stay pointing past the end.
@@ -161,7 +160,10 @@ export function SlashMenu({
     };
   }, [onClose]);
 
-  const position = useMemo(() => computeSlashMenuPosition(anchorRect), [anchorRect]);
+  const position = useMemo(
+    () => computeSlashMenuPosition(anchorRect),
+    [anchorRect],
+  );
 
   return createPortal(
     <div
@@ -287,7 +289,8 @@ export function computeSlashMenuPosition(anchor: DOMRect): {
 } {
   const top = anchor.bottom + 4;
   const desiredLeft = anchor.left;
-  const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1024;
+  const viewportWidth =
+    typeof window !== "undefined" ? window.innerWidth : 1024;
   const menuWidth = 280;
   const left = Math.min(desiredLeft, viewportWidth - menuWidth - 8);
   return { top, left };

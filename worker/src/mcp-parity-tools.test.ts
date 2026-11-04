@@ -30,6 +30,7 @@ const EXPECTED = [
   "get_component",
   "update_component",
   "write_component_data",
+  "run_component_action",
   "update_page_panel",
   "list_component_templates",
   "get_component_template",

@@ -12,6 +12,8 @@ import {
 } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { Sidebar } from "@/src/components/Sidebar";
+import {ComponentLibraryProvider} from "./component-renderers/ComponentLibraryProvider";
+import {useWorkspace} from "@/src/providers/WorkspaceProvider";
 import { AiPanel } from "@/src/components/AiPanel";
 import {
   ECLOSION_CHAT_PANEL_ENABLED,
@@ -46,6 +48,7 @@ export function useWorkspaceAiPanel() {
  * {@link useWorkspaceAiPanel} without duplicating the pear standalone layout.
  */
 export function WorkspaceAiPanelLayout({ children }: { children: ReactNode }) {
+  const {activeId}=useWorkspace();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const conversationParam = searchParams.get("conversation");
@@ -142,6 +145,7 @@ export function WorkspaceAiPanelLayout({ children }: { children: ReactNode }) {
   );
 
   return (
+    <ComponentLibraryProvider key={activeId??"workspace"}>
     <WorkspaceAiPanelContext.Provider value={contextValue}>
       <div className="flex h-screen bg-white dark:bg-neutral-950 text-neutral-900 dark:text-neutral-200 overflow-hidden">
         {children}
@@ -189,6 +193,7 @@ export function WorkspaceAiPanelLayout({ children }: { children: ReactNode }) {
         )}
       </div>
     </WorkspaceAiPanelContext.Provider>
+    </ComponentLibraryProvider>
   );
 }
 

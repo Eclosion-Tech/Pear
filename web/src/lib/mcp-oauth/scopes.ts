@@ -47,6 +47,7 @@ const SCOPE_TOOLS: Record<McpOauthScope, readonly string[]> = {
   [SCOPE_PAGES_READ]: [
     "list_page_panel_templates",
     "get_page_panel",
+    "get_component",
     "list_component_templates",
     "get_component_template",
     "get_page",
@@ -63,6 +64,10 @@ const SCOPE_TOOLS: Record<McpOauthScope, readonly string[]> = {
   ],
   [SCOPE_PAGES_WRITE]: [
     "create_page_panel",
+    "create_component",
+    "update_component",
+    "write_component_data",
+    "run_component_action",
     "update_page_panel",
     "preview_component_template",
     "publish_component_template",

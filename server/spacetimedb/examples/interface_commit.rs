@@ -24,6 +24,7 @@ fn run(request: Value) -> Result<Value, String> {
         "instantiate-component" => authored_state::instantiate(request["surfaceId"].as_u64().ok_or("surfaceId")?,request["componentId"].as_u64().ok_or("componentId")?,get("parentId")?,get("principal")?,get("requestId")?,get("packageJson")?,get("hash")?).map(|saved|json!({"ok":true,"saved":saved})),
         "package-hash" => authored_state::package_hash(&request["value"]).map(|hash|json!({"ok":true,"hash":hash})),
         "authorize-write" => authored_state::authorize_write(&authored_state::parse(get("existing")?)?,&request["write"]).map(|_|json!({"ok":true})),
+        "create-intent" => authored_state::create_intent(&authored_state::parse(get("existing")?)?,&request["event"],false).map(|(source,values)|json!({"ok":true,"source":source,"values":values})),
         "parse-component" => authored_state::parse(get("existing")?).map(|saved|json!({"ok":true,"state":saved})),
         "commit-component" => authored_state::commit(get("existing")?, request["baseRevision"].as_u64().ok_or("baseRevision")?, get("principal")?, get("requestId")?, get("commandJson")?).map(|saved|json!({"ok":true,"saved":saved})),
         "export-template" => repository_state::prepare(get("existing")?, &request.get("registry").cloned().unwrap_or_else(state::registry), get("optionsJson")?).map(|package| json!({"ok":true,"package":package})),

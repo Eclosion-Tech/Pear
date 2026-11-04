@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   SlashMenuList,
@@ -16,6 +16,7 @@ import {
  */
 export function InlineSlashMenu({
   anchorRect,
+  getAnchorRect,
   items,
   activeIndex,
   onHover,
@@ -23,6 +24,7 @@ export function InlineSlashMenu({
   onClose,
 }: {
   anchorRect: DOMRect;
+  getAnchorRect: () => DOMRect | null;
   items: SlashMenuItem[];
   activeIndex: number;
   onHover: (index: number) => void;
@@ -30,27 +32,56 @@ export function InlineSlashMenu({
   onClose: () => void;
 }) {
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const [position, setPosition] = useState(() =>
+    computeSlashMenuPosition(anchorRect),
+  );
 
-  // Close on outside click / scroll. Escape is handled by the editor keymap.
+  // The editor scrolls the caret into view while typing. Follow the live
+  // document anchor instead of treating that scroll as a dismissal.
+  useLayoutEffect(() => {
+    function reposition() {
+      const rect = getAnchorRect();
+      if (
+        !rect ||
+        rect.bottom < 0 ||
+        rect.top > window.innerHeight ||
+        rect.right < 0 ||
+        rect.left > window.innerWidth
+      ) {
+        onClose();
+        return;
+      }
+      const next = computeSlashMenuPosition(rect);
+      setPosition((previous) =>
+        previous.top === next.top && previous.left === next.left
+          ? previous
+          : next,
+      );
+    }
+    function onScroll(e: Event) {
+      if (e.target instanceof Node && menuRef.current?.contains(e.target)) return;
+      reposition();
+    }
+    reposition();
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", reposition);
+    return () => {
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", reposition);
+    };
+  }, [anchorRect, getAnchorRect, onClose]);
+
+  // Close on outside click. Escape is handled by the editor keymap.
   useEffect(() => {
     function onPointerDown(e: PointerEvent) {
       if (menuRef.current?.contains(e.target as Node)) return;
       onClose();
     }
-    function onScroll(e: Event) {
-      const target = e.target;
-      if (target instanceof Node && menuRef.current?.contains(target)) return;
-      onClose();
-    }
     document.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("scroll", onScroll, true);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("scroll", onScroll, true);
     };
   }, [onClose]);
-
-  const position = computeSlashMenuPosition(anchorRect);
 
   return createPortal(
     <div

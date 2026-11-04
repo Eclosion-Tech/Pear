@@ -372,7 +372,12 @@ pub(crate) fn validate_document(document: &Value, registry: &Value) -> Result<()
     }
     validate_nodes(document, registry, entry, true)
 }
-fn validate_nodes(document: &Value, registry: &Value, entry: &Value, registered_effects: bool) -> Result<(), String> {
+fn validate_nodes(
+    document: &Value,
+    registry: &Value,
+    entry: &Value,
+    registered_effects: bool,
+) -> Result<(), String> {
     let nodes = document["nodes"]
         .as_array()
         .ok_or_else(|| invalid("Expected nodes"))?;
@@ -476,7 +481,16 @@ fn validate_nodes(document: &Value, registry: &Value, entry: &Value, registered_
                     keys(value, &["field"])?;
                     if object(value)?.len() != 1
                         || !fields.contains(id(&value["field"])?)
-                        || schema["type"] != "string"
+                        || schema["type"]
+                            != if nodes.iter().any(|node| {
+                                node["type"] == "Input"
+                                    && node["props"]["name"] == value["field"]
+                                    && node["props"]["inputType"] == "number"
+                            }) {
+                                "number"
+                            } else {
+                                "string"
+                            }
                     {
                         return Err(invalid("Invalid field binding"));
                     }
@@ -493,7 +507,9 @@ fn validate_nodes(document: &Value, registry: &Value, entry: &Value, registered_
             }) {
                 return Err(invalid("Missing action input"));
             }
-            if !registered_effects { continue; }
+            if !registered_effects {
+                continue;
+            }
             let effect = &binding["effect"];
             if effect["kind"] == "setText" {
                 let target = target(document, &effect["target"])?;
@@ -514,15 +530,41 @@ fn validate_nodes(document: &Value, registry: &Value, entry: &Value, registered_
     }
     Ok(())
 }
-pub(crate) fn validate_component_document(document: &Value, catalog: &Value, actions: &Value) -> Result<(), String> {
-    keys(document, &["protocol", "documentId", "revision", "catalogVersion", "rootId", "nodes", "retiredIds"])?;
-    if document["protocol"] != "trellis_ui_v1" || document["catalogVersion"] != catalog["version"] { return Err(invalid("Unsupported document/catalog")); }
-    id(&document["documentId"])?; id(&document["rootId"])?; rev(&document["revision"])?;
+pub(crate) fn validate_component_document(
+    document: &Value,
+    catalog: &Value,
+    actions: &Value,
+) -> Result<(), String> {
+    keys(
+        document,
+        &[
+            "protocol",
+            "documentId",
+            "revision",
+            "catalogVersion",
+            "rootId",
+            "nodes",
+            "retiredIds",
+        ],
+    )?;
+    if document["protocol"] != "trellis_ui_v1" || document["catalogVersion"] != catalog["version"] {
+        return Err(invalid("Unsupported document/catalog"));
+    }
+    id(&document["documentId"])?;
+    id(&document["rootId"])?;
+    rev(&document["revision"])?;
     let mut bindings = Map::new();
     for (slot, value) in object(actions)? {
-        let mut value = object(value)?.clone(); value.insert("action".into(), json!(slot)); bindings.insert(slot.clone(), Value::Object(value));
+        let mut value = object(value)?.clone();
+        value.insert("action".into(), json!(slot));
+        bindings.insert(slot.clone(), Value::Object(value));
     }
-    validate_nodes(document, &json!({"catalog":catalog}), &json!({"bindings":bindings}), false)
+    validate_nodes(
+        document,
+        &json!({"catalog":catalog}),
+        &json!({"bindings":bindings}),
+        false,
+    )
 }
 pub fn is_interface(raw: &str) -> bool {
     serde_json::from_str::<Value>(raw)
@@ -592,11 +634,24 @@ pub fn create(
     request_id: &str,
     raw: &str,
 ) -> Result<String, String> {
-    create_with_registry(surface_id, component_id, parent_id, principal, request_id, raw, &registry())
+    create_with_registry(
+        surface_id,
+        component_id,
+        parent_id,
+        principal,
+        request_id,
+        raw,
+        &registry(),
+    )
 }
 pub fn create_with_registry(
-    surface_id: u64, component_id: u64, parent_id: &str, principal: &str,
-    request_id: &str, raw: &str, registry: &Value,
+    surface_id: u64,
+    component_id: u64,
+    parent_id: &str,
+    principal: &str,
+    request_id: &str,
+    raw: &str,
+    registry: &Value,
 ) -> Result<String, String> {
     let descriptor = parse_json(raw)?;
     keys(
@@ -715,8 +770,11 @@ pub(crate) fn patch_nodes(document: &Value, operations: &Value) -> Result<Value,
                     "setText" => node["text"] = op["text"].clone(),
                     "setProps" => node["props"] = op["props"].clone(),
                     "setAction" => {
-                        if op["action"].is_null() { node.as_object_mut().unwrap().remove("action"); }
-                        else { node["action"] = op["action"].clone(); }
+                        if op["action"].is_null() {
+                            node.as_object_mut().unwrap().remove("action");
+                        } else {
+                            node["action"] = op["action"].clone();
+                        }
                     }
                     _ => {
                         id(&op["parentId"])?;
@@ -729,7 +787,9 @@ pub(crate) fn patch_nodes(document: &Value, operations: &Value) -> Result<Value,
         }
     }
     doc["revision"] = json!(rev(&document["revision"])? + 1);
-    if doc.get("template").is_some() { doc["template"]["state"] = json!("forked"); }
+    if doc.get("template").is_some() {
+        doc["template"]["state"] = json!("forked");
+    }
     Ok(doc)
 }
 fn action_operations(doc: &Value, event: &Value, registry: &Value) -> Result<Value, String> {
@@ -810,11 +870,22 @@ pub fn commit(
     request_id: &str,
     raw: &str,
 ) -> Result<Option<String>, String> {
-    commit_with_registry(existing, base_revision, principal, request_id, raw, &registry())
+    commit_with_registry(
+        existing,
+        base_revision,
+        principal,
+        request_id,
+        raw,
+        &registry(),
+    )
 }
 pub fn commit_with_registry(
-    existing: &str, base_revision: u64, principal: &str, request_id: &str,
-    raw: &str, registry: &Value,
+    existing: &str,
+    base_revision: u64,
+    principal: &str,
+    request_id: &str,
+    raw: &str,
+    registry: &Value,
 ) -> Result<Option<String>, String> {
     let mut saved = parse_with_registry(existing, registry)?;
     let command = parse_json(raw)?;
