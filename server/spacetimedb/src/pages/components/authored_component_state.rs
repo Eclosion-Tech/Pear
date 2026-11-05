@@ -47,7 +47,8 @@ pub(crate) fn catalog() -> Value {
     catalog["components"]["Input"]["props"]["properties"]["inputType"] =
         json!({"type":"string","enum":["text","email","url","number"]});
     catalog["components"]["Input"]["props"]["properties"]["multiline"] = json!({"type":"boolean"});
-    catalog["components"]["DataTable"] = json!({"acceptsChildren":false,"props":{"type":"object","properties":{"source":{"type":"string"},"columns":{"type":"array","items":{"type":"string"},"maxItems":32},"emptyText":{"type":"string","maxLength":500}},"required":["source","columns"]}});
+    catalog["components"]["DataTable"] = json!({"acceptsChildren":false,"props":{"type":"object","properties":{"source":{"type":"string"},"columns":{"type":"array","items":{"type":"string"},"maxItems":32},"emptyText":{"type":"string","maxLength":500},"rowAction":{"type":"string"}},"required":["source","columns"]}});
+    catalog["components"]["CalendarGrid"] = json!({"acceptsChildren":false,"props":{"type":"object","properties":{"source":{"type":"string"},"startField":{"type":"string"},"endField":{"type":"string"},"titleField":{"type":"string"},"emptyText":{"type":"string","maxLength":500},"rowAction":{"type":"string"}},"required":["source","startField","titleField"]}});
     catalog
 }
 pub fn is_component(raw: &str) -> bool {
@@ -230,14 +231,30 @@ pub fn parse(raw: &str) -> Result<Value, String> {
     let catalog = catalog();
     let document = &saved["document"];
     for source in sources.values() {
-        exact(source, &["label", "fields", "connection"])?;
+        let mut keys = vec!["label", "fields", "connection"];
+        if let Some(mode) = source.get("mode") {
+            keys.push("mode");
+            if mode != "snapshot" && mode != "query" {
+                return Err(error(
+                    "INVALID_BINDING",
+                    "Choose snapshot or query source mode.",
+                ));
+            }
+        }
+        exact(source, &keys)?;
         string(&source["label"], 160)?;
         for field in map(&source["fields"], 32)?.values() {
             core::keys(field, &["type", "writable"])?;
-            if !["string", "number", "boolean"].contains(&core::text(&field["type"])?)
+            if !["string", "number", "boolean", "date"].contains(&core::text(&field["type"])?)
                 || field.get("writable").is_some_and(|v| !v.is_boolean())
             {
                 return Err(invalid("Invalid source field"));
+            }
+            if field["type"] == "date" && field["writable"] == true {
+                return Err(error(
+                    "INVALID_BINDING",
+                    "Date fields are read-only in this version.",
+                ));
             }
         }
         if !source["connection"].is_null() {
@@ -259,6 +276,13 @@ pub fn parse(raw: &str) -> Result<Value, String> {
         match kind {
             "local" => exact(action, &["kind", "input", "message", "effects"])?,
             "refresh" => exact(action, &["kind", "input", "message", "source"])?,
+            "open" => {
+                let mut keys = vec!["kind", "input", "message", "source", "recordId"];
+                if action.get("layout").is_some() {
+                    keys.push("layout");
+                }
+                exact(action, &keys)?;
+            }
             "create" => {
                 core::keys(
                     action,
@@ -345,10 +369,54 @@ pub fn parse(raw: &str) -> Result<Value, String> {
                     }
                 }
             }
-            "source" | "create" | "refresh" => {
-                let source = sources
-                    .get(core::text(&action["source"])?)
-                    .ok_or_else(|| invalid("Action source missing"))?;
+            "source" | "create" | "refresh" | "open" => {
+                let source = sources.get(core::text(&action["source"])?).ok_or_else(|| {
+                    if action["kind"] == "open" {
+                        error("INVALID_BINDING", "Action source is not declared.")
+                    } else {
+                        invalid("Action source missing")
+                    }
+                })?;
+                // Query sources are read-only end to end; mirrors the TypeScript validator.
+                if source["mode"] == "query" && (action["kind"] == "source" || action["kind"] == "create") {
+                    return Err(error("READ_ONLY_SOURCE", "Query sources are read-only."));
+                }
+                if action["kind"] == "open" {
+                    exact(&action["recordId"], &["row"])?;
+                    if action["recordId"]["row"] != true {
+                        return Err(error(
+                            "INVALID_BINDING",
+                            "Open actions must select the current row.",
+                        ));
+                    }
+                    if action["input"]
+                        .get("properties")
+                        .is_some_and(|v| v.as_object().is_some_and(|v| !v.is_empty()))
+                    {
+                        return Err(error("INVALID_BINDING", "Opening a record takes no input."));
+                    }
+                    if let Some(layout) = action.get("layout") {
+                        exact(layout, &["templateId", "version"])?;
+                        let template = core::id(&layout["templateId"])?;
+                        // Match the exact decimal version syntax without imposing a numeric size limit.
+                        let version = layout["version"].as_str().unwrap_or("");
+                        let parts: Vec<_> = version.split('.').collect();
+                        if !template.starts_with("workspace:")
+                            || parts.len() != 3
+                            || parts.iter().any(|part| {
+                                part.is_empty()
+                                    || !part.bytes().all(|c| c.is_ascii_digit())
+                                    || (part.len() > 1 && part.starts_with('0'))
+                            })
+                        {
+                            return Err(error(
+                                "INVALID_BINDING",
+                                "Choose an exact workspace layout version.",
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 if action["kind"] == "refresh" {
                     if !core::object(&action["input"]["properties"])?.is_empty() {
                         return Err(invalid("Refresh takes no input"));
@@ -385,6 +453,31 @@ pub fn parse(raw: &str) -> Result<Value, String> {
         }
     }
     for node in document["nodes"].as_array().unwrap() {
+        if node["type"] == "CalendarGrid" {
+            let source = &saved["sources"][core::text(&node["props"]["source"])?];
+            let typed = |property: &str, kind: &str| {
+                node["props"][property]
+                    .as_str()
+                    .is_some_and(|field| source["fields"][field]["type"] == kind)
+            };
+            if !typed("startField", "date")
+                || (node["props"].get("endField").is_some() && !typed("endField", "date"))
+                || !typed("titleField", "string")
+            {
+                return Err(error("INVALID_BINDING", "Calendar fields must belong to its declared source and have the required types."));
+            }
+        }
+        if node["type"] == "DataTable" || node["type"] == "CalendarGrid" {
+            if let Some(slot) = node["props"].get("rowAction") {
+                let action = &saved["actions"][core::text(slot)?];
+                if action["kind"] != "open" || action["source"] != node["props"]["source"] {
+                    return Err(error(
+                        "INVALID_BINDING",
+                        "Row actions must open a record from the same source.",
+                    ));
+                }
+            }
+        }
         if node["type"] == "DataTable" {
             let source = sources
                 .get(core::text(&node["props"]["source"])?)
@@ -416,7 +509,17 @@ pub fn parse(raw: &str) -> Result<Value, String> {
         let field = source["fields"]
             .get(core::text(&binding["field"])?)
             .ok_or_else(|| invalid("Bound field missing"))?;
-        record_target(&binding["recordId"])?;
+        if binding["recordId"].get("param").is_some() {
+            exact(&binding["recordId"], &["param"])?;
+            if binding["recordId"]["param"] != "record" || binding["writeBack"] != false {
+                return Err(error(
+                    "INVALID_BINDING",
+                    "Record parameter bindings are read-only and must select record.",
+                ));
+            }
+        } else {
+            record_target(&binding["recordId"])?;
+        }
         if !binding["writeBack"].is_boolean()
             || binding["writeBack"] == true && field["writable"] != true
             || node.get("action").is_some()
@@ -525,6 +628,9 @@ pub(crate) fn authorize_write_for_record(
     if values.is_empty() {
         return Err(invalid("Choose fields to write"));
     }
+    if saved["sources"][source]["mode"] == "query" {
+        return Err(error("READ_ONLY_SOURCE", "Query sources are read-only."));
+    }
     for (field, value) in values {
         let definition = &saved["sources"][source]["fields"][field];
         if definition["writable"] != true {
@@ -536,7 +642,7 @@ pub(crate) fn authorize_write_for_record(
         if target["first"] == true {
             first_record.is_none_or(|first| first == record)
         } else {
-            target.is_object() || target == record
+            target.is_string() && target == record
         }
     };
     for node in saved["document"]["nodes"].as_array().unwrap() {
@@ -564,7 +670,7 @@ pub(crate) fn authorize_write_for_record(
             let action = &saved["actions"][slot];
             if action["kind"] != "source"
                 || action["source"] != source
-                || !matches(&action["recordId"])
+                || !(action["recordId"].get("input").is_some() || matches(&action["recordId"]))
             {
                 continue;
             }
@@ -655,6 +761,15 @@ fn action_input<'a>(
         ],
     )?;
     core::id(&event["invocationId"])?;
+    if event["slot"]
+        .as_str()
+        .is_some_and(|slot| saved["actions"][slot]["kind"] == "open")
+    {
+        return Err(error(
+            "INVALID_OPERATION",
+            "Open actions navigate; they do not commit.",
+        ));
+    }
     let document = &saved["document"];
     let node = document["nodes"]
         .as_array()
@@ -708,6 +823,9 @@ pub(crate) fn create_intent(
     let action = action_input(saved, event, allow_stale)?;
     if action["kind"] != "create" {
         return Err(invalid("This control does not create a source record"));
+    }
+    if saved["sources"][core::text(&action["source"])?]["mode"] == "query" {
+        return Err(error("READ_ONLY_SOURCE", "Query sources are read-only."));
     }
     let mut values = Map::new();
     for (field, input) in core::object(&action["fields"])? {
@@ -810,6 +928,15 @@ pub fn commit(
             saved["document"] = core::patch_nodes(&document, &json!(operations))?;
         }
         "source-create" => {
+            if command["event"]["slot"]
+                .as_str()
+                .is_some_and(|slot| saved["actions"][slot]["kind"] == "open")
+            {
+                return Err(error(
+                    "INVALID_OPERATION",
+                    "Open actions navigate; they do not commit.",
+                ));
+            }
             exact(&command, &["kind", "event"])?;
             let (source, _) = create_intent(&saved, &command["event"], false)?;
             if saved["sources"][&source]["connection"]["adapter"] != "pear.database" {
@@ -1075,6 +1202,11 @@ pub(crate) fn prepare_template(raw: &str, options_raw: &str) -> Result<Value, St
         if node["type"] == "ChecklistItem" {
             node["props"]["checked"] = json!(false);
         }
+        if node["type"] == "DataTable" || node["type"] == "CalendarGrid" {
+            if let Some(slot) = node["props"]["rowAction"].as_str() {
+                node["props"]["rowAction"] = json!(action_ids[slot]);
+            }
+        }
         if let Some(action) = node.get_mut("action") {
             action["slot"] = json!(action_ids[core::text(&action["slot"])?]);
             for input in action["input"].as_object_mut().unwrap().values_mut() {
@@ -1097,7 +1229,9 @@ pub(crate) fn prepare_template(raw: &str, options_raw: &str) -> Result<Value, St
         source["connection"] = Value::Null;
     }
     for binding in blueprint["bindings"].as_object_mut().unwrap().values_mut() {
-        binding["recordId"] = json!({"first":true});
+        if binding["recordId"].get("param").is_none() {
+            binding["recordId"] = json!({"first":true});
+        }
     }
     remap(&mut blueprint, &ids)?;
     let package = json!({"format":"trellis_authored_template_v1","repositoryId":"workspace","templateId":format!("workspace:{}",core::text(&options["slug"]) ?),"version":options["version"],"name":options["name"],"description":options["description"],"tags":options["tags"],"blueprint":blueprint});
@@ -1148,4 +1282,418 @@ pub(crate) fn instantiate(
     let result = saved.to_string();
     parse(&result)?;
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture() -> Value {
+        let mut saved =
+            parse(&create(1, 2, "parent", "author", "initial", "Calendar").unwrap()).unwrap();
+        saved["sources"]["events"] = json!({"label":"Events","fields":{
+            "title":{"type":"string","writable":true},
+            "start":{"type":"date"},"end":{"type":"date","writable":false}
+        },"connection":null});
+        saved["actions"]["open-record"] = json!({"kind":"open","input":{"type":"object","properties":{}},"message":"","source":"events","recordId":{"row":true}});
+        let root = saved["document"]["rootId"].clone();
+        saved["document"]["nodes"].as_array_mut().unwrap().extend([
+            json!({"id":"calendar","parentId":root,"order":0,"type":"CalendarGrid","props":{"source":"events","startField":"start","endField":"end","titleField":"title","rowAction":"open-record"}}),
+            json!({"id":"table","parentId":root,"order":1,"type":"DataTable","props":{"source":"events","columns":["title"],"rowAction":"open-record"}}),
+            json!({"id":"detail","parentId":root,"order":2,"type":"Input","props":{"name":"title"}}),
+        ]);
+        saved["bindings"]["detail"] = json!({"source":"events","recordId":{"param":"record"},"field":"title","property":"value","writeBack":false});
+        parse(&saved.to_string()).unwrap()
+    }
+
+    fn accepts(saved: &Value) {
+        parse(&saved.to_string()).unwrap();
+    }
+    fn rejects(saved: &Value) {
+        assert!(parse(&saved.to_string()).is_err());
+    }
+    fn write() -> Value {
+        json!({"source":"events","recordId":"11","values":{"title":"Changed"},"requestId":"write"})
+    }
+    fn event(saved: &Value) -> Value {
+        json!({"documentId":saved["document"]["documentId"],"revision":0,"nodeId":"calendar","slot":"open-record","invocationId":"open","input":{}})
+    }
+
+    #[test]
+    fn source_modes_are_optional_and_exact() {
+        let mut saved = fixture();
+        for mode in ["snapshot", "query"] {
+            saved["sources"]["events"]["mode"] = json!(mode);
+            accepts(&saved);
+        }
+        for mode in [json!(null), json!(true), json!("other")] {
+            saved["sources"]["events"]["mode"] = mode;
+            assert!(parse(&saved.to_string())
+                .unwrap_err()
+                .starts_with("INVALID_BINDING:"));
+        }
+        saved["sources"]["events"]
+            .as_object_mut()
+            .unwrap()
+            .remove("mode");
+        accepts(&saved);
+        saved["sources"]["events"]["extra"] = json!(true);
+        rejects(&saved);
+        saved["sources"]["events"]
+            .as_object_mut()
+            .unwrap()
+            .remove("extra");
+        saved["sources"]["events"]
+            .as_object_mut()
+            .unwrap()
+            .remove("connection");
+        rejects(&saved);
+    }
+
+    #[test]
+    fn date_fields_are_read_only() {
+        let mut saved = fixture();
+        saved["sources"]["events"]["fields"]["start"]["writable"] = json!(false);
+        accepts(&saved);
+        saved["sources"]["events"]["fields"]["start"]["writable"] = json!(true);
+        assert_eq!(
+            parse(&saved.to_string()).unwrap_err(),
+            "INVALID_BINDING: Date fields are read-only in this version."
+        );
+        saved["sources"]["events"]["fields"]["start"] = json!({"type":"datetime"});
+        rejects(&saved);
+    }
+
+    #[test]
+    fn calendar_catalog_enforces_props_and_children() {
+        let saved = fixture();
+        for required in ["source", "startField", "titleField"] {
+            let mut bad = saved.clone();
+            bad["document"]["nodes"][1]["props"]
+                .as_object_mut()
+                .unwrap()
+                .remove(required);
+            rejects(&bad);
+        }
+        let mut changed = saved.clone();
+        changed["document"]["nodes"][1]["props"]
+            .as_object_mut()
+            .unwrap()
+            .remove("endField");
+        changed["document"]["nodes"][1]["props"]["emptyText"] = json!("x".repeat(500));
+        accepts(&changed);
+        changed["document"]["nodes"][1]["props"]["emptyText"] = json!("x".repeat(501));
+        rejects(&changed);
+        changed = saved.clone();
+        changed["document"]["nodes"][3]["parentId"] = json!("calendar");
+        rejects(&changed);
+        changed = saved;
+        changed["document"]["nodes"][1]["props"]["unknown"] = json!(true);
+        rejects(&changed);
+    }
+
+    #[test]
+    fn calendar_fields_must_have_declared_types() {
+        let saved = fixture();
+        for (property, value) in [
+            ("source", "missing"),
+            ("startField", "missing"),
+            ("startField", "title"),
+            ("endField", "missing"),
+            ("endField", "title"),
+            ("titleField", "missing"),
+            ("titleField", "start"),
+        ] {
+            let mut bad = saved.clone();
+            bad["document"]["nodes"][1]["props"][property] = json!(value);
+            assert!(parse(&bad.to_string())
+                .unwrap_err()
+                .starts_with("INVALID_BINDING:"));
+        }
+    }
+
+    #[test]
+    fn open_actions_require_exact_row_and_empty_input() {
+        let saved = fixture();
+        let mut minimal = saved.clone();
+        minimal["actions"]["open-record"]["input"] = json!({"type":"object"});
+        accepts(&minimal);
+        for target in [
+            json!({"row":false}),
+            json!({"first":true}),
+            json!({"row":true,"extra":true}),
+            json!("11"),
+        ] {
+            let mut bad = saved.clone();
+            bad["actions"]["open-record"]["recordId"] = target;
+            rejects(&bad);
+        }
+        for key in ["kind", "input", "message", "source", "recordId"] {
+            let mut bad = saved.clone();
+            bad["actions"]["open-record"]
+                .as_object_mut()
+                .unwrap()
+                .remove(key);
+            rejects(&bad);
+        }
+        let mut bad = saved.clone();
+        bad["actions"]["open-record"]["fields"] = json!({});
+        rejects(&bad);
+        bad = saved.clone();
+        bad["actions"]["open-record"]["source"] = json!("missing");
+        rejects(&bad);
+        bad = saved;
+        bad["actions"]["open-record"]["input"]["properties"] = json!({"value":{"type":"string"}});
+        rejects(&bad);
+    }
+
+    #[test]
+    fn open_layouts_require_exact_workspace_versions() {
+        let mut saved = fixture();
+        for version in ["0.0.0", "1.23.456", "9999999999999999999999999.0.1"] {
+            saved["actions"]["open-record"]["layout"] =
+                json!({"templateId":"workspace:detail","version":version});
+            accepts(&saved);
+        }
+        for version in [
+            "01.0.0",
+            "1.00.0",
+            "1.0.01",
+            "1.0",
+            "1.0.0-beta",
+            "1.0.0+build",
+            "-1.0.0",
+            "1.0.0\n",
+            "1.0.x",
+        ] {
+            saved["actions"]["open-record"]["layout"]["version"] = json!(version);
+            rejects(&saved);
+        }
+        for layout in [
+            json!(null),
+            json!({"templateId":"external:detail","version":"1.0.0"}),
+            json!({"templateId":"workspace:bad name","version":"1.0.0"}),
+            json!({"templateId":"workspace:detail","version":1}),
+            json!({"templateId":"workspace:detail"}),
+            json!({"templateId":"workspace:detail","version":"1.0.0","extra":true}),
+        ] {
+            saved["actions"]["open-record"]["layout"] = layout;
+            rejects(&saved);
+        }
+    }
+
+    #[test]
+    fn row_actions_must_open_the_same_source() {
+        let saved = fixture();
+        for index in [1, 2] {
+            let mut changed = saved.clone();
+            changed["document"]["nodes"][index]["props"]
+                .as_object_mut()
+                .unwrap()
+                .remove("rowAction");
+            accepts(&changed);
+            changed["document"]["nodes"][index]["props"]["rowAction"] = json!("missing");
+            rejects(&changed);
+            changed["actions"]["refresh"] = json!({"kind":"refresh","source":"events","message":"","input":{"type":"object","properties":{}}});
+            changed["document"]["nodes"][index]["props"]["rowAction"] = json!("refresh");
+            rejects(&changed);
+            changed["sources"]["other"] = changed["sources"]["events"].clone();
+            changed["actions"]["other-open"] = changed["actions"]["open-record"].clone();
+            changed["actions"]["other-open"]["source"] = json!("other");
+            changed["document"]["nodes"][index]["props"]["rowAction"] = json!("other-open");
+            rejects(&changed);
+        }
+    }
+
+    #[test]
+    fn parameter_bindings_are_exact_and_read_only() {
+        let mut saved = fixture();
+        for target in [
+            json!({"param":"record"}),
+            json!({"first":true}),
+            json!("11"),
+        ] {
+            saved["bindings"]["detail"]["recordId"] = target;
+            accepts(&saved);
+        }
+        for target in [
+            json!({"param":"other"}),
+            json!({"param":"record","first":true}),
+            json!({"param":"record","extra":true}),
+            json!({"first":false}),
+            json!(""),
+        ] {
+            saved["bindings"]["detail"]["recordId"] = target;
+            rejects(&saved);
+        }
+        saved["bindings"]["detail"]["recordId"] = json!({"param":"record"});
+        saved["bindings"]["detail"]["writeBack"] = json!(true);
+        rejects(&saved);
+        // Parameter selectors are bindings only, not source-write action targets.
+        saved["bindings"]["detail"]["writeBack"] = json!(false);
+        saved["actions"]["write"] = json!({"kind":"source","source":"events","recordId":{"param":"record"},"message":"","input":{"type":"object","properties":{"title":{"type":"string"}}},"fields":{"title":"title"}});
+        rejects(&saved);
+    }
+
+    #[test]
+    fn open_actions_never_commit_even_for_stale_controls() {
+        let saved = fixture();
+        let mut event = event(&saved);
+        event["nodeId"] = json!("missing");
+        for kind in ["action", "source-create"] {
+            let result = commit(
+                &saved.to_string(),
+                0,
+                "author",
+                "next",
+                &json!({"kind":kind,"event":event}).to_string(),
+            );
+            assert_eq!(
+                result.unwrap_err(),
+                "INVALID_OPERATION: Open actions navigate; they do not commit."
+            );
+        }
+        assert_eq!(
+            create_intent(&saved, &event, true).unwrap_err(),
+            "INVALID_OPERATION: Open actions navigate; they do not commit."
+        );
+        // source-create rejects an open slot before requiring the full action event.
+        assert_eq!(
+            commit(
+                &saved.to_string(),
+                0,
+                "author",
+                "next",
+                &json!({"kind":"source-create","event":{"slot":"open-record"}}).to_string()
+            )
+            .unwrap_err(),
+            "INVALID_OPERATION: Open actions navigate; they do not commit."
+        );
+    }
+
+    #[test]
+    fn query_sources_cannot_authorize_writes() {
+        let mut saved = fixture();
+        authorize_write(&saved, &write()).unwrap();
+        saved["sources"]["events"]["mode"] = json!("snapshot");
+        authorize_write(&saved, &write()).unwrap();
+        saved["sources"]["events"]["mode"] = json!("query");
+        accepts(&saved);
+        assert_eq!(
+            authorize_write(&saved, &write()).unwrap_err(),
+            "READ_ONLY_SOURCE: Query sources are read-only."
+        );
+    }
+
+    #[test]
+    fn write_targets_match_only_strings_and_first_bindings() {
+        let mut saved = fixture();
+        saved["document"]["nodes"].as_array_mut().unwrap().remove(2);
+        saved["bindings"]["detail"]["writeBack"] = json!(true);
+        // Defense in depth: even an unvalidated parameter binding cannot grant a write.
+        assert!(authorize_write(&saved, &write()).is_err());
+        saved["bindings"]["detail"]["recordId"] = json!({"first":true});
+        accepts(&saved);
+        authorize_write_for_record(&saved, &write(), Some("11")).unwrap();
+        assert!(authorize_write_for_record(&saved, &write(), Some("12")).is_err());
+        saved["bindings"]["detail"]["recordId"] = json!("11");
+        authorize_write(&saved, &write()).unwrap();
+        saved["bindings"]["detail"]["recordId"] = json!("12");
+        assert!(authorize_write(&saved, &write()).is_err());
+    }
+
+    #[test]
+    fn source_actions_keep_input_record_targets() {
+        let mut saved = fixture();
+        saved["document"]["nodes"].as_array_mut().unwrap().remove(2);
+        saved["bindings"] = json!({});
+        saved["document"]["nodes"][2] = json!({"id":"button","parentId":saved["document"]["rootId"],"order":2,"type":"Button","props":{},"action":{"slot":"write","input":{"title":"Changed","id":"11"}}});
+        saved["actions"]["write"] = json!({"kind":"source","source":"events","recordId":{"input":"id"},"message":"","input":{"type":"object","properties":{"title":{"type":"string"},"id":{"type":"string"}},"required":["title","id"]},"fields":{"title":"title"}});
+        accepts(&saved);
+        authorize_write(&saved, &write()).unwrap();
+        let mut wrong = write();
+        wrong["recordId"] = json!("12");
+        assert!(authorize_write(&saved, &wrong).is_err());
+    }
+
+    #[test]
+    fn templates_preserve_query_ports_params_and_remap_row_actions() {
+        let mut saved = fixture();
+        saved["sources"]["events"]["mode"] = json!("query");
+        saved["sources"]["events"]["connection"] =
+            json!({"adapter":"pear.database","schemaId":"5","mapping":{"title":"7"}});
+        let options = json!({"slug":"calendar","version":"1.0.0","name":"Calendar","description":"","tags":[]});
+        let package = prepare_template(&saved.to_string(), &options.to_string()).unwrap();
+        let blueprint = &package["blueprint"];
+        assert_eq!(blueprint["sources"]["events"]["mode"], "query");
+        assert!(blueprint["sources"]["events"]["connection"].is_null());
+        assert_eq!(
+            blueprint["bindings"]["node-3"]["recordId"],
+            json!({"param":"record"})
+        );
+        for index in [1, 2] {
+            assert_eq!(blueprint["nodes"][index]["props"]["rowAction"], "action-1");
+        }
+        assert_eq!(blueprint["actions"]["action-1"]["kind"], "open");
+        let hash = package_hash(&package).unwrap();
+        let instance = parse(
+            &instantiate(
+                3,
+                4,
+                "parent",
+                "author",
+                "instance",
+                &package.to_string(),
+                &hash,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            instance["bindings"]["pear-component:4:node-3"]["recordId"],
+            json!({"param":"record"})
+        );
+        assert_eq!(instance["sources"]["events"]["mode"], "query");
+        let mut connected = package.clone();
+        connected["blueprint"]["sources"]["events"]["connection"] =
+            saved["sources"]["events"]["connection"].clone();
+        assert!(validate_package(&connected.to_string(), None).is_err());
+        let mut invalid_mode = package.clone();
+        invalid_mode["blueprint"]["sources"]["events"]["mode"] = json!("other");
+        assert!(validate_package(&invalid_mode.to_string(), None).is_err());
+        let mut writable_param = package.clone();
+        writable_param["blueprint"]["bindings"]["node-3"]["writeBack"] = json!(true);
+        assert!(validate_package(&writable_param.to_string(), None).is_err());
+        for target in [json!("11"), json!({"first":true})] {
+            saved["bindings"]["detail"]["recordId"] = target;
+            let package = prepare_template(&saved.to_string(), &options.to_string()).unwrap();
+            assert_eq!(
+                package["blueprint"]["bindings"]["node-3"]["recordId"],
+                json!({"first":true})
+            );
+        }
+    }
+
+    #[test]
+    fn query_sources_reject_write_and_create_actions_and_intents() {
+        let mut saved = fixture();
+        saved["sources"]["events"]["mode"] = json!("query");
+        accepts(&saved);
+        let mut with_create = saved.clone();
+        with_create["actions"]["add"] = json!({"kind":"create","input":{"type":"object","properties":{"title":{"type":"string"}}},"message":"","source":"events","fields":{"title":"title"}});
+        assert_eq!(parse(&with_create.to_string()).unwrap_err(), "READ_ONLY_SOURCE: Query sources are read-only.");
+        let mut with_write = saved.clone();
+        with_write["actions"]["edit"] = json!({"kind":"source","input":{"type":"object","properties":{"title":{"type":"string"}}},"message":"","source":"events","recordId":{"first":true},"fields":{"title":"title"}});
+        assert_eq!(parse(&with_write.to_string()).unwrap_err(), "READ_ONLY_SOURCE: Query sources are read-only.");
+        // A definition saved before a source became query-mode cannot create through a stale intent either.
+        let mut legacy = fixture();
+        legacy["actions"]["add"] = json!({"kind":"create","input":{"type":"object","properties":{"title":{"type":"string"}}},"message":"","source":"events","fields":{"title":"title"}});
+        let root = legacy["document"]["rootId"].clone();
+        legacy["document"]["nodes"].as_array_mut().unwrap().push(json!({"id":"add-button","parentId":root,"order":3,"type":"Button","props":{"label":"Add"},"action":{"slot":"add","input":{"title":"x"}}}));
+        let legacy = parse(&legacy.to_string()).unwrap();
+        let mut flipped = legacy.clone();
+        flipped["sources"]["events"]["mode"] = json!("query");
+        let event = json!({"documentId":flipped["document"]["documentId"],"revision":flipped["document"]["revision"],"nodeId":"add-button","slot":"add","invocationId":"add","input":{"title":"x"}});
+        assert_eq!(create_intent(&flipped, &event, true).unwrap_err(), "READ_ONLY_SOURCE: Query sources are read-only.");
+    }
 }

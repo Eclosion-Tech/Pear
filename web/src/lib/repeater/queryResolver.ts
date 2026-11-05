@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useContext, useEffect, useMemo, useRef } from "react";
 import { useTable } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
 import type { DataSourceConfig, QueryResolver, RepeaterRow } from "@eclosion-tech/pulp";
 import { evaluatePagesQuery } from "./evaluatePagesQuery";
 import { DatabaseRowCache, schemaChainIds } from "./databaseRows";
 import { applyFilter, comparatorFor } from "./rowFilter";
+import { HostSourceRegistry, subscribeHostQuery } from "./hostSources";
 
 /**
  * The host half of the repeater (ADR D1) for every entity kind.
@@ -29,6 +30,7 @@ type Subscription = {
 };
 
 export function useQueryResolver(): QueryResolver {
+  const hostSources = useContext(HostSourceRegistry);
   const [pages] = useTable(tables.page);
   const [schemas] = useTable(tables.database_schema);
   const [propertyDefs] = useTable(tables.property_definition);
@@ -47,6 +49,8 @@ export function useQueryResolver(): QueryResolver {
     if (config.entity.kind === "pages") {
       return evaluatePagesQuery(pages, config);
     }
+    if (config.entity.kind === "host") return [];
+    if (config.entity.kind !== "database") return [];
 
     // ── database ──────────────────────────────────────────────────────────
     const { schemaId, includeDescendants } = config.entity;
@@ -106,6 +110,9 @@ export function useQueryResolver(): QueryResolver {
   return useMemo<QueryResolver>(
     () => ({
       subscribe(config, onRows) {
+        if (config.entity.kind === "host") {
+          return subscribeHostQuery(hostSources, { ...config, entity: config.entity }, onRows);
+        }
         const id = nextIdRef.current++;
         subsRef.current.set(id, { config, onRows });
         // Deliver immediately so a repeater mounting against a warm cache
@@ -116,6 +123,6 @@ export function useQueryResolver(): QueryResolver {
         };
       },
     }),
-    [],
+    [hostSources],
   );
 }

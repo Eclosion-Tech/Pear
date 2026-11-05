@@ -455,6 +455,15 @@ mod prop_schemas {
                 "includeDescendants": { "type": "boolean" }
               },
               "required": ["kind", "schemaId"]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": { "const": "host" },
+                "surfaceId": { "type": ["integer", "string"] },
+                "source": { "type": "string", "minLength": 1, "maxLength": 64 }
+              },
+              "required": ["kind", "surfaceId", "source"]
             }
           ]
         },
@@ -2224,4 +2233,33 @@ pub(crate) fn restore_component_tree(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod record_view_tests {
+    use super::prop_schemas;
+    use serde_json::{json, Value};
+
+    #[test]
+    fn repeater_schema_declares_bounded_host_source_entities() {
+        let schema: Value = serde_json::from_str(prop_schemas::REPEATER).unwrap();
+        let entities = schema["properties"]["dataSource"]["properties"]["entity"]["oneOf"]
+            .as_array()
+            .unwrap();
+        assert_eq!(entities.len(), 3);
+        assert_eq!(entities[0]["properties"]["kind"]["const"], "pages");
+        assert_eq!(entities[1]["properties"]["kind"]["const"], "database");
+        assert_eq!(
+            entities[2],
+            json!({
+                "type":"object",
+                "properties":{
+                    "kind":{"const":"host"},
+                    "surfaceId":{"type":["integer","string"]},
+                    "source":{"type":"string","minLength":1,"maxLength":64}
+                },
+                "required":["kind","surfaceId","source"]
+            })
+        );
+    }
 }

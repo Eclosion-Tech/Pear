@@ -21,6 +21,8 @@ import {
   scalarProperty,
   writableProperty,
   workspaceComponentSnapshot,
+  workspaceComponentQuery,
+  workspaceComponentRead,
 } from "@/src/lib/component-workspace-data";
 import type { ComponentSourceChoices } from "@eclosion-tech/trellis-react";
 export function useComponentData(
@@ -67,6 +69,16 @@ export function useComponentData(
   };
   const live = useRef({ data, commit, read });
   live.current = { data, commit, read };
+  // Advance during render so child effects cannot receive an older ACL result
+  // while this hook's notification effect is still pending.
+  const dependencies = [access.pages, access.principal, access.ready, access.privileged,
+    schemas.rows, schemas.ready, properties.rows, properties.ready,
+    values.rows, values.ready, rules.rows, rules.ready];
+  const generation = useRef({ value: 0, dependencies });
+  if (dependencies.some((value, index) => !Object.is(value, generation.current.dependencies[index]))) {
+    generation.current = { value: generation.current.value + 1, dependencies };
+  }
+  const watchers = useRef(new Set<() => void>());
   const listeners = useRef(
     new Set<{
       source: ComponentSource;
@@ -76,6 +88,7 @@ export function useComponentData(
   useEffect(() => {
     for (const listener of listeners.current)
       listener.deliver(workspaceComponentSnapshot(listener.source, data));
+    for (const onChange of watchers.current) onChange();
   }, [
     access.pages,
     access.principal,
@@ -92,7 +105,36 @@ export function useComponentData(
   ]);
   const workspace = useMemo<ComponentDataAdapter>(() => {
     const attempts = new Map<string, ComponentCommit>();
+    const principalKey = access.principal;
     return {
+      async query(source, request, { signal }) {
+        const captured = generation.current.value;
+        const result = workspaceComponentQuery(source, request, live.current.data);
+        await Promise.resolve();
+        if (signal.aborted || captured !== generation.current.value || principalKey !== live.current.data.principal)
+          return { status: "unavailable", records: [], complete: false, asOf: result.asOf, message: "This result is out of date." };
+        return result;
+      },
+      async read(source, recordId, { signal }) {
+        const captured = generation.current.value;
+        const result = workspaceComponentRead(source, recordId, live.current.data);
+        await Promise.resolve();
+        if (signal.aborted || captured !== generation.current.value || principalKey !== live.current.data.principal)
+          return { status: "unavailable", message: "This result is out of date." };
+        return result;
+      },
+      watch(_source, onChange, signal) {
+        if (signal.aborted) return () => {};
+        // Keep registrations independent even when callers reuse a callback.
+        const listener = () => onChange();
+        const close = () => {
+          watchers.current.delete(listener);
+          signal.removeEventListener("abort", close);
+        };
+        watchers.current.add(listener);
+        signal.addEventListener("abort", close, { once: true });
+        return close;
+      },
       subscribe(source, deliver, signal) {
         const listener = { source, deliver };
         listeners.current.add(listener);

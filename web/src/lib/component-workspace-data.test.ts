@@ -1,6 +1,10 @@
 import { expect, it } from "vitest";
 import {
   workspaceComponentSnapshot,
+  workspaceComponentQuery,
+  workspaceComponentRead,
+  scalarProperty,
+  writableProperty,
   type WorkspaceComponentData,
 } from "./component-workspace-data";
 import type { ComponentSource } from "@eclosion-tech/trellis";
@@ -107,4 +111,87 @@ it("creating in an empty database requires current database authority and suppor
   ] as any;
   value = workspaceComponentSnapshot(source, data);
   expect(value.creatableFields).toEqual([]);
+});
+
+it("queries project requested fields while reads return all declared fields", () => {
+  const data = fixture();
+  const result = workspaceComponentQuery(source, {
+    fields: ["name"], filter: [{ field: "status", op: "eq", value: "Ready" }],
+  }, data);
+  expect(result).toMatchObject({ status: "ready", complete: true, records: [{ id: "11", values: { name: "Saved value" } }] });
+  expect(result.records[0].values).toEqual({ name: "Saved value" });
+  expect(Number.isFinite(Date.parse(result.asOf))).toBe(true);
+  expect(workspaceComponentRead(source, "11", data)).toEqual({
+    status: "ready", record: { id: "11", values: { name: "Saved value", status: "Ready" } },
+  });
+  // A page outside the connected schema is not an opened record.
+  expect(workspaceComponentRead(source, "12", data).status).toBe("unavailable");
+});
+
+it("query and read distinguish denied database access from missing or unready data", () => {
+  const denied = fixture();
+  denied.rules = [{ pageId: 10n, principal: { tag: "WorkspaceMember", value: { toHexString: () => "other" } }, permission: { tag: "Read" } }] as any;
+  for (const data of [denied, { ...fixture(), principal: "anonymous" }]) {
+    expect(workspaceComponentQuery(source, { fields: ["name"] }, data)).toMatchObject({ status: "denied", records: [], complete: false });
+    expect(workspaceComponentRead(source, "11", data)).toMatchObject({ status: "denied" });
+    expect(workspaceComponentRead(source, "11", data).record).toBeUndefined();
+  }
+  for (const data of [
+    { ...fixture(), ready: false },
+    { ...fixture(), schemas: [] },
+    { ...fixture(), pages: fixture().pages.filter(page => page.id !== 10n) },
+  ]) {
+    expect(workspaceComponentQuery(source, { fields: ["name"] }, data)).toMatchObject({ status: "unavailable", records: [] });
+    expect(workspaceComponentRead(source, "11", data).status).toBe("unavailable");
+  }
+  expect(workspaceComponentQuery(source, { fields: ["name"] }, { ...denied, privileged: true }).status).toBe("ready");
+});
+
+it("queries exclude unreadable children and reads conceal whether a hidden record exists", () => {
+  const data = fixture();
+  data.rules = [{ pageId: 11n, principal: { tag: "WorkspaceMember", value: { toHexString: () => "other" } }, permission: { tag: "Read" } }] as any;
+  expect(workspaceComponentQuery(source, { fields: ["name"] }, data)).toMatchObject({ status: "ready", records: [], complete: true });
+  const unavailable = { status: "unavailable", message: "This record is unavailable." };
+  expect(workspaceComponentRead(source, "11", data)).toEqual(unavailable);
+  expect(workspaceComponentRead(source, "999", data)).toEqual(unavailable);
+  data.pages = data.pages.map(page => page.id === 11n ? { ...page, deletedAt: {} } as any : page);
+  expect(workspaceComponentRead(source, "11", data).status).toBe("unavailable");
+});
+
+it("Date(u64) maps to a read-only UTC civil day in snapshots, queries and reads", () => {
+  const data = fixture();
+  const dated: ComponentSource = { ...source, fields: { ...source.fields, day: { type: "date" } }, connection: { adapter: "pear.database", schemaId: "5", mapping: { name: "7", status: "8", day: "9" } } };
+  data.properties = [...data.properties, { id: 9n, schemaId: 5n, propertyType: { tag: "Date" } } as any];
+  data.values = [...data.values, { pageId: 11n, propertyDefinitionId: 9n, value: { tag: "Date", value: BigInt(Date.parse("2026-11-04T00:30:00Z")) } } as any];
+  expect(scalarProperty("Date")).toBe("date");
+  expect(writableProperty("Date")).toBe(false);
+  expect(workspaceComponentSnapshot(dated, data).records[0].values.day).toBe("2026-11-04");
+  expect(workspaceComponentRead(dated, "11", data).record?.values.day).toBe("2026-11-04");
+  expect(workspaceComponentQuery(dated, { fields: ["day"], range: { startField: "day", from: "2026-11-04", to: "2026-11-05" } }, data).records[0].values).toEqual({ day: "2026-11-04" });
+  data.values = data.values.filter(value => value.propertyDefinitionId !== 9n);
+  expect(workspaceComponentRead(dated, "11", data).record?.values.day).toBeNull();
+  data.values = [...data.values, { pageId: 11n, propertyDefinitionId: 9n, value: { tag: "Date", value: 2n ** 64n - 1n } } as any];
+  expect(workspaceComponentRead(dated, "11", data).record?.values.day).toBeNull();
+});
+
+it("queries filter all 1200 candidates before the bounded limit; snapshots retain their cap", () => {
+  const data = fixture();
+  data.pages = [data.pages[0], ...Array.from({ length: 1200 }, (_, i) => ({ id: BigInt(i + 100), parentId: 10n } as any))];
+  data.values = data.pages.slice(1).map((page, i) => ({ pageId: page.id, propertyDefinitionId: 7n, value: { tag: "Text", value: i >= 1100 ? "match" : "skip" } } as any));
+  const request = { fields: ["name"], filter: [{ field: "name", op: "eq" as const, value: "match" }] };
+  const result = workspaceComponentQuery(source, request, data);
+  expect(result.records).toHaveLength(100);
+  expect(result.complete).toBe(true);
+  expect(result.records.every(record => BigInt(record.id) >= 1200n)).toBe(true);
+  expect(workspaceComponentQuery(source, { ...request, limit: 5 }, data)).toMatchObject({ complete: false, records: result.records.slice(0, 5) });
+  expect(workspaceComponentQuery(source, { fields: ["name"] }, data).records).toHaveLength(200);
+  expect(workspaceComponentSnapshot(source, data).records).toHaveLength(1000);
+});
+
+it("only declared fields mapped to matching schema properties are read", () => {
+  const data = fixture();
+  const mapped: ComponentSource = { ...source, fields: { ...source.fields, absent: { type: "string" } }, connection: { adapter: "pear.database", schemaId: "5", mapping: { name: "7", status: "8", secret: "7" } } };
+  data.properties = data.properties.map(property => property.id === 8n ? { ...property, schemaId: 99n } : property);
+  expect(workspaceComponentRead(mapped, "11", data).record?.values).toEqual({ name: "Saved value", status: null, absent: null });
+  expect(() => workspaceComponentQuery(mapped, { fields: ["secret"] }, data)).toThrow();
 });
