@@ -17,6 +17,20 @@ A source declares scalar fields and a connection. Bind an input, checkbox, or te
 
 API tokens are entered privately for the current browser session and exact URL origin. They are absent from the component definition, agent snapshots, saved templates and backup payloads. Changing the principal ends the session. External writes execute through the connected browser adapter; the server-side agent write tool supports workspace data. No service-specific OAuth integration or server-side external credential store is introduced here.
 
+## Queries, calendar and open record
+
+External JSON sources do not support bounded queries or record reads in this version, so calendars and the detail panel work with workspace databases only.
+
+The `date` field type is a read-only UTC civil day (`YYYY-MM-DD` or `null`). Pear Date properties map to this type. Dates cannot be written back in this version.
+
+Query-mode sources evaluate all authorized candidates before applying a bounded result limit: AND filters, date-range overlap, sorting (with record ID ascending as the final tie-break), then the limit and field projection. A request selects 1–32 declared fields, up to eight predicates and three sort keys, and a limit of 1–200 (default 200). Date ranges are half-open `[from, to)`. `complete: false` means matching records exceeded the limit; it does not mean the source was filtered before evaluation. Query results include an evaluation timestamp (`asOf`); permission loss, unavailable sources and errors return their status without records. Query-mode sessions are read-only and refresh when workspace data or access changes.
+
+Add **CalendarGrid** in the builder, choose a source, a date start field, an optional date end field, and a string title field. The grid displays a UTC month with Sunday-start weeks and previous/next/today controls. End dates are inclusive; an absent end is a single day, and an end before the start displays just the start day with an invalid-range indicator. The calendar queries the visible grid, including adjacent-month days. More than 200 matching events produces a visible incomplete-results notice. The displayed month is private viewer state.
+
+Declare an **open** action for a source and select it as the `rowAction` on a DataTable or CalendarGrid using that source. Opening navigates without committing a component action. Pear displays a read-only record detail side panel with every declared field, using a fresh `read` to check current access. The workspace route slug, connection identity, source and record identify the target; the component document ID identifies its live host surface. Reconnecting a source invalidates old references. Close or browser Back dismisses the panel, and Forward restores it and reads again. The reference lives in browser history state; the URL does not contain the record ID. This panel is ordinary React UI: no Page or tree node is created.
+
+Live query sessions are registered for host repeaters under the component's numeric node ID (the Pulp `host` entity's `surfaceId`) and the declared source ID, so a repeater config `{ "v": 1, "entity": { "kind": "host", "surfaceId": <component node id>, "source": "<source id>" } }` reads that component's live rows through the same permission-checked adapter. Registrations last only as long as the mounted component and its sources; missing sessions yield no rows. Host rows use the record's numeric identity, so non-numeric record IDs from external JSON sources are not addressable by repeaters in this version.
+
 ## Reuse
 
 **Save as template**, in the component options menu, previews an immutable workspace version before publication. The published blueprint resets checkbox completion, private field defaults, saved action output, source record selectors and source connections. Each use allocates fresh node/document identities and independent state. Reconnect the new instance's source ports deliberately. Existing instances stay editable and pinned when the family gains versions or is archived.
@@ -27,4 +41,4 @@ No new database tables, reducers or views are required. Existing component/repos
 
 ## Next actions
 
-Open record/page and archive/delete are separate follow-ups. Destructive actions need confirmation and undo where the source supports it. Arbitrary HTTP requests, sending messages and automation execution need explicit capabilities and authorization; publishing a template cannot introduce those powers.
+Open page and archive/delete are separate follow-ups. Destructive actions need confirmation and undo where the source supports it. Arbitrary HTTP requests, sending messages and automation execution need explicit capabilities and authorization; publishing a template cannot introduce those powers.

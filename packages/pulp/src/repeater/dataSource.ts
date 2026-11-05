@@ -44,6 +44,8 @@ export type SortRule = {
  * `pages` covers the sidebar and page-list shapes; `database` covers DB views
  * and is schema-chain aware from day one (`includeDescendants`) because
  * retrofitting that onto shipped configs is the trap flagged in D5.
+ * `host` delegates row resolution to a host-registered source (ADR D1;
+ * PLAN section 10, "versioned host-source variant"). Pulp never evaluates it.
  */
 export type DataSourceEntity =
   | {
@@ -63,7 +65,8 @@ export type DataSourceEntity =
        */
       includeDescendants?: boolean;
     }
-  | { kind: "database"; schemaId: BlockId; includeDescendants?: boolean };
+  | { kind: "database"; schemaId: BlockId; includeDescendants?: boolean }
+  | { kind: "host"; surfaceId: BlockId; source: string };
 
 export type DataSourceConfig = {
   /**
@@ -185,6 +188,13 @@ function parseEntity(raw: unknown): DataSourceEntity | null {
     };
   }
 
+  if (r.kind === "host") {
+    const surfaceId = toBigId(r.surfaceId);
+    if (surfaceId === null) return null;
+    if (typeof r.source !== "string" || !r.source || r.source.length > 64) return null;
+    return { kind: "host", surfaceId, source: r.source };
+  }
+
   return null;
 }
 
@@ -286,6 +296,9 @@ export function dataSourceEquals(
   } else if (a.entity.kind === "database" && b.entity.kind === "database") {
     if (a.entity.schemaId !== b.entity.schemaId) return false;
     if (!!a.entity.includeDescendants !== !!b.entity.includeDescendants) return false;
+  } else if (a.entity.kind === "host" && b.entity.kind === "host") {
+    if (a.entity.surfaceId !== b.entity.surfaceId) return false;
+    if (a.entity.source !== b.entity.source) return false;
   }
 
   const af = a.filter ?? [];

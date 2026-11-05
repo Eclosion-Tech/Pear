@@ -46,6 +46,7 @@ import { registerPearBuiltinRenderers } from "./built-in";
 import { slashItemsForDefs } from "./pearSlashItems";
 import { useComponentSlashItems } from "./useComponentSlashItems";
 import { useQueryResolver } from "@/src/lib/repeater/queryResolver";
+import { createHostSourceRegistry, HostSourceRegistry } from "@/src/lib/repeater/hostSources";
 import { pearReferences } from "./PearReferenceSource";
 
 registerCoreBlocks();
@@ -100,17 +101,28 @@ function useHighlightNodeFromUrl(surfaceId: bigint): void {
  * Pear's ComponentTree page surface — wires SpacetimeDB subscriptions
  * and reducers into `@eclosion-tech/pulp`'s storage-agnostic editor.
  */
-export function ComponentTreeRenderer({
-  surfaceId,
-  layout,
-  onLayoutChange,
-  onOpenThread,
-}: {
+export function ComponentTreeRenderer(props: ComponentTreeRendererProps) {
+  const registry = useMemo(() => createHostSourceRegistry(), []);
+  return (
+    <HostSourceRegistry.Provider value={registry}>
+      <ComponentTreeRendererContent {...props} />
+    </HostSourceRegistry.Provider>
+  );
+}
+
+type ComponentTreeRendererProps = {
   surfaceId: bigint;
   layout: CompositionLayout;
   onLayoutChange: (layout: CompositionLayout) => void;
   onOpenThread?: (conversationId: bigint) => void;
-}) {
+};
+
+function ComponentTreeRendererContent({
+  surfaceId,
+  layout,
+  onLayoutChange,
+  onOpenThread,
+}: ComponentTreeRendererProps) {
   const { idbNamespace } = useWorkspace();
   const { identity, getConnection } = useSpacetimeDB();
   const createConversation = useCreateConversation();

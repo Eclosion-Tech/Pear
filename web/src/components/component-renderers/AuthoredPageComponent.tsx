@@ -1,11 +1,12 @@
 "use client";
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef } from "react";
 import { useParams } from "next/navigation";
 import { useSpacetimeDB } from "spacetimedb/react";
 import { usePulpOptional, type BlockRendererProps } from "@eclosion-tech/pulp";
 import { AuthoredComponentView } from "@eclosion-tech/trellis-react";
 import {
   canonicalJson,
+  createComponentDataSession,
   observeComponentCommit,
   type ComponentCommit,
 } from "@eclosion-tech/trellis";
@@ -13,8 +14,10 @@ import { INTERFACE_REGISTRY, readPageComponent } from "@pear/trellis-ui";
 import { usePageAccess } from "@/src/hooks/usePageAccess";
 import { useComponentData } from "@/src/hooks/useComponentData";
 import { blockReferenceHref } from "@/src/lib/blockReferenceLink";
+import { HostSourceRegistry } from "@/src/lib/repeater/hostSources";
 import type { DbConnection } from "@/src/module_bindings";
 import { SaveComponentTemplate } from "./ComponentTemplateLibrary";
+import { RecordDetailPanel, useOpenRecordPanel } from "./RecordDetailPanel";
 export function AuthoredPageComponentRenderer({ node }: BlockRendererProps) {
   const access = usePageAccess(node.surfaceId),
     { getConnection } = useSpacetimeDB(),
@@ -87,6 +90,29 @@ export function AuthoredPageComponentRenderer({ node }: BlockRendererProps) {
     [getConnection, node.id, read],
   );
   const data = useComponentData(node.surfaceId, commit, read);
+  const workspaceAdapter = data.dataAdapters["pear.database"];
+  const registry = useContext(HostSourceRegistry);
+  const surfaceId = parsed?.document.documentId;
+  // Pulp's `host` entity addresses a numeric surface id; the component node id
+  // is that identity, while the document id identifies the view for opens.
+  const hostSurfaceId = node.id.toString();
+  const sources = parsed?.sources;
+  useEffect(() => {
+    if (!registry || !sources) return;
+    // AuthoredComponentView owns private sessions; repeaters need their own.
+    const entries = Object.fromEntries(
+      Object.entries(sources).filter(([, source]) => source.connection).map(([id, source]) => [id, {
+        source,
+        session: createComponentDataSession({ ...source, mode: "query" }, workspaceAdapter),
+      }]),
+    );
+    const unregister = registry.register(hostSurfaceId, entries);
+    return () => {
+      unregister();
+      for (const { session } of Object.values(entries)) session.close();
+    };
+  }, [registry, hostSurfaceId, sources, workspaceAdapter]);
+  const { openRecord, onOpenRecord, onClose } = useOpenRecordPanel(workspace, surfaceId);
   if (!parsed)
     return (
       <p role="alert">
@@ -106,6 +132,8 @@ export function AuthoredPageComponentRenderer({ node }: BlockRendererProps) {
         principalKey={access.principal}
         canEdit={access.canEdit}
         onCommit={commit}
+        workspace={workspace}
+        onOpenRecord={onOpenRecord}
         {...data}
         onDiscuss={
           pulp?.config.onCommentBlock && access.canEdit
@@ -132,6 +160,15 @@ export function AuthoredPageComponentRenderer({ node }: BlockRendererProps) {
           </>
         }
       />
+      {openRecord && (
+        <RecordDetailPanel
+          key={canonicalJson([openRecord, access.principal])}
+          recordRef={openRecord}
+          source={Object.hasOwn(parsed.sources, openRecord.source) ? parsed.sources[openRecord.source] : undefined}
+          adapter={workspaceAdapter}
+          onClose={onClose}
+        />
+      )}
     </section>
   );
 }
