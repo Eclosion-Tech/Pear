@@ -47,7 +47,10 @@ pub(crate) fn catalog() -> Value {
     catalog["components"]["Input"]["props"]["properties"]["inputType"] =
         json!({"type":"string","enum":["text","email","url","number"]});
     catalog["components"]["Input"]["props"]["properties"]["multiline"] = json!({"type":"boolean"});
-    catalog["components"]["DataTable"] = json!({"acceptsChildren":false,"props":{"type":"object","properties":{"source":{"type":"string"},"columns":{"type":"array","items":{"type":"string"},"maxItems":32},"emptyText":{"type":"string","maxLength":500},"rowAction":{"type":"string"}},"required":["source","columns"]}});
+    let filter = json!({"type":"array","maxItems":8,"items":{"type":"object","properties":{"field":{"type":"string"},"op":{"type":"string","enum":["eq","neq","lt","gt","contains","isEmpty"]},"value":{"type":["string","number","boolean","null"]}},"required":["field","op"]}});
+    let sort = json!({"type":"array","maxItems":3,"items":{"type":"object","properties":{"field":{"type":"string"},"direction":{"type":"string","enum":["asc","desc"]}},"required":["field","direction"]}});
+    catalog["components"]["DataTable"] = json!({"acceptsChildren":false,"props":{"type":"object","properties":{"source":{"type":"string"},"columns":{"type":"array","items":{"type":"string"},"maxItems":32},"filter":filter,"sort":sort,"limit":{"type":"integer","minimum":1,"maximum":200},"emptyText":{"type":"string","maxLength":500},"rowAction":{"type":"string"}},"required":["source","columns"]}});
+    catalog["components"]["RecordList"] = json!({"acceptsChildren":false,"props":{"type":"object","properties":{"source":{"type":"string"},"titleField":{"type":"string"},"detailFields":{"type":"array","items":{"type":"string"},"maxItems":4},"filter":filter,"sort":sort,"limit":{"type":"integer","minimum":1,"maximum":200},"emptyText":{"type":"string","maxLength":500},"rowAction":{"type":"string"}},"required":["source","titleField"]}});
     catalog["components"]["CalendarGrid"] = json!({"acceptsChildren":false,"props":{"type":"object","properties":{"source":{"type":"string"},"startField":{"type":"string"},"endField":{"type":"string"},"titleField":{"type":"string"},"emptyText":{"type":"string","maxLength":500},"rowAction":{"type":"string"}},"required":["source","startField","titleField"]}});
     catalog
 }
@@ -141,7 +144,11 @@ fn connection(value: &Value) -> Result<(), String> {
             }
             for property in map(&value["mapping"], 32)?.values() {
                 let id = core::text(property)?;
-                if id.starts_with('0') || id.parse::<u64>().ok().filter(|v| *v > 0).is_none() {
+                if !["$title", "$id"].contains(&id)
+                    && (id.starts_with('0')
+                        || !id.bytes().all(|c| c.is_ascii_digit())
+                        || id.parse::<u64>().ok().filter(|v| *v > 0).is_none())
+                {
                     return Err(invalid("Map source fields to properties"));
                 }
             }
@@ -204,6 +211,132 @@ fn connection(value: &Value) -> Result<(), String> {
     }
     Ok(())
 }
+fn is_civil_date(value: &Value) -> bool {
+    let Some(date) = value.as_str() else {
+        return false;
+    };
+    let bytes = date.as_bytes();
+    if bytes.len() != 10
+        || bytes.iter().enumerate().any(|(i, c)| {
+            if i == 4 || i == 7 {
+                *c != b'-'
+            } else {
+                !c.is_ascii_digit()
+            }
+        })
+    {
+        return false;
+    }
+    let year: u32 = date[..4].parse().unwrap();
+    let month: u32 = date[5..7].parse().unwrap();
+    let day: u32 = date[8..].parse().unwrap();
+    let days = match month {
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        _ => return false,
+    };
+    (1..=days).contains(&day)
+}
+
+fn validate_view_request(source: &Value, fields: &[Value], props: &Value) -> Result<(), String> {
+    let field = |name: &Value| {
+        name.as_str()
+            .and_then(|name| source["fields"].get(name))
+            .ok_or_else(|| {
+                error(
+                    "INVALID_BINDING",
+                    "Query fields must be declared by the source.",
+                )
+            })
+    };
+    // Preserve the first occurrence, as componentViewRequest does in TypeScript.
+    let mut seen = BTreeSet::new();
+    let fields: Vec<_> = fields
+        .iter()
+        .filter(|name| seen.insert(name.as_str()))
+        .collect();
+    if fields.is_empty() || fields.len() > 32 {
+        return Err(error("LIMIT", "Choose between one and 32 query fields."));
+    }
+    for name in fields {
+        field(name)?;
+    }
+    if let Some(filter) = props.get("filter") {
+        let predicates = filter
+            .as_array()
+            .ok_or_else(|| error("INVALID_BINDING", "Expected a query list."))?;
+        if predicates.len() > 8 {
+            return Err(error("LIMIT", "Query list exceeds the limit."));
+        }
+        for predicate in predicates {
+            core::keys(predicate, &["field", "op", "value"])?;
+            let kind = core::text(&field(&predicate["field"])?["type"])?;
+            let op = predicate["op"].as_str().unwrap_or("");
+            if !["eq", "neq", "lt", "gt", "contains", "isEmpty"].contains(&op)
+                || (op == "contains" && kind != "string")
+                || (["lt", "gt"].contains(&op) && kind == "boolean")
+            {
+                return Err(error(
+                    "INVALID_BINDING",
+                    "This operator does not apply to the field type.",
+                ));
+            }
+            if op == "isEmpty" {
+                if predicate.get("value").is_some() {
+                    return Err(error("INVALID_BINDING", "isEmpty takes no value."));
+                }
+            } else if !predicate.get("value").is_some_and(|value| {
+                if value.is_null() {
+                    return ["eq", "neq"].contains(&op);
+                }
+                match kind {
+                    "date" => is_civil_date(value),
+                    "string" => value.is_string(),
+                    "number" => value.as_f64().is_some_and(|n| n.is_finite()),
+                    "boolean" => value.is_boolean(),
+                    _ => false,
+                }
+            }) {
+                return Err(error(
+                    "INVALID_BINDING",
+                    "Query values must match the declared field type.",
+                ));
+            }
+        }
+    }
+    if let Some(sort) = props.get("sort") {
+        let sorts = sort
+            .as_array()
+            .ok_or_else(|| error("INVALID_BINDING", "Expected a query list."))?;
+        if sorts.len() > 3 {
+            return Err(error("LIMIT", "Query list exceeds the limit."));
+        }
+        for sort in sorts {
+            core::keys(sort, &["field", "direction"])?;
+            field(&sort["field"])?;
+            if sort["direction"] != "asc" && sort["direction"] != "desc" {
+                return Err(error(
+                    "INVALID_BINDING",
+                    "Choose ascending or descending order.",
+                ));
+            }
+        }
+    }
+    if props.get("limit").is_some_and(|limit| {
+        !limit
+            .as_f64()
+            .is_some_and(|n| n.fract() == 0.0 && (1.0..=200.0).contains(&n))
+    }) {
+        return Err(error(
+            "LIMIT",
+            "Query limit must be an integer between one and 200.",
+        ));
+    }
+    Ok(())
+}
+
 pub fn parse(raw: &str) -> Result<Value, String> {
     let saved = core::parse_json(raw)?;
     exact(
@@ -266,6 +399,17 @@ pub fn parse(raw: &str) -> Result<Value, String> {
                     if source["fields"].get(field).is_none() || !properties.insert(core::text(id)?)
                     {
                         return Err(invalid("Map declared fields to distinct properties"));
+                    }
+                }
+                for (field, id) in mapping {
+                    if (id == "$title" || id == "$id")
+                        && (source["fields"][field]["type"] != "string"
+                            || source["fields"][field]["writable"] == true)
+                    {
+                        return Err(error(
+                            "INVALID_BINDING",
+                            "Native record attributes are read-only text fields.",
+                        ));
                     }
                 }
             }
@@ -467,7 +611,10 @@ pub fn parse(raw: &str) -> Result<Value, String> {
                 return Err(error("INVALID_BINDING", "Calendar fields must belong to its declared source and have the required types."));
             }
         }
-        if node["type"] == "DataTable" || node["type"] == "CalendarGrid" {
+        if node["type"] == "DataTable"
+            || node["type"] == "CalendarGrid"
+            || node["type"] == "RecordList"
+        {
             if let Some(slot) = node["props"].get("rowAction") {
                 let action = &saved["actions"][core::text(slot)?];
                 if action["kind"] != "open" || action["source"] != node["props"]["source"] {
@@ -490,6 +637,38 @@ pub fn parse(raw: &str) -> Result<Value, String> {
             {
                 return Err(invalid("Table columns must belong to its source"));
             }
+            validate_view_request(source, columns, &node["props"])?;
+        }
+        if node["type"] == "RecordList" {
+            let props = &node["props"];
+            let source = sources
+                .get(core::text(&props["source"])?)
+                .ok_or_else(|| invalid("List source missing"))?;
+            let field_error = || {
+                error(
+                    "INVALID_BINDING",
+                    "List fields must be distinct fields of its declared source.",
+                )
+            };
+            let title = props["titleField"].as_str().ok_or_else(field_error)?;
+            let empty = vec![];
+            let details = match props.get("detailFields") {
+                Some(value) => value.as_array().ok_or_else(field_error)?,
+                None => &empty,
+            };
+            let mut seen = BTreeSet::from([title]);
+            if source["fields"].get(title).is_none()
+                || details.iter().any(|field| {
+                    field.as_str().is_none_or(|field| {
+                        source["fields"].get(field).is_none() || !seen.insert(field)
+                    })
+                })
+            {
+                return Err(field_error());
+            }
+            let mut fields = vec![props["titleField"].clone()];
+            fields.extend_from_slice(details);
+            validate_view_request(source, &fields, props)?;
         }
     }
     for (node_id, binding) in bindings {
@@ -1202,7 +1381,10 @@ pub(crate) fn prepare_template(raw: &str, options_raw: &str) -> Result<Value, St
         if node["type"] == "ChecklistItem" {
             node["props"]["checked"] = json!(false);
         }
-        if node["type"] == "DataTable" || node["type"] == "CalendarGrid" {
+        if node["type"] == "DataTable"
+            || node["type"] == "CalendarGrid"
+            || node["type"] == "RecordList"
+        {
             if let Some(slot) = node["props"]["rowAction"].as_str() {
                 node["props"]["rowAction"] = json!(action_ids[slot]);
             }
@@ -1309,6 +1491,361 @@ mod tests {
     fn accepts(saved: &Value) {
         parse(&saved.to_string()).unwrap();
     }
+
+    fn view_fixture() -> Value {
+        let mut saved = fixture();
+        saved["sources"]["asks"] = json!({"label":"Asks","mode":"query","fields":{
+            "title":{"type":"string"},"id":{"type":"string"},
+            "status":{"type":"string"},"raised":{"type":"date"},
+            "detail":{"type":"string","writable":true},"done":{"type":"boolean"},
+            "score":{"type":"number"}
+        },"connection":{"adapter":"pear.database","schemaId":"333","mapping":{
+            "title":"$title","id":"$id","status":"1467","raised":"1466","detail":"1463"
+        }}});
+        saved["actions"]["open-ask"] = json!({"kind":"open","input":{"type":"object","properties":{}},"message":"","source":"asks","recordId":{"row":true}});
+        let root = saved["document"]["rootId"].clone();
+        saved["document"]["nodes"].as_array_mut().unwrap().extend([
+            json!({"id":"asks-table","parentId":root,"order":3,"type":"DataTable","props":{
+                "source":"asks","columns":["title","status","raised"],
+                "filter":[{"field":"status","op":"eq","value":"Open"}],
+                "sort":[{"field":"raised","direction":"asc"}],"limit":50,"rowAction":"open-ask"
+            }}),
+            json!({"id":"asks-list","parentId":root,"order":4,"type":"RecordList","props":{
+                "source":"asks","titleField":"title","detailFields":["status","raised"],
+                "filter":[{"field":"status","op":"eq","value":"Open"}],
+                "sort":[{"field":"raised","direction":"asc"}],"limit":50,
+                "emptyText":"Nothing needs your judgment.","rowAction":"open-ask"
+            }}),
+        ]);
+        saved
+    }
+
+    fn view_props<'a>(saved: &'a mut Value, id: &str) -> &'a mut Value {
+        &mut saved["document"]["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|node| node["id"] == id)
+            .unwrap()["props"]
+    }
+
+    #[test]
+    fn query_views_parse_without_changing_saved_props() {
+        let saved = view_fixture();
+        assert_eq!(parse(&saved.to_string()).unwrap(), saved);
+    }
+
+    #[test]
+    fn native_record_attributes_require_read_only_text() {
+        for field in ["title", "id"] {
+            for definition in [
+                json!({"type":"string","writable":true}),
+                json!({"type":"number"}),
+            ] {
+                let mut saved = view_fixture();
+                saved["sources"]["asks"]["fields"][field] = definition;
+                assert_eq!(
+                    parse(&saved.to_string()).unwrap_err(),
+                    "INVALID_BINDING: Native record attributes are read-only text fields."
+                );
+            }
+        }
+        let mut saved = view_fixture();
+        saved["sources"]["asks"]["fields"]["title"]["writable"] = json!(false);
+        accepts(&saved);
+    }
+
+    #[test]
+    fn database_mappings_admit_only_native_attributes_or_positive_decimal_ids() {
+        for id in ["$other", "0", "01", "+1", "-1", "", "18446744073709551616"] {
+            let mut saved = view_fixture();
+            saved["sources"]["asks"]["connection"]["mapping"]["status"] = json!(id);
+            rejects(&saved);
+        }
+        let mut saved = view_fixture();
+        saved["sources"]["asks"]["connection"]["mapping"]["status"] = json!("18446744073709551615");
+        accepts(&saved);
+        saved["sources"]["asks"]["connection"]["mapping"]["status"] = json!("$title");
+        assert_eq!(
+            parse(&saved.to_string()).unwrap_err(),
+            "INVALID_COMPONENT: Map declared fields to distinct properties"
+        );
+    }
+
+    #[test]
+    fn view_filters_validate_declared_fields_operators_and_values() {
+        let cases = [
+            (
+                json!({"field":"missing","op":"eq","value":"Open"}),
+                "Query fields must be declared by the source.",
+            ),
+            (
+                json!({"field":"status","op":"eq","value":true}),
+                "Query values must match the declared field type.",
+            ),
+            (
+                json!({"field":"status","op":"eq"}),
+                "Query values must match the declared field type.",
+            ),
+            (
+                json!({"field":"status","op":"isEmpty","value":null}),
+                "isEmpty takes no value.",
+            ),
+            (
+                json!({"field":"raised","op":"contains","value":"2026"}),
+                "This operator does not apply to the field type.",
+            ),
+            (
+                json!({"field":"done","op":"lt","value":true}),
+                "This operator does not apply to the field type.",
+            ),
+            (
+                json!({"field":"done","op":"gt","value":false}),
+                "This operator does not apply to the field type.",
+            ),
+            (
+                json!({"field":"raised","op":"eq","value":"2026-02-30"}),
+                "Query values must match the declared field type.",
+            ),
+            (
+                json!({"field":"raised","op":"eq","value":"soon"}),
+                "Query values must match the declared field type.",
+            ),
+            (
+                json!({"field":"status","op":"contains","value":null}),
+                "Query values must match the declared field type.",
+            ),
+            (
+                json!({"field":"score","op":"eq","value":"3"}),
+                "Query values must match the declared field type.",
+            ),
+        ];
+        for id in ["asks-table", "asks-list"] {
+            for (predicate, message) in &cases {
+                let mut saved = view_fixture();
+                view_props(&mut saved, id)["filter"] = json!([predicate]);
+                assert_eq!(
+                    parse(&saved.to_string()).unwrap_err(),
+                    format!("INVALID_BINDING: {message}"),
+                    "{id}: {predicate}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn view_filters_accept_matching_scalars_null_and_empty_checks() {
+        for predicate in [
+            json!({"field":"status","op":"contains","value":"Open"}),
+            json!({"field":"score","op":"gt","value":3}),
+            json!({"field":"done","op":"eq","value":false}),
+            json!({"field":"raised","op":"lt","value":"2024-02-29"}),
+            json!({"field":"raised","op":"eq","value":null}),
+            json!({"field":"status","op":"neq","value":null}),
+            json!({"field":"done","op":"isEmpty"}),
+        ] {
+            let mut saved = view_fixture();
+            for id in ["asks-table", "asks-list"] {
+                view_props(&mut saved, id)["filter"] = json!([predicate]);
+            }
+            accepts(&saved);
+        }
+    }
+
+    #[test]
+    fn view_sort_fields_must_be_declared() {
+        for id in ["asks-table", "asks-list"] {
+            let mut saved = view_fixture();
+            view_props(&mut saved, id)["sort"] = json!([{"field":"missing","direction":"asc"}]);
+            assert_eq!(
+                parse(&saved.to_string()).unwrap_err(),
+                "INVALID_BINDING: Query fields must be declared by the source."
+            );
+        }
+    }
+
+    #[test]
+    fn view_catalog_rejects_invalid_shapes_and_bounds() {
+        let cases = [
+            (
+                "filter",
+                json!(vec![json!({"field":"status","op":"eq","value":"Open"}); 9]),
+            ),
+            ("limit", json!(0)),
+            ("limit", json!(201)),
+            ("limit", json!(1.5)),
+            (
+                "filter",
+                json!([{"field":"status","op":"between","value":"Open"}]),
+            ),
+            ("filter", json!([{"field":"status","op":"eq","value":{}}])),
+            (
+                "filter",
+                json!([{"field":"status","op":"eq","value":"Open","extra":true}]),
+            ),
+            (
+                "sort",
+                json!(vec![json!({"field":"status","direction":"asc"}); 4]),
+            ),
+            ("sort", json!([{"field":"status","direction":"up"}])),
+            (
+                "sort",
+                json!([{"field":"status","direction":"asc","extra":true}]),
+            ),
+        ];
+        for (id, kind) in [("asks-table", "DataTable"), ("asks-list", "RecordList")] {
+            for (key, value) in &cases {
+                let mut saved = view_fixture();
+                let props = view_props(&mut saved, id);
+                props[*key] = value.clone();
+                assert!(
+                    core::validate_value(props, &catalog()["components"][kind]["props"]).is_err(),
+                    "{kind}: {key} = {value}"
+                );
+                rejects(&saved);
+            }
+        }
+        let mut saved = view_fixture();
+        let props = view_props(&mut saved, "asks-list");
+        props["detailFields"] = json!(["id", "status", "raised", "detail", "done"]);
+        assert!(
+            core::validate_value(props, &catalog()["components"]["RecordList"]["props"]).is_err()
+        );
+        rejects(&saved);
+    }
+
+    #[test]
+    fn list_fields_are_distinct_and_declared() {
+        for details in [
+            json!(["status", "status"]),
+            json!(["title"]),
+            json!(["missing"]),
+        ] {
+            let mut saved = view_fixture();
+            view_props(&mut saved, "asks-list")["detailFields"] = details;
+            assert_eq!(
+                parse(&saved.to_string()).unwrap_err(),
+                "INVALID_BINDING: List fields must be distinct fields of its declared source."
+            );
+        }
+        let mut saved = view_fixture();
+        view_props(&mut saved, "asks-list")["titleField"] = json!("missing");
+        rejects(&saved);
+        view_props(&mut saved, "asks-list")["titleField"] = json!("title");
+        view_props(&mut saved, "asks-list")
+            .as_object_mut()
+            .unwrap()
+            .remove("detailFields");
+        accepts(&saved);
+    }
+
+    #[test]
+    fn snapshot_views_and_duplicate_table_columns_remain_valid() {
+        let mut saved = view_fixture();
+        saved["sources"]["asks"]["mode"] = json!("snapshot");
+        accepts(&saved);
+        view_props(&mut saved, "asks-table")["columns"] = json!(["status", "title", "status"]);
+        assert_eq!(parse(&saved.to_string()).unwrap(), saved);
+        view_props(&mut saved, "asks-table")["columns"] = json!([]);
+        rejects(&saved);
+        assert_eq!(
+            validate_view_request(&saved["sources"]["asks"], &[], &json!({})).unwrap_err(),
+            "LIMIT: Choose between one and 32 query fields."
+        );
+    }
+
+    #[test]
+    fn list_row_actions_must_open_the_same_source() {
+        for action in ["refresh-asks", "open-record"] {
+            let mut saved = view_fixture();
+            saved["actions"]["refresh-asks"] = json!({"kind":"refresh","input":{"type":"object","properties":{}},"message":"","source":"asks"});
+            view_props(&mut saved, "asks-list")["rowAction"] = json!(action);
+            assert_eq!(
+                parse(&saved.to_string()).unwrap_err(),
+                "INVALID_BINDING: Row actions must open a record from the same source."
+            );
+        }
+    }
+
+    #[test]
+    fn templates_remap_list_row_actions_and_preserve_view_settings() {
+        let mut saved = view_fixture();
+        let options =
+            json!({"slug":"asks","version":"1.0.0","name":"Asks","description":"","tags":[]});
+        let package = prepare_template(&saved.to_string(), &options.to_string()).unwrap();
+        for (id, kind) in [("asks-table", "DataTable"), ("asks-list", "RecordList")] {
+            let node = package["blueprint"]["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|node| node["type"] == kind && node["props"]["source"] == "asks")
+                .unwrap();
+            assert_eq!(node["props"]["rowAction"], "action-1");
+            for key in ["filter", "sort", "limit"] {
+                assert_eq!(node["props"][key], view_props(&mut saved, id)[key]);
+            }
+        }
+        assert_eq!(
+            package["blueprint"]["actions"]["action-1"]["source"],
+            "asks"
+        );
+    }
+
+    #[test]
+    fn scalar_unions_validate_members_and_skip_bounds() {
+        let schema = json!({"type":["string","number","boolean","null"],"minimum":10,"maximum":20,"minLength":10,"maxLength":1});
+        for value in [json!("Open"), json!(3), json!(false), Value::Null] {
+            core::validate_value(&value, &schema).unwrap();
+        }
+        for value in [json!({}), json!([])] {
+            assert!(core::validate_value(&value, &schema)
+                .unwrap_err()
+                .contains("Value outside the allowed scalar types"));
+        }
+        for types in [
+            json!([]),
+            json!(["string", "object"]),
+            json!(["integer"]),
+            json!([true]),
+        ] {
+            assert!(core::validate_value(&json!("Open"), &json!({"type":types}))
+                .unwrap_err()
+                .contains("Unions admit scalar types only"));
+        }
+        assert!(core::validate_value(
+            &json!(3),
+            &json!({"type":["string","number"],"enum":["Open"]})
+        )
+        .is_err());
+        assert!(core::validate_value(&json!(false), &json!({"type":["string","null"]})).is_err());
+    }
+
+    #[test]
+    fn civil_dates_require_exact_format_and_valid_calendar_days() {
+        for date in [
+            "0000-02-29",
+            "2000-02-29",
+            "2024-02-29",
+            "2026-04-30",
+            "9999-12-31",
+        ] {
+            assert!(is_civil_date(&json!(date)), "{date}");
+        }
+        for date in [
+            "1900-02-29",
+            "2026-02-30",
+            "2026-04-31",
+            "2026-00-01",
+            "2026-13-01",
+            "2026-01-00",
+            "2026-2-01",
+            "soon",
+            "２０２６-02-01",
+        ] {
+            assert!(!is_civil_date(&json!(date)), "{date}");
+        }
+    }
+
     fn rejects(saved: &Value) {
         assert!(parse(&saved.to_string()).is_err());
     }

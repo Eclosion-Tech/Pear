@@ -18,6 +18,7 @@ import type {
 import { useScopedTable } from "./useScopedTable";
 import { usePageAccess } from "./usePageAccess";
 import {
+  NATIVE_RECORD_PROPERTIES,
   scalarProperty,
   writableProperty,
   workspaceComponentSnapshot,
@@ -260,18 +261,22 @@ export function useComponentData(
       .map((schema) => ({
         id: schema.id.toString(),
         name: schema.name,
-        properties: properties.rows
-          .filter(
-            (property) =>
-              property.schemaId === schema.id &&
-              scalarProperty(property.propertyType.tag),
-          )
-          .map((property) => ({
-            id: property.id.toString(),
-            name: property.name,
-            type: scalarProperty(property.propertyType.tag)!,
-            writable: writableProperty(property.propertyType.tag),
-          })),
+        properties: [
+          // The row title and identity need no column; they are read-only text.
+          ...NATIVE_RECORD_PROPERTIES,
+          ...properties.rows
+            .filter(
+              (property) =>
+                property.schemaId === schema.id &&
+                scalarProperty(property.propertyType.tag),
+            )
+            .map((property) => ({
+              id: property.id.toString(),
+              name: property.name,
+              type: scalarProperty(property.propertyType.tag)!,
+              writable: writableProperty(property.propertyType.tag),
+            })),
+        ],
       })),
   };
   const dataAdapters = useMemo(
