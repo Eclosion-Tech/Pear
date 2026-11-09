@@ -346,3 +346,77 @@ it("agents run only a saved action with exact typed input and retain normal revi
     "AUTHORIZATION_DENIED",
   );
 });
+
+it("agents configure a filtered query view and a record list over native title fields through update_component", async () => {
+  const host = fixture(),
+    created = await host.run("create_component", {
+      parent_id: "70",
+      title: "Needs your judgment",
+      request_id: "blank",
+    });
+  expect(created.authoring_contract.query_view_table.node.type).toBe("DataTable");
+  expect(created.authoring_contract.query_view_list.node.type).toBe("RecordList");
+  expect(created.authoring_contract.query_source.connection.mapping.title).toBe("$title");
+  expect(created.components.RecordList.props.required).toEqual(["source", "titleField"]);
+  expect(created.components.DataTable.props.properties.filter.items.properties.value.type).toEqual(["string", "number", "boolean", "null"]);
+  const view = {
+    filter: [{ field: "status", op: "eq", value: "Open" }],
+    sort: [{ field: "raised", direction: "asc" }],
+    limit: 50,
+  };
+  const configuration = {
+    ...created.configuration,
+    sources: {
+      asks: {
+        label: "Asks",
+        mode: "query",
+        fields: { title: { type: "string" }, status: { type: "string" }, raised: { type: "date" } },
+        connection: { adapter: "pear.database", schemaId: "333", mapping: { title: "$title", status: "1467", raised: "1466" } },
+      },
+    },
+    actions: {
+      openAsk: { kind: "open", source: "asks", recordId: { row: true }, input: { type: "object", properties: {} }, message: "Open ask" },
+    },
+  };
+  const changed = await host.run("update_component", {
+    component_id: "100",
+    base_revision: 0,
+    request_id: "define",
+    command: {
+      kind: "edit",
+      configuration,
+      operations: [
+        { op: "insertNode", node: { id: "table", parentId: created.document.rootId, type: "DataTable", order: 0,
+          props: { source: "asks", columns: ["title", "status", "raised"], ...view, rowAction: "openAsk" } } },
+        { op: "insertNode", node: { id: "list", parentId: created.document.rootId, type: "RecordList", order: 1,
+          props: { source: "asks", titleField: "title", detailFields: ["status", "raised"], ...view, limit: 25, emptyText: "Nothing needs your judgment.", rowAction: "openAsk" } } },
+      ],
+    },
+  });
+  expect(changed.ok).toBe(true);
+  expect(changed.revision).toBe(1);
+  expect(changed.document.nodes.find((node: any) => node.id === "list").props.filter).toEqual(view.filter);
+  // The saved view is what a human reads next, and the same rules reject a bad rule from either side.
+  const current = await host.run("get_component", { component_id: "100" });
+  expect(current.document.nodes.find((node: any) => node.id === "table").props.limit).toBe(50);
+  const rejected = await host.run("update_component", {
+    component_id: "100",
+    base_revision: 1,
+    request_id: "bad-filter",
+    command: {
+      kind: "edit",
+      operations: [{ op: "setProps", target: { id: "table" }, props: {
+        source: "asks", columns: ["title"], filter: [{ field: "raised", op: "gt", value: "soon" }],
+      } }],
+    },
+  });
+  expect(rejected.ok).toBe(false);
+  expect(rejected.code).toBe("INVALID_BINDING");
+  expect((await host.run("get_component", { component_id: "100" })).revision).toBe(1);
+  // Writes stay closed on the query source, even through the agent data tool.
+  const write = await host.run("write_component_data", {
+    component_id: "100", base_revision: 1, source: "asks", record_id: "11", values: { status: "Done" }, request_id: "write",
+  });
+  expect(write.ok).toBe(false);
+  expect(write.code).toBe("READ_ONLY_SOURCE");
+});

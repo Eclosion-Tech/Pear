@@ -116,6 +116,25 @@ pub(crate) fn validate_value(value: &Value, schema: &Value) -> Result<(), String
     {
         return Err(invalid("Value outside enumeration"));
     }
+    if let Some(types) = schema["type"].as_array() {
+        if types.is_empty()
+            || types.iter().any(|member| {
+                !matches!(member.as_str(), Some("string" | "number" | "boolean" | "null"))
+            })
+        {
+            return Err(invalid("Unions admit scalar types only"));
+        }
+        if !types.iter().any(|member| match member.as_str() {
+            Some("null") => value.is_null(),
+            Some("number") => value.as_f64().is_some_and(|n| n.is_finite()),
+            Some("string") => value.is_string(),
+            Some("boolean") => value.is_boolean(),
+            _ => false,
+        }) {
+            return Err(invalid("Value outside the allowed scalar types"));
+        }
+        return Ok(());
+    }
     match text(&schema["type"])? {
         "object" => {
             let map = object(value)?;

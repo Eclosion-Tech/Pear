@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import {
+  NATIVE_RECORD_PROPERTIES,
   workspaceComponentSnapshot,
   workspaceComponentQuery,
   workspaceComponentRead,
@@ -194,4 +195,62 @@ it("only declared fields mapped to matching schema properties are read", () => {
   data.properties = data.properties.map(property => property.id === 8n ? { ...property, schemaId: 99n } : property);
   expect(workspaceComponentRead(mapped, "11", data).record?.values).toEqual({ name: "Saved value", status: null, absent: null });
   expect(() => workspaceComponentQuery(mapped, { fields: ["secret"] }, data)).toThrow();
+});
+
+it("native $title and $id mappings read the page title and identity as read-only text in every path", () => {
+  const data = fixture();
+  data.pages = data.pages.map(page => page.id === 11n ? { ...page, title: "Marketing production schedule" } as any : page);
+  const native: ComponentSource = {
+    ...source, mode: "query",
+    fields: { ...source.fields, title: { type: "string" }, id: { type: "string" } },
+    connection: { adapter: "pear.database", schemaId: "5", mapping: { name: "7", status: "8", title: "$title", id: "$id" } },
+  };
+  const snapshot = workspaceComponentSnapshot(native, data);
+  expect(snapshot.records[0].values).toEqual({ name: "Saved value", status: "Ready", title: "Marketing production schedule", id: "11" });
+  expect(snapshot.writableFields).toEqual(["name"]);
+  expect(snapshot.records[0].writableFields).toEqual(["name"]);
+  expect(workspaceComponentRead(native, "11", data).record?.values).toMatchObject({ title: "Marketing production schedule", id: "11" });
+  const query = workspaceComponentQuery(native, {
+    fields: ["title", "id"], filter: [{ field: "title", op: "contains", value: "schedule" }], sort: [{ field: "title", direction: "asc" }],
+  }, data);
+  expect(query).toMatchObject({ status: "ready", complete: true, records: [{ id: "11", values: { title: "Marketing production schedule", id: "11" } }] });
+  expect(workspaceComponentQuery(native, { fields: ["title"], filter: [{ field: "title", op: "eq", value: "Other" }] }, data).records).toEqual([]);
+  // A native mapping never becomes writable, even when the declaration asks for it.
+  const asksWritable = { ...native, fields: { ...native.fields, title: { type: "string" as const, writable: true } } };
+  expect(workspaceComponentSnapshot(asksWritable, data).writableFields).toEqual(["name"]);
+  expect(workspaceComponentSnapshot(asksWritable, data).records[0].values.title).toBeNull();
+  expect(NATIVE_RECORD_PROPERTIES.map(property => property.id)).toEqual(["$title", "$id"]);
+  expect(NATIVE_RECORD_PROPERTIES.every(property => property.type === "string" && !property.writable)).toBe(true);
+});
+
+it("saved views over a query source follow filter, sort and limit across live changes and revocation", () => {
+  const data = fixture();
+  const asks: ComponentSource = {
+    label: "Asks", mode: "query",
+    fields: { title: { type: "string" }, status: { type: "string" }, raised: { type: "date" } },
+    connection: { adapter: "pear.database", schemaId: "5", mapping: { title: "$title", status: "8", raised: "9" } },
+  };
+  data.properties = [...data.properties, { id: 9n, schemaId: 5n, propertyType: { tag: "Date" } } as any];
+  const rows: [bigint, string, string, string][] = [
+    [21n, "Older open ask", "Open", "2026-02-16"], [22n, "Newer open ask", "Open", "2026-08-17"],
+    [23n, "Answered ask", "Answered", "2026-08-09"], [24n, "Newest open ask", "Open", "2026-09-23"],
+  ];
+  data.pages = [data.pages[0], ...rows.map(([id, title]) => ({ id, parentId: 10n, title } as any))];
+  data.values = rows.flatMap(([id, , status, raised]) => [
+    { pageId: id, propertyDefinitionId: 8n, value: { tag: "Select", value: status } },
+    { pageId: id, propertyDefinitionId: 9n, value: { tag: "Date", value: BigInt(Date.parse(`${raised}T00:00:00Z`)) } },
+  ] as any);
+  const view = { fields: ["title", "status", "raised"], filter: [{ field: "status", op: "eq" as const, value: "Open" }], sort: [{ field: "raised", direction: "asc" as const }], limit: 2 };
+  const result = workspaceComponentQuery(asks, view, data);
+  expect(result.records.map(record => record.values.title)).toEqual(["Older open ask", "Newer open ask"]);
+  expect(result.complete).toBe(false);
+  expect(workspaceComponentQuery(asks, { ...view, limit: 50 }, data).records.map(record => record.id)).toEqual(["21", "22", "24"]);
+  // The oldest ask is answered: it leaves the view on the next evaluation.
+  data.values = data.values.map(value => value.pageId === 21n && value.propertyDefinitionId === 8n ? { ...value, value: { tag: "Select", value: "Answered" } } as any : value);
+  expect(workspaceComponentQuery(asks, { ...view, limit: 50 }, data).records.map(record => record.id)).toEqual(["22", "24"]);
+  // Revoking one row hides it; revoking the database denies the whole view.
+  data.rules = [{ pageId: 22n, principal: { tag: "WorkspaceMember", value: { toHexString: () => "other" } }, permission: { tag: "Read" } }] as any;
+  expect(workspaceComponentQuery(asks, { ...view, limit: 50 }, data).records.map(record => record.id)).toEqual(["24"]);
+  data.rules = [{ pageId: 10n, principal: { tag: "WorkspaceMember", value: { toHexString: () => "other" } }, permission: { tag: "Read" } }] as any;
+  expect(workspaceComponentQuery(asks, { ...view, limit: 50 }, data)).toMatchObject({ status: "denied", records: [] });
 });
