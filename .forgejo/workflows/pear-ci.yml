@@ -1,13 +1,13 @@
 name: Pear CI
 on:
-  pull_request:
   push:
-    branches: [main]
+    branches: ['**']
   workflow_dispatch:
 
+# Codeberg pushes branch commits to the Forgejo mirror; PR events do not mirror.
 # No deployment work or production credentials belong in this workflow.
 concurrency:
-  group: pear-ci-${{ github.event.pull_request.number || github.ref }}
+  group: pear-ci-${{ github.ref }}
   cancel-in-progress: true
 defaults:
   run:
@@ -15,12 +15,13 @@ defaults:
 
 jobs:
   unit:
-    runs-on: pear-ci
+    runs-on: synops
     timeout-minutes: 30
     steps:
       - uses: https://data.forgejo.org/actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: https://data.forgejo.org/actions/setup-node@v4
         with:
@@ -36,14 +37,15 @@ jobs:
         run: bash scripts/ci/test-unit.sh
 
   protected-mail:
-    runs-on: pear-ci
+    runs-on: synops
     timeout-minutes: 35
     env:
       PEAR_PROTECTED_MAIL_BASELINE_CACHE: ${{ github.workspace }}/.protected-mail-baselines
     steps:
       - uses: https://data.forgejo.org/actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: https://data.forgejo.org/actions/setup-node@v4
         with:
@@ -51,8 +53,8 @@ jobs:
       - name: Classify the exact Pear diff
         id: scope
         env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_BASE_SHA: ${{ github.event.before }}
+          PR_HEAD_SHA: ${{ github.sha }}
         run: node scripts/ci/protected-mail-scope.mjs
       - name: Install toolchains and dependencies
         if: steps.scope.outputs.run != 'false'
