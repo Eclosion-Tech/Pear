@@ -1,0 +1,76 @@
+{
+  "pearCommit": "06dc8132a9272c7f7d25e778de7c2284fc2ec61a",
+  "wasmSha256": "0a4bce81df890d658a86090ef123bed8b128f0f1595c4680f2865f7885562ff2",
+  "views": [
+    {
+      "name": "ai_extension_runtime",
+      "index": 0,
+      "is_anonymous": false
+    },
+    {
+      "name": "api_endpoint_key_lookup",
+      "index": 0,
+      "is_anonymous": true
+    },
+    {
+      "name": "my_extension_permissions",
+      "index": 1,
+      "is_anonymous": false
+    },
+    {
+      "name": "my_protected_mail",
+      "index": 2,
+      "is_anonymous": false
+    },
+    {
+      "name": "my_protected_mail_collections",
+      "index": 3,
+      "is_anonymous": false
+    },
+    {
+      "name": "my_protected_mail_instructions",
+      "index": 4,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_automation_events",
+      "index": 5,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_automations",
+      "index": 6,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_components",
+      "index": 7,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_conversations",
+      "index": 8,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_jobs",
+      "index": 9,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_pages",
+      "index": 10,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_review_snapshots",
+      "index": 11,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_schemas",
+      "index": 12,
+      "is_anonymous": false
+    }
+  ]
+}

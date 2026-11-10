@@ -1,0 +1,85 @@
+name: Pear CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# No deployment work or production credentials belong in this workflow.
+concurrency:
+  group: pear-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  unit:
+    runs-on: pear-ci
+    timeout-minutes: 30
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: https://data.forgejo.org/actions/setup-node@v4
+        with:
+          node-version: '22.23.0'
+      - name: Install toolchains and dependencies
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          npm install -g pnpm@10.14.0
+          pnpm install --frozen-lockfile
+      - name: Server, web, worker, Sentinel and bindings checks
+        run: bash scripts/ci/test-unit.sh
+
+  protected-mail:
+    runs-on: pear-ci
+    timeout-minutes: 35
+    env:
+      PEAR_PROTECTED_MAIL_BASELINE_CACHE: ${{ github.workspace }}/.protected-mail-baselines
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: https://data.forgejo.org/actions/setup-node@v4
+        with:
+          node-version: '22.23.0'
+      - name: Classify the exact Pear diff
+        id: scope
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node scripts/ci/protected-mail-scope.mjs
+      - name: Install toolchains and dependencies
+        if: steps.scope.outputs.run != 'false'
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          . "$HOME/.cargo/env"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          rustup target add wasm32-unknown-unknown
+          npm install -g pnpm@10.14.0
+          pnpm install --frozen-lockfile
+      - name: Identify historical build toolchain
+        if: steps.scope.outputs.run != 'false'
+        id: baseline-cache
+        run: |
+          set -euo pipefail
+          protected_mail_cache_key=$(node scripts/ci/build-protected-mail-baseline.mjs --cache-key)
+          echo "key=$protected_mail_cache_key" >> "$GITHUB_OUTPUT"
+      - name: Restore historical WASM builds (save after successful conformance)
+        if: steps.scope.outputs.run != 'false'
+        uses: https://data.forgejo.org/actions/cache@v4
+        continue-on-error: true
+        with:
+          path: .protected-mail-baselines
+          key: pear-mail-baselines-${{ runner.os }}-${{ steps.baseline-cache.outputs.key }}-${{ hashFiles('scripts/ci/test-protected-mail.sh') }}
+          restore-keys: |
+            pear-mail-baselines-${{ runner.os }}-${{ steps.baseline-cache.outputs.key }}-
+      - name: Private mail access, upgrades and durable restarts
+        if: steps.scope.outputs.run != 'false'
+        run: bash scripts/ci/test-protected-mail.sh
