@@ -35,7 +35,9 @@ Git refs. Runner registrations and instance settings are managed on Forgejo.
 
 Cloud's `verify-pear-ci.mjs` checks the latest matching `pear-ci.yml` run on
 `Eclosion-Tech/Pear` at `forge.syntropy.chat` for its exact Codeberg Pear pin.
-Its CI token authenticates API requests; no manually posted status substitutes
+Its `PEAR_CI_READ_TOKEN` secret authenticates API requests with only
+`public-only,read:actions` scope. Automatic job tokens cannot read another
+repository's CI. No manually posted status substitutes
 for run evidence. Missing, unavailable, pending, failed, skipped, unapproved or
 wrong-revision runs stop release. Mirror lag therefore stops the gate until the
 exact revision has arrived and passed.
