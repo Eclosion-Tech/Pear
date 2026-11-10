@@ -34,6 +34,7 @@ after another gesture, and an explicit `denied` distinct from an empty mailbox.
 | `bind_protected_mail_component_source(component_id, source, collection_id)` and `unbind_protected_mail_component_source(component_id, source)` reducers | The collection owner, with read access on the page. Each owner has at most one active binding per component source; nobody can replace or remove another owner's binding |
 | `protected_mail_component_binding` table | Private, append-only lifecycle: component node and its page, source name, owner, collection, declaration digest, monotonic epoch, status `active` or `revoked`, timestamps |
 | `my_protected_mail_component_bindings` view | Owner only, no mail content: component node, source, collection id, epoch, status |
+| `protected_mail_window_index` table | Private. One row per protected record: collection id, inverted `imported_at` key and record id, written in the record's transaction. Serves newest-first windows in time proportional to the page without touching record bodies |
 
 There is no view over mail content, no change signal and no subscription. The
 binding view is an explicit owner view in the sense of the storage contract,
@@ -58,36 +59,60 @@ connection/folder/UIDVALIDITY/UID identity; `id` stays
 ```
 
 `limit` is 1 to 200 and is required. Rows are ordered by `imported_at`
-descending, then `id` descending. `before` is an exclusive boundary on that
-pair: a row is returned when its `imported_at` is older than `before.importedAt`,
-or equal with a smaller `id`. Batch ingestion commits several records with one
-transaction timestamp, so a timestamp-only boundary would skip the rest of a
-batch; the pair boundary cannot. `complete` is true when no older row remains.
-The response is capped at 1 MiB measured on its JSON encoding with worst-case
-escaping, the larger of the two transports; a window that would exceed it
-returns fewer rows, at least one, with `complete: false`, and the client
-continues from the last row. A worst-case row is about 16 KiB, so every call
-makes progress.
-`before` is a plain pair of values the client already holds, not a cursor
-token, and there is no offset, filter, search or sort choice. The response
-repeats the binding epoch and collection id it resolved.
+descending, then `id` ascending in UTF-8 byte order, which is the order the
+window index yields. `imported_at` and `before.importedAt` travel as decimal
+integer microseconds in a string under the full-u64 rule, and the client returns
+the value unchanged; a Trellis `date` field is derived from it for display only,
+never used as a boundary. `before` is an exclusive boundary on that pair: a row
+is returned when its `imported_at` is older than `before.importedAt`, or equal
+with a larger `id`. A `before.importedAt` outside `0..=i64::MAX`, or a malformed
+`id`, is rejected with the fixed malformed-request error. Batch ingestion
+commits several records with one transaction timestamp, so a timestamp-only
+boundary would skip the rest of a batch; the pair boundary cannot. `complete` is
+true when no older qualifying row remains: after `limit` rows the procedure
+looks ahead for one more admissible row, under the same index-row and
+association checks as every returned row, and reports `complete: false` only if
+it finds one, so a window is never followed by an empty page. The response is
+capped at 1 MiB measured on its JSON encoding with worst-case escaping, the
+larger of the two transports; a window that would exceed it returns fewer rows,
+at least one, with `complete: false`, and the client continues from the last
+row. A worst-case row is about 16 KiB, so every call makes progress. `before` is
+a plain pair of values the client already holds, not a cursor token, and there
+is no offset, filter, search or sort choice. The response repeats the binding
+epoch and collection id it resolved.
 
-Implementation adds a `(collection_id, imported_at)` index on
-`protected_mail_record`. The pinned SpacetimeDB iterates an index range forward
-only, so the procedure relies on no reverse iteration: it walks the range from
-the start of the collection up to and including `before.importedAt` in ascending
-order, keeps the newest `limit` rows that lie strictly below the `(imported_at,
-id)` boundary in a bounded buffer, and returns them newest first. The
-association check runs before a row enters the buffer: a record whose
-collection, source and receipt do not agree is skipped, never counted and never
-reported as an error, so a window is short only when the collection is.
-`complete` is true exactly when the buffer never overflowed. The byte cap then
-drops the oldest buffered rows, never below one, and clears `complete`. The scan
-is exact, with no budget and no early exit; its cost is linear in the records
-older than the boundary, acceptable for mailboxes of tens of thousands of
-records and measured in the fixture. A descending-order index table is the
-optimization if measurements demand it. The current owner-only index would scan
-every owned record of every collection per call.
+Implementation serves windows from a private window index instead of scanning
+records. `protected_mail_window_index` holds one row per protected record, keyed
+by the record `id` as its primary key so a row can never be duplicated and a
+backfill rerun skips what exists: `record_id`, `collection_id`, and an inverted
+sort key (`u64::MAX` minus `imported_at` in microseconds), with a BTree index on
+`(collection_id, inverted_key, record_id)`. The row is written next to the
+record insert in `insert_ingested_mail`, the single function through which both
+`append_protected_mail_message` and the ingestion path create records, so no
+writer can skip it. The pinned SpacetimeDB iterates an index range forward only,
+and forward over the inverted key is newest first with ids ascending inside an
+equal key; a page is the range `(collection_id, inverted(before.importedAt),
+(Excluded(before.id), Unbounded))` followed by `(collection_id,
+(Excluded(inverted(before.importedAt)), Unbounded))`, which needs no arithmetic
+and cannot overflow, or the whole collection prefix for the first page. For each
+index row the procedure fetches the record by primary key and admits it only
+when the record's collection matches the index row, its `imported_at` reproduces
+the inverted key, and its collection, source and receipt agree; a row failing
+any check is skipped, never counted and never reported as an error, so a window
+is short only when the collection is, and a mis-keyed index row can never place
+a record in another collection's window. Iteration stops after `limit` admitted
+rows plus the one-row look-ahead, or at the byte cap. Cost is proportional to
+the candidates examined: the admitted rows, the look-ahead row, any rows
+rejected by the checks and any rows trimmed by the byte cap, never to the size
+of the mailbox. Only those candidates are deserialized, which matters because
+every record row carries a body of up to 160 KB. Index rows for records that
+exist when the table is introduced come from a publisher-only backfill
+management reducer gated like the existing management operations: it skips
+records whose row exists with identical values, fails on a row that exists with
+different values, and so is a no-op when rerun; nothing produces protected
+records in production today, so in practice the backfill touches only fixtures.
+The byte cap drops the oldest returned rows, never below one, and clears
+`complete`.
 
 `message_date` is stored free text, an ISO-8601 instant when the MIME custody
 could parse a Date header and otherwise empty. The server neither parses nor
@@ -160,6 +185,29 @@ Collection creation, monitoring, connector grants, instruction approvals and
 inference admissions grant nothing here, and a binding grants nothing to them.
 Enabling monitoring alone never approves this surface.
 
+## Reusable window primitive
+
+The window index and its routine are written so that they can be extracted for
+other large record sets: the module takes a table handle, a scope value, an
+optional `(key, id)` boundary, a limit, a byte budget and a per-row
+fetch-and-check callback, and nothing in it names mail. The sort key is a `u64`
+the source defines, stored inverted so that forward iteration is descending,
+with the record id as tie-break. This design uses only insertion; protected
+records are never updated or deleted, so no re-key or removal helper is
+specified here.
+
+What may be shared is the mechanism; tables are not. Each domain keeps its own
+index table with its own visibility and backup policy:
+`protected_mail_window_index` is private and outside ordinary export like every
+protected table, while a future index over ordinary database rows would be an
+ordinary table under the snapshot policy. Mixing them would place protected
+metadata in a structure that ordinary export, restore and readers touch, which
+the coverage inventory forbids. Reuse for ordinary Pear databases, the
+server-side windowing the record-view plan cut from its first version, is not
+part of this design; it needs its own review, which would also decide the
+host-level request and response contract. Trellis core's query request stays
+unchanged.
+
 ## Every read is an owner gesture in code-rendered chrome
 
 Trust surfaces render from code, never from component trees (the Pear Cloud
@@ -178,12 +226,16 @@ component data hook does not hold today and must be given:
   owner's own `mail_connection` row when it still exists and otherwise by
   collection id and creation time, and calls the binding reducer after an
   inline confirmation.
-- Mounting a component never reads mail, and neither does a bound component on
-  a later visit. The panel frame renders a code-chrome "Show mail" control for
-  a bound source; the owner's click issues the first window call for this
-  session. "Refresh" repeats it, "Older" moves the boundary, and "Newest"
-  returns to the top. No timer, head signal, scroll or component action issues
-  a call. Results carry `asOf`; nothing marks them fresh automatically.
+- Mounting a component never reads mail. The panel frame renders a code-chrome
+  "Show mail" control for a bound source; the owner's click issues the first
+  window call of this browser session for that binding. The window is then held
+  in session memory (see below), so leaving and returning to the page within the
+  session renders the held window again, labelled with its `asOf` time, without
+  a call. "Refresh" repeats the call, "Older" moves the boundary, and "Newest"
+  returns to the top. A new session, logout, an access or principal change, or a
+  rebinding starts over with "Show mail". No timer, head signal, scroll or
+  component action issues a call, and nothing marks a window fresh
+  automatically.
 - Viewers without an active binding of their own, owner or not, see
   `unavailable` with "Connect a protected mailbox from the panel menu". Each
   viewer sees only their own mailbox or none; a page never shows one owner's
@@ -259,7 +311,9 @@ generation). A response issued under an older epoch, after logout, after a
 principal change or after an access change is rejected before caching or
 rendering; rebinding closes an open panel. Held windows are session memory
 only, keyed by principal, component node, source, collection id and binding
-epoch, and are purged on logout, access loss or principal change.
+epoch. A held window is rendered only while the owner's binding view shows that
+epoch `active`, and it is purged when the epoch is revoked, on logout, on access
+loss or on a principal change.
 
 ## UIDVALIDITY resets, duplicates and expunge
 
@@ -292,7 +346,7 @@ a grant and a recorded exposure is qualified to governed reads: an owner's own
 historical reads through the explicit owner views and these procedures are
 outside it, as the views already were, and disclose nothing beyond the owner's
 own records. When implemented, `snapshot_tables_v2.json` omits the private
-binding table, as it omits every private table, and lists
+binding and window index tables, as it omits every private table, and lists
 `my_protected_mail_component_bindings` under `exclude` beside the existing owner
 views; `worker/src/subscriptions.ts` already excludes every `my_protected_mail_*`
 view; and the coverage rows for page projections, MCP readers, owner views and
@@ -322,9 +376,21 @@ rejected by both validators. On the Trellis side, TS/Rust parity covers the new
 connection member, the `text`-only binding rule, the `open`-without-layout rule
 and the no-filter/sort/range rule. Browser checks prove that mount, history
 restore and page repeaters issue no procedure call, that only the chrome
-controls do, and that `show_page_panel` refuses the component. A populated
-upgrade from the current 61 protected-mail private tables (72 module-wide) keeps
-every table and history; the one new table and the new index have no backfill.
+controls do, and that `show_page_panel` refuses the component. The window index
+is written atomically with each record, the window procedure's result equals a
+brute-force scan ordered by `imported_at` descending then `id` ascending in
+UTF-8 byte order for random boundaries and limits, including boundaries that
+fall inside a batch sharing one timestamp and a collection holding exactly
+`limit` rows (which must report `complete: true`), a mis-keyed index row never
+surfaces a record in another collection's window, a revoked epoch purges the
+held window on the next render, a fixture mailbox of fifty thousand records
+pages in time proportional to the candidates examined, an instrumented run shows
+that only admitted, look-ahead, rejected and byte-cap-trimmed candidates are
+read, and equal-timestamp pagination with `limit` 1 visits every row of the
+batch exactly once. A populated upgrade from the current 61 protected-mail
+private tables (72 module-wide) keeps every table and history; the binding table
+has no backfill, and the window index backfill reducer is checked against the
+brute-force scan, is a no-op when rerun, and fails on a mismatched existing row.
 
 ## Remaining gates
 

@@ -434,7 +434,9 @@ collection exposing `mailbox_event_id` and `uid_validity`, and one summary and
 one body by durable reference), a private append-only component binding that
 only the collection owner can set from code-rendered UI and that dies with the
 source declaration or when its node, an ancestor or its page is deleted or
-replaced, and one content-free owner view. The server resolves the
+replaced, one content-free owner view, and a private per-record window index
+that serves pages in time proportional to the page without reading bodies (a
+reusable module with per-domain tables). The server resolves the
 binding itself, so a component reaches a window only through it; durable
 references resolve for their owner by collection and record. Every call is an
 owner gesture in host chrome; mount, history restore, page repeaters and chat
