@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useLayoutEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useTable } from "spacetimedb/react";
 import { tables } from "@/src/module_bindings";
@@ -22,6 +22,8 @@ import { usePageAncestors } from "@/src/hooks/usePages";
 import { useWorkspaceAiPanel } from "@/src/components/WorkspaceShell";
 import { usePageCompositionLayout } from "@/src/hooks/usePageCompositionLayout";
 
+import { trackPageScroll } from "@/src/lib/pageScrollRestoration";
+
 interface DocPageProps {
   page: PageRow;
 }
@@ -29,6 +31,10 @@ interface DocPageProps {
 export function DocPage({ page }: DocPageProps) {
   const { idbNamespace } = useWorkspace();
   const [layout, onLayoutChange] = usePageCompositionLayout(idbNamespace, page.id);
+  const scrollPane = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (scrollPane.current) return trackPageScroll(scrollPane.current, `${idbNamespace}:${page.id}`);
+  }, [idbNamespace, page.id]);
   const aiPanel = useWorkspaceAiPanel();
   const router = useRouter();
   const updateTitle = useUpdatePageTitle();
@@ -94,6 +100,8 @@ export function DocPage({ page }: DocPageProps) {
         </div>
       )}
       <div
+        ref={scrollPane}
+        data-pear-page-scroll={String(page.id)}
         className={`flex flex-col overflow-y-auto transition-all ${historyOpen ? "flex-1 min-w-0" : "flex-1"}`}
       >
       <div className="max-w-3xl mx-auto w-full px-8 pt-16 pb-24 flex-1">
