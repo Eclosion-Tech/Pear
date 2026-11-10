@@ -1,12 +1,12 @@
 # Sentinel coverage inventory and staged storage boundary
 
-**Status: S0–S2b2c8 and reuse review merged; contiguous composition working branch, October 28, 2026.** The [composition boundary](PROTECTED_MAIL_COMPOSITION.md) connects bounded internal read/MIME custody to existing atomic ingestion and adds exact authenticated-owner retrieval of accepted results. Public executors stay opaque; there is no new table, grant family, migration, sparse conversion or activation. Monitoring remains disabled.
+**Status: S0–S2b2c8, reuse review and contiguous composition merged; owner read surface design branch, November 10, 2026.** The [owner read surface design](PROTECTED_MAIL_READ_SURFACE.md) is the gate before any protected mailbox becomes a Trellis component source. The [composition boundary](PROTECTED_MAIL_COMPOSITION.md) connects bounded internal read/MIME custody to existing atomic ingestion and adds exact authenticated-owner retrieval of accepted results. Public executors stay opaque; there is no new table, grant family, migration, sparse conversion or activation. Monitoring remains disabled.
 
 See [current implementation](SENTINEL.md), the Cloud [implementation plan](https://forge.syntropy.chat/Eclosion-Tech/pear-cloud/src/branch/main/docs/PEAR_SENTINEL_PLAN.md) and [research proposal](https://forge.syntropy.chat/Eclosion-Tech/pear-cloud/src/branch/main/docs/UNTRUSTED_CONTENT_SPIKE.md). Cloud links refer to that host repository; Pear OSS does not require its implementation. Source references identify the audited seams, not evidence that their remaining gates pass.
 
 ## Entry-point inventory
 
-Every protected read needs an authenticated initiating principal and run, a current grant, an authoritative source revision and a recorded exposure. Every subsequent disclosure must satisfy all exposed sources and their parents. A source identifier, prompt warning, model citation, operation fingerprint or clean screening result grants no authority.
+Every governed protected read (a model, service or workflow read) needs an authenticated initiating principal and run, a current grant, an authoritative source revision and a recorded exposure; an owner's own historical reads through the explicit owner views and the designed [owner read surface](PROTECTED_MAIL_READ_SURFACE.md) procedures are outside this rule and disclose nothing beyond the owner's own records. Every subsequent disclosure must satisfy all exposed sources and their parents. A source identifier, prompt warning, model citation, operation fingerprint or clean screening result grants no authority.
 
 | Entry point and source | Current identity source | Read, write or outbound effects | Required private-mail gate | Current status |
 |---|---|---|---|---|

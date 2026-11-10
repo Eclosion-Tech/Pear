@@ -1,13 +1,14 @@
 # Sentinel implementation status
 
-**Updated:** 2026-10-28
+**Updated:** 2026-11-10
 
-**Status:** S0 through S2b2c8 and the reuse review are merged. This branch adds a
-[dormant contiguous composition](PROTECTED_MAIL_COMPOSITION.md): bounded internal
-MIME custody feeds existing exact ingestion, and a narrow read-only procedure
-returns accepted results to their authenticated human owner. The synthetic proof
-uses existing durable operations, with no new table or grant family. Sparse
-integration, recurrence and production host/UI gates remain. Monitoring stays disabled.
+**Status:** S0 through S2b2c8, the reuse review and the dormant contiguous
+composition are merged. This branch adds the
+[owner read surface design](PROTECTED_MAIL_READ_SURFACE.md): owner-only,
+body-free windowed summaries and a one-body read for Trellis components, bound
+to a page only through an owner gesture in code-rendered chrome. It implements
+no table, procedure, grant or UI. Sparse integration, recurrence and production
+host/UI gates remain. Monitoring stays disabled.
 
 Sentinel will enforce authority and disclosure rules outside the model. Email,
 webpages, workspace content, tool output, and derived summaries cannot grant
@@ -423,3 +424,22 @@ that next milestone as a dormant synthetic path. Common transport,
 canonical and lifecycle code can be shared while retaining purpose-specific
 atomic transactions, IDs and historical replay. No durable-table migration,
 production dependency or runtime activation is part of this review.
+
+## Owner read surface design
+
+The [owner read surface design](PROTECTED_MAIL_READ_SURFACE.md) is the Pear-side
+gate before any protected mailbox becomes a Trellis component source. It
+specifies three owner-only procedures (a bounded, body-free window of one bound
+collection exposing `mailbox_event_id` and `uid_validity`, and one summary and
+one body by durable reference), a private append-only component binding that
+only the collection owner can set from code-rendered UI and that dies with the
+source declaration or when its node, an ancestor or its page is deleted or
+replaced, and one content-free owner view. The server resolves the
+binding itself, so a component reaches a window only through it; durable
+references resolve for their owner by collection and record. Every call is an
+owner gesture in host chrome; mount, history restore, page repeaters and chat
+embedding issue none. Components holding such a source render it only through
+read-only list nodes, carry no write-back binding anywhere, keep `body`
+detail-only, and show `denied` distinct from empty. The
+design adds no subscription over mail content, no tool, no model or service
+read and no monitoring, and it is not implemented.

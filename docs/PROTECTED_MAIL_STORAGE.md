@@ -13,12 +13,18 @@ describe the remaining gates. Existing page-based mail imports stay legacy.
 | `append_protected_mail_message(connection_id, event_key, message)` | Publisher only; requires the same live, paused, human-owned connection and immutable collection binding. No runner calls this reducer yet |
 | `protected_mail_collection`, `protected_mail_source`, `protected_mail_record`, `protected_mail_receipt` | Private backing tables; not generated client table surfaces, ordinary pages, workspace JSON exports or generic CRUD databases |
 | `my_protected_mail_collections`, `my_protected_mail` | Explicit human owner views. No administrator/service override; AI and publisher identities receive no rows. Records include their source association, version, digest and origin |
+| `query_protected_mail_window`, `read_protected_mail_summary`, `read_protected_mail_body` (designed, not implemented) | Owner-only procedures of the [read surface design](PROTECTED_MAIL_READ_SURFACE.md): a bounded, body-free window of one bound collection exposing `mailbox_event_id` and `uid_validity`, one summary and one body by durable reference, each called on the owner's own authenticated connection after a gesture in code-rendered chrome |
+| `bind_protected_mail_component_source`, `unbind_protected_mail_component_source`, `protected_mail_component_binding`, `my_protected_mail_component_bindings` (designed, not implemented) | Owner-only reducers, private append-only table and content-free owner view naming which owned collection one component source may read for its owner; set only by that owner through code-rendered UI, never by `update_component`, templates or chat, and revoked in the same transaction when the source declaration changes or the node, an ancestor or the page is deleted or replaced |
 
 The publisher can read private backing tables through trusted management SQL.
 The view restriction does not constrain that platform authority. A human using
 the publisher identity cannot use the owner views; a separate owner identity is
 required. No new MCP, native tool, generic API mapping or automatic client
 subscription exposes these views.
+The [read surface design](PROTECTED_MAIL_READ_SURFACE.md) adds owner-only
+procedures and one content-free owner view for Trellis components, every call
+issued from code-rendered chrome; it adds no view over mail content, no
+subscription, no tool, and is not yet implemented.
 
 The input consists of folder, UIDVALIDITY, UID, received/sent direction, message
 date, From/To/Cc, subject, literal body/note and a sanitization version. Fields

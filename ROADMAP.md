@@ -152,6 +152,7 @@
 - 🔨 [Authority state (S2a)](./docs/PROTECTED_MAIL_AUTHORITY.md) — retained epochs/tombstones, frozen processor revisions and controlled restart coverage. Configuration alone grants no execution authority.
 - 🔨 [Governed instruction inputs (S2b1)](./docs/PROTECTED_MAIL_INSTRUCTIONS.md) — exact source references, current-only first enrollment and retained ceilings across edits. Source policy remains separate from current instruction approval.
 - 🔨 [Local summary admission (S2b2a)](./docs/PROTECTED_MAIL_ADMISSION.md) — exact owner-issued artifact grants, service-bound runs, shared budgets and atomic private promotion receipts. No mailbox, model, network, cursor or runtime activation.
+- 📋 [Owner read surface design](./docs/PROTECTED_MAIL_READ_SURFACE.md) — owner-only, body-free windowed summaries and a one-body read for Trellis components, bound through code-rendered chrome. Design only; the gate before any mailbox becomes a component source.
 - 📋 Protected mail runtime — trusted UI/recipe authorization, admitted connector/inference effects, isolated brokers and host egress tests, then restricted workflow UI and a private canary. Ordinary assistant mail access waits for outgoing-path enforcement.
 - 📋 Governed assistants — extend enforcement to native/API/MCP paths, inference/output, memory/delegation/schedules, then separately constrained browser/remote execution. Prompt warnings and classifiers alone do not establish containment.
 
