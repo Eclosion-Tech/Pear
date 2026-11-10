@@ -1,0 +1,178 @@
+{
+  "beforeFixWasmSha256": "25788be66c3a775b00f177964f668e08e3ba252ec356ddbf1c98f82e09ec0388",
+  "afterFixWasmSha256": "be3a42c01d612399bbde4082d98d282c6861dcfa45e3a03bd30de06bcb64e6ef",
+  "beforeFix": [
+    {
+      "name": "ai_extension_runtime",
+      "index": 0,
+      "is_anonymous": false
+    },
+    {
+      "name": "api_endpoint_key_lookup",
+      "index": 0,
+      "is_anonymous": true
+    },
+    {
+      "name": "my_component_repository_receipt",
+      "index": 1,
+      "is_anonymous": false
+    },
+    {
+      "name": "my_extension_permissions",
+      "index": 2,
+      "is_anonymous": false
+    },
+    {
+      "name": "my_protected_mail",
+      "index": 3,
+      "is_anonymous": false
+    },
+    {
+      "name": "my_protected_mail_collections",
+      "index": 4,
+      "is_anonymous": false
+    },
+    {
+      "name": "my_protected_mail_instructions",
+      "index": 5,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_automation_events",
+      "index": 6,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_automations",
+      "index": 7,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_components",
+      "index": 8,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_conversations",
+      "index": 9,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_jobs",
+      "index": 10,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_pages",
+      "index": 11,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_review_snapshots",
+      "index": 12,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_schemas",
+      "index": 13,
+      "is_anonymous": false
+    },
+    {
+      "name": "workspace_component_template",
+      "index": 14,
+      "is_anonymous": false
+    },
+    {
+      "name": "workspace_component_template_version",
+      "index": 15,
+      "is_anonymous": false
+    }
+  ],
+  "afterFix": [
+    {
+      "name": "ai_extension_runtime",
+      "index": 0,
+      "is_anonymous": false
+    },
+    {
+      "name": "api_endpoint_key_lookup",
+      "index": 0,
+      "is_anonymous": true
+    },
+    {
+      "name": "my_extension_permissions",
+      "index": 1,
+      "is_anonymous": false
+    },
+    {
+      "name": "my_protected_mail",
+      "index": 2,
+      "is_anonymous": false
+    },
+    {
+      "name": "my_protected_mail_collections",
+      "index": 3,
+      "is_anonymous": false
+    },
+    {
+      "name": "my_protected_mail_instructions",
+      "index": 4,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_automation_events",
+      "index": 5,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_automations",
+      "index": 6,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_components",
+      "index": 7,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_conversations",
+      "index": 8,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_jobs",
+      "index": 9,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_pages",
+      "index": 10,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_review_snapshots",
+      "index": 11,
+      "is_anonymous": false
+    },
+    {
+      "name": "readable_schemas",
+      "index": 12,
+      "is_anonymous": false
+    },
+    {
+      "name": "my_component_repository_receipt",
+      "index": 13,
+      "is_anonymous": false
+    },
+    {
+      "name": "workspace_component_template",
+      "index": 14,
+      "is_anonymous": false
+    },
+    {
+      "name": "workspace_component_template_version",
+      "index": 15,
+      "is_anonymous": false
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+[Unit]
+Description=Dedicated Pear Codeberg CI runner
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+User=pear-ci
+Group=pear-ci
+SupplementaryGroups=docker
+WorkingDirectory=/var/lib/pear-ci
+ExecStart=/usr/local/bin/forgejo-runner daemon --config /etc/pear-ci/config.yml
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45min
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
