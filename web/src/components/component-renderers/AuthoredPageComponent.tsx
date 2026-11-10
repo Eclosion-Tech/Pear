@@ -12,6 +12,7 @@ import {
 } from "@eclosion-tech/trellis";
 import { INTERFACE_REGISTRY, readPageComponent } from "@pear/trellis-ui";
 import { usePageAccess } from "@/src/hooks/usePageAccess";
+import { useOpenWorkspaceRecord } from "@/src/hooks/useOpenWorkspaceRecord";
 import { useComponentData } from "@/src/hooks/useComponentData";
 import { blockReferenceHref } from "@/src/lib/blockReferenceLink";
 import { HostSourceRegistry } from "@/src/lib/repeater/hostSources";
@@ -112,7 +113,11 @@ export function AuthoredPageComponentRenderer({ node }: BlockRendererProps) {
       for (const { session } of Object.values(entries)) session.close();
     };
   }, [registry, hostSurfaceId, sources, workspaceAdapter]);
-  const { openRecord, onOpenRecord, onClose } = useOpenRecordPanel(workspace, surfaceId);
+  const { openRecord, onOpenRecord: openPanel, onClose } = useOpenRecordPanel(workspace ?? "", surfaceId);
+  const { onOpenRecord, message: openRecordMessage } = useOpenWorkspaceRecord({
+    workspace, surfaceId, principal: access.principal, sources, read,
+    adapter: workspaceAdapter, openPanel,
+  });
   if (!parsed)
     return (
       <p role="alert">
@@ -160,12 +165,13 @@ export function AuthoredPageComponentRenderer({ node }: BlockRendererProps) {
           </>
         }
       />
+      {openRecordMessage && <p role="status">{openRecordMessage}</p>}
       {openRecord && (
         <RecordDetailPanel
           key={canonicalJson([openRecord, access.principal])}
           recordRef={openRecord}
           source={Object.hasOwn(parsed.sources, openRecord.source) ? parsed.sources[openRecord.source] : undefined}
-          adapter={workspaceAdapter}
+          adapter={data.dataAdapters[parsed.sources[openRecord.source]?.connection?.adapter ?? "pear.database"]}
           onClose={onClose}
         />
       )}

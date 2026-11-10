@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   adapter: { query: vi.fn(), watch: vi.fn(), subscribe: vi.fn() },
   view: vi.fn(),
 }));
-vi.mock("next/navigation", () => ({ useParams: () => ({ slug: ["acme"] }) }));
+vi.mock("next/navigation", () => ({ useParams: () => ({ slug: ["acme"] }), useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("spacetimedb/react", () => ({ useSpacetimeDB: () => ({ getConnection: () => null }) }));
 vi.mock("../hooks/usePageAccess", () => ({ usePageAccess: () => ({ principal: "human", canEdit: true }) }));
 vi.mock("../hooks/useComponentData", () => ({ useComponentData: () => ({ dataAdapters: { "pear.database": mocks.adapter } }) }));
