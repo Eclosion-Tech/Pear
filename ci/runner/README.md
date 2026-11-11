@@ -8,9 +8,12 @@ no Codeberg runner or separate Pear machine is needed.
 ## Mirror setup
 
 1. Keep Codeberg's push mirror pointed at
-   `ssh://git@forge.syntropy.chat:2222/Eclosion-Tech/Pear.git` with sync on commit
-   enabled. Authorize the mirror's public key as a write-enabled deploy key on
-   the Forgejo Pear repository. The private key stays on Codeberg.
+   `https://forge.syntropy.chat/Eclosion-Tech/Pear.git` with sync on commit
+   enabled and SSH authentication disabled. Use the Forgejo username and a
+   separate mirror token with repository write access in the password field.
+   This token is distinct from Cloud's read-only CI evidence token below.
+   HTTPS uses port 443; port 2222 is restricted to operator IPs by the hosting
+   firewall and Codeberg's SSH mirror connections time out there.
 2. Enable Actions on the Forgejo Pear repository and ensure the existing
    `synops` runner is available to it. Do not add deployment secrets to Pear.
 3. Sync the mirror and compare the Codeberg commit with Forgejo's branch SHA.
@@ -36,9 +39,10 @@ Git refs. Runner registrations and instance settings are managed on Forgejo.
 Cloud's `verify-pear-ci.mjs` checks the latest matching `pear-ci.yml` run on
 `Eclosion-Tech/Pear` at `forge.syntropy.chat` for its exact Codeberg Pear pin.
 Its `PEAR_CI_READ_TOKEN` secret authenticates API requests with only
-`public-only,read:actions` scope. Automatic job tokens cannot read another
-repository's CI. No manually posted status substitutes
-for run evidence. Missing, unavailable, pending, failed, skipped, unapproved or
+`public-only,read:repository` scope (Forgejo 12 groups Actions reads under
+repository access; it has no separate `read:actions` scope). Automatic job tokens
+cannot read another repository's CI. No manually posted status substitutes for
+run evidence. Missing, unavailable, pending, failed, skipped, unapproved or
 wrong-revision runs stop release. Mirror lag therefore stops the gate until the
 exact revision has arrived and passed.
 
