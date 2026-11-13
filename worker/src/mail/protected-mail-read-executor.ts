@@ -145,7 +145,10 @@ function createExecutor(options: ProtectedMailReadExecutorOptions, capture: bool
       if (controller.signal.aborted) throw new Stop(signalReason(controller.signal));
       if (capture && Date.now() >= deadlineAtMs) throw new Stop("deadline_exceeded");
       clearTimeout(timer);
-      timer = setTimeout(() => controller.abort(Date.now() >= binding.expiresAtMs ? "read_expired" : "deadline_exceeded"),
+      // Preserve which bound armed the timer. Timer delivery and Date.now can
+      // straddle a millisecond; an early expiry callback is not an executor timeout.
+      const expiryFirst = binding.expiresAtMs <= deadlineAtMs;
+      timer = setTimeout(() => controller.abort(expiryFirst ? "read_expired" : "deadline_exceeded"),
         Math.max(1, Math.min(deadlineAtMs, binding.expiresAtMs) - Date.now()));
       let resolved: unknown;
       try { resolved = await bounded(Promise.resolve().then(() => {
