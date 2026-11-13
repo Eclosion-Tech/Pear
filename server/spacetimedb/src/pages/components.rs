@@ -26,6 +26,7 @@
 //! `serialize_component_tree` / `restore_component_tree` helpers consumed
 //! by the snapshot reducers in `pages/snapshots.rs`.
 
+pub(crate) mod property_reference;
 use std::time::Duration;
 
 use spacetimedb::{reducer, table, Identity, ReducerContext, SpacetimeType, Table, Timestamp};
@@ -671,6 +672,13 @@ fn builtin_specs() -> Vec<BuiltinSpec> {
     use ComponentCapability::*;
     vec![
         BuiltinSpec {
+            component_type: "PropertyReference",
+            display_name: "Property",
+            description: "Read-only live Text property. binding.recordId is {param:record} for this page or a stable page ID. field is the stable property ID. No cached text.",
+            prop_schema: r#"{"type":"object","properties":{"v":{"const":1},"schemaId":{"type":"string"},"binding":{"type":"object","properties":{"source":{"const":"property"},"recordId":{"oneOf":[{"type":"string"},{"type":"object","properties":{"param":{"const":"record"}},"required":["param"],"additionalProperties":false}]},"field":{"type":"string"},"property":{"const":"text"},"writeBack":{"const":false}},"required":["source","recordId","field","property","writeBack"],"additionalProperties":false}},"additionalProperties":false}"#,
+            capabilities: vec![], has_yjs_state: false, accepts_children: false,
+        },
+        BuiltinSpec {
             component_type: "Reference",
             display_name: "Reference",
             description: "Editable reference to a page root or block subtree. Source blocks retain their identity and access rules.",
@@ -1227,6 +1235,7 @@ pub fn insert_component(
         ));
     }
     require_type_def(ctx, &component_type)?;
+    if component_type == "PropertyReference" { property_reference::validate(&props_json)?; }
 
     let siblings = live_siblings_sorted(ctx, surface_id, parent_id, None);
     let insert_index = match after_sibling_id {
@@ -1276,6 +1285,7 @@ pub fn update_component_props(
     let page = require_component_tree_page(ctx, node.surface_id)?;
     require_page_write(ctx, node.surface_id)?;
 
+    if node.component_type == "PropertyReference" { property_reference::validate(&props_json)?; }
     if node.component_type == trellis_panel::COMPONENT_TYPE {
         return Err("Use commit_trellis_panel to update a versioned page panel".into());
     }
@@ -1533,6 +1543,7 @@ pub fn migrate_page_to_component_tree(
     } else {
         for row in &payload.components {
             require_type_def(ctx, &row.component_type)?;
+            if row.component_type == "PropertyReference" { property_reference::validate(&row.props_json)?; }
 
             let parent_id = match row.parent_source_block_id.as_deref() {
                 None | Some("") => root_id,
@@ -1845,6 +1856,7 @@ fn write_page_doc(
     // a clean per-block error (the transaction would roll back either way).
     for (i, block) in blocks.iter().enumerate() {
         let type_def = require_type_def(ctx, &block.component_type)?;
+        if block.component_type == "PropertyReference" { property_reference::validate(&block.props_json)?; }
         if block.yjs_state.is_some() && !type_def.has_yjs_state {
             return Err(format!(
                 "Block {i}: component type {:?} does not support Yjs state",

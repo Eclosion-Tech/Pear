@@ -286,3 +286,5 @@ export async function updateSavedUi(
     );
   return { v: SAVED_UI_VERSION, document, bindings: current.bindings };
 }
+
+export * from "./property-reference.js";

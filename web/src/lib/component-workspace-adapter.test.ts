@@ -14,7 +14,7 @@ const state = vi.hoisted(() => ({
     page_access_rule: { ready: true, rows: [] },
   },
 }));
-vi.mock("../hooks/usePageAccess", () => ({ usePageAccess: () => state.access }));
+vi.mock("../hooks/usePageAccess", () => ({ usePageAccess: () => ({ ...state.access, rules: state.tables.page_access_rule.rows }) }));
 vi.mock("../hooks/useScopedTable", () => ({ useScopedTable: (_table: unknown, query: string) => state.tables[query.replace("SELECT * FROM ", "") as keyof typeof state.tables] }));
 import { useComponentData } from "../hooks/useComponentData";
 

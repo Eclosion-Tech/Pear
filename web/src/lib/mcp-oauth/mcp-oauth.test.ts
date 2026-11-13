@@ -196,6 +196,8 @@ describe("scopes", () => {
     expect(readWrite("get_schema_id")).toBe(true);
     expect(readWrite("list_properties")).toBe(true);
     expect(readWrite("create_page")).toBe(true);
+    expect(readWrite("create_page_from_template")).toBe(true);
+    expect(toolFilterForScopes(["pages:read"])("create_page_from_template")).toBe(false);
     expect(readWrite("add_property")).toBe(true);
     expect(readWrite("delete_property")).toBe(true);
     expect(readWrite("rename_property")).toBe(true);

@@ -1,3 +1,4 @@
+import { PropertyReferenceRenderer } from "../PropertyReference";
 import {
   registerRenderer,
 } from "@eclosion-tech/pulp";
@@ -31,6 +32,7 @@ export function registerPearBuiltinRenderers(): void {
   if (registered) return;
   registered = true;
 
+  registerRenderer("PropertyReference", PropertyReferenceRenderer);
   registerRenderer("TrellisPanel", TrellisPagePanelRenderer);
 
   registerRenderer("Container", ContainerRenderer);

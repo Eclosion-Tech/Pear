@@ -20,6 +20,7 @@ use crate::pages::views::database_view;
 pub(crate) mod components;
 pub(crate) mod schemas;
 pub(crate) mod snapshots;
+pub(crate) mod templates;
 pub(crate) mod views;
 
 pub(crate) use crate::pages::components::PageContentFormat;

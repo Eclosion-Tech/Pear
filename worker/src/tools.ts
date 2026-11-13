@@ -1488,7 +1488,7 @@ function targetPageForAccessRequest(
     const node = id ? conn.db.component_node?.id?.find?.(id) as { surfaceId?: bigint } | undefined : undefined;
     return node?.surfaceId ?? ctx.currentPageId;
   }
-  if (toolName === "create_page") {
+  if (toolName === "create_page" || toolName === "create_page_from_template") {
     return numericInputToBigInt(input.parent_id);
   }
   if (toolName === "create_row") {
@@ -1527,6 +1527,7 @@ function isPageWriteTool(toolName: string): boolean {
     "write_component_data",
   "run_component_action",
     "create_page",
+    "create_page_from_template",
     "add_property",
     "delete_property",
     "create_row",

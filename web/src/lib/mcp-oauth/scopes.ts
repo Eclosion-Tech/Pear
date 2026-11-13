@@ -73,6 +73,7 @@ const SCOPE_TOOLS: Record<McpOauthScope, readonly string[]> = {
     "publish_component_template",
     "archive_component_template",
     "create_page",
+    "create_page_from_template",
     "add_property",
     "rename_property",
     "update_property_config",

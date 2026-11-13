@@ -88,6 +88,7 @@ import CreateMailConnectionReducer from "./create_mail_connection_reducer";
 import CreateMemoryConsolidationRoutineReducer from "./create_memory_consolidation_routine_reducer";
 import CreateNotionImportJobReducer from "./create_notion_import_job_reducer";
 import CreatePageReducer from "./create_page_reducer";
+import CreatePageFromTemplateReducer from "./create_page_from_template_reducer";
 import CreateProtectedMailCollectionReducer from "./create_protected_mail_collection_reducer";
 import CreateReviewAgentBindingReducer from "./create_review_agent_binding_reducer";
 import CreateSensorTriageRoutineReducer from "./create_sensor_triage_routine_reducer";
@@ -1614,6 +1615,7 @@ const reducersSchema = __reducers(
   __reducerSchema("create_memory_consolidation_routine", CreateMemoryConsolidationRoutineReducer),
   __reducerSchema("create_notion_import_job", CreateNotionImportJobReducer),
   __reducerSchema("create_page", CreatePageReducer),
+  __reducerSchema("create_page_from_template", CreatePageFromTemplateReducer),
   __reducerSchema("create_protected_mail_collection", CreateProtectedMailCollectionReducer),
   __reducerSchema("create_review_agent_binding", CreateReviewAgentBindingReducer),
   __reducerSchema("create_sensor_triage_routine", CreateSensorTriageRoutineReducer),

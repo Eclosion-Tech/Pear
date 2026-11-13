@@ -1313,6 +1313,7 @@ describe("registry", () => {
       "archive_component_template",
       "create_component",
       "create_page",
+      "create_page_from_template",
       "create_page_panel",
       "create_thread",
       "delete_component",

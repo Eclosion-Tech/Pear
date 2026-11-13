@@ -53,6 +53,7 @@ const PARITY_TOOL_NAMES = new Set([
   "query_database",
   // Page UI authoring (M2/M4 — the reason a repeater can exist on a page)
   "get_page_components",
+  "create_page_from_template",
   "list_page_panel_templates",
   "create_page_panel",
   "create_component",

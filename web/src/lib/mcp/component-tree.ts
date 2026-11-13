@@ -1,3 +1,4 @@
+import { readPropertyReferences, propertyReferenceText } from "./property-references";
 /**
  * Stateless ComponentTree document read/write over `/sql` + `/call`.
  *
@@ -119,7 +120,8 @@ export async function readComponentTreeDoc(
     return undefined;
   }
   const texts = await readComponentTexts(transport, yjsIds);
-  return renderDocTree(nodes, (id) => texts.get(id) ?? "");
+  const references = await readPropertyReferences(transport, nodes, pageId);
+  return renderDocTree(nodes, (id) => references.has(id) ? propertyReferenceText(references.get(id)!) : texts.get(id) ?? "");
 }
 
 /**
@@ -159,7 +161,9 @@ export async function readComponentTreeDocs(
 
   const texts = await readComponentTexts(transport, allYjsIds);
   for (const pageId of pageIds) {
-    const rendered = renderDocTree(nodesBySurface.get(pageId) ?? [], (id) => texts.get(id) ?? "");
+    const nodes = nodesBySurface.get(pageId) ?? [];
+    const references = await readPropertyReferences(transport, nodes, pageId);
+    const rendered = renderDocTree(nodes, (id) => references.has(id) ? propertyReferenceText(references.get(id)!) : texts.get(id) ?? "");
     if (rendered !== undefined) result.set(pageId, rendered);
   }
   return result;

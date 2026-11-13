@@ -1,3 +1,5 @@
+import { propertyId } from "@pear/trellis-ui";
+import { readCounter, discoverAllocatedId } from "./ids";
 import { requestHumanInputTool } from "./human-input";
 /**
  * The Pear MCP tool surface: stateless tools over `/sql` + `/call`.
@@ -302,6 +304,21 @@ const updatePageContentTool: McpToolEntry = {
   },
 };
 
+const createPageFromTemplateTool: McpToolEntry = {
+  name: "create_page_from_template",
+  description: "Create a page from a readable document template, or duplicate a page under its parent. Copies the body and same-database property defaults. Self property references follow the new page; explicit sources stay unchanged. Never copies resolved reference values. Requires source read and destination parent write access.",
+  inputSchema: { type: "object", properties: { source_page_id: { type: "string" }, parent_id: { type: "string" }, title: { type: "string" } }, required: ["source_page_id", "title"], additionalProperties: false },
+  execute: async (ctx, input) => {
+    const source = propertyId(input.source_page_id);
+    const parent = input.parent_id === undefined ? undefined : propertyId(input.parent_id);
+    if (typeof input.title !== "string") throw new Error("Expected a title.");
+    const before = await readCounter(ctx.transport, "page");
+    await ctx.transport.call("create_page_from_template", [source, parent ? { some: parent } : { none: [] }, input.title]);
+    const pageId = await discoverAllocatedId(ctx.transport, "page", before, async () => null);
+    return JSON.stringify({ ok: true, page_id: pageId, ...(pageId === null ? { message: "Created; concurrent page creation prevented unambiguous identity discovery. Find the new page by its parent and title." } : {}) });
+  },
+};
+
 const getPageComponentsTool: McpToolEntry = {
   name: "get_page_components",
   description:
@@ -328,6 +345,8 @@ const insertComponentTool: McpToolEntry = {
     "set props such as a Repeater's `dataSource` or a component's `style` tokens. " +
     "Build nested structures by inserting the parent first and passing the returned component_id " +
     "as parent_id for its children. Find parent ids with `get_page_components`. " +
+    "PropertyReference displays a live Text property: props={v:1,schemaId:'stable schema ID',binding:{source:'property',recordId:{param:'record'},field:'stable property ID',property:'text',writeBack:false}}. " +
+    "Use a decimal page ID string for recordId to choose another page. Use query_database to discover property IDs; never store labels or values. Self references follow the containing page when copied. " +
     "Returns the new component_id.",
   inputSchema: {
     type: "object",
@@ -1285,6 +1304,7 @@ export function buildToolRegistry(): McpToolEntry[] {
     setPageThemeTool,
     getPageThemeTool,
     getPageComponentsTool,
+    createPageFromTemplateTool,
     insertComponentTool,
     updateBlockContentTool,
     editPageContentTool,

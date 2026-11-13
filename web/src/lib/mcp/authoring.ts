@@ -1,3 +1,4 @@
+import { readPropertyReferences, type ResolvedProperty } from "./property-references";
 /**
  * Component-tree authoring for the MCP surface — the missing primitive that
  * lets an AI user build UI on a page rather than only write prose into one.
@@ -36,6 +37,7 @@ export type ComponentSummary = {
   /** Plain text for Yjs-backed content blocks; absent for structural blocks. */
   content?: string;
   children: ComponentSummary[];
+  resolved_property?: ResolvedProperty;
 };
 
 /**
@@ -64,6 +66,7 @@ export async function getPageComponents(
     nodes.filter((n) => YJS_BACKED.has(n.componentType)).map((n) => n.id),
   );
 
+  const references = await readPropertyReferences(transport, nodes, pageId);
   const byParent = new Map<number | null, typeof nodes>();
   for (const n of nodes) {
     const key = n.parentId ?? null;
@@ -87,6 +90,7 @@ export async function getPageComponents(
         parent_id: n.parentId,
         order: n.order,
         props,
+        resolved_property: references.get(n.id),
         content: YJS_BACKED.has(n.componentType) ? (texts.get(n.id) ?? "") : undefined,
         children: build(n.id),
       };

@@ -115,8 +115,10 @@ export function useScopedTable<Row>(
   // Track WHICH sql is currently applied rather than a boolean, so changing
   // scope (e.g. navigating surfaces) reads as not-ready in the very same
   // render instead of flashing stale readiness over an empty cache.
-  const [appliedSql, setAppliedSql] = useState<string | null>(null);
-  const ready = appliedSql === sql;
+  const connection = connectionState.getConnection();
+  const principal = connectionState.identity?.toHexString();
+  const [applied, setApplied] = useState<{ sql: string; connection: unknown; principal: string | undefined } | null>(null);
+  const ready = connectionState.isActive && applied?.sql === sql && applied.connection === connection && applied.principal === principal;
 
   const latestTransactionEventId = useRef<string | null>(null);
   const lastSnapshotRef = useRef<Snapshot<Row> | null>(null);
@@ -158,7 +160,7 @@ export function useScopedTable<Row>(
     const scopedHandle: SubscriptionHandle = connection
       .subscriptionBuilder()
       .onApplied(() => {
-        if (!disposed) setAppliedSql(sql);
+        if (!disposed) setApplied({ sql, connection, principal });
       })
       .onError((ctx) => {
         // Server rejected the scoped query (bad SQL, unsupported join shape,
@@ -174,7 +176,7 @@ export function useScopedTable<Row>(
         fallbackHandle = connection
           .subscriptionBuilder()
           .onApplied(() => {
-            if (!disposed) setAppliedSql(sql);
+            if (!disposed) setApplied({ sql, connection, principal });
           })
           .onError((fallbackCtx) => {
             console.warn(
@@ -204,7 +206,7 @@ export function useScopedTable<Row>(
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sql, sourceName, connectionState.isActive, connectionState]);
+  }, [sql, sourceName, connectionState.isActive, connectionState, principal]);
 
   // Row-event wiring for useSyncExternalStore, mirroring useTable: run
   // callbacks per row (filtered / membership-classified), but rebuild the
@@ -270,7 +272,12 @@ export function useScopedTable<Row>(
     [connectionState, accessorName, computeSnapshot],
   );
 
+  const snapshotComputer = useRef(computeSnapshot);
   const getSnapshot = useCallback((): Snapshot<Row> => {
+    if (snapshotComputer.current !== computeSnapshot) {
+      snapshotComputer.current = computeSnapshot;
+      lastSnapshotRef.current = null;
+    }
     if (!lastSnapshotRef.current) {
       lastSnapshotRef.current = computeSnapshot();
     }

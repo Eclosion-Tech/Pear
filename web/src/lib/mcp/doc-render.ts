@@ -180,6 +180,8 @@ export function renderDocTree(nodes: DocNode[], textOf: (id: number) => string):
 
     const plain = (text: string): Rendered => ({ text: indentLines(text, depth), listKind: null, depth });
 
+    if (type === "PropertyReference") return [plain(textOf(node.id) || "[Property reference: unavailable]")];
+
     if (YJS_BACKED.has(type)) {
       const text = textOf(node.id);
       let line: string;
