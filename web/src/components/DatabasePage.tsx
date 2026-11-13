@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useUpdatePageTitle, useUpdatePageIcon, useDeletePageSubtree } from "@/src/hooks/usePages";
 import type { PageRow } from "@/src/hooks/usePages";
+import { PageTemplatePicker } from "./PageTemplatePicker";
 import { GridView } from "./GridView";
 import { PageMoreMenu } from "./PageMoreMenu";
 import { PageAccessMenu } from "./PageAccessMenu";
@@ -48,6 +49,7 @@ export function DatabasePage({ page }: DatabasePageProps) {
   return (
     <div className="relative flex flex-col h-full">
       <div className="px-8 pt-8 pb-4 flex-shrink-0">
+        <PageTemplatePicker key={String(page.id)} pageId={page.id} />
         <Breadcrumb ancestors={ancestors} currentTitle={title} />
         <div className="flex items-center gap-3 mt-1">
           <button

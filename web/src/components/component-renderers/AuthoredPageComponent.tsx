@@ -133,6 +133,7 @@ export function AuthoredPageComponentRenderer({ node }: BlockRendererProps) {
     >
       <AuthoredComponentView
         saved={parsed}
+        recordId={String(node.surfaceId)}
         catalog={INTERFACE_REGISTRY.catalog}
         principalKey={access.principal}
         canEdit={access.canEdit}

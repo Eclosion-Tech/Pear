@@ -60,6 +60,7 @@ import CreateMailConnectionReducer from "../create_mail_connection_reducer";
 import CreateMemoryConsolidationRoutineReducer from "../create_memory_consolidation_routine_reducer";
 import CreateNotionImportJobReducer from "../create_notion_import_job_reducer";
 import CreatePageReducer from "../create_page_reducer";
+import CreatePageFromTemplateReducer from "../create_page_from_template_reducer";
 import CreateProtectedMailCollectionReducer from "../create_protected_mail_collection_reducer";
 import CreateReviewAgentBindingReducer from "../create_review_agent_binding_reducer";
 import CreateSensorTriageRoutineReducer from "../create_sensor_triage_routine_reducer";
@@ -329,6 +330,7 @@ export type CreateMailConnectionParams = __Infer<typeof CreateMailConnectionRedu
 export type CreateMemoryConsolidationRoutineParams = __Infer<typeof CreateMemoryConsolidationRoutineReducer>;
 export type CreateNotionImportJobParams = __Infer<typeof CreateNotionImportJobReducer>;
 export type CreatePageParams = __Infer<typeof CreatePageReducer>;
+export type CreatePageFromTemplateParams = __Infer<typeof CreatePageFromTemplateReducer>;
 export type CreateProtectedMailCollectionParams = __Infer<typeof CreateProtectedMailCollectionReducer>;
 export type CreateReviewAgentBindingParams = __Infer<typeof CreateReviewAgentBindingReducer>;
 export type CreateSensorTriageRoutineParams = __Infer<typeof CreateSensorTriageRoutineReducer>;

@@ -10,6 +10,7 @@ import { useUpdatePageTitle, useUpdatePageIcon, useDeletePageSubtree, useChildPa
 import type { PageRow } from "@/src/hooks/usePages";
 import { EmojiPicker } from "./EmojiPicker";
 import { PageEditorSurface } from "./PageEditorSurface";
+import { PageTemplatePicker } from "./PageTemplatePicker";
 import { PageMoreMenu } from "./PageMoreMenu";
 import { PageAccessMenu } from "./PageAccessMenu";
 import { PageHistoryPanel } from "./PageHistoryPanel";
@@ -193,6 +194,7 @@ export function DocPage({ page }: DocPageProps) {
             ]}
           />
         </div>
+        <PageTemplatePicker key={String(page.id)} pageId={page.id} duplicate />
         {parentIsDatabase && properties.length > 0 && (
           <div className="mb-6 pb-4 border-b border-neutral-100 dark:border-neutral-800">
             <PagePropertiesPanel pageId={page.id} properties={properties} />

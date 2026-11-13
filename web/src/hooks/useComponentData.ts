@@ -1,4 +1,5 @@
 "use client";
+import { useWorkspaceComponentData } from "./useWorkspaceComponentData";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createExternalJsonAdapter,
@@ -8,15 +9,6 @@ import {
   type ComponentSource,
   type ComponentDataSnapshot,
 } from "@eclosion-tech/trellis";
-import { tables } from "@/src/module_bindings";
-import type {
-  DatabaseSchema,
-  PageAccessRule,
-  PagePropertyValue,
-  PropertyDefinition,
-} from "@/src/module_bindings/types";
-import { useScopedTable } from "./useScopedTable";
-import { usePageAccess } from "./usePageAccess";
 import {
   NATIVE_RECORD_PROPERTIES,
   scalarProperty,
@@ -34,40 +26,7 @@ export function useComponentData(
   ) => Promise<AuthoredComponent>,
   read: () => AuthoredComponent,
 ) {
-  const access = usePageAccess(surfaceId);
-  const schemas = useScopedTable<DatabaseSchema>(
-    tables.database_schema,
-    "SELECT * FROM database_schema",
-    () => true,
-  );
-  const properties = useScopedTable<PropertyDefinition>(
-    tables.property_definition,
-    "SELECT * FROM property_definition",
-    () => true,
-  );
-  const values = useScopedTable<PagePropertyValue>(
-    tables.page_property_value,
-    "SELECT * FROM page_property_value",
-    () => true,
-  );
-  const rules = useScopedTable<PageAccessRule>(
-    tables.page_access_rule,
-    "SELECT * FROM page_access_rule",
-    () => true,
-  );
-  const data = {
-    ...access,
-    ready:
-      access.ready &&
-      schemas.ready &&
-      properties.ready &&
-      values.ready &&
-      rules.ready,
-    schemas: schemas.rows,
-    properties: properties.rows,
-    values: values.rows,
-    rules: rules.rows,
-  };
+  const { access, data, schemas, properties, values, rules } = useWorkspaceComponentData(surfaceId);
   const live = useRef({ data, commit, read });
   live.current = { data, commit, read };
   // Advance during render so child effects cannot receive an older ACL result

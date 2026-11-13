@@ -110,7 +110,9 @@ async function mount() {
     root.render(createElement(SpacetimeDBContext.Provider, { value: state }, createElement(Probe)));
   });
   expect(container.textContent).toBe("Write");
-  return { db, page };
+  return { db, page, async switchPrincipal(nextIdentity) {
+    await act(async () => root.render(createElement(SpacetimeDBContext.Provider, { value: { ...state, identity: nextIdentity } }, createElement(Probe))));
+  } };
 }
 test("saving twice keeps access after the reducer touches the page timestamp", async () => {
   const { db, page } = await mount();
@@ -138,5 +140,14 @@ test("a deleted source disables editing and restoration restores its permission"
   await act(async () => db.page.update({ ...page, deletedAt: 1 }));
   expect(container.textContent).toBe("Read only");
   await act(async () => db.page.update(page));
+  expect(container.textContent).toBe("Write");
+});
+
+test("switching principals never reuses the previous principal's authorization", async () => {
+  const { db, switchPrincipal } = await mount();
+  await act(async () => db.page_access_rule.insert({ pageId: 7n, principal: { tag: "WorkspaceMember", value: identity }, permission: { tag: "Write" } }));
+  await switchPrincipal({ toHexString: () => "b".repeat(64) });
+  expect(container.textContent).toBe("Read only");
+  await switchPrincipal(identity);
   expect(container.textContent).toBe("Write");
 });

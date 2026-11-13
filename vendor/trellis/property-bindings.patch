@@ -1,0 +1,163 @@
+--- a/packages/trellis/src/authoring.ts
++++ b/packages/trellis/src/authoring.ts
+@@ -76,6 +76,11 @@
+   property: "text" | "value" | "checked";
+   writeBack: boolean;
+ };
++/** Resolve a binding against its containing record. A parameter never means the first row. */
++export function bindingRecordId(binding: ComponentBinding, recordId?: string, firstRecordId?: string): string | undefined {
++  return typeof binding.recordId === "string" ? binding.recordId :
++    "param" in binding.recordId ? recordId : firstRecordId;
++}
+ export type ComponentEffect =
+   | { kind: "setText"; target: Target; input: string }
+   | { kind: "setProp"; target: Target; property: string; input: string }
+--- a/packages/trellis-react/src/authored-components.tsx
++++ b/packages/trellis-react/src/authored-components.tsx
+@@ -12,6 +12,7 @@
+ } from "react";
+ import {
+   canonicalJson,
++  bindingRecordId,
+   addDays,
+   normalizeDateInterval,
+   connectionIdentity,
+@@ -70,6 +71,8 @@
+   onDiscuss?: () => void;
+   onOpenRecord?: (ref: OpenRecordRef & { surfaceId: string }) => void;
+   workspace?: string;
++  /** Containing page/record identity, never the focused tab or first source row. */
++  recordId?: string;
+ };
+ type CellDraft = {
+   draft: string;
+@@ -86,6 +89,7 @@
+   drafts: Map<string, CellDraft>;
+   onOpenRecord?: AuthoredComponentViewProps["onOpenRecord"];
+   workspace: string;
++  recordId?: string;
+ };
+ const Context = createContext<Runtime | null>(null);
+ const unavailable: ComponentDataSnapshot = Object.freeze({
+@@ -95,6 +99,7 @@
+   message: "Connect this data source to display live records.",
+ });
+ const subscribeNone = () => () => {};
++const noSessions: ReadonlyMap<string, ComponentDataSession> = new Map();
+ function runtime() {
+   const value = useContext(Context);
+   if (!value) throw new Error("An authored component requires its runtime.");
+@@ -339,19 +344,44 @@
+     </div>
+   );
+ }
++function RecordBoundNode({ node, recordId }: BlockRendererProps & { recordId?: string }) {
++  const { saved } = runtime();
++  const current = useTrellisNode(node.id);
++  const binding = saved.bindings[current.id];
++  const { session } = useSource(binding.source);
++  const [result, setResult] = useState<ComponentReadResult | null>(null);
++  useEffect(() => {
++    let active = true, generation = 0;
++    async function read() {
++      const current = ++generation;
++      // Clear on every notification: a source change may be permission revocation.
++      setResult(null);
++      if (!session || !recordId) return;
++      try {
++        const value = await session.read(recordId);
++        if (active && current === generation && !value.stale) setResult(value);
++      } catch {
++        if (active && current === generation) setResult({ status: "unavailable" });
++      }
++    }
++    void read();
++    const unsubscribe = session?.onChange(() => void read());
++    return () => { active = false; unsubscribe?.(); };
++  }, [session, recordId, binding.field]);
++  if (!recordId) return <p role="status">This binding needs a containing page or opened record.</p>;
++  if (!session || !result) return <p role="status">Loading property…</p>;
++  if (result.status !== "ready" || !result.record) return <p role="status">This source is unavailable.</p>;
++  return <div style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{display(result.record.values[binding.field])}</div>;
++}
++
+ function BoundNode(props: BlockRendererProps) {
+   const { saved, canEdit } = runtime(),
+     node = useTrellisNode(props.node.id),
+     binding = saved.bindings[node.id];
+   const { session, snapshot } = useSource(binding.source);
+-  // A record parameter resolves only through an opened record's `read`;
+-  // it must never fall back to the first snapshot row.
++  const { recordId } = runtime();
+   if (typeof binding.recordId !== "string" && "param" in binding.recordId)
+-    return (
+-      <p role="status">
+-        This control shows the opened record. Open a record to display it.
+-      </p>
+-    );
++    return <RecordBoundNode key={`${recordId ?? ""}:${node.id}:${binding.field}`} {...props} recordId={bindingRecordId(binding, recordId)} />;
+   const row =
+     typeof binding.recordId === "string"
+       ? snapshot.records.find((row) => row.id === binding.recordId)
+@@ -361,7 +391,7 @@
+   if (!row)
+     return <p role="status">The selected source record is unavailable.</p>;
+   if (binding.property === "text")
+-    return <div>{display(row.values[binding.field])}</div>;
++    return <div style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{display(row.values[binding.field])}</div>;
+   return (
+     <LiveCell
+       key={`${row.id}:${binding.field}`}
+@@ -889,11 +919,13 @@
+   onDiscuss,
+   onOpenRecord,
+   workspace = "",
++  recordId,
+ }: AuthoredComponentViewProps) {
+   const [editing, setEditing] = useState(false),
+-    [sessions, setSessions] = useState<
+-      ReadonlyMap<string, ComponentDataSession>
+-    >(new Map());
++    [sessionState, setSessionState] = useState<{
++      sourceKey: string; adapters: AuthoredComponentViewProps["dataAdapters"]; preview: boolean | undefined;
++      sessions: ReadonlyMap<string, ComponentDataSession>;
++    } | null>(null);
+   const lifetime = useRef<AbortController | null>(null);
+   const editorCreated = useRef(false);
+   if (editing) editorCreated.current = true;
+@@ -903,6 +935,9 @@
+     [dataAdapters],
+   );
+   const sourceKey = canonicalJson(saved.sources);
++  // Never hand a child the previous (possibly closed) session during reconnect.
++  const sessions = sessionState?.sourceKey === sourceKey && sessionState.adapters === adapters && sessionState.preview === preview
++    ? sessionState.sessions : noSessions;
+   const drafts = useMemo(() => new Map<string, CellDraft>(), [sourceKey]);
+   const live = useRef({ saved, canEdit, onCommit, sessions });
+   live.current = { saved, canEdit, onCommit, sessions };
+@@ -922,7 +957,7 @@
+             lifetime.current?.signal,
+           ),
+         );
+-    setSessions(opened);
++    setSessionState({ sourceKey, adapters, preview, sessions: opened });
+     return () => {
+       for (const session of opened.values()) session.close();
+     };
+@@ -966,7 +1001,7 @@
+   }
+   return (
+     <Context.Provider
+-      value={{ saved, sessions, drafts, canEdit: canEdit && !preview, workspace, onOpenRecord: preview ? undefined : onOpenRecord }}
++      value={{ saved, sessions, drafts, recordId, canEdit: canEdit && !preview, workspace, onOpenRecord: preview ? undefined : onOpenRecord }}
+     >
+       <section
+         aria-label={preview ? "Component preview" : "Authored component"}
+@@ -1219,6 +1254,7 @@
+                   canEdit={false}
+                   onCommit={commit}
+                   dataAdapters={adapters}
++                  recordId={recordId}
+                   preview
+                 />
+               }

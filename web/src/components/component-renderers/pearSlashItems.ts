@@ -24,12 +24,18 @@ export const PEAR_REGISTRY_REQUIRED_TYPES = [
   // component with no path to recovery.
   "Repeater",
   "Reference",
+  "PropertyReference",
   "TrellisPanel",
 ] as const;
 
 /** Pear sprint-4 slash / turn-into items — extends pulp's curated set. */
 export const PEAR_SLASH_ITEMS: SlashMenuItem[] = [
   ...SPRINT_3B_SLASH_ITEMS,
+  {
+    id: "property", section: "Data", label: "Property", componentType: "PropertyReference",
+    description: "Display a live text property from this page or another page.",
+    defaultProps: {}, searchTokens: ["property", "summary", "reference", "text", "binding"],
+  },
   {
     id: "trellis-component",
     section: "Components",
