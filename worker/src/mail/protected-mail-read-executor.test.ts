@@ -128,9 +128,49 @@ test("selection expiry bounds a hung credential resolver and its late success ca
   const execute = createProtectedMailReadExecutor({ authority: host.options, ca: fixture.ca, lookup: fixture.lookup, timeoutMs: 2000,
     resolveCredential: (binding, signal) => { captured = binding; signal.addEventListener("abort", () => { resolverAborted = true; }, { once: true }); return new Promise(resolve => { release = resolve; }); } });
   const started = Date.now(), result = await execute(plan.manifest.readId);
-  assert.ok(result.kind === "stopped" && result.reason === "read_expired" && Date.now() - started < 1200 && resolverAborted && fixture.stats.tcpConnections === 0 && host.stats.reports === 1, "executor_resolver_outlived_selection");
+  assert.equal(result.kind, "stopped");
+  if (result.kind !== "stopped") return;
+  assert.equal(result.reason, "read_expired");
+  assert.ok(Date.now() - started < 1200, "executor_resolver_outlived_selection");
+  assert.equal(resolverAborted, true);
+  assert.equal(fixture.stats.tcpConnections, 0);
+  assert.equal(host.stats.reports, 1);
   assert.ok(Boolean(release), "executor_expiry_resolver_not_started"); release({ binding: captured, password }); await new Promise(resolve => setTimeout(resolve, 20));
   assert.ok(fixture.stats.tcpConnections === 0 && host.stats.reports === 1, "executor_expired_late_credential_dialed"); noRaw(result);
+});
+
+test("selection expiry keeps its abort reason when the timer fires before the wall-clock boundary", { timeout: 3000 }, async t => {
+  const fixture = await createExecutorFixture({ certificates }); t.after(() => fixture.close());
+  const plan = await prepared(fixture.port), host = authority(plan);
+  let release!: (value: ProtectedMailReadCredential) => void, captured!: ProtectedMailReadBinding, resolverAborted = false;
+  let started!: () => void;
+  const resolving = new Promise<void>(resolve => { started = resolve; });
+  // Control timer delivery separately from Date.now, as their clocks can straddle a millisecond.
+  const now = Date.now(), expires = plan.manifest.selection.expiresAtMs;
+  const clock = t.mock.method(Date, "now", () => now);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const execute = createProtectedMailReadExecutor({ authority: host.options, timeoutMs: 60000,
+    resolveCredential: (binding, signal) => {
+      captured = binding;
+      signal.addEventListener("abort", () => { resolverAborted = true; }, { once: true });
+      return new Promise(resolve => { release = resolve; started(); });
+    } });
+  const pending = execute(plan.manifest.readId);
+  await resolving;
+  clock.mock.mockImplementation(() => expires - 1);
+  t.mock.timers.tick(expires - now);
+  const result = await pending;
+  assert.equal(result.kind, "stopped");
+  if (result.kind !== "stopped") return;
+  assert.equal(result.reason, "read_expired");
+  assert.equal(resolverAborted, true);
+  assert.equal(fixture.stats.tcpConnections, 0);
+  assert.equal(host.stats.reports, 1);
+  release({ binding: captured, password });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(fixture.stats.tcpConnections, 0);
+  assert.equal(host.stats.reports, 1);
+  noRaw(result);
 });
 
 test("hung claim and greeting obey deadlines without credential/socket retries", async t => {
