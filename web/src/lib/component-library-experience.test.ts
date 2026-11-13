@@ -27,15 +27,24 @@ async function mount(){
  return reference;
 }
 const button=(name:string)=>[...document.querySelectorAll("button")].find(button=>(button.getAttribute("aria-label")??[...button.childNodes].filter(node=>!(node instanceof Element&&node.getAttribute("aria-hidden")==="true")).map(node=>node.textContent).join(""))?.trim()===name)!;
-async function click(name:string){await act(async()=>{button(name).click();await new Promise(resolve=>setTimeout(resolve,25));});}
+async function click(name:string){await act(async()=>{button(name).click();});}
+// Package validation and hashing finish asynchronously; runner speed is not a readiness signal.
+async function waitForPreview(action:string){
+ const deadline=Date.now()+2000;
+ while(!button(action)&&Date.now()<deadline){
+  await act(async()=>{await new Promise(resolve=>setTimeout(resolve,10));});
+ }
+ expect(document.querySelector('[aria-label="Selected component template"]')).not.toBeNull();
+ expect(button(action)).toBeDefined();
+}
 it("sidebar library requires an explicit destination and previews the immutable workspace template",async()=>{
- await mount();await click("Components");expect(document.querySelector('dialog')!.open).toBe(true);await click("Saved form");
+ await mount();await click("Components");expect(document.querySelector('dialog')!.open).toBe(true);await click("Saved form");await waitForPreview("Insert into this page");
  expect(button("Insert into this page").disabled).toBe(true);expect(document.querySelector('[aria-label="Selected component template"]')).not.toBeNull();
  const target=[...document.querySelectorAll('select')].find(select=>select.parentElement?.textContent?.includes("Insert into page"))!;
  await act(async()=>{target.value="7";target.dispatchEvent(new Event("change",{bubbles:true}));});expect(button("Insert into this page").disabled).toBe(false);
  await click("Close component library");expect(document.querySelector('dialog')).toBeNull();
 });
 it("Browse all returns a pinned descriptor to the original slash callback without appending a separate page instance",async()=>{
- const reference=await mount();await act(async()=>openBrowse());await click("Saved form");expect(button("Insert at cursor").disabled).toBe(false);await click("Insert at cursor");
+ const reference=await mount();await act(async()=>openBrowse());await click("Saved form");await waitForPreview("Insert at cursor");expect(button("Insert at cursor").disabled).toBe(false);await click("Insert at cursor");
  expect(inserted).toEqual([{kind:"component-template",templateId:reference.templateId,version:reference.version,hash:reference.hash}]);expect(document.querySelector('dialog')).toBeNull();
 });
