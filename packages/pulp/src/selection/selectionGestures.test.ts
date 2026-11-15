@@ -159,6 +159,24 @@ describe("selection gesture origin", () => {
     expect(views.get(2n)!.state.doc.textContent).toBe("Alpha bravo");
   });
 
+  it.each(["select", "option", "label"])("leaves native %s pointer actions to the browser", async (tag) => {
+    const { surface, getSelection } = await fixture();
+    const label = surface.appendChild(document.createElement("label"));
+    label.append("Property");
+    const select = label.appendChild(document.createElement("select"));
+    const option = select.appendChild(document.createElement("option"));
+    option.textContent = "Summary";
+    const target = tag === "select" ? select : tag === "option" ? option : label;
+    const down = new PointerEvent("pointerdown", { bubbles: true, cancelable: true,
+      pointerType: "mouse", pointerId: 1, button: 0, buttons: 1, clientX: 120, clientY: 30 });
+    await act(() => target.dispatchEvent(down));
+    expect(down.defaultPrevented).toBe(false);
+    await pointer(window, "pointermove", 200, 110);
+    await pointer(window, "pointerup", 200, 110);
+    expect(getSelection().selectedIds).toEqual([]);
+    expect(getSelection().textRange).toBeNull();
+  });
+
   it("preserves native touch scrolling instead of starting text or block drags", async () => {
     const { views, surface, getSelection } = await fixture();
     for (const target of [views.get(2n)!.dom, surface]) {
