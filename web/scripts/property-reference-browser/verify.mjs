@@ -21,21 +21,40 @@ const browser=await chromium.launch({headless:true});
 const page=await browser.newPage({viewport:{width:1280,height:1000}});
 const errors=[];page.on('pageerror',e=>errors.push(e.message));
 try{
+ await page.addInitScript(()=>window.addEventListener('pointerdown',event=>{
+  if(event.target instanceof HTMLSelectElement) window.__selectPointer={prevented:event.defaultPrevented,label:event.target.getAttribute('aria-label')};
+ }));
  await page.goto(`http://127.0.0.1:${server.address().port}`);
  await page.getByRole('heading',{name:'Project overview'}).waitFor();
+ async function chooseOption(label, expected){
+  const select=page.getByLabel(label,{exact:true});
+  await select.click();
+  assert.deepEqual(await page.evaluate(()=>window.__selectPointer),{prevented:false,label});
+  assert(await select.evaluate(element=>document.activeElement===element));
+  await page.keyboard.press('Escape');
+  // Native popup keyboard routing varies by browser/OS. Keep the real click and
+  // focus assertions above: selectOption alone would bypass the editor bug.
+  await select.selectOption(expected);
+  assert.equal(await select.inputValue(),expected);
+ }
+
  await page.screenshot({path:`${dir}/screenshots/desktop.png`,fullPage:true});
  await page.getByRole('button',{name:'Show more',exact:true}).click();
  await page.getByRole('button',{name:'Edit property',exact:true}).first().click();
  await page.getByRole('textbox',{name:'Summary',exact:true}).fill('Edited multiline summary\n\nThe second paragraph remains readable.');
  await page.getByRole('button',{name:'Save',exact:true}).click();
  assert((await page.getByLabel('Property reference',{exact:true}).textContent()).includes('Edited multiline summary\n\nThe second paragraph'));
+ await page.getByLabel('Property reference',{exact:true}).focus();
+ await page.getByRole('button',{name:'Reference settings',exact:true}).click();
+ await chooseOption('Property','7');
+ await page.getByRole('button',{name:'Save reference',exact:true}).click();
  await page.getByRole('button',{name:'Record B',exact:true}).click();
  assert((await page.getByLabel('Property reference',{exact:true}).textContent()).includes('A second record with its own summary'));
  await page.getByLabel('Property reference',{exact:true}).focus();
  await page.getByRole('button',{name:'Reference settings',exact:true}).click();
  await page.getByLabel('Choose a page',{exact:true}).check();
- await page.getByLabel('Source page',{exact:true}).selectOption('11');
- await page.getByLabel('Property',{exact:true}).selectOption('7');
+ await chooseOption('Source page','11');
+ await chooseOption('Property','7');
  await page.screenshot({path:`${dir}/screenshots/picker-desktop.png`,fullPage:true});
  await page.getByRole('button',{name:'Save reference',exact:true}).click();
  assert((await page.getByLabel('Property reference',{exact:true}).textContent()).includes('Edited multiline summary'));
@@ -60,9 +79,11 @@ try{
  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
  await page.getByLabel('Property reference',{exact:true}).focus();
  await page.getByRole('button',{name:'Reference settings',exact:true}).click();
+ await chooseOption('Source page','11');
+ await chooseOption('Property','7');
  await page.screenshot({path:`${dir}/screenshots/picker-narrow.png`,fullPage:true});
  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
  assert.deepEqual(errors,[]);
- await writeFile(`${dir}/result.json`,JSON.stringify({passed:true,viewportWidths:[1280,390],checks:['multiline edit','self context switch','explicit selection','save/reload','canonical source URL','Back history','read-only controls','revocation and restoration','no horizontal overflow','no browser errors']},null,2));
+ await writeFile(`${dir}/result.json`,JSON.stringify({passed:true,viewportWidths:[1280,390],checks:['real BlockEditor uncancelled dropdown clicks and focus','multiline edit','self context switch','explicit selection','save/reload','canonical source URL','Back history','read-only controls','revocation and restoration','no horizontal overflow','no browser errors']},null,2));
  console.log('PASS: desktop/narrow visual checks, live edit, self/explicit picker, reload, source navigation/Back, read-only controls and revocation');
 }finally{await browser.close();server.close();}

@@ -112,7 +112,7 @@ function BlockSurface({ tree }: { tree: BlockTree }) {
       // Ignore interactive chrome (menus, buttons, drag handles).
       if (
         target.closest(
-          "button,a,input,textarea,[role='dialog'],[role='menu'],[data-block-gutter]",
+          "button,a,input,textarea,select,option,label,[role='dialog'],[role='menu'],[data-block-gutter]",
         )
       ) {
         return;
