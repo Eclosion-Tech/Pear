@@ -17,8 +17,10 @@ import {
   type ConversationRow,
 } from "@/src/hooks/useConversations";
 import { useUsers } from "@/src/hooks/useUser";
+import { fetchVoiceAvailability } from "@/src/lib/voice";
 import { selectMyConversations } from "@/src/lib/chatAdapter";
 import { EclosionChatThread } from "./EclosionChatThread";
+import { VoiceCallView } from "./VoiceCallView";
 import { PageAccessMenu } from "../PageAccessMenu";
 
 /** Flag for the parallel @eclosion-tech/chat panel (phase 0/1 of the migration). */
@@ -49,10 +51,16 @@ export function EclosionChatPanel({
   const addParticipant = useAddConversationParticipant();
   const [inviteError, setInviteError] = useState("");
   const [inviting, setInviting] = useState(false);
+  const [calling, setCalling] = useState(false);
 
   useEffect(() => {
     if (openConversationId != null) setSelectedId(openConversationId);
   }, [openConversationId]);
+
+  // A call belongs to the conversation it was started in.
+  useEffect(() => {
+    setCalling(false);
+  }, [selectedId]);
 
   const conversations = useMemo(
     () => selectMyConversations(allConversations, allParticipants, identity?.toHexString()),
@@ -89,6 +97,23 @@ export function EclosionChatPanel({
 
   const conversation: ConversationRow | undefined = conversations.find((c) => c.id === selectedId)
     ?? allConversations.find((c) => c.id === selectedId);
+
+  // The Call button appears only when the host says this AI user can take a
+  // call: voice needs a host that holds the AI user's model key.
+  const calleeProfile = conversation ? aiUserByConversation.get(conversation.id) : undefined;
+  const calleeId = calleeProfile?.aiUserId;
+  const [callableId, setCallableId] = useState<bigint | null>(null);
+  useEffect(() => {
+    if (calleeId === undefined) return;
+    let current = true;
+    void fetchVoiceAvailability(calleeId).then((result) => {
+      if (current && result.available) setCallableId(calleeId);
+    });
+    return () => {
+      current = false;
+    };
+  }, [calleeId]);
+  const callee = calleeProfile && callableId === calleeProfile.aiUserId ? calleeProfile : undefined;
 
   const kindBadge = (c: ConversationRow): string | null =>
     c.kind.tag === "Dm" ? "DM"
@@ -134,6 +159,15 @@ export function EclosionChatPanel({
               </select>
             </label>
           )}
+          {callee && !calling ? (
+            <button
+              type="button"
+              onClick={() => setCalling(true)}
+              className="rounded border border-neutral-200 px-2 py-0.5 text-xs hover:bg-neutral-50 dark:border-neutral-700 dark:hover:bg-neutral-800/50"
+            >
+              Call
+            </button>
+          ) : null}
           {!conversation ? (
             <NewChatMenu
               pageId={pageId}
@@ -153,7 +187,17 @@ export function EclosionChatPanel({
         </div>
       </header>
       {inviteError && <p role="alert" className="px-3 py-2 text-sm text-red-600">{inviteError}</p>}
-      {conversation ? (
+      {conversation && callee && calling ? (
+        <div className="min-h-0 flex-1">
+          <VoiceCallView
+            key={String(conversation.id)}
+            aiUserId={callee.aiUserId}
+            aiUserName={callee.displayName}
+            conversationId={conversation.id}
+            onClose={() => setCalling(false)}
+          />
+        </div>
+      ) : conversation ? (
         <div className="min-h-0 flex-1">
           <EclosionChatThread key={String(conversation.id)} conversation={conversation} activePageId={pageId} />
         </div>
