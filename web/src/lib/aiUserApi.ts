@@ -59,6 +59,15 @@ function hostUrl(path = ""): string {
   return `${resolveHostBase().replace(/\/$/, "")}${path}`;
 }
 
+/**
+ * The host URL for a path under the AI-user API base, for features that are
+ * host-delegated the same way AI-user management is (voice calls). Throws
+ * when the base needs a workspace slug and the URL has none.
+ */
+export function aiUserHostUrl(path = ""): string {
+  return hostUrl(path);
+}
+
 // ── Shared types ────────────────────────────────────────────────────────────
 
 export type ProviderTag = "Anthropic" | "OpenAi" | "Ollama" | "OpenAiCompatible";
