@@ -1,5 +1,5 @@
 import { aiUserHostUrl, isAiUserHostDelegated } from "../aiUserApi";
-import type { VoiceModels, VoiceUpstream } from "./types";
+import type { VoiceModels, VoiceUpstream } from "@eclosion-tech/chat-voice";
 
 /**
  * Voice calls through the host.

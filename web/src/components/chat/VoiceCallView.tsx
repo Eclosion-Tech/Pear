@@ -3,25 +3,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTable } from "spacetimedb/react";
 
-import { useSendUserMessage } from "@/src/hooks/useConversations";
-import { usePages, useSetPropertyValue } from "@/src/hooks/usePages";
-import { tables } from "@/src/module_bindings";
 import {
   VoiceCall,
   callRecordMessage,
   createBrowserCallAudio,
   createTurnDetector,
-  decisionWrites,
   encodeWav,
+  type BrowserCallAudio,
+  type CallState,
+  type CallStatus,
+  type TurnDetector,
+} from "@eclosion-tech/chat-voice";
+
+import { useSendUserMessage } from "@/src/hooks/useConversations";
+import { usePages, useSetPropertyValue } from "@/src/hooks/usePages";
+import { tables } from "@/src/module_bindings";
+import {
+  decisionWrites,
   fetchVoiceAvailability,
   hostVoiceUpstream,
   isCallSheet,
   readCallSheet,
-  type BrowserCallAudio,
   type CallSheet,
-  type CallState,
-  type CallStatus,
-  type TurnDetector,
   type VoiceAvailability,
 } from "@/src/lib/voice";
 

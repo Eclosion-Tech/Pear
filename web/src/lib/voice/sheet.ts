@@ -1,4 +1,4 @@
-import type { CallDecision, CallItem } from "./types";
+import type { CallDecision, CallItem } from "@eclosion-tech/chat-voice";
 
 /**
  * A call sheet is an ordinary Pear database. Each row is one thing to raise:
