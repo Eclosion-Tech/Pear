@@ -128,8 +128,8 @@ importers:
         specifier: ^0.2.1
         version: 0.2.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)(use-sync-external-store@1.6.0(react@19.2.3))(zod@4.5.4)
       '@eclosion-tech/chat-voice':
-        specifier: ^0.1.0
-        version: 0.1.0
+        specifier: ^0.2.0
+        version: 0.2.0
       '@eclosion-tech/pulp':
         specifier: workspace:*
         version: link:../packages/pulp
@@ -725,8 +725,8 @@ packages:
     peerDependencies:
       react: '>=16.8.0'
 
-  '@eclosion-tech/chat-voice@0.1.0':
-    resolution: {integrity: sha512-wbYc2OO1mk2w8OCp5ZzmRZJsSh1szWGB18GgxNFvN+MYyrKI6MKCTE44glctxSJmDUvDql93sMvjLeRYKogkUw==}
+  '@eclosion-tech/chat-voice@0.2.0':
+    resolution: {integrity: sha512-mbNfKtgpmH8Xl43RFV9ok9ShSBqALzUnI6yBfU6+niluEH301dPSCCmnNBfyjFhAjPIQESocFPyRoBcbcq9cSA==}
 
   '@eclosion-tech/chat@0.2.1':
     resolution: {integrity: sha512-/5I4usuVmpBDT0rkkVeRS+VRANiY+BSzGXM3586i1LLmL2UCEUm5qxcGjD4vcG83b4x0TlKOBsmuuzyvsr7H2g==}
@@ -6620,7 +6620,7 @@ snapshots:
       react: 19.2.3
       tslib: 2.8.1
 
-  '@eclosion-tech/chat-voice@0.1.0': {}
+  '@eclosion-tech/chat-voice@0.2.0': {}
 
   '@eclosion-tech/chat@0.2.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)(use-sync-external-store@1.6.0(react@19.2.3))(zod@4.5.4)':
     dependencies:
