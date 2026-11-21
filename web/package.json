@@ -19,7 +19,7 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@eclosion-tech/chat": "^0.2.1",
-    "@eclosion-tech/chat-voice": "^0.1.0",
+    "@eclosion-tech/chat-voice": "^0.2.0",
     "@eclosion-tech/pulp": "workspace:*",
     "@eclosion-tech/snapshot-core": "workspace:*",
     "@eclosion-tech/trellis": "file:../vendor/trellis/eclosion-tech-trellis-0.1.0-alpha.9.tgz",

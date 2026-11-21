@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useTable } from "spacetimedb/react";
+import { useSpacetimeDB, useTable } from "spacetimedb/react";
 
 import {
   VoiceCall,
@@ -10,12 +10,13 @@ import {
   createTurnDetector,
   encodeWav,
   type BrowserCallAudio,
+  type CallRequest,
   type CallState,
   type CallStatus,
   type TurnDetector,
 } from "@eclosion-tech/chat-voice";
 
-import { useSendUserMessage } from "@/src/hooks/useConversations";
+import { useConversationMessages, useSendUserMessage } from "@/src/hooks/useConversations";
 import { usePages, useSetPropertyValue } from "@/src/hooks/usePages";
 import { tables } from "@/src/module_bindings";
 import {
@@ -23,12 +24,18 @@ import {
   fetchVoiceAvailability,
   hostVoiceUpstream,
   isCallSheet,
+  newestMessageId,
   readCallSheet,
+  recentTurns,
+  settleRequests,
+  voiceRequestMessage,
   type CallSheet,
+  type PendingRequest,
   type VoiceAvailability,
 } from "@/src/lib/voice";
 
-const SHEET_KEY = "pear.voice.callSheet";
+/** How long the AI user has to answer a request before the caller is told it is taking too long. */
+const REQUEST_TIMEOUT_MS = 180_000;
 const STATUS_LABEL: Record<CallStatus, string> = {
   idle: "Not started",
   connecting: "Connecting",
@@ -38,6 +45,7 @@ const STATUS_LABEL: Record<CallStatus, string> = {
   speaking: "Speaking",
   ended: "Call ended",
 };
+const REQUEST_LABEL: Record<CallRequest["status"], string> = { pending: "Working on it", answered: "Answered", failed: "Not done" };
 
 function median(values: number[]): number | null {
   if (!values.length) return null;
@@ -46,34 +54,53 @@ function median(values: number[]): number | null {
   return sorted.length % 2 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
 }
 
+interface Agenda {
+  /** The database page the agenda was read from. */
+  pageId: string;
+  sheet: CallSheet;
+  title: string;
+}
+
 /**
  * A voice call with an AI user, in place of the thread.
  *
- * The call walks through a call sheet: any database with a text column named
- * "Say". Each row is one thing to ask. Answers are written to the row's
- * Decision column as they are given, and when the call ends its record is
- * sent to the conversation as an ordinary message, for the AI user to act on.
+ * The call is a conversation, and it starts as soon as the view opens. The
+ * voice model answers fast and has no tools, so two things tie it to the AI
+ * user's real work, both through this conversation: it is given the latest
+ * messages going in, and anything the caller asks for that needs the workspace
+ * is sent to the AI user as a message, whose answer is spoken when it arrives.
+ *
+ * An agenda can be attached at any point: any database with a text column
+ * named "Say", one row per thing to ask. Answers are written to the row's
+ * Decision column as they are given. When the call ends, its record is sent to
+ * the conversation as an ordinary message.
  */
 export function VoiceCallView({
   aiUserId,
   aiUserName,
+  aiIdentityHex,
   conversationId,
   onClose,
 }: {
   aiUserId: bigint;
   aiUserName: string;
+  /** The AI user's identity, to tell its messages in the conversation from the caller's. */
+  aiIdentityHex: string;
   conversationId: bigint;
   onClose: () => void;
 }) {
+  const { identity } = useSpacetimeDB();
+  const callerIdentityHex = identity?.toHexString() ?? "";
   const { pages } = usePages();
   const [schemas] = useTable(tables.database_schema);
   const [definitions] = useTable(tables.property_definition);
   const [values] = useTable(tables.page_property_value);
+  const messages = useConversationMessages();
   const setPropertyValue = useSetPropertyValue();
   const sendUserMessage = useSendUserMessage();
 
   const [availability, setAvailability] = useState<VoiceAvailability | null>(null);
-  const [sheetId, setSheetId] = useState<string>("");
+  const [agenda, setAgenda] = useState<Agenda | null>(null);
   const [state, setState] = useState<CallState | null>(null);
   const [level, setLevel] = useState({ rms: 0, threshold: 0.012 });
   const [allowInterrupt, setAllowInterrupt] = useState(true);
@@ -81,10 +108,17 @@ export function VoiceCallView({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const live = useRef<{ call: VoiceCall; audio: BrowserCallAudio; sheet: CallSheet; title: string } | null>(null);
+  const live = useRef<{ call: VoiceCall; audio: BrowserCallAudio } | null>(null);
   const detector = useRef<TurnDetector | null>(null);
+  const opened = useRef(false);
+  const waiting = useRef<Array<PendingRequest & { sentAt: number }>>([]);
+  const claimed = useRef(new Set<bigint>());
+  const agendaRef = useRef(agenda);
+  const messagesRef = useRef(messages);
   const allowInterruptRef = useRef(allowInterrupt);
   const endpointRef = useRef(endpointMs);
+  agendaRef.current = agenda;
+  messagesRef.current = messages;
   allowInterruptRef.current = allowInterrupt;
   endpointRef.current = endpointMs;
 
@@ -114,42 +148,76 @@ export function VoiceCallView({
       .sort((a, b) => (a.page.updatedAt.microsSinceUnixEpoch < b.page.updatedAt.microsSinceUnixEpoch ? 1 : -1));
   }, [pages, schemas, definitions]);
 
-  useEffect(() => {
-    if (sheetId || sheets.length === 0) return;
-    let remembered: string | null = null;
-    try {
-      remembered = window.localStorage.getItem(SHEET_KEY);
-    } catch {
-      // Storage can be unavailable; the first sheet is a fine default.
+  /** Hands answers the AI user has written in the conversation back to the call. */
+  const settle = useCallback(() => {
+    const call = live.current?.call;
+    if (!call || waiting.current.length === 0) return;
+    const { rows, outcomes } = settleRequests({
+      pending: waiting.current,
+      messages: messagesRef.current,
+      conversationId,
+      callerIdentityHex,
+      aiIdentityHex,
+      claimed: claimed.current,
+    });
+    for (const row of rows) {
+      const request = waiting.current.find((entry) => entry.id === row.id);
+      if (request) request.rowId = row.rowId;
     }
-    const pick = sheets.find((entry) => entry.page.id.toString() === remembered) ?? sheets[0];
-    setSheetId(pick.page.id.toString());
-  }, [sheets, sheetId]);
+    for (const outcome of outcomes) {
+      claimed.current.add(outcome.replyId);
+      waiting.current = waiting.current.filter((entry) => entry.id !== outcome.id);
+      if (outcome.status === "answered") call.answerRequest(outcome.id, outcome.text);
+      else call.failRequest(outcome.id, outcome.text);
+    }
+    const now = Date.now();
+    for (const request of waiting.current.filter((entry) => now - entry.sentAt > REQUEST_TIMEOUT_MS)) {
+      waiting.current = waiting.current.filter((entry) => entry.id !== request.id);
+      call.failRequest(request.id, "no answer has come back yet; it will be in the chat when it does");
+    }
+  }, [conversationId, callerIdentityHex, aiIdentityHex]);
 
-  const selected = sheets.find((entry) => entry.page.id.toString() === sheetId);
-  const preview = useMemo(
-    () => (selected ? readCallSheet({ definitions: selected.definitions, rows: pages.filter((page) => page.parentId === selected.page.id), values }) : null),
-    [selected, pages, values],
-  );
-  const openCount = preview ? preview.items.filter((item) => !preview.decisions[item.id]).length : 0;
+  useEffect(() => {
+    settle();
+  }, [messages, settle]);
+  useEffect(() => {
+    const timer = setInterval(settle, 3000);
+    return () => clearInterval(timer);
+  }, [settle]);
 
   const start = useCallback(async () => {
-    if (!selected || !preview || !availability?.available || !availability.models) return;
+    if (live.current || !availability?.available || !availability.models) return;
     setError(null);
     setBusy(true);
-    const sheet = preview;
     const audio = createBrowserCallAudio();
+    const going = agendaRef.current;
     const call = new VoiceCall({
       upstream: hostVoiceUpstream(aiUserId, availability),
       models: availability.models,
       voice: availability.defaultVoice ?? "alloy",
       assistantName: aiUserName,
-      items: sheet.items,
-      decisions: sheet.decisions,
+      items: going?.sheet.items,
+      decisions: going?.sheet.decisions,
+      context: { recent: recentTurns(messagesRef.current, { conversationId, aiIdentityHex }) },
       audio,
       onChange: setState,
       onDecision: async (itemId, decision) => {
-        for (const write of decisionWrites(sheet, itemId, decision)) await setPropertyValue(write);
+        const current = agendaRef.current;
+        if (!current) return;
+        for (const write of decisionWrites(current.sheet, itemId, decision)) await setPropertyValue(write);
+      },
+      // The AI user does the work: the request goes to it as a message, and
+      // `settle` hands its answer back when it has written one.
+      onRequest: async (request) => {
+        const message = voiceRequestMessage(request.text);
+        const entry = { id: request.id, message, afterId: newestMessageId(messagesRef.current, conversationId), sentAt: Date.now() };
+        waiting.current.push(entry);
+        try {
+          await sendUserMessage({ conversationId, content: message, attachments: [] });
+        } catch (cause) {
+          waiting.current = waiting.current.filter((other) => other !== entry);
+          throw new Error(cause instanceof Error ? `it could not be sent to the chat: ${cause.message}` : "it could not be sent to the chat");
+        }
       },
     });
     let blocks = 0;
@@ -170,30 +238,51 @@ export function VoiceCallView({
       setError(cause instanceof DOMException && cause.name === "NotAllowedError" ? "The microphone is blocked for this site." : "Could not start the microphone.");
       return;
     }
-    try {
-      window.localStorage.setItem(SHEET_KEY, selected.page.id.toString());
-    } catch {
-      // Not remembering the choice is harmless.
-    }
-    live.current = { call, audio, sheet, title: selected.page.title };
+    live.current = { call, audio };
     setBusy(false);
     await call.start();
-  }, [selected, preview, availability, aiUserId, aiUserName, setPropertyValue]);
+  }, [availability, aiUserId, aiUserName, aiIdentityHex, conversationId, sendUserMessage, setPropertyValue]);
+
+  // Pressing Call is the request to start: the call opens as soon as the host says it can.
+  useEffect(() => {
+    if (opened.current || !availability?.available) return;
+    opened.current = true;
+    void start();
+  }, [availability, start]);
+
+  const chooseAgenda = useCallback(
+    (pageId: string) => {
+      const entry = sheets.find((candidate) => candidate.page.id.toString() === pageId);
+      const next: Agenda | null = entry
+        ? {
+            pageId,
+            sheet: readCallSheet({ definitions: entry.definitions, rows: pages.filter((page) => page.parentId === entry.page.id), values }),
+            title: entry.page.title,
+          }
+        : null;
+      agendaRef.current = next;
+      setAgenda(next);
+      void live.current?.call.setAgenda(next?.sheet.items ?? [], next?.sheet.decisions ?? {});
+    },
+    [sheets, pages, values],
+  );
 
   const end = useCallback(async () => {
     const current = live.current;
     if (!current) return onClose();
     live.current = null;
     detector.current = null;
+    waiting.current = [];
     current.call.end();
     await current.audio.close();
     const finalState = current.call.state;
-    // A call nobody spoke on leaves nothing for the AI user to act on.
+    // A call nobody spoke on leaves nothing for the AI user to read.
     if (finalState.turns.some((turn) => turn.role === "user")) {
+      const withAgenda = agendaRef.current;
       try {
         await sendUserMessage({
           conversationId,
-          content: callRecordMessage({ items: current.sheet.items, state: finalState, sheetTitle: current.title }),
+          content: callRecordMessage({ items: withAgenda?.sheet.items ?? [], state: finalState, sheetTitle: withAgenda?.title }),
           attachments: [],
         });
       } catch (cause) {
@@ -221,9 +310,10 @@ export function VoiceCallView({
     detector.current?.setEndpointMs(endpointMs);
   }, [endpointMs]);
 
-  const inCall = state !== null && state.status !== "idle";
-  const items = live.current?.sheet.items ?? preview?.items ?? [];
-  const decisions = state?.decisions ?? preview?.decisions ?? {};
+  const inCall = state !== null && state.status !== "idle" && state.status !== "ended";
+  const items = agenda?.sheet.items ?? [];
+  const decisions = state?.decisions ?? agenda?.sheet.decisions ?? {};
+  const requests = state?.requests ?? [];
   const gap = median(state?.gapsMs ?? []);
 
   if (!availability) {
@@ -251,14 +341,14 @@ export function VoiceCallView({
           <button
             type="button"
             onClick={() => void start()}
-            disabled={busy || !preview || openCount === 0}
+            disabled={busy}
             className="rounded bg-neutral-900 px-3 py-1 font-medium text-white disabled:opacity-40 dark:bg-neutral-100 dark:text-neutral-900"
           >
             Start call
           </button>
         )}
         <span role="status" aria-live="polite" className="font-medium">
-          {state ? STATUS_LABEL[state.status] : `Call with ${aiUserName}`}
+          {state ? STATUS_LABEL[state.status] : busy ? "Starting" : `Call with ${aiUserName}`}
         </span>
         {inCall ? (
           <span aria-hidden="true" className="relative h-1.5 min-w-24 flex-1 overflow-hidden rounded bg-neutral-200 dark:bg-neutral-700">
@@ -278,54 +368,39 @@ export function VoiceCallView({
         </p>
       ) : null}
 
-      {!inCall ? (
-        <div className="flex flex-col gap-3 p-3">
-          {sheets.length === 0 ? (
-            <p className="text-neutral-500">
-              No call sheet yet. A call sheet is any database with a text column named “Say”: one row per thing to ask, with optional
-              “Recommendation”, “Detail”, “Source”, “Decision” and “Quote” columns.
-            </p>
-          ) : (
-            <label className="flex flex-col gap-1">
-              <span className="text-xs text-neutral-500">Call sheet</span>
-              <select
-                value={sheetId}
-                onChange={(event) => setSheetId(event.target.value)}
-                className="rounded border border-neutral-200 bg-transparent p-1 dark:border-neutral-700"
-              >
-                {sheets.map((entry) => (
-                  <option key={entry.page.id.toString()} value={entry.page.id.toString()}>
-                    {entry.page.title || "Untitled"}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          {preview ? (
-            <p className="text-neutral-500">
-              {openCount === 0
-                ? "Every row on this sheet already has a decision."
-                : `${openCount} of ${preview.items.length} item${preview.items.length === 1 ? "" : "s"} to go through. Answer out loud; headphones work best.`}
-            </p>
-          ) : null}
-        </div>
-      ) : (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-neutral-200 px-3 py-2 text-xs text-neutral-500 dark:border-neutral-800">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-neutral-200 px-3 py-2 text-xs text-neutral-500 dark:border-neutral-800">
+        <label className="flex items-center gap-1.5">
+          <input type="checkbox" checked={allowInterrupt} onChange={(event) => setAllowInterrupt(event.target.checked)} />
+          Let me interrupt
+        </label>
+        <label className="flex items-center gap-1.5">
+          Wait after I stop
+          <input type="range" min={400} max={1500} step={50} value={endpointMs} onChange={(event) => setEndpointMs(Number(event.target.value))} />
+          <span className="tabular-nums">{endpointMs} ms</span>
+        </label>
+        {sheets.length > 0 ? (
           <label className="flex items-center gap-1.5">
-            <input type="checkbox" checked={allowInterrupt} onChange={(event) => setAllowInterrupt(event.target.checked)} />
-            Let me interrupt
+            Agenda
+            <select
+              value={agenda?.pageId ?? ""}
+              onChange={(event) => chooseAgenda(event.target.value)}
+              className="max-w-44 rounded border border-neutral-200 bg-transparent p-0.5 dark:border-neutral-700"
+            >
+              <option value="">None, just talk</option>
+              {sheets.map((entry) => (
+                <option key={entry.page.id.toString()} value={entry.page.id.toString()}>
+                  {entry.page.title || "Untitled"}
+                </option>
+              ))}
+            </select>
           </label>
-          <label className="flex items-center gap-1.5">
-            Wait after I stop
-            <input type="range" min={400} max={1500} step={50} value={endpointMs} onChange={(event) => setEndpointMs(Number(event.target.value))} />
-            <span className="tabular-nums">{endpointMs} ms</span>
-          </label>
-          {gap !== null ? <span className="tabular-nums">Reply after {gap} ms</span> : null}
-        </div>
-      )}
+        ) : null}
+        {gap !== null ? <span className="tabular-nums">Reply after {gap} ms</span> : null}
+      </div>
 
-      <div className="grid min-h-0 flex-1 grid-rows-2 gap-px overflow-hidden bg-neutral-200 dark:bg-neutral-800">
+      <div className={`grid min-h-0 flex-1 gap-px overflow-hidden bg-neutral-200 dark:bg-neutral-800 ${items.length || requests.length ? "grid-rows-2" : "grid-rows-1"}`}>
         <ol className="min-h-0 overflow-y-auto bg-white p-3 dark:bg-neutral-950">
+          {(state?.turns ?? []).length === 0 ? <li className="text-neutral-400">Talk when you are ready. Headphones work best.</li> : null}
           {(state?.turns ?? []).map((turn, index) => (
             <li key={index} className="mb-2">
               <span className="block text-xs text-neutral-400">{turn.role === "user" ? "You" : aiUserName}</span>
@@ -336,21 +411,35 @@ export function VoiceCallView({
             </li>
           ))}
         </ol>
-        <ul className="min-h-0 overflow-y-auto bg-white p-3 dark:bg-neutral-950">
-          {items.map((item) => {
-            const decision = decisions[item.id];
-            const current = !decision && state?.currentItem === item.id;
-            return (
+        {items.length || requests.length ? (
+          <ul className="min-h-0 overflow-y-auto bg-white p-3 dark:bg-neutral-950">
+            {requests.map((request) => (
               <li
-                key={item.id}
-                className={`mb-2 border-l-2 pl-2 ${decision ? "border-green-500" : current ? "border-amber-500" : "border-neutral-200 dark:border-neutral-700"}`}
+                key={request.id}
+                className={`mb-2 border-l-2 pl-2 ${request.status === "answered" ? "border-green-500" : request.status === "failed" ? "border-red-500" : "border-amber-500"}`}
               >
-                <span className="block font-medium">{item.title}</span>
-                <span className={decision ? undefined : "text-neutral-400"}>{decision ? decision.decision : "Open"}</span>
+                <span className="block font-medium">{request.text}</span>
+                <span className={request.status === "pending" ? "text-neutral-400" : undefined}>
+                  {REQUEST_LABEL[request.status]}
+                  {request.status === "failed" && request.answer ? `: ${request.answer}` : ""}
+                </span>
               </li>
-            );
-          })}
-        </ul>
+            ))}
+            {items.map((item) => {
+              const decision = decisions[item.id];
+              const current = !decision && state?.currentItem === item.id;
+              return (
+                <li
+                  key={item.id}
+                  className={`mb-2 border-l-2 pl-2 ${decision ? "border-green-500" : current ? "border-amber-500" : "border-neutral-200 dark:border-neutral-700"}`}
+                >
+                  <span className="block font-medium">{item.title}</span>
+                  <span className={decision ? undefined : "text-neutral-400"}>{decision ? decision.decision : "Open"}</span>
+                </li>
+              );
+            })}
+          </ul>
+        ) : null}
       </div>
     </div>
   );

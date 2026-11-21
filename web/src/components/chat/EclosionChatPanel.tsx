@@ -193,6 +193,7 @@ export function EclosionChatPanel({
             key={String(conversation.id)}
             aiUserId={callee.aiUserId}
             aiUserName={callee.displayName}
+            aiIdentityHex={callee.identity.toHexString()}
             conversationId={conversation.id}
             onClose={() => setCalling(false)}
           />

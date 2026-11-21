@@ -23,6 +23,21 @@ const NO_HOST: VoiceAvailability = { available: false, reason: "Voice calls are 
 
 const withCredentials: typeof fetch = (input, init) => fetch(input, { ...init, credentials: "same-origin", cache: "no-store" });
 
+/** Why the host said no, in words for the person who pressed Call. */
+async function refusal(res: Response): Promise<string> {
+  if (res.status === 404) return "This AI user cannot take voice calls.";
+  if (res.status === 401) return "Your sign-in has expired. Reload the page and try again.";
+  let detail = "";
+  try {
+    const text = (await res.text()).trim();
+    const body = text.startsWith("{") ? (JSON.parse(text) as { error?: unknown }) : null;
+    detail = typeof body?.error === "string" ? body.error : text.replace(/\s+/g, " ").slice(0, 120);
+  } catch {
+    // The status alone still says more than nothing.
+  }
+  return `Voice calls are unavailable right now (the server answered ${res.status}${detail ? `: ${detail}` : ""}).`;
+}
+
 function voiceBase(aiUserId: bigint | number): string {
   return aiUserHostUrl(`/${aiUserId.toString()}/voice`);
 }
@@ -32,12 +47,12 @@ export async function fetchVoiceAvailability(aiUserId: bigint | number, doFetch:
   if (!isAiUserHostDelegated()) return NO_HOST;
   try {
     const res = await doFetch(`${voiceBase(aiUserId)}/config`, { method: "GET" });
-    if (!res.ok) return { available: false, reason: res.status === 404 ? "This AI user cannot take voice calls." : "Voice calls are unavailable right now." };
+    if (!res.ok) return { available: false, reason: await refusal(res) };
     const body = (await res.json()) as Partial<VoiceAvailability>;
     if (body.available !== true) return { available: false, reason: typeof body.reason === "string" ? body.reason : "Voice calls are unavailable for this AI user." };
     const models = body.models;
     if (!models || typeof models.talker !== "string" || typeof models.transcribe !== "string" || typeof models.notes !== "string") {
-      return { available: false, reason: "Voice calls are unavailable right now." };
+      return { available: false, reason: "Voice calls are unavailable right now (the server's answer was incomplete)." };
     }
     return {
       available: true,
@@ -46,7 +61,7 @@ export async function fetchVoiceAvailability(aiUserId: bigint | number, doFetch:
       dialect: body.dialect === "openai" ? "openai" : "openrouter",
     };
   } catch {
-    return { available: false, reason: "Voice calls are unavailable right now." };
+    return { available: false, reason: "Voice calls are unavailable right now (the request did not go through)." };
   }
 }
 
