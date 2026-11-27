@@ -41,7 +41,7 @@ import {
   isThinkingOnlyExhaustion,
   emptyAnswerMessage,
 } from "./thinking-recovery.js";
-import { resolveRouting } from "./model-catalog.js";
+import { effortSupportFor, resolveRouting } from "./model-catalog.js";
 import { buildPageContext } from "./llm.js";
 import { readComponentNodeText } from "./component-authoring.js";
 import {
@@ -134,21 +134,38 @@ type AiUserProfileRow = {
 const turnLock = new TurnLock();
 const FLUSH_INTERVAL_MS = 300;
 const THINKING_BUDGET = 5_000;
+/**
+ * Lowest `max_tokens` sent for a streamed reply from an adaptive-thinking
+ * Anthropic model. Anthropic bills the tokens generated, not the ceiling, so a
+ * high ceiling reserves nothing.
+ */
+const ADAPTIVE_THINKING_MAX_TOKENS = 64_000;
 const MAX_TOOL_ITERATIONS = 15;
 
 /**
- * Anthropic's explicit thinking tokens share `max_tokens` with visible output,
- * so its adapter needs extra headroom. OpenAI-compatible adapters (including
- * OpenRouter) ignore `thinkingBudget` and use their native effort controls;
- * inflating their output reservation causes avoidable OpenRouter 402s.
+ * Anthropic's thinking tokens share `max_tokens` with tool-call input and the
+ * visible answer, so its adapter needs headroom on top of the configured limit.
+ *
+ * A model with a fixed thinking budget gets exactly that budget on top. An
+ * adaptive-thinking model ignores the budget and decides for itself how much
+ * to reason, so the same small allowance left a turn that reasoned at length
+ * after its tool results stopping on `max_tokens` with nothing written. Those
+ * models get a ceiling of at least `ADAPTIVE_THINKING_MAX_TOKENS`.
+ *
+ * OpenAI-compatible adapters (including OpenRouter) ignore `thinkingBudget`
+ * and use their native effort controls; inflating their output reservation
+ * causes avoidable OpenRouter 402s.
  */
 export function streamTokenBudget(
   providerTag: string,
   maxTokens: number,
+  model?: string,
 ): { maxTokens: number; thinkingBudget?: number } {
   if (providerTag === "Anthropic") {
+    const withBudget = maxTokens + THINKING_BUDGET;
+    const adaptive = model !== undefined && effortSupportFor(model).kind === "anthropic_effort";
     return {
-      maxTokens: maxTokens + THINKING_BUDGET,
+      maxTokens: adaptive ? Math.max(withBudget, ADAPTIVE_THINKING_MAX_TOKENS) : withBudget,
       thinkingBudget: THINKING_BUDGET,
     };
   }
@@ -1026,7 +1043,7 @@ async function handleConversationMessage(
 
     if (aiProvider.chatStream) {
       let cleanFinish = false;
-      const streamBudget = streamTokenBudget(providerTag, maxTokens);
+      const streamBudget = streamTokenBudget(providerTag, maxTokens, model);
       while (iterations++ < MAX_TOOL_ITERATIONS) {
         let lastFlush = Date.now();
 
