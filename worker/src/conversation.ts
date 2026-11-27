@@ -41,7 +41,7 @@ import {
   isThinkingOnlyExhaustion,
   emptyAnswerMessage,
 } from "./thinking-recovery.js";
-import { resolveRouting } from "./model-catalog.js";
+import { MODEL_CATALOG, REASONING_MAX_TOKENS, effortSupportFor, resolveRouting } from "./model-catalog.js";
 import { buildPageContext } from "./llm.js";
 import { readComponentNodeText } from "./component-authoring.js";
 import {
@@ -137,20 +137,44 @@ const THINKING_BUDGET = 5_000;
 const MAX_TOOL_ITERATIONS = 15;
 
 /**
- * Anthropic's explicit thinking tokens share `max_tokens` with visible output,
- * so its adapter needs extra headroom. OpenAI-compatible adapters (including
- * OpenRouter) ignore `thinkingBudget` and use their native effort controls;
- * inflating their output reservation causes avoidable OpenRouter 402s.
+ * The `max_tokens` to send for one streamed reply.
+ *
+ * On every provider a model's reasoning shares `max_tokens` with its tool-call
+ * input and its visible answer. The configured limit (8,192 by default) is
+ * sized for the answer alone, so a model that reasoned at length after its
+ * tool results stopped on the limit with nothing written.
+ *
+ * Anthropic: a model with a fixed thinking budget gets exactly that budget on
+ * top. An adaptive-thinking model ignores the budget and decides for itself
+ * how much to reason, so it gets at least `REASONING_MAX_TOKENS`. Anthropic
+ * bills the tokens generated, not the ceiling.
+ *
+ * OpenRouter: catalog models get at least `REASONING_MAX_TOKENS` too.
+ * OpenRouter prices a request up front from its `max_tokens` and answers 402
+ * when the account cannot cover that, so the configured limit is returned as
+ * `fallbackMaxTokens` for the adapter to retry with. A model outside the
+ * catalog keeps the configured limit, because its output limit is not known.
+ *
+ * Other OpenAI-compatible providers keep the configured limit.
  */
 export function streamTokenBudget(
   providerTag: string,
   maxTokens: number,
-): { maxTokens: number; thinkingBudget?: number } {
+  model?: string,
+): { maxTokens: number; thinkingBudget?: number; fallbackMaxTokens?: number } {
   if (providerTag === "Anthropic") {
+    const withBudget = maxTokens + THINKING_BUDGET;
+    const adaptive = model !== undefined && effortSupportFor(model).kind === "anthropic_effort";
     return {
-      maxTokens: maxTokens + THINKING_BUDGET,
+      maxTokens: adaptive ? Math.max(withBudget, REASONING_MAX_TOKENS) : withBudget,
       thinkingBudget: THINKING_BUDGET,
     };
+  }
+  if (
+    providerTag === "OpenRouter" && maxTokens < REASONING_MAX_TOKENS
+    && MODEL_CATALOG.OpenRouter.some((entry) => entry.id === model)
+  ) {
+    return { maxTokens: REASONING_MAX_TOKENS, fallbackMaxTokens: maxTokens };
   }
   return { maxTokens };
 }
@@ -452,6 +476,12 @@ export function userVisibleTurnFailure(err: unknown): string {
     return (
       "⚠️ The model provider is currently rate-limited or overloaded (429). " +
       "This turn was interrupted before it could finish. Retry the message or switch models."
+    );
+  }
+  if (directStatus === 402) {
+    return (
+      "⚠️ The model provider refused this request for lack of credit (402). " +
+      "Add credit to the provider account, or raise the API key's spending limit, then retry."
     );
   }
   const isAuth = directStatus === 401 || directStatus === 403 || /\b(401|403)\b/.test(raw);
@@ -971,6 +1001,8 @@ async function handleConversationMessage(
     let lastStopReason = "missing_done";
     let recoveryAttempted = false;
     let recoveryRequest: ChatStreamRequest | undefined;
+    /** Reasoning settings of the recovery retry, kept for the rest of the turn. */
+    let reducedReasoning: Pick<ChatStreamRequest, "thinkingBudget" | "effort"> | undefined;
 
     /** Append the current segment to `narration` before it is reset between
      * tool iterations. */
@@ -1026,18 +1058,21 @@ async function handleConversationMessage(
 
     if (aiProvider.chatStream) {
       let cleanFinish = false;
-      const streamBudget = streamTokenBudget(providerTag, maxTokens);
+      const streamBudget = streamTokenBudget(providerTag, maxTokens, model);
       while (iterations++ < MAX_TOOL_ITERATIONS) {
         let lastFlush = Date.now();
 
         const streamReq: ChatStreamRequest = recoveryRequest ?? {
           model,
           maxTokens: streamBudget.maxTokens,
+          fallbackMaxTokens: streamBudget.fallbackMaxTokens,
           system: systemBlocks,
           messages: llmMessages,
           tools: tools.length > 0 ? tools : undefined,
-          thinkingBudget: streamBudget.thinkingBudget,
-          effort,
+          // Once a segment has spent its whole allowance on reasoning, the
+          // rest of the turn keeps the reduced reasoning it was retried with.
+          thinkingBudget: reducedReasoning ? reducedReasoning.thinkingBudget : streamBudget.thinkingBudget,
+          effort: reducedReasoning ? reducedReasoning.effort : effort,
           conversationId: conv.id,
         };
 
@@ -1117,7 +1152,9 @@ async function handleConversationMessage(
         const stopReason = doneResponse.response.stopReason;
         lastStopReason = stopReason;
         // Retry only a segment with no answer or tools. Existing tool results
-        // remain in llmMessages, and this allowance is shared by the whole turn.
+        // remain in llmMessages. One retry per turn; the reduced reasoning it
+        // uses then applies to every later segment of the turn, so a later
+        // segment cannot spend the allowance on reasoning again.
         if (
           !recoveryAttempted && iterations < MAX_TOOL_ITERATIONS
           && isThinkingOnlyExhaustion(doneResponse.response, responseText, sawTool)
@@ -1125,6 +1162,7 @@ async function handleConversationMessage(
           recoveryRequest = answerRecoveryRequest(streamReq, providerTag);
           if (recoveryRequest) {
             recoveryAttempted = true;
+            reducedReasoning = { thinkingBudget: recoveryRequest.thinkingBudget, effort: recoveryRequest.effort };
             console.warn(`${logTag} reasoning_budget_exhausted conversation_id=${conv.id}; retrying once with reduced reasoning`);
             continue;
           }

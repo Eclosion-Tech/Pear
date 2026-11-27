@@ -100,6 +100,14 @@ const GLM_OPENROUTER_EFFORT: EffortSupport = {
 };
 const NO_EFFORT: EffortSupport = { kind: "none" };
 
+/**
+ * Lowest `max_tokens` the worker sends for a streamed reply from a model whose
+ * reasoning shares that limit with its answer (see `streamTokenBudget`). Every
+ * OpenRouter catalog model must accept at least this many output tokens;
+ * `scripts/check-model-catalog.ts` checks that against OpenRouter's model list.
+ */
+export const REASONING_MAX_TOKENS = 64_000;
+
 export const MODEL_CATALOG: Record<CatalogFamily, CatalogModel[]> = {
   Anthropic: [
     {

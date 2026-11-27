@@ -6,17 +6,21 @@
  *    the UI fails at request time). These exit non-zero so CI can gate on them.
  *  - Newer arrivals — live models from the same vendor created after the newest
  *    model we list for that vendor, i.e. the "we're out of date" signal.
+ *  - SHORT output limits — cataloged ids whose output limit is below the
+ *    `max_tokens` the worker sends for them (`REASONING_MAX_TOKENS`). A request
+ *    above a model's limit can be rejected. These exit non-zero too.
  *
  * Run: npm run catalog:check (worker package). Network-dependent by design —
  * keep it out of the unit-test suite.
  */
 
-import { MODEL_CATALOG } from "../src/model-catalog.js";
+import { MODEL_CATALOG, REASONING_MAX_TOKENS } from "../src/model-catalog.js";
 
 interface LiveModel {
   id: string;
   name: string;
   created: number;
+  top_provider?: { max_completion_tokens?: number | null };
 }
 
 // Modality/variant noise we never curate: ":free"/":batch" variants and
@@ -75,6 +79,21 @@ if (dead.length) {
   for (const m of dead) console.error(`  ${m.id}  (${m.label})`);
   console.error(
     "\nUpdate worker/src/model-catalog.ts and web/src/lib/aiUserApi.ts.",
+  );
+  process.exit(1);
+}
+
+const short = curated.filter((m) => {
+  const limit = liveById.get(m.id)?.top_provider?.max_completion_tokens;
+  return typeof limit === "number" && limit < REASONING_MAX_TOKENS;
+});
+if (short.length) {
+  console.error(`\nSHORT output limits (below the ${REASONING_MAX_TOKENS} the worker sends):`);
+  for (const m of short) {
+    console.error(`  ${m.id}  (${liveById.get(m.id)?.top_provider?.max_completion_tokens})`);
+  }
+  console.error(
+    "\nLower REASONING_MAX_TOKENS in worker/src/model-catalog.ts or drop the model.",
   );
   process.exit(1);
 }

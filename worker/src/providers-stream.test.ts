@@ -229,3 +229,82 @@ test("chatStream tolerates malformed tool args", async () => {
   assert.ok(start);
   assert.deepEqual(start.block.input, {});
 });
+
+// ── Falling back to a lower ceiling when OpenRouter refuses for lack of credit ──
+
+type CreateArgs = Record<string, unknown>;
+
+/** An OpenRouter-backed provider whose HTTP client is replaced by `create`. */
+async function openRouterWith(create: (args: CreateArgs) => Promise<AsyncIterable<unknown>>) {
+  const { createProviderFromConfig } = await import("./providers.js");
+  const provider = createProviderFromConfig({
+    id: 1n, provider: { tag: "OpenAiCompatible" }, apiKey: "test-key",
+    identity: { toHexString: () => "test" }, createdBy: { toHexString: () => "test" },
+    endpoint: "https://openrouter.ai/api/v1", systemPrompt: undefined, model: "z-ai/glm-5.3", maxTokens: 8192,
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (provider as any).client = { chat: { completions: { create } } };
+  return provider;
+}
+
+const answerStream = async function* () {
+  yield { choices: [{ delta: { content: "Answer" }, finish_reason: "stop" }] };
+};
+const failure = (status: number) => Object.assign(new Error(`${status} from provider`), { status });
+const creditRequest = {
+  model: "z-ai/glm-5.3", maxTokens: 64000, fallbackMaxTokens: 8192,
+  system: "system", messages: [{ role: "user" as const, content: "hello" }],
+};
+
+test("a request refused for lack of credit is retried once at the fallback ceiling", async () => {
+  const sent: unknown[] = [];
+  const provider = await openRouterWith(async (args) => {
+    sent.push(args.max_tokens);
+    if (sent.length === 1) throw failure(402);
+    return answerStream();
+  });
+  const events: StreamEvent[] = [];
+  for await (const event of provider.chatStream!(creditRequest)) events.push(event);
+  assert.deepEqual(sent, [64000, 8192]);
+  assert.ok(events.some((e) => e.type === "text_delta" && e.text === "Answer"));
+});
+
+test("a refusal at the fallback ceiling too is raised, not retried again", async () => {
+  const sent: unknown[] = [];
+  const provider = await openRouterWith(async (args) => {
+    sent.push(args.max_tokens);
+    throw failure(402);
+  });
+  await assert.rejects(async () => {
+    for await (const _ of provider.chatStream!(creditRequest)) { /* drain */ }
+  }, { status: 402 });
+  assert.deepEqual(sent, [64000, 8192]);
+});
+
+test("a credit refusal with no lower ceiling to fall back to is raised", async () => {
+  for (const fallbackMaxTokens of [undefined, 64000, 100000]) {
+    const sent: unknown[] = [];
+    const provider = await openRouterWith(async (args) => {
+      sent.push(args.max_tokens);
+      throw failure(402);
+    });
+    await assert.rejects(async () => {
+      for await (const _ of provider.chatStream!({ ...creditRequest, fallbackMaxTokens })) { /* drain */ }
+    }, { status: 402 });
+    assert.deepEqual(sent, [64000]);
+  }
+});
+
+test("errors other than a credit refusal are not retried at the fallback ceiling", async () => {
+  for (const status of [400, 429, 500]) {
+    const sent: unknown[] = [];
+    const provider = await openRouterWith(async (args) => {
+      sent.push(args.max_tokens);
+      throw failure(status);
+    });
+    await assert.rejects(async () => {
+      for await (const _ of provider.chatStream!(creditRequest)) { /* drain */ }
+    }, { status });
+    assert.deepEqual(sent, [64000]);
+  }
+});
