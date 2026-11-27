@@ -49,6 +49,7 @@ import {
   toolContextFromAiUserConfigRow,
 } from "./tools.js";
 import { CompositeToolExecutor } from "./composite-tool-executor.js";
+import { mcpToolResultSucceeded } from "./mcp-client.js";
 import { SystemPromptBuilder } from "./prompt-builder.js";
 import { parseBridgeBackendBinding } from "./bridge-inference.js";
 import {
@@ -525,6 +526,11 @@ function findOwnProfile(
 function toolResultStringsIndicateFullSuccess(log: string[]): boolean {
   if (log.length === 0) return false;
   for (const s of log) {
+    const extension = mcpToolResultSucceeded(s);
+    if (extension !== undefined) {
+      if (!extension) return false;
+      continue;
+    }
     try {
       if (JSON.parse(s).ok !== true) return false;
     } catch {
@@ -544,7 +550,11 @@ function fallbackTextWhenNoAssistantMessage(toolResultLog: string[]): string {
   return "I ran some tools, but at least one step did not return success, or a tool returned non-JSON. Check the tool trace above for details.";
 }
 
-function toolResultWasOk(result: string): boolean {
+export function toolResultWasOk(result: string): boolean {
+  // An extension (MCP) tool answers with plain text under a fixed header, not
+  // JSON. It succeeded unless its server flagged the call as an error.
+  const extension = mcpToolResultSucceeded(result);
+  if (extension !== undefined) return extension;
   try {
     const parsed = JSON.parse(result);
     // A tool result that isn't a JSON object, or whose `ok` is explicitly
