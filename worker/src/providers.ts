@@ -139,6 +139,13 @@ export type StreamEvent =
 
 export interface ChatStreamRequest extends ChatRequest {
   thinkingBudget?: number;
+  /**
+   * A lower `maxTokens` to retry with, once, when the provider refuses the
+   * request for lack of credit (HTTP 402). OpenRouter prices a request up
+   * front from its `max_tokens`, so an account that is short of credit can
+   * afford the lower ceiling and not the higher one.
+   */
+  fallbackMaxTokens?: number;
 }
 
 export interface InferenceProvider {
@@ -517,13 +524,27 @@ class OpenAIProvider implements InferenceProvider {
   async *chatStream(request: ChatStreamRequest): AsyncIterable<StreamEvent> {
     // `thinkingBudget` has no chat-completions equivalent; reasoning depth is
     // steered via `reasoning_effort` in buildParams where the model supports it.
-    const stream = await this.client.chat.completions.create({
-      ...this.buildParams(request),
-      stream: true,
-      // Ask for a final usage chunk so streamed turns bill like non-streamed
-      // ones. Supported by OpenAI, OpenRouter, and Ollama's compat layer.
-      stream_options: { include_usage: true },
-    });
+    const open = (maxTokens: number) =>
+      this.client.chat.completions.create({
+        ...this.buildParams({ ...request, maxTokens }),
+        stream: true,
+        // Ask for a final usage chunk so streamed turns bill like non-streamed
+        // ones. Supported by OpenAI, OpenRouter, and Ollama's compat layer.
+        stream_options: { include_usage: true },
+      });
+    let stream: Awaited<ReturnType<typeof open>>;
+    try {
+      stream = await open(request.maxTokens);
+    } catch (err) {
+      // A 402 is raised before any output, so nothing has been streamed yet.
+      const fallback = request.fallbackMaxTokens;
+      const status = Number((err as { status?: unknown } | null)?.status);
+      if (status !== 402 || fallback === undefined || fallback >= request.maxTokens) throw err;
+      console.warn(
+        `[providers] ${request.model} refused max_tokens=${request.maxTokens} for lack of credit (402); retrying at ${fallback}`,
+      );
+      stream = await open(fallback);
+    }
 
     let text = "";
     let thinking = "";

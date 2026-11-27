@@ -42,13 +42,38 @@ test("a fixed-budget or unknown Anthropic model keeps the configured limit plus 
   }
 });
 
-test("the ceiling for other providers does not depend on the model", () => {
-  assert.deepEqual(streamTokenBudget("OpenRouter", 8192, "anthropic/claude-fable-5"), {
+test("an OpenRouter catalog model gets room to reason, with the configured limit to fall back to", () => {
+  for (const model of ["z-ai/glm-5.3", "z-ai/glm-5.3-flash", "anthropic/claude-fable-5", "openai/gpt-5.6-sol"]) {
+    assert.deepEqual(streamTokenBudget("OpenRouter", 8192, model), {
+      maxTokens: 64000,
+      fallbackMaxTokens: 8192,
+    });
+  }
+});
+
+test("an OpenRouter model outside the catalog keeps the configured limit", () => {
+  assert.deepEqual(streamTokenBudget("OpenRouter", 8192, "some-vendor/unlisted-model"), {
     maxTokens: 8192,
   });
-  assert.deepEqual(streamTokenBudget("OpenAi", 8192, "gpt-5.6"), {
-    maxTokens: 8192,
-  });
+});
+
+test("a configured limit at or above the ceiling is sent as it is", () => {
+  assert.deepEqual(streamTokenBudget("OpenRouter", 64000, "z-ai/glm-5.3"), { maxTokens: 64000 });
+  assert.deepEqual(streamTokenBudget("OpenRouter", 100000, "z-ai/glm-5.3"), { maxTokens: 100000 });
+});
+
+test("other OpenAI-compatible providers keep the configured limit whatever the model", () => {
+  assert.deepEqual(streamTokenBudget("OpenAi", 8192, "gpt-5.6"), { maxTokens: 8192 });
+  assert.deepEqual(streamTokenBudget("OpenAiCompatible", 8192, "z-ai/glm-5.3"), { maxTokens: 8192 });
+  assert.deepEqual(streamTokenBudget("Ollama", 8192, "llama3"), { maxTokens: 8192 });
+});
+
+test("a 402 provider failure tells the user the account is out of credit", () => {
+  const message = userVisibleTurnFailure(Object.assign(new Error("Provider returned error"), {
+    status: 402,
+  }));
+  assert.match(message, /lack of credit \(402\)/);
+  assert.doesNotMatch(message, /credentials/);
 });
 
 test("429 provider failures become a visible retry/switch message", () => {
