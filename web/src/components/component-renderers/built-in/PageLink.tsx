@@ -17,6 +17,10 @@ import {
   useUpdateComponentProps,
   type PageRow,
 } from "@/src/hooks/usePages";
+import {
+  claimChildPageLink,
+  releaseChildPageLinkClaim,
+} from "@/src/hooks/useSyncChildPageLinks";
 
 /**
  * Built-in `PageLink` — navigates to a workspace page by id.
@@ -91,12 +95,21 @@ export function PageLinkRenderer({ node }: BlockRendererProps) {
 
       cleanup();
       pendingInsertCleanupRef.current = null;
+      // This block becomes the child's link. Claim it now: the child-page sync
+      // would otherwise see an unlinked child until the props update lands and
+      // insert a duplicate link.
+      claimChildPageLink(node.surfaceId, newPage.id);
       updateComponentProps({
         componentId: node.id,
         propsJson: JSON.stringify({
           pageId: String(newPage.id),
           pageTitle: newPage.title || "Untitled",
         }),
+      }).catch((err) => {
+        // Binding failed (e.g. this block was deleted meanwhile): hand the
+        // child back to the sync so it still gets a link.
+        releaseChildPageLinkClaim(node.surfaceId, newPage.id);
+        console.error("[PageLink] Failed to link new subpage", err);
       });
       setCreating(false);
       setPickerOpen(false);

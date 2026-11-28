@@ -38,6 +38,55 @@ function parsePageLinkPageId(propsJson: string): string | null {
 }
 
 /**
+ * Child pages a `PageLink` placeholder on this client is about to bind to
+ * ("New page" slash item, "New subpage"). The page row lands a reducer
+ * round-trip before the placeholder's `pageId` does; in that gap the tree has
+ * no link for the child, so without the claim the sync inserts a second one.
+ */
+const claimedChildLinks = new Set<string>();
+
+function claimKey(surfaceId: bigint, pageId: bigint | string): string {
+  return `${surfaceId}:${pageId}`;
+}
+
+export function claimChildPageLink(
+  surfaceId: bigint,
+  pageId: bigint | string,
+): void {
+  claimedChildLinks.add(claimKey(surfaceId, pageId));
+}
+
+export function releaseChildPageLinkClaim(
+  surfaceId: bigint,
+  pageId: bigint | string,
+): void {
+  claimedChildLinks.delete(claimKey(surfaceId, pageId));
+}
+
+/** Child pages that still need an auto-inserted `PageLink`, in sidebar order. */
+export function childPagesNeedingLink(
+  surfaceId: bigint,
+  linkedIds: ReadonlySet<string>,
+  childPages: PageRow[],
+  autoInserted: ReadonlySet<string>,
+): PageRow[] {
+  return childPages
+    .filter((p) => {
+      const id = String(p.id);
+      return (
+        !linkedIds.has(id) &&
+        !autoInserted.has(id) &&
+        !claimedChildLinks.has(claimKey(surfaceId, id))
+      );
+    })
+    .sort((a, b) => {
+      const ao = Number(a.sortOrder);
+      const bo = Number(b.sortOrder);
+      return ao !== bo ? ao - bo : Number(a.id - b.id);
+    });
+}
+
+/**
  * Child-page sync: auto-insert `PageLink` rows for each
  * child page missing from the tree, and remove stale links when a child is
  * deleted or reparented away.
@@ -68,16 +117,15 @@ export function useSyncChildPageLinks({
 
     const handle = requestAnimationFrame(() => {
       const inTree = pageLinkIdsInTree(tree);
-      const toInsert = childPages
-        .filter((p) => {
-          const id = String(p.id);
-          return !inTree.has(id) && !autoInsertedRef.current.has(id);
-        })
-        .sort((a, b) => {
-          const ao = Number(a.sortOrder);
-          const bo = Number(b.sortOrder);
-          return ao !== bo ? ao - bo : Number(a.id - b.id);
-        });
+      // A claim only covers the gap until the link reaches the tree; dropping
+      // it here lets a child that later leaves and returns be re-linked.
+      for (const id of inTree) releaseChildPageLinkClaim(surfaceId, id);
+      const toInsert = childPagesNeedingLink(
+        surfaceId,
+        inTree,
+        childPages,
+        autoInsertedRef.current,
+      );
 
       if (toInsert.length === 0) return;
 
@@ -100,7 +148,7 @@ export function useSyncChildPageLinks({
     });
 
     return () => cancelAnimationFrame(handle);
-  }, [tree, childIdsKey, childPages, insertPageLink]);
+  }, [surfaceId, tree, childIdsKey, childPages, insertPageLink]);
 
   // Remove PageLink rows when their child page leaves this parent.
   useEffect(() => {
